@@ -265,6 +265,7 @@ describe('what the menu under the field offers', () => {
     id,
     origin,
     username,
+    realm: null,
     note: '',
     createdAt: 0,
     updatedAt: 0,

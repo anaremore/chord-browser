@@ -480,7 +480,16 @@ function registerIpc(): void {
   handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
   handle('player:view', () => browser!.player.frame());
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
-  handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
+  // Only the popover of the window the box's tab is shown in answers it.
+  handle('auth:respond', async ({ id, credentials, remember }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'cards');
+    if (windowId) await httpAuth.respond(id, credentials, remember, windowId);
+  });
+  handle('auth:unlock', async ({ id }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'cards');
+    if (windowId) await httpAuth.unlock(id, windowId);
+  });
+  handle('passwords:revert', ({ id }, sender) => browser!.revertPasswordUpdate(senderWindow(sender).id, id));
   handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
   // Settings → Passwords, and the popover's unlock card (S17 §9).
   handle('passwords:view', () => passwords.view());
@@ -609,6 +618,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('web-contents-created', (_event, contents) => proxies.contentsCreated(contents));
   // The passwords sentinel's ask for the agent gets an answer anywhere it runs; a tab's page then takes over (attachPage).
   app.on('web-contents-created', (_event, contents) => passwordDetector.attachOther(contents));
+  // Which frame each sign-in box's request came from: tracked on every page from its first navigation.
+  app.on('web-contents-created', (_event, contents) => httpAuth.attachPage(contents));
   // A site or proxy asking for a username and password: Chord's own box over the tab, or cancelled.
   app.on('login', (event, contents, details, info, callback) => {
     if (httpAuth.login(contents, details, info, callback)) event.preventDefault();

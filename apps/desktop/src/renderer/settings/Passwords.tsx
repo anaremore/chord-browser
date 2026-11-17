@@ -201,7 +201,12 @@ function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummar
 
   const secure = origin.startsWith('https://');
   return (
-    <div id={`${ids}-detail`} className={local.detail} role="group" aria-label={`${hostOf(login.origin)}, ${login.username || 'no username'}`}>
+    <div
+      id={`${ids}-detail`}
+      className={local.detail}
+      role="group"
+      aria-label={`${hostOf(login.origin)}${login.realm ? `, realm ${login.realm}` : ''}, ${login.username || 'no username'}`}
+    >
       <div className={local.field}>
         <label className={local.fieldLabel} htmlFor={`${ids}-origin`}>
           Address
@@ -693,7 +698,7 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase();
     const logins = view?.logins ?? [];
-    return words ? logins.filter((l) => `${hostOf(l.origin)} ${l.username} ${l.note}`.toLowerCase().includes(words)) : logins;
+    return words ? logins.filter((l) => `${hostOf(l.origin)} ${l.realm ?? ''} ${l.username} ${l.note}`.toLowerCase().includes(words)) : logins;
   }, [view, query]);
 
   return (
@@ -729,6 +734,7 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
                       <Favicon url={login.origin} title={hostOf(login.origin)} favicon={null} appearance={appearance} />
                       <span className={local.loginText}>
                         <span className={local.loginHost}>{hostOf(login.origin)}</span>
+                        {login.realm !== null && <span className={local.loginUser}>{login.realm ? `Realm: ${login.realm}` : 'The site’s sign-in box'}</span>}
                         <span className={local.loginUser}>{login.username || 'No username'}</span>
                       </span>
                       <span className={local.when}>{whenText(login.lastUsed ?? login.updatedAt)}</span>

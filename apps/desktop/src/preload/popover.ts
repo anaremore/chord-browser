@@ -16,7 +16,10 @@ const api: PopoverApi = {
   },
   permission: { respond: (id, decision) => invoke('permission:respond', { id, decision }) },
   share: { respond: (id, sourceId, audio) => invoke('share:respond', { id, sourceId, audio }) },
-  auth: { respond: (id, credentials) => invoke('auth:respond', { id, credentials }) },
+  auth: {
+    respond: (id, credentials, remember) => invoke('auth:respond', { id, credentials, ...(remember !== undefined ? { remember } : {}) }),
+    unlock: (id) => invoke('auth:unlock', { id }),
+  },
   passkey: { respond: (id, credentialId) => invoke('passkey:respond', { id, credentialId }) },
   passwords: {
     unlock: (id, passphrase, keep) => invoke('passwords:unlockCard', { id, passphrase, keep }),

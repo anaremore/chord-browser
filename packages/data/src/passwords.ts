@@ -58,6 +58,8 @@ export interface NewLogin {
   username: string;
   password: string;
   note?: string;
+  /** Saved from the browser's own sign-in box (HTTP Basic or Digest): its realm. Absent for a page's form. */
+  realm?: string;
 }
 
 /** What Settings can change of a sign-in: a new password keeps the old one as `previous`. */
@@ -94,20 +96,28 @@ export type PasswordOp =
   /** The OS-wrapped copy, if one is kept. */
   | { op: 'kept' }
   | { op: 'list'; chordId: string | null }
-  /** The sign-ins saved for the site of `origin`, for the menu under the field to rank (main's `offersFor`). */
-  | { op: 'forSite'; origin: string; chordId: string | null }
+  /**
+   * The sign-ins saved for the site of `origin`, for the menu under the field to rank (main's `offersFor`): a page's
+   * forms' only. With `realm`, the browser's own sign-in box's instead: those saved for exactly that origin and realm.
+   */
+  | { op: 'forSite'; origin: string; chordId: string | null; realm?: string }
   | { op: 'reveal'; id: string }
   /** A password for a page, only if the sign-in matches the page's origin (S17 §5); its use is recorded unless `chordId` is null. */
-  | { op: 'fill'; id: string; origin: string; chordId: string | null }
+  | { op: 'fill'; id: string; origin: string; chordId: string | null; realm?: string }
   | { op: 'used'; id: string; chordId: string }
   | { op: 'add'; login: NewLogin; chordId: string | null }
   | { op: 'edit'; id: string; patch: LoginPatch }
+  /**
+   * Undo of an update: the password before it back (the one it replaces becomes the one before), only while the
+   * password is still the one that update wrote (`changedAt`, from `save`): refused once anything changed it since.
+   */
+  | { op: 'revert'; id: string; changedAt: number }
   /** Deleted, and kept sealed in memory for its Undo until chord-data quits. */
   | { op: 'delete'; id: string }
   | { op: 'undelete'; id: string }
-  | { op: 'compare'; origin: string; username: string; password: string }
-  /** A page's sign-in saved: new, or in place of `replace`'s password. */
-  | { op: 'save'; origin: string; username: string; password: string; chordId: string | null; replace?: string }
+  | { op: 'compare'; origin: string; username: string; password: string; realm?: string }
+  /** A page's sign-in saved (or, with `realm`, the sign-in box's): new, or in place of `replace`'s password. */
+  | { op: 'save'; origin: string; username: string; password: string; chordId: string | null; replace?: string; realm?: string }
   | { op: 'never'; origin: string }
   | { op: 'isNever'; origin: string }
   | { op: 'nevers' }
@@ -137,6 +147,10 @@ export interface PasswordResult {
   held?: boolean;
   /** From `fill`: the sign-in's own origin, so main checks the match too. */
   loginOrigin?: string;
+  /** From `fill`: the sign-in's realm (null for a form's), so main checks that too. */
+  loginRealm?: string | null;
+  /** From `save` (an update): when its password changed, which a `revert` names. */
+  changedAt?: number;
 }
 
 /** What `meta` keeps under `passwords`. */
@@ -395,6 +409,7 @@ export class PasswordStore {
       id: str(row['id']),
       origin: secret.origin,
       username: secret.username,
+      realm: secret.realm,
       note: secret.note,
       createdAt: num(row['created_at']),
       updatedAt: num(row['updated_at']),
@@ -431,7 +446,7 @@ export class PasswordStore {
     const site = origin ? loginSite(origin) : null;
     if (!origin || !site || loginProblem({ ...login, origin }) !== null) return 'invalid';
     const id = randomUUID();
-    const secret: LoginSecret = { origin, username: login.username, password: login.password, realm: null, note: login.note ?? '', changedAt: now, previous: null };
+    const secret: LoginSecret = { origin, username: login.username, password: login.password, realm: login.realm ?? null, note: login.note ?? '', changedAt: now, previous: null };
     this.sql('INSERT INTO login (id, site_tag, sealed, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, this.tag(site), this.sealSecret(id, secret), now, now);
     if (chordId) this.use(id, chordId, now);
     return id;
@@ -462,6 +477,17 @@ export class PasswordStore {
     const site = loginSite(origin);
     if (!site) return [];
     return this.sql(`${this.SELECT} WHERE l.site_tag = ?`).all(chordId ?? '', this.tag(site)) as Row[];
+  }
+
+  /**
+   * Whether a saved sign-in may be used where it's asked for (S17 §5, §10). A page's form (`realm` undefined) gets
+   * the form sign-ins that `matchLogin` allows. The browser's own sign-in box gets only those saved from that box for
+   * exactly its origin (scheme, host and port) and realm: never another port or scheme, never the rest of the site.
+   */
+  private fits(secret: LoginSecret, origin: string, realm: string | undefined): boolean {
+    if (realm === undefined) return secret.realm === null && matchLogin(origin, secret.origin) !== null;
+    const exact = loginOrigin(origin);
+    return secret.realm === realm && exact !== null && secret.origin === exact;
   }
 
   /* ---------- ops ---------- */
@@ -602,7 +628,8 @@ export class PasswordStore {
       }
       case 'forSite': {
         const { logins, unreadable } = this.summaries(this.siteRows(op.origin, op.chordId), op.chordId);
-        return { logins, unreadable };
+        // A form is never offered what the sign-in box saved, nor the box a form's (S17 §10).
+        return { logins: logins.filter((l) => (op.realm === undefined ? l.realm === null : l.realm === op.realm && l.origin === loginOrigin(op.origin))), unreadable };
       }
       case 'reveal': {
         const row = this.rowById(op.id);
@@ -613,10 +640,10 @@ export class PasswordStore {
         const row = this.rowById(op.id);
         const secret = row ? this.openRow(row) : null;
         if (!secret) return { problem: 'missing' };
-        // Never for a page whose origin it doesn't match, whoever asks (S17 §5): main checks too.
-        if (matchLogin(op.origin, secret.origin) === null) return { problem: 'refused' };
+        // Never for a page whose origin it doesn't match, whoever asks (S17 §5), nor across a form and the sign-in box: main checks too.
+        if (!this.fits(secret, op.origin, op.realm)) return { problem: 'refused' };
         if (op.chordId) this.use(op.id, op.chordId, now);
-        return { password: secret.password, loginOrigin: secret.origin };
+        return { password: secret.password, loginOrigin: secret.origin, loginRealm: secret.realm };
       }
       case 'used':
         if (!this.rowById(op.id)) return { problem: 'missing' };
@@ -631,6 +658,15 @@ export class PasswordStore {
         const secret = row ? this.openRow(row) : null;
         if (!row || !secret) return { problem: 'missing' };
         const problem = this.rewrite(row, secret, op.patch, now);
+        return problem ? { problem } : { id: op.id };
+      }
+      case 'revert': {
+        const row = this.rowById(op.id);
+        const secret = row ? this.openRow(row) : null;
+        if (!row || !secret?.previous) return { problem: 'missing' };
+        // Changed again since (by hand, another save, an earlier Undo): what's before it isn't what Undo meant.
+        if (secret.changedAt !== op.changedAt) return { problem: 'refused' };
+        const problem = this.rewrite(row, secret, { password: secret.previous.password }, now);
         return problem ? { problem } : { id: op.id };
       }
       case 'delete': {
@@ -657,7 +693,7 @@ export class PasswordStore {
         let best: { id: string; same: boolean; exact: boolean } | null = null;
         for (const row of this.siteRows(op.origin, null)) {
           const secret = this.openRow(row);
-          if (!secret || secret.username !== op.username) continue;
+          if (!secret || secret.username !== op.username || !this.fits(secret, op.origin, op.realm)) continue;
           const match = matchLogin(op.origin, secret.origin);
           if (!match) continue;
           const found = { id: str(row['id']), same: secret.password === op.password, exact: match !== 'site' };
@@ -672,15 +708,15 @@ export class PasswordStore {
           const row = this.rowById(op.replace);
           const secret = row ? this.openRow(row) : null;
           if (!row || !secret) return { problem: 'missing' };
-          if (matchLogin(op.origin, secret.origin) === null) return { problem: 'refused' };
-          // Saved on http and now signed in on https: it moves to https (S17 §5).
-          const upgrade = matchLogin(op.origin, secret.origin) === 'upgrade' ? { origin: op.origin } : {};
+          if (!this.fits(secret, op.origin, op.realm)) return { problem: 'refused' };
+          // Saved on http and now signed in on https: it moves to https (S17 §5). A sign-in box's never moves.
+          const upgrade = op.realm === undefined && matchLogin(op.origin, secret.origin) === 'upgrade' ? { origin: op.origin } : {};
           const problem = this.rewrite(row, secret, { ...upgrade, username: op.username, password: op.password }, now);
           if (problem) return { problem };
           if (op.chordId) this.use(op.replace, op.chordId, now);
-          return { id: op.replace };
+          return { id: op.replace, changedAt: secret.password === op.password ? secret.changedAt : now };
         }
-        const id = this.insert({ origin: op.origin, username: op.username, password: op.password }, op.chordId, now);
+        const id = this.insert({ origin: op.origin, username: op.username, password: op.password, ...(op.realm !== undefined ? { realm: op.realm } : {}) }, op.chordId, now);
         return id === 'invalid' ? { problem: 'invalid' } : { id };
       }
       case 'never': {

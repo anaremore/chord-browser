@@ -37,6 +37,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: The tag matches the player's version
         run: |

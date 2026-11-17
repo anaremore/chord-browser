@@ -83,7 +83,8 @@ export interface DetectorSwitch {
 type DetectorState = { settings: { passwords: PasswordSettings }; chords: Record<string, { id: string; profileId: string; private?: boolean }>; extensions: Record<string, InstalledExtension> };
 
 /** What the save card's Save did, or why it didn't. */
-export type SaveAnswer = { ok: true; id: string; kind: 'new' | 'update' | 'same' } | { ok: false; problem: PasswordProblem | 'off' | 'io' | 'never' };
+/** `changedAt`: an update's, for its Undo (`revertUpdate`). */
+export type SaveAnswer = { ok: true; id: string; kind: 'new' | 'update' | 'same'; changedAt?: number } | { ok: false; problem: PasswordProblem | 'off' | 'io' | 'never' };
 
 /** Who's asking for a page's accounts, or saving one: the page's origin as Chromium reports it for the frame, never what its script says. */
 export interface PasswordPage {
@@ -92,6 +93,13 @@ export interface PasswordPage {
   chord: { id: string; profileId: string } | null;
   private: boolean;
 }
+
+/** What the browser's own sign-in box gets (S17 §10): usernames only, never a password. */
+export type HttpAccountsAnswer =
+  | { state: 'off' }
+  | { state: 'none' }
+  | { state: 'locked' }
+  | { state: 'open'; accounts: { id: string; username: string }[] };
 
 /** What the menu under the field gets: usernames and hosts, never a password. */
 export type AccountsAnswer =
@@ -113,6 +121,8 @@ export type CandidateAnswer =
 export interface SaveRequest extends PasswordPage {
   username: string;
   password: string;
+  /** Typed in the browser's own sign-in box with *Remember* ticked: its realm (S17 §10). */
+  realm?: string;
   /** The saved sign-in whose password this replaces (the update card). */
   replace?: string;
   /** The first save: the passphrase the card's passphrase step chose. */
@@ -568,7 +578,9 @@ export class PasswordService {
     if (result.problem === 'locked') return { state: 'locked' };
     this.touch();
     const { insecureOrigin, offersFor } = await sites();
-    return { state: 'open', offers: offersFor(page.origin, result.logins ?? []), insecure: insecureOrigin(page.origin) };
+    // A form is never offered what the browser's own sign-in box saved (S17 §10): checked here as well as in chord-data.
+    const forms = (result.logins ?? []).filter((l) => l.realm === null);
+    return { state: 'open', offers: offersFor(page.origin, forms), insecure: insecureOrigin(page.origin) };
   }
 
   /**
@@ -583,21 +595,24 @@ export class PasswordService {
     const chordId = page.private ? null : (page.chord?.id ?? null);
     const result = await this.data({ op: 'fill', id, origin: page.origin, chordId }).catch(() => ({}) as PasswordResult);
     this.touch();
-    // Main checks the match itself too (S17 §5), on the sign-in's own origin as chord-data opened it.
-    if (result.password === undefined || result.loginOrigin === undefined) return null;
+    // Main checks the match itself too (S17 §5), on the sign-in's own origin as chord-data opened it, and that it's a
+    // form's, never the sign-in box's (S17 §10).
+    if (result.password === undefined || result.loginOrigin === undefined || result.loginRealm !== null) return null;
     if ((await sites()).matchLogin(page.origin, result.loginOrigin) === null) return null;
     return result.password;
   }
 
   /** What a sign-in that worked is to the vault: which card, or none. Never in a private window, never for a proxy. */
-  async candidate(page: PasswordPage & { username: string; password: string; proxy?: boolean }, extensions: Record<string, InstalledExtension>): Promise<CandidateAnswer> {
+  async candidate(page: PasswordPage & { username: string; password: string; proxy?: boolean; realm?: string }, extensions: Record<string, InstalledExtension>): Promise<CandidateAnswer> {
     if (page.private || page.proxy || loginProblem({ ...page, origin: page.origin }) !== null) return { kind: 'refused' };
+    const realm = page.realm !== undefined ? { realm: page.realm } : {};
     if (!(await this.onFor(page, extensions))) return { kind: 'off' };
     const state = await this.ensureOpen();
     if (state === 'none') return { kind: 'new', setup: true };
     if (state === 'locked') return { kind: 'locked' };
-    if ((await this.data({ op: 'isNever', origin: page.origin }).catch(() => ({}) as PasswordResult)).never) return { kind: 'never' };
-    const { candidate } = await this.data({ op: 'compare', origin: page.origin, username: page.username, password: page.password }).catch(() => ({}) as PasswordResult);
+    // *Never for this site* is about offers to save; *Remember*, ticked in the sign-in box, is you asking.
+    if (page.realm === undefined && (await this.data({ op: 'isNever', origin: page.origin }).catch(() => ({}) as PasswordResult)).never) return { kind: 'never' };
+    const { candidate } = await this.data({ op: 'compare', origin: page.origin, username: page.username, password: page.password, ...realm }).catch(() => ({}) as PasswordResult);
     if (!candidate) return { kind: 'locked' };
     // Exactly what's saved: no card, and its last use moves (S17 §6).
     if (candidate.kind === 'same' && page.chord) await this.data({ op: 'used', id: candidate.id, chordId: page.chord.id }).catch(() => undefined);
@@ -610,7 +625,7 @@ export class PasswordService {
    * Refused from a private window, for a proxy, or for a site you said never
    * to save for.
    */
-  async save(request: SaveRequest, extensions: Record<string, InstalledExtension>): Promise<{ ok: true; id: string } | { ok: false; problem: PasswordProblem | 'off' | 'io' }> {
+  async save(request: SaveRequest, extensions: Record<string, InstalledExtension>): Promise<{ ok: true; id: string; changedAt?: number } | { ok: false; problem: PasswordProblem | 'off' | 'io' }> {
     if (request.private || request.proxy || loginProblem(request) !== null) return { ok: false, problem: 'refused' };
     if (!(await this.onFor(request, extensions))) return { ok: false, problem: 'off' };
     try {
@@ -623,7 +638,7 @@ export class PasswordService {
         state = 'open';
       }
       if (state !== 'open') return { ok: false, problem: 'locked' };
-      if (!request.replace && (await this.data({ op: 'isNever', origin: request.origin })).never) return { ok: false, problem: 'refused' };
+      if (!request.replace && request.realm === undefined && (await this.data({ op: 'isNever', origin: request.origin })).never) return { ok: false, problem: 'refused' };
       const saved = await this.data({
         op: 'save',
         origin: request.origin,
@@ -631,11 +646,12 @@ export class PasswordService {
         password: request.password,
         chordId: request.chord?.id ?? null,
         ...(request.replace ? { replace: request.replace } : {}),
+        ...(request.realm !== undefined ? { realm: request.realm } : {}),
       });
       if (!saved.id) return { ok: false, problem: saved.problem ?? 'invalid' };
       this.touch();
       this.options.changed();
-      return { ok: true, id: saved.id };
+      return { ok: true, id: saved.id, ...(saved.changedAt !== undefined ? { changedAt: saved.changedAt } : {}) };
     } catch {
       return { ok: false, problem: 'io' };
     }
@@ -697,7 +713,7 @@ export class PasswordService {
    * passphrase (`passphrase`, from the card's step). Never from a private
    * window, for a proxy, or on a site you said never to save for.
    */
-  async saveCandidate(candidate: { origin: string; username: string; password: string; chordId: string | null; passphrase?: string; proxy?: boolean }): Promise<SaveAnswer> {
+  async saveCandidate(candidate: { origin: string; username: string; password: string; chordId: string | null; passphrase?: string; proxy?: boolean; realm?: string }): Promise<SaveAnswer> {
     const page = this.pageOf(candidate.origin, candidate.chordId);
     if (!page) return { ok: false, problem: 'off' };
     const extensions = this.installed();
@@ -707,6 +723,7 @@ export class PasswordService {
       password: candidate.password,
       ...(candidate.passphrase !== undefined ? { passphrase: candidate.passphrase } : {}),
       ...(candidate.proxy ? { proxy: true } : {}),
+      ...(candidate.realm !== undefined ? { realm: candidate.realm } : {}),
     };
     const kind = await this.candidate(request, extensions);
     switch (kind.kind) {
@@ -719,13 +736,62 @@ export class PasswordService {
         return { ok: true, id: kind.id, kind: 'same' };
       case 'update': {
         const saved = await this.save({ ...request, replace: kind.id }, extensions);
-        return saved.ok ? { ok: true, id: saved.id, kind: 'update' } : saved;
+        return saved.ok ? { ok: true, id: saved.id, kind: 'update', ...(saved.changedAt !== undefined ? { changedAt: saved.changedAt } : {}) } : saved;
       }
       case 'new': {
         const saved = await this.save(request, extensions);
         return saved.ok ? { ok: true, id: saved.id, kind: 'new' } : saved;
       }
     }
+  }
+
+  /* ---------- the browser's own sign-in box (S17 §10) ---------- */
+
+  /**
+   * The sign-ins the box for an origin and realm is filled from: those saved from the box for exactly that origin
+   * (scheme, host, port, as main saw the request) and realm, this chord's recent first; usernames only. A private
+   * window is offered them too (it fills and never saves). Never for a proxy: the caller doesn't ask.
+   */
+  async httpAccountsFor(origin: string, realm: string, chordId: string | null): Promise<HttpAccountsAnswer> {
+    const page = this.pageOf(origin, chordId);
+    if (!page || !(await this.onFor(page, this.installed()))) return { state: 'off' };
+    const state = await this.ensureOpen();
+    if (state !== 'open') return { state };
+    const result = await this.data({ op: 'forSite', origin, realm, chordId: page.chord?.id ?? null }).catch(() => ({}) as PasswordResult);
+    if (result.problem === 'locked') return { state: 'locked' };
+    this.touch();
+    const exact = (await sites()).loginOrigin(origin);
+    const logins = (result.logins ?? []).filter((l) => l.realm === realm && l.origin === exact);
+    logins.sort(
+      (a, b) =>
+        (b.chordUsed ?? -1) - (a.chordUsed ?? -1) || (b.lastUsed ?? -1) - (a.lastUsed ?? -1) || a.username.localeCompare(b.username) || a.id.localeCompare(b.id),
+    );
+    return { state: 'open', accounts: logins.map((l) => ({ id: l.id, username: l.username })) };
+  }
+
+  /** The password of a sign-in the box was filled from, for that origin and realm only (checked here and in chord-data). Its use is remembered, never in a private window. */
+  async httpPasswordFor(id: string, origin: string, realm: string, chordId: string | null): Promise<string | null> {
+    const page = this.pageOf(origin, chordId);
+    if (!page || !(await this.onFor(page, this.installed()))) return null;
+    if ((await this.ensureOpen()) !== 'open') return null;
+    const result = await this.data({ op: 'fill', id, origin, realm, chordId: page.chord?.id ?? null }).catch(() => ({}) as PasswordResult);
+    this.touch();
+    if (result.password === undefined || result.loginOrigin === undefined || result.loginRealm !== realm) return null;
+    if (result.loginOrigin !== (await sites()).loginOrigin(origin)) return null;
+    return result.password;
+  }
+
+  /**
+   * Undo of an update *Remember* made: the password before it back, only while the password is still the one that
+   * update wrote (`changedAt`). False when it can't (locked, gone, changed since).
+   */
+  async revertUpdate(id: string, changedAt: number): Promise<boolean> {
+    if ((await this.ensureOpen()) !== 'open') return false;
+    const result = await this.data({ op: 'revert', id, changedAt }).catch(() => ({}) as PasswordResult);
+    if (!result.id) return false;
+    this.touch();
+    this.options.changed();
+    return true;
   }
 
   /** The save card's *Never for this site*, for that frame's origin and the tab's chord: false while locked (ask first) or in a private window. */

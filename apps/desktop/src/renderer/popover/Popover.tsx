@@ -20,7 +20,7 @@ import {
   type ShareSource,
   type SystemInfo,
 } from '@chord/ipc';
-import type { Appearance } from '@chord/tokens';
+import { durations, type Appearance } from '@chord/tokens';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -268,32 +268,83 @@ function ShareCard({ prompt, appearance, platform }: { prompt: SharePrompt; appe
   );
 }
 
+/** What a filled password field holds: a mask, never the password, which stays in main. */
+const FILLED_MASK = '•'.repeat(10);
+
 /**
  * A site or proxy asking for a username and password (HTTP Basic, Digest or
- * NTLM; ARCHITECTURE.md §9). What's typed goes to main once, on Sign in, and
- * Chord keeps none of it: Chromium remembers a sign-in that worked until you quit.
+ * NTLM; ARCHITECTURE.md §9). What's typed goes to main once, on Sign in.
+ * With Chord's passwords on here (S17 §10): a sign-in saved from this box for
+ * this origin and realm fills it, its password masked (this page never has
+ * it: Sign in sends which account, and main answers from the vault); several
+ * get a chooser of usernames; a locked vault gets *Unlock passwords*. A
+ * frame of another site's page says whose page it's in, and isn't filled:
+ * its usernames are the chooser, so signing in takes a click on one. And
+ * *Remember* saves what you typed once the site takes it. Never for a proxy,
+ * and a private window fills without *Remember*.
  */
 function AuthCard({ prompt }: { prompt: AuthPrompt }) {
-  const username = useRef<HTMLInputElement>(null);
-  const password = useRef<HTMLInputElement>(null);
+  const form = useRef<HTMLFormElement>(null);
+  const usernameField = useRef<HTMLInputElement>(null);
+  const signIn = useRef<HTMLButtonElement>(null);
   const [sent, setSent] = useState(false);
+  /** The saved sign-in the box is filled with, by its place in `prompt.accounts`; null once you type over it. */
+  const [filled, setFilled] = useState<number | null>(prompt.fill && prompt.accounts.length > 0 ? 0 : null);
+  const [username, setUsername] = useState(prompt.fill ? (prompt.accounts[0] ?? '') : '');
+  const [password, setPassword] = useState('');
+  const [typed, setTyped] = useState(false);
+  const [remember, setRemember] = useState(prompt.remember ?? false);
   const ids = useId();
-  // The username field has the keyboard when the box appears (main focuses the popover too).
-  useEffect(() => username.current?.focus(), []);
-  const respond = (credentials: { username: string; password: string } | null) => {
+  // Sign in, the chooser and Unlock wait a moment after the box appears (disabled, so Enter doesn't submit either): a
+  // page can't time the box to appear under a click, or a held Enter, meant for itself. Cancel and Escape always work.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), durations.promptInputDelay);
+    return () => clearTimeout(timer);
+  }, []);
+  // The username field has the keyboard when the box appears (main focuses the popover too); Sign in when it's filled.
+  // Filled, the box itself holds it (Escape cancels) until Sign in can take it.
+  useEffect(() => (prompt.fill && prompt.accounts.length > 0 ? form.current : usernameField.current)?.focus(), []);
+  useEffect(() => {
+    if (armed && filled !== null && !typed && form.current?.contains(document.activeElement)) signIn.current?.focus();
+  }, [armed]);
+  // Filled after the box appeared (the vault answered late, or was just unlocked): unless you've typed already.
+  const accounts = prompt.accounts.join('\n');
+  useEffect(() => {
+    if (typed || !prompt.fill || prompt.accounts.length === 0 || filled !== null) return;
+    setFilled(0);
+    setUsername(prompt.accounts[0]!);
+    setPassword('');
+    if (prompt.remember !== null) setRemember(true);
+    signIn.current?.focus();
+  }, [accounts]);
+  // Main didn't answer with a saved sign-in (the vault locked meanwhile): the box is yours again.
+  useEffect(() => setSent(false), [prompt.locked, accounts]);
+  const respond = (credentials: { username: string; password: string } | { account: number; username: string } | null) => {
     setSent(true);
-    void api.auth.respond(prompt.id, credentials);
+    void api.auth.respond(prompt.id, credentials, prompt.remember !== null && remember);
+  };
+  const choose = (index: number) => {
+    setFilled(index);
+    setUsername(prompt.accounts[index]!);
+    setPassword('');
+    setTyped(false);
+    // Filled from the vault: Remember keeps it so, as when the box opened filled.
+    if (prompt.remember !== null) setRemember(true);
   };
   const title = prompt.proxy ? 'The proxy' : 'Sign in to';
   return (
     <form
-      className={styles.card}
+      ref={form}
+      tabIndex={-1}
+      className={`${styles.card} ${styles.authBox}`}
       role="alertdialog"
       aria-labelledby={`${ids}-title`}
       aria-describedby={`${ids}-notes`}
       onSubmit={(e) => {
         e.preventDefault();
-        respond({ username: username.current?.value ?? '', password: password.current?.value ?? '' });
+        if (!armed) return;
+        respond(filled !== null ? { account: filled, username: prompt.accounts[filled]! } : { username, password });
       }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
@@ -313,6 +364,12 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         </button>
       </div>
       <div id={`${ids}-notes`} className={styles.authNotes}>
+        {prompt.embedded && (
+          <p className={styles.offerNotice}>
+            Asked by <span className={styles.host}>{new URL(prompt.origin).host}</span>, inside{' '}
+            {prompt.embedded.host ? <span className={styles.host}>{prompt.embedded.host}</span> : 'another page'}.
+          </p>
+        )}
         {prompt.retry && <p className={styles.authRetry}>That username and password didn't work.</p>}
         {prompt.realm && (
           <p className={styles.offerNotice}>
@@ -326,21 +383,81 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
           </p>
         )}
       </div>
+      {prompt.locked && (
+        <button type="button" className={styles.authUnlock} disabled={!armed} onClick={() => void api.auth.unlock(prompt.id)}>
+          <span className={styles.menuIcon} aria-hidden>
+            <LockKeyhole size={12} strokeWidth={2} />
+          </span>
+          Unlock passwords
+        </button>
+      )}
+      {(prompt.accounts.length > 1 || (!prompt.fill && prompt.accounts.length > 0)) && (
+        <div className={styles.authChooser} role="listbox" aria-label="Saved sign-ins">
+          {prompt.accounts.map((name, i) => (
+            <button key={i} type="button" role="option" aria-selected={filled === i} className={styles.authAccount} disabled={!armed} onClick={() => choose(i)}>
+              <span className={styles.menuIcon} aria-hidden>
+                {[...name.trim()][0]?.toUpperCase() || '·'}
+              </span>
+              <span className={styles.menuUser}>{name || 'No username'}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className={styles.authFields}>
         <label className={styles.authLabel} htmlFor={`${ids}-username`}>
           Username
         </label>
-        <input ref={username} id={`${ids}-username`} className={styles.authInput} autoComplete="username" spellCheck={false} autoCapitalize="off" />
+        <input
+          ref={usernameField}
+          id={`${ids}-username`}
+          className={styles.authInput}
+          autoComplete="username"
+          spellCheck={false}
+          autoCapitalize="off"
+          value={username}
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setTyped(true);
+            // Another username: the saved password isn't its own.
+            if (filled !== null) {
+              setFilled(null);
+              setPassword('');
+            }
+          }}
+        />
         <label className={styles.authLabel} htmlFor={`${ids}-password`}>
           Password
         </label>
-        <input ref={password} id={`${ids}-password`} className={styles.authInput} type="password" autoComplete="current-password" />
+        <input
+          id={`${ids}-password`}
+          className={styles.authInput}
+          type="password"
+          autoComplete="current-password"
+          value={filled !== null ? FILLED_MASK : password}
+          onFocus={(e) => {
+            if (filled !== null) e.target.select();
+          }}
+          onChange={(e) => {
+            setTyped(true);
+            const value = e.target.value;
+            if (filled === null) return setPassword(value);
+            // Typed over the saved one: what's typed, without the mask.
+            setFilled(null);
+            setPassword(value.startsWith(FILLED_MASK) ? value.slice(FILLED_MASK.length) : FILLED_MASK.startsWith(value) ? '' : value);
+          }}
+        />
       </div>
+      {prompt.remember !== null && (
+        <label className={styles.shareAudio}>
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          Remember
+        </label>
+      )}
       <div className={styles.actions}>
         <button type="button" className={styles.secondary} onClick={() => respond(null)}>
           Cancel
         </button>
-        <button type="submit" className={styles.primary} disabled={sent}>
+        <button ref={signIn} type="submit" className={styles.primary} disabled={sent || !armed}>
           Sign in
         </button>
       </div>

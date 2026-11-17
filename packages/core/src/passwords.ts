@@ -80,6 +80,8 @@ export interface LoginSummary {
   id: string;
   origin: string;
   username: string;
+  /** An HTTP sign-in's realm (the browser's own box, S17 §10); null for a page's form. */
+  realm: string | null;
   note: string;
   createdAt: number;
   updatedAt: number;
