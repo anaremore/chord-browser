@@ -229,6 +229,13 @@ const udpCandidates = (page: Page) =>
     return found.filter((c) => / udp /i.test(c)).length;
   });
 
+/**
+ * With no proxy, a page does gather UDP candidates. Once in a while a CI runner gathers none within the
+ * 4 s (issue #42, Linux x64 only, not a proxy's doing: it was before any was set), so gather again rather
+ * than fail on the first try. A proxy's 0 is checked once, as it should be.
+ */
+const gathersUdp = (page: Page) => expect.poll(() => udpCandidates(page), { timeout: 20_000, intervals: [0], message: 'UDP candidates with no proxy' }).toBeGreaterThan(0);
+
 /** Settings → Privacy, at the Proxy group. */
 async function privacy(app: ElectronApplication, shell: Page): Promise<Page> {
   await runAction(shell, 'app.settings');
@@ -248,7 +255,7 @@ test('the proxy for every chord and a chord’s own, set in Settings: pages, pri
     await expect.poll(titleOf(app, '/home')).toBe('Direct /home');
     await expect.poll(() => direct.open()).toBeGreaterThan(0);
     const home = await pageWhere(app, (u) => u === url('/home'));
-    expect(await udpCandidates(home)).toBeGreaterThan(0);
+    await gathersUdp(home);
 
     // Settings → Privacy → Proxy: a proxy server for every chord, checked as it's typed.
     const settings = await privacy(app, shell);
@@ -342,7 +349,7 @@ test('the proxy for every chord and a chord’s own, set in Settings: pages, pri
     await home.reload();
     await expect.poll(() => home.title()).toBe('Direct /home');
     expect(proxyA.seen).toEqual([]);
-    expect(await udpCandidates(home)).toBeGreaterThan(0);
+    await gathersUdp(home);
 
     // A proxy server again: the one typed before is kept.
     await forAll.getByRole('radio', { name: /^A proxy server/ }).click();
