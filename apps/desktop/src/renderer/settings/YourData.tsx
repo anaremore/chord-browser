@@ -57,7 +57,7 @@ export function exportText(p: ExportProgress): string {
     case 'assistant':
       return `Writing assistant chats: ${numbers.format(p.done)} of ${plural(p.total, 'chat')}`;
     case 'done':
-      return `Saved ${p.name}, ${fileSize(p.bytes ?? 0)}${p.passwords !== undefined ? `, with ${plural(p.passwords, 'password')}` : ''}${p.skipped ? `. ${plural(p.skipped, 'thing')} too big for the file (over 32 MB) stayed out.` : ''}`;
+      return `Saved ${p.name}, ${fileSize(p.bytes ?? 0)}${p.passwords !== undefined ? `, with ${plural(p.passwords, 'password')}` : ''}${p.passwordsLeftOut ? `. Your ${plural(p.passwordsLeftOut, 'password')} ${p.passwordsLeftOut === 1 ? 'was' : 'were'} left out` : ''}${p.skipped ? `. ${plural(p.skipped, 'thing')} too big for the file (over 32 MB) stayed out.` : ''}`;
     case 'failed':
       if (p.problem === 'locked') return 'Your passwords locked while the file was written, so it wasn’t kept. Unlock them and save again.';
       return p.problem === 'read' ? 'Chord couldn’t read your data to write the file. Choose where to save to try again.' : 'Chord couldn’t save there. Choose another place.';
@@ -75,7 +75,7 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
   const [withPasswords, setWithPasswords] = useState(true);
   const [passwordCount, setPasswordCount] = useState(0);
   /** The vault's passphrase, asked for at the save when it wasn't typed in the last 5 minutes (as *Show* asks). */
-  const [vaultAsk, setVaultAsk] = useState<'ask' | 'wrong' | 'locked' | null>(null);
+  const [vaultAsk, setVaultAsk] = useState<'ask' | 'wrong' | 'locked' | 'same' | null>(null);
   const encrypt = snapshot.settings.encryptExports;
   const [passphrase, setPassphrase] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -89,7 +89,8 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
 
   useEffect(() => {
     if (open) void api.exports.counts().then(setCounts);
-    if (open) void api.passwords.view().then((v) => setPasswordCount(v.count));
+    // Counted without the key: opening the vault (with the key kept here) would restart *Lock after* just to count.
+    if (open) void api.passwords.count().then(setPasswordCount);
   }, [open]);
   useEffect(
     () =>
@@ -121,9 +122,9 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
       .run({ history, assistant, passphrase: encrypt ? passphrase : null, ...(bringPasswords ? { passwords: true } : {}), ...(bringPasswords && vaultPassphrase !== undefined ? { vaultPassphrase } : {}) })
       .catch(() => ({ ok: false, problem: 'cancelled' }) as const);
     setVaultAsk(null);
-    if (!result.ok && (result.problem === 'passphrase' || result.problem === 'wrong' || result.problem === 'locked')) {
+    if (!result.ok && (result.problem === 'passphrase' || result.problem === 'wrong' || result.problem === 'locked' || result.problem === 'vault-passphrase')) {
       started.current = null;
-      return setVaultAsk(result.problem === 'passphrase' ? 'ask' : result.problem);
+      return setVaultAsk(result.problem === 'passphrase' ? 'ask' : result.problem === 'vault-passphrase' ? 'same' : result.problem);
     }
     if (result.ok) {
       started.current = result.exportId;
@@ -232,7 +233,9 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
           )}
           {vaultAsk && (
             <div className={local.actions}>
-              {vaultAsk === 'locked' ? (
+              {vaultAsk === 'same' ? (
+                <ProblemCard text="Use a different passphrase from the one your passwords are locked with." />
+              ) : vaultAsk === 'locked' ? (
                 <ProblemCard text="Your passwords are locked. Unlock them in Settings → Passwords, or turn Passwords off here." />
               ) : (
                 <PassphraseAsk

@@ -21,6 +21,7 @@
  */
 import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeSync } from 'node:fs';
 import {
+  CONTROL_CHARACTERS,
   importOrigin,
   loginProblem,
   loginRecord,
@@ -125,7 +126,7 @@ const STAGE_MS = 10 * 60_000;
 const STAGE_CHARS = 64 * 1024 * 1024;
 /** The end of the year 9999, as a stamp's limit (docs/data-format.md). */
 const MAX_TIME = 253402300799999;
-const ISSUE_KINDS: ReadonlySet<unknown> = new Set(['address', 'app', 'password', 'long', 'kind']);
+const ISSUE_KINDS: ReadonlySet<unknown> = new Set(['address', 'app', 'password', 'long', 'kind', 'text']);
 /** Text a listed row shows, as the import process cuts it; anything that isn't text is nothing. */
 const shown = (v: unknown) => (typeof v === 'string' ? (v.length > PASSWORD_IMPORT_LIMITS.shown ? `${v.slice(0, PASSWORD_IMPORT_LIMITS.shown - 1)}…` : v) : '');
 
@@ -149,6 +150,9 @@ interface Landed {
   at: number;
   added: string[];
   replaced: StoredLogin[];
+  /** What its Undo has taken back so far, and whether one is running. */
+  undone: PasswordImportUndone;
+  undoing: boolean;
 }
 
 const yieldNow = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -200,7 +204,8 @@ export class PasswordTransfer {
         typeof login.note === 'string' &&
         (login.realm === null || typeof login.realm === 'string') &&
         (login.changedAt === null || (Number.isInteger(login.changedAt) && login.changedAt >= 0 && login.changedAt <= MAX_TIME)) &&
-        loginProblem(login) === null;
+        loginProblem(login) === null &&
+        !CONTROL_CHARACTERS.test(login.username);
       const size = ok ? login.origin.length + login.username.length + login.password.length + login.note.length + (login.realm?.length ?? 0) : 0;
       // A file's sign-ins are held in memory until they're imported: past STAGE_CHARS in all, the rest are left out.
       if (ok && stage.chars + size > STAGE_CHARS) {
@@ -343,6 +348,8 @@ export class PasswordTransfer {
     const state = this.vault.state();
     if (state !== 'open') return { problem: state === 'none' ? 'none' : 'locked' };
     stage.running = true;
+    // Its 10 minutes start again: a stage never lapses while it's being imported.
+    this.stage(stageId);
     let writing = false;
     try {
       await this.vault.ready();
@@ -353,7 +360,7 @@ export class PasswordTransfer {
       const except = new Set(choices.except);
       const replace = plan.different.filter(({ at }) => takesFile(choices.take, except, at));
       const result: PasswordImportResult = { added: 0, updated: 0, kept: plan.different.length - replace.length, same: plan.same.length, stopped: false };
-      const landed: Landed = { at: now, added: [], replaced: [] };
+      const landed: Landed = { at: now, added: [], replaced: [], undone: { removed: 0, restored: 0, changed: 0 }, undoing: false };
       this.landed.set(importId, landed);
       this.vault.importing(true);
       writing = true;
@@ -438,22 +445,32 @@ export class PasswordTransfer {
   private async undo(importId: string): Promise<TransferResult> {
     const landed = this.landed.get(importId);
     if (!landed) return { problem: 'missing' };
-    this.landed.delete(importId);
-    const undone: PasswordImportUndone = { removed: 0, restored: 0, changed: 0 };
-    const steps: ({ remove: string } | { restore: StoredLogin })[] = [...landed.added.map((id) => ({ remove: id })), ...landed.replaced.map((row) => ({ restore: row }))];
+    // One Undo at a time; what it has taken back leaves `landed` a slice at a time, once committed, so an Undo that
+    // fails part way (a full disk) can be tried again for the rest, and nothing is taken back twice.
+    if (landed.undoing) return { problem: 'refused' };
+    landed.undoing = true;
     this.vault.importing(true);
     try {
-      await this.undoSteps(landed, steps, undone);
+      await this.undoSteps(landed);
+    } catch (error) {
+      // eslint-disable-next-line preserve-caught-error -- its cause could quote a row: only its name goes on.
+      throw new Error(error instanceof Error ? error.name : 'error');
     } finally {
+      landed.undoing = false;
       this.vault.importing(false);
     }
-    return { undone };
+    this.landed.delete(importId);
+    return { undone: landed.undone };
   }
 
-  private async undoSteps(landed: Landed, steps: ({ remove: string } | { restore: StoredLogin })[], undone: PasswordImportUndone): Promise<void> {
-    for (let from = 0; from < steps.length; from += UNDO_SLICE) {
+  private async undoSteps(landed: Landed): Promise<void> {
+    while (landed.added.length > 0 || landed.replaced.length > 0) {
+      const removing = landed.added.slice(0, UNDO_SLICE);
+      const restoring = landed.replaced.slice(0, UNDO_SLICE - removing.length);
+      const steps: ({ remove: string } | { restore: StoredLogin })[] = [...removing.map((id) => ({ remove: id })), ...restoring.map((row) => ({ restore: row }))];
+      const undone = { ...landed.undone };
       this.vault.transaction(() => {
-        for (const step of steps.slice(from, from + UNDO_SLICE)) {
+        for (const step of steps) {
           const id = 'remove' in step ? step.remove : step.restore.id;
           const now = this.vault.stored(id);
           if (!now) continue;
@@ -470,6 +487,10 @@ export class PasswordTransfer {
           }
         }
       });
+      // Committed: this slice is done, and counted.
+      landed.added.splice(0, removing.length);
+      landed.replaced.splice(0, restoring.length);
+      landed.undone = undone;
       await yieldNow();
     }
   }

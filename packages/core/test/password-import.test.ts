@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CsvReader,
   csvColumns,
+  importChoices,
   csvField,
   importOrigin,
   loginFromRecord,
@@ -148,7 +149,7 @@ describe('CSV’s corners', () => {
     const reader = new CsvReader();
     const rows = [...reader.push(`a,${'x'.repeat(PASSWORD_IMPORT_LIMITS.field + 10)},c\n`), ...reader.end()];
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.long).toBe(true);
+    expect(rows[0]!.long).toEqual([1]);
     expect(rows[0]!.fields[1]!.length).toBe(PASSWORD_IMPORT_LIMITS.field);
   });
 });
@@ -174,6 +175,12 @@ describe('which rows come in', () => {
     { what: 'a bare host', row: 'x,example.com,u,p,', origin: 'https://example.com' },
     { what: 'a bare host with a port and a path', row: 'x,example.com:8443/login,u,p,', origin: 'https://example.com:8443' },
     { what: 'two addresses in one field: the first that works', row: 'x,"android://abc@com.example, https://example.com",u,p,', origin: 'https://example.com' },
+    // Bitwarden joins a sign-in's addresses with a comma, or a line break, and no space: never one host `a.example,https`.
+    { what: 'two addresses joined by a comma', row: 'x,"https://a.example,https://b.example",u,p,', origin: 'https://a.example' },
+    { what: 'two addresses joined by a line break', row: 'x,"https://a.example\nhttps://b.example",u,p,', origin: 'https://a.example' },
+    { what: 'two addresses joined by a semicolon', row: 'x,"https://a.example;https://b.example",u,p,', origin: 'https://a.example' },
+    { what: 'an app, then a site, joined by a comma', row: 'x,"android://x@com.example,https://b.example",u,p,', origin: 'https://b.example' },
+    { what: 'a username with a control character', row: 'x,https://example.com,"ada\u0000",p,', kind: 'text' },
     { what: 'localhost', row: 'x,http://localhost:3000,u,p,', origin: 'http://localhost:3000' },
     { what: 'an Android app', row: 'x,android://hash@com.example.app/,u,p,', kind: 'app' },
     { what: 'an iOS app', row: 'x,ios-app://12345/example.com,u,p,', kind: 'app' },
@@ -202,6 +209,15 @@ describe('which rows come in', () => {
       }
     });
   }
+
+  it('a long field in a column Chord doesn’t read leaves the row as it is', () => {
+    const header = 'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n';
+    const got = readCsv(`${header},,login,Example,,${'f'.repeat(PASSWORD_IMPORT_LIMITS.field + 5)},0,https://example.com,ada,pw,\n`);
+    expect(got.issues).toEqual([]);
+    expect(got.logins).toEqual([login('https://example.com', 'ada', 'pw')]);
+    // In a column it reads, the row is too long.
+    expect(readCsv(`${header},,login,Example,${'n'.repeat(PASSWORD_IMPORT_LIMITS.field + 5)},,0,https://example.com,ada,pw,\n`).issues[0]?.kind).toBe('long');
+  });
 
   it('a listed row shows what it says, cut, and never its password', () => {
     const got = readCsv(`${header}Bank,${'a'.repeat(300)},ada,Sekrit-123,\n`);
@@ -248,6 +264,10 @@ describe('the same sign-in twice in a file', () => {
     const got = uniqueLogins([login('https://a.example', 'ada', '1'), login('https://b.example', 'ada', '2'), login('https://a.example', 'ada', '3'), login('https://a.example', 'ada', '3')]);
     expect(got.logins).toEqual([login('https://a.example', 'ada', '3'), login('https://b.example', 'ada', '2')]);
     expect(got.duplicates).toBe(2);
+  });
+  it('the key can’t be forged by a separator in a part', () => {
+    const got = uniqueLogins([login('https://a.example', 'ada\u0000x', '1'), login('https://a.example', 'ada', '1', { realm: 'x' })]);
+    expect(got.logins).toHaveLength(2);
   });
   it('a form’s and the sign-in box’s are two', () => {
     const got = uniqueLogins([login('https://a.example', 'ada', '1'), login('https://a.example', 'ada', '1', { realm: 'Admin' })]);
@@ -350,4 +370,19 @@ describe('CSV export', () => {
     const got = readCsv(text, 3);
     expect(got.logins).toEqual(logins.map((l) => login(l.origin, l.username, l.password, { note: l.note })));
   });
+});
+
+describe('what Settings sends for those that differ', () => {
+  const listed = [0, 1, 2, 3];
+  const cases: { what: string; more: number; ticked: number[]; want: { take: 'yours' | 'file'; except: number[] } }[] = [
+    { what: 'none ticked', more: 0, ticked: [], want: { take: 'yours', except: [] } },
+    { what: 'one ticked', more: 0, ticked: [2], want: { take: 'yours', except: [2] } },
+    { what: 'most ticked: named the shorter way', more: 0, ticked: [0, 1, 3], want: { take: 'file', except: [2] } },
+    { what: 'all ticked (the switch on)', more: 0, ticked: [0, 1, 2, 3], want: { take: 'file', except: [] } },
+    // More differ than are listed: the unlisted take the file's only with the switch itself on.
+    { what: 'more unlisted, most ticked by hand: the unlisted keep yours', more: 20_000, ticked: [0, 1, 3], want: { take: 'yours', except: [0, 1, 3] } },
+    { what: 'more unlisted, the switch on', more: 20_000, ticked: [0, 1, 2, 3], want: { take: 'file', except: [] } },
+    { what: 'more unlisted, none ticked', more: 20_000, ticked: [], want: { take: 'yours', except: [] } },
+  ];
+  for (const c of cases) it(c.what, () => expect(importChoices(listed, c.more, new Set(c.ticked))).toEqual(c.want));
 });

@@ -105,6 +105,7 @@ const api: SettingsApi = {
     importUndo: (importId) => invoke('passwords:importUndo', { importId }),
     exportCsv: (passphrase) => invoke('passwords:export', passphrase !== undefined ? { passphrase } : {}),
     exportShow: (exportId) => invoke('passwords:exportShow', { exportId }),
+    count: () => invoke('passwords:count'),
     onImportProgress: (listener) => subscribe('passwords:importProgress', listener),
     onChange: (listener) => subscribe('passwords:changed', listener),
   },

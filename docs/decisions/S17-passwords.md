@@ -1081,6 +1081,14 @@ Only what a real desktop can show; everything else above was measured.
 
 **After a security review** (a subagent's, of this half): it found no way for a password to reach a renderer or main, no export without the passphrase check, and no password in a plain file. What it found, each fixed: an import that failed part way (a full disk) left its rows without Undo, so now it says it stopped and keeps its Undo; chord-data took what the import process sent on a stage's port into a handler that could throw, and passed its listed rows on unchecked, so now every batch is checked whole (rows, kinds, text cut, the problem one Chord knows, a change time within the year 9999) and never crashes it; a file's sign-ins in memory are capped at 64 M characters (a Chord file had no cap, as a CSV's size is one); *Lock now* or idle lets a staged file go; a CSV export chord-data didn't finish has its `.part` removed by main; the export port is closed if the export fails before its process takes it; and `export:` and `importFile:` requests, which can carry a passphrase, are refused without detail as `passwords:` ones are.
 
+**After review round 1** (the planning thread's):
+- **Several addresses in one field** (Bitwarden joins them with a comma or a line break, no space) are read as pieces first, the first that works; the whole field only when it has no separator, and a host with `,` or `;` is never one. Before, `https://a.com,https://b.com` came in as the origin `https://a.com,https`, which could never fill.
+- **Never the vault's passphrase for a file** is enforced, not only promised: before an export with passwords, chord-data checks the file's passphrase against the vault's (`verify`, which leaves the vault as it is) and refuses it: *Use a different passphrase from the one your passwords are locked with.*
+- **Never in a plain file** is held at each place, table-tested (`unit/passwords-plain-file.test.ts`): main asks for the passwords' port only for an encrypted file; the export process closes any port it's given unless the file is encrypted and asked for them (`export/passwords.ts`); the import reads a `login` record only from an encrypted file (core's `loginFromFile`); and a reader that doesn't know them passes over the record and the `passwords` part. A file saved without them (plain, or *Passwords* off) says how many were left out.
+- **A budget:** CI runs the 5,000-row import alone (`CHORD_PASSWORD_PERF=1`, its own step) and fails it when chord-data's longest task passes 100 ms: measured 10.6 ms on an SSD and 40 ms on a slower drive.
+- **Unlisted conflicts** (past 10,000) take the file's only with the switch itself on, never because many rows were ticked by hand (core's `importChoices`).
+- **Smaller ones:** the key comparing sign-ins is JSON, not parts joined by NUL; a username with a control character is left out (*a username with characters a page can't hold*); a too-long field counts only in a column an import reads (Bitwarden's `fields` no longer refuses its row); a CSV must be a file and is read no further than the size limit, whatever its size said; a stage's 10 minutes start again when its import starts; an Undo that fails part way keeps the rest to be tried again, taking nothing back twice; Your data's export card counts passwords without opening the vault (which would restart *Lock after*).
+
 **Decided here** (not the owner's):
 - **The same file again** imports nothing: everything reads as the same.
 - **A sign-in twice in one file** is one, the later row's, and the preview counts it.
@@ -1088,7 +1096,7 @@ Only what a real desktop can show; everything else above was measured.
 - **A sign-in box's realm goes out as its address** in a CSV (CSV has no realm), so a CSV brought back makes it a form's. Chord's file keeps the realm.
 - **A CSV's values are never changed:** no spreadsheet-formula escaping (`=`, `+`, `-`, `@`), which would change a password. Opened in a spreadsheet, such a field is the spreadsheet's to interpret.
 - **What a `login` record leaves out:** the password before the last change, which chords used it, and the never list.
-- **Limits:** 64 MB of CSV, 50,000 rows (the rest counted), 64 KB a field, 200 columns, 1,000 listed rows.
+- **Limits:** 64 MB of CSV, 50,000 rows (the rest counted), 64 KB a field, 200 columns, 1,000 listed rows, 10,000 listed conflicts, 64 M characters of sign-ins held from one file.
 
 **Measured:**
 - **In the app** (`e2e/passwords-transfer.spec.ts`, the Linux container, X11): the 6,240-row Bitwarden file into a vault of 329, from *Import* to its result line, **414 ms**.

@@ -1328,7 +1328,7 @@ export type ExportProblem = 'write' | 'read' | 'locked';
 
 /** `cancelled`: the save dialog was closed; `busy`: another export is still being written. */
 /** With passwords: `passphrase`, the vault's passphrase must be typed again first (as for *Show*); `wrong`; `locked`: unlock first. */
-export type ExportRunResult = { ok: true; exportId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' | 'passphrase' | 'wrong' | 'locked' };
+export type ExportRunResult = { ok: true; exportId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' | 'passphrase' | 'wrong' | 'locked' | 'vault-passphrase' };
 
 /** How an export is going, pushed to Settings (`export:progress`). */
 export interface ExportProgress {
@@ -1351,6 +1351,8 @@ export interface ExportProgress {
   skipped?: number;
   /** Passwords written (an encrypted file with *Passwords* on); absent when it has none (a plain file never does). */
   passwords?: number;
+  /** Passwords saved here and left out of this file (a plain one, or *Passwords* off): the result says so. */
+  passwordsLeftOut?: number;
   problem?: ExportProblem;
 }
 
@@ -1541,6 +1543,8 @@ export const invokeChannels = {
   'passwords:importUndo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.custom<PasswordImportUndone | null>() },
   /** *Export…*: asks for the passphrase as *Show* does, then the save dialog; a CSV in Chrome's shape. */
   'passwords:export': { roles: ['internal'], request: z.strictObject({ passphrase: typedPassphrase.optional() }), response: z.custom<PasswordExportResult>() },
+  /** How many passwords are saved, counted without opening the vault (Your data's export card). */
+  'passwords:count': { roles: ['internal'], request: z.void(), response: z.custom<number>() },
   /** *Show in folder* for a CSV just saved: named by its id, never a path. */
   'passwords:exportShow': { roles: ['internal'], request: z.strictObject({ exportId: id }), response: z.void() },
   /** The popover's unlock card: the passphrase (and whether to keep the vault unlocked here), or null to cancel. */
@@ -2220,6 +2224,8 @@ export interface PasswordsApi {
   /** Export… as a CSV, after the passphrase check. */
   exportCsv(passphrase?: string): Promise<PasswordExportResult>;
   exportShow(exportId: string): Promise<void>;
+  /** How many are saved, without opening the vault or restarting *Lock after*. */
+  count(): Promise<number>;
   onImportProgress(listener: (progress: PasswordImportProgress) => void): () => void;
   /** `hide`: the vault locked; hide any shown password, and don't ask for the view. */
   onChange(listener: (change: { hide: true } | null) => void): () => void;

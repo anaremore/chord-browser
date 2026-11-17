@@ -308,6 +308,18 @@ export class PasswordTransfers {
     }
   }
 
+  /** How many passwords are saved: chord-data counts the rows without the key, so nothing opens and *Lock after* doesn't restart. */
+  async count(): Promise<number> {
+    const { status } = await this.options.data({ op: 'status' }).catch((): PasswordResult => ({}));
+    return status?.count ?? 0;
+  }
+
+  /** Whether `passphrase` is the vault's (chord-data's `verify`, which leaves the vault as it is): a file's must never be. */
+  async isVaultPassphrase(passphrase: string): Promise<boolean> {
+    const result = await this.options.data({ op: 'verify', passphrase }).catch((): PasswordResult => ({ problem: 'invalid' }));
+    return result.problem === undefined;
+  }
+
   /** *Show in folder*: the CSV saved, selected in the system's file manager. */
   show(exportId: string): void {
     const path = this.saved.get(exportId);

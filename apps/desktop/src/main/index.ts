@@ -521,6 +521,7 @@ function registerIpc(): void {
   });
   handle('passwords:importDrop', ({ stageId }) => passwordTransfers?.drop(stageId));
   handle('passwords:importUndo', ({ importId }) => passwordTransfers?.undo(importId) ?? null);
+  handle('passwords:count', () => passwordTransfers?.count() ?? 0);
   handle('passwords:exportShow', ({ exportId }) => passwordTransfers?.show(exportId));
   handle('passwords:export', ({ passphrase }, sender) => (passwordTransfers ? passwordTransfers.exportCsv(browser!.settingsWindowOf(sender), passphrase) : { ok: false, problem: 'busy' }));
   handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
@@ -1066,6 +1067,8 @@ if (!app.requestSingleInstanceLock()) {
       folder: () => app.getPath('documents'),
       data: { flush: () => store.flush(), device: () => store.device(), counts: () => store.exportCounts() },
       passwords: (vaultPassphrase) => passwordTransfers!.exportPort(vaultPassphrase),
+      isVaultPassphrase: (passphrase) => passwordTransfers!.isVaultPassphrase(passphrase),
+      passwordCount: () => passwordTransfers!.count(),
     });
     // The detector watches the sign-ins the vault's switch and extension rule say (S17 §11), from now on: told at once,
     // and after every change (onChange's stateChanged), only when that changes.

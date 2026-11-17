@@ -223,3 +223,20 @@ describe('Export…', () => {
     expect(await t.exportPort()).toEqual({ problem: 'locked' });
   });
 });
+
+describe('for Your data’s export', () => {
+  it('counts without opening the vault, and tells the vault’s passphrase from another', async () => {
+    const t = transfers();
+    expect(await t.count()).toBe(0);
+    expect(await t.isVaultPassphrase(PASSPHRASE)).toBe(false);
+    await db.passwords.run({ op: 'setup', passphrase: PASSPHRASE });
+    await db.passwords.run({ op: 'add', login: { origin: 'https://example.com', username: 'ada', password: 'Sekrit-1' }, chordId: null });
+    await db.passwords.run({ op: 'lock' });
+    expect(await t.count()).toBe(1);
+    expect((await db.passwords.run({ op: 'status' })).status!.state).toBe('locked');
+    expect(await t.isVaultPassphrase(PASSPHRASE)).toBe(true);
+    expect(await t.isVaultPassphrase('another passphrase entirely')).toBe(false);
+    // Checking left the vault as it was.
+    expect((await db.passwords.run({ op: 'status' })).status!.state).toBe('locked');
+  });
+});

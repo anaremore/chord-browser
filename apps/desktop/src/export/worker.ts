@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { dataHeader, encryptedWriter, plainWriter, type DataFileWriter, type DataPart, type DataRecord, type AssistantImage, type Platform } from '@chord/core';
 import type { PasswordExportAsk, PasswordExportPage } from '@chord/data';
+import { passwordsPort } from './passwords';
 import { nodeCrypto, sha256Hex } from '@chord/data/crypto';
 import { exportCounts, exportRecords, type ExportPhase } from '@chord/data/export';
 
@@ -120,8 +121,7 @@ function openPart(target: string): { fd: number; path: string } {
 
 async function run(job: ExportJob, port: MessagePortMain | null): Promise<void> {
   // Passwords never go into a plain file, whatever asked.
-  const passwords = job.passwords && job.passphrase !== null ? port : null;
-  if (!passwords) port?.close();
+  const passwords = passwordsPort(job, port);
   let part: string | null = null;
   let fd: number | null = null;
   const db = new DatabaseSync(job.database, { readOnly: true, timeout: 5000 });

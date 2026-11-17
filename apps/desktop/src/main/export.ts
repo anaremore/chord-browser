@@ -33,6 +33,10 @@ export interface ExporterOptions {
    * on which the export process reads them (main/passwords/transfer.ts).
    */
   passwords?(vaultPassphrase?: string): Promise<{ port: MessagePortMain } | { problem: 'passphrase' | 'wrong' | 'locked' }>;
+  /** Whether a file's passphrase is the vault's (the owner's decision: never). */
+  isVaultPassphrase?(passphrase: string): Promise<boolean>;
+  /** How many passwords are saved (counted without the key): a file without them says it left them out. */
+  passwordCount?(): Promise<number>;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -83,6 +87,8 @@ export class Exporter {
     // Passwords only into an encrypted file, and only after the vault's own check, before the dialog asks where.
     let passwords: MessagePortMain | null = null;
     if (request.passwords && encrypted) {
+      // The file's passphrase is its own, never the one the passwords are locked with (S17, decided 2026-11-17).
+      if (await this.options.isVaultPassphrase?.(request.passphrase!).catch(() => false)) return { ok: false, problem: 'vault-passphrase' };
       const asked = await this.options.passwords?.(request.vaultPassphrase);
       if (!asked) return { ok: false, problem: 'locked' };
       if ('problem' in asked) return { ok: false, problem: asked.problem };
@@ -99,15 +105,24 @@ export class Exporter {
       passwords?.close();
       return { ok: false, problem: 'cancelled' };
     }
+    // Passwords left out (a plain file, or the switch off): the result says how many, so it's never a surprise.
+    const leftOut = passwords ? 0 : await (this.options.passwordCount?.() ?? Promise.resolve(0)).catch(() => 0);
     try {
-      return await this.fork(chosen.filePath, request, passwords, passwordsOnly, notify);
+      return await this.fork(chosen.filePath, request, passwords, passwordsOnly, notify, leftOut);
     } catch (error) {
       passwords?.close();
       throw error;
     }
   }
 
-  private async fork(target: string, request: ExportRequest, passwords: MessagePortMain | null, passwordsOnly: boolean, notify: (progress: ExportProgress) => void): Promise<ExportRunResult> {
+  private async fork(
+    target: string,
+    request: ExportRequest,
+    passwords: MessagePortMain | null,
+    passwordsOnly: boolean,
+    notify: (progress: ExportProgress) => void,
+    leftOut = 0,
+  ): Promise<ExportRunResult> {
     this.folder = dirname(target);
     const name = basename(target);
     const id = uuidv7();
@@ -130,13 +145,13 @@ export class Exporter {
     const child = utilityProcess.fork(this.options.workerPath, [], { serviceName: 'Chord Export', stdio: 'ignore' });
     const running: Running = { id, child, target, finished: Promise.resolve() };
     this.running = running;
-    running.finished = this.follow(running, name, notify);
+    running.finished = this.follow(running, name, notify, leftOut);
     child.postMessage({ type: 'run', job } satisfies ExportMessage, passwords ? [passwords] : []);
     return { ok: true, exportId: id, name };
   }
 
   /** Passes the process's progress on until it's done, fails, goes quiet or exits; then ends it. */
-  private follow(running: Running, name: string, notify: (progress: ExportProgress) => void): Promise<void> {
+  private follow(running: Running, name: string, notify: (progress: ExportProgress) => void, leftOut = 0): Promise<void> {
     const { id, child, target } = running;
     return new Promise((resolve) => {
       let ended = false;
@@ -161,6 +176,7 @@ export class Exporter {
             bytes: outcome.bytes,
             ...(outcome.skipped ? { skipped: outcome.skipped } : {}),
             ...(outcome.passwords !== undefined ? { passwords: outcome.passwords } : {}),
+            ...(leftOut > 0 ? { passwordsLeftOut: leftOut } : {}),
           });
         } else {
           // A process that's gone can't take its unfinished file with it.

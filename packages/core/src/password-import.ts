@@ -42,7 +42,8 @@ export const PASSWORD_IMPORT_LIMITS = {
  * commas, line breaks and `""` for a quote. A byte-order mark at the start is
  * passed over. Lenient where exporters are: a quote inside an unquoted field
  * is kept as it is, and text after a closing quote joins the field. A field
- * longer than PASSWORD_IMPORT_LIMITS.field isn't kept (its row says `long`).
+ * longer than PASSWORD_IMPORT_LIMITS.field isn't kept: its row names it in `long` (by its place), so only a
+ * column an import reads can make the row too long.
  */
 export class CsvReader {
   private field = '';
@@ -54,13 +55,14 @@ export class CsvReader {
   private cr = false;
   private started = false;
   /** A field in this row went past the limit. */
-  private long = false;
+  /** The places of this row's fields that went past the limit. */
+  private long: number[] = [];
   /** Whether the row has had any character (a blank line is no row). */
   private touched = false;
 
-  /** The next text: the rows whole in it so far, each with whether one of its fields was too long. */
-  push(text: string): { fields: string[]; long: boolean }[] {
-    const rows: { fields: string[]; long: boolean }[] = [];
+  /** The next text: the rows whole in it so far, each with the places of its fields that were too long. */
+  push(text: string): { fields: string[]; long: number[] }[] {
+    const rows: { fields: string[]; long: number[] }[] = [];
     let at = 0;
     if (!this.started && text.length > 0) {
       this.started = true;
@@ -107,7 +109,7 @@ export class CsvReader {
   }
 
   /** The text has ended: the last row, if it had no line break after it. */
-  end(): { fields: string[]; long: boolean }[] {
+  end(): { fields: string[]; long: number[] }[] {
     this.quote = false;
     this.quoted = false;
     const row = this.endRow();
@@ -121,7 +123,7 @@ export class CsvReader {
     this.touched = true;
     this.touchedField = true;
     if (this.field.length >= PASSWORD_IMPORT_LIMITS.field) {
-      this.long = true;
+      if (this.long.at(-1) !== this.row.length) this.long.push(this.row.length);
       return;
     }
     this.field += c;
@@ -136,7 +138,7 @@ export class CsvReader {
     this.quote = false;
   }
 
-  private endRow(): { fields: string[]; long: boolean } | null {
+  private endRow(): { fields: string[]; long: number[] } | null {
     if (!this.touched) {
       this.field = '';
       return null;
@@ -144,7 +146,7 @@ export class CsvReader {
     this.endField();
     const row = { fields: this.row, long: this.long };
     this.row = [];
-    this.long = false;
+    this.long = [];
     this.touched = false;
     return row;
   }
@@ -240,9 +242,14 @@ export interface ImportedLogin {
  * - `app`: an app's sign-in (`android://`, `ios-app://`), which a browser can't fill;
  * - `password`: no password;
  * - `long`: a part is longer than a sign-in may be (S17 §8's limits);
- * - `kind`: not a sign-in (a password manager's note, card or identity).
+ * - `kind`: not a sign-in (a password manager's note, card or identity);
+ * - `text`: a username with control characters in it, which no page's field holds.
  */
-export type ImportIssueKind = 'address' | 'app' | 'password' | 'long' | 'kind';
+export type ImportIssueKind = 'address' | 'app' | 'password' | 'long' | 'kind' | 'text';
+
+/** Control characters (C0 and DEL): never in a username a page's field could hold. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point.
+export const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 /** A row that didn't come in, listed with what it says so you can find it: never its password. */
 export interface ImportIssue {
@@ -267,9 +274,11 @@ const BARE_HOST = /^(localhost|[^\s/:?#]+\.[^\s/:?#]+)(:\d+)?([/?#]\S*)?$/i;
 export function importOrigin(text: string): { origin: string } | { issue: 'address' | 'app' } {
   const t = text.trim();
   if (!t) return { issue: 'address' };
-  const tries = [t];
-  // Several addresses in one field (some managers join them with commas or line breaks): the first that works.
-  if (/[,\n\r ]/.test(t)) tries.push(...t.split(/[,\n\r ]+/).filter(Boolean));
+  // Several addresses in one field (Bitwarden joins them with commas or line breaks): the pieces first, the first
+  // that works. The whole field is tried only when it has no separator, so `https://a.com,https://b.com` is never
+  // read as one address (a URL parser takes it as the host `a.com,https`).
+  const pieces = t.split(/[,;\n\r\t ]+/).filter(Boolean);
+  const tries = pieces.length > 1 ? pieces : [t];
   let app = false;
   for (const one of tries) {
     if (APP.test(one)) {
@@ -286,6 +295,8 @@ export function importOrigin(text: string): { origin: string } | { issue: 'addre
       continue;
     }
     if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || !parsed.hostname || parsed.username || parsed.password) continue;
+    // A host with a separator in it is two addresses run together, never one a page could have.
+    if (/[,;]/.test(parsed.hostname)) continue;
     if (parsed.origin.length > PASSWORD_LIMITS.origin) continue;
     return { origin: parsed.origin };
   }
@@ -293,7 +304,7 @@ export function importOrigin(text: string): { origin: string } | { issue: 'addre
 }
 
 /** What one data row is: a sign-in, or an issue; and whether it held a one-time-code secret (never kept). */
-export function csvRow(fields: readonly string[], long: boolean, columns: Partial<Record<CsvColumn, number>>, row: number): { login?: ImportedLogin; issue?: ImportIssue; otp: boolean } {
+export function csvRow(fields: readonly string[], long: readonly number[], columns: Partial<Record<CsvColumn, number>>, row: number): { login?: ImportedLogin; issue?: ImportIssue; otp: boolean } {
   const get = (column: CsvColumn) => {
     const at = columns[column];
     return at === undefined ? '' : (fields[at] ?? '');
@@ -311,7 +322,10 @@ export function csvRow(fields: readonly string[], long: boolean, columns: Partia
   if (!password) return issue('password');
   const realm = get('realm');
   const login: ImportedLogin = { origin: where.origin, username, password, note: get('note'), realm: realm === '' ? null : realm, changedAt: null };
-  if (long || loginProblem(login) !== null) return issue('long');
+  // Too long only for a column that's read: a long field Chord ignores (Bitwarden's `fields`) leaves the row as it is.
+  const read = (['url', 'username', 'password', 'note', 'realm'] as const).map((c) => columns[c]).filter((at) => at !== undefined);
+  if (long.some((at) => read.includes(at)) || loginProblem(login) !== null) return issue('long');
+  if (CONTROL_CHARACTERS.test(username)) return issue('text');
   return { login, otp };
 }
 
@@ -351,7 +365,7 @@ export class PasswordCsv {
     return out;
   }
 
-  private take(rows: { fields: string[]; long: boolean }[]): { logins: ImportedLogin[]; issues: ImportIssue[] } {
+  private take(rows: { fields: string[]; long: number[] }[]): { logins: ImportedLogin[]; issues: ImportIssue[] } {
     const logins: ImportedLogin[] = [];
     const issues: ImportIssue[] = [];
     for (const { fields, long } of rows) {
@@ -399,7 +413,7 @@ export interface VaultLogin {
 }
 
 /** The same sign-in: its origin, username and realm (a page's form and the sign-in box are never the same one). */
-const loginKey = (l: { origin: string; username: string; realm: string | null }) => `${l.origin}\0${l.username}\0${l.realm === null ? '' : `r${l.realm}`}`;
+const loginKey = (l: { origin: string; username: string; realm: string | null }) => JSON.stringify([l.origin, l.username, l.realm]);
 
 /**
  * A file's sign-ins, once each: the same origin, username and realm twice is
@@ -503,7 +517,7 @@ export function loginFromRecord(record: DataRecord): ImportedLogin | null {
   // A record's origin must already be one: an address that needs fixing isn't Chord's.
   if ('issue' in where || where.origin !== origin) return null;
   const login: ImportedLogin = { origin, username, password, note, realm, changedAt: isTime(s['changed']) ? s['changed'] : null };
-  return loginProblem(login) === null ? login : null;
+  return loginProblem(login) === null && !CONTROL_CHARACTERS.test(username) ? login : null;
 }
 
 /* ---------- CSV export ---------- */
@@ -590,3 +604,17 @@ export interface PasswordImportUndone {
 
 /** Whether a sign-in that differs takes the file's password, by the choices. */
 export const takesFile = (take: PasswordImportChoices['take'], except: ReadonlySet<number>, at: number): boolean => (take === 'file') !== except.has(at);
+
+/**
+ * What Settings sends for the sign-ins that differ: those ticked take the file's. Named the shorter way (*take the
+ * file's except…* when most are ticked). When more differ than are listed (`more`), the unlisted ones take the file's
+ * only with the switch itself on, every listed one ticked: never because many were ticked by hand.
+ */
+export function importChoices(listed: readonly number[], more: number, ticked: ReadonlySet<number>): PasswordImportChoices {
+  const all = listed.length > 0 && listed.every((at) => ticked.has(at));
+  const takeFile = more > 0 ? all : ticked.size * 2 > listed.length;
+  return { take: takeFile ? 'file' : 'yours', except: listed.filter((at) => ticked.has(at) !== takeFile) };
+}
+
+/** A Chord file's `login` record as a sign-in to stage: only from an encrypted file, never a plain one (decision 6). */
+export const loginFromFile = (record: DataRecord, encrypted: boolean): ImportedLogin | null => (encrypted ? loginFromRecord(record) : null);

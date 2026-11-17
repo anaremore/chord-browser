@@ -14,7 +14,7 @@
  *   of its own (never the vault's, the owner's decision), or a CSV, with its
  *   warning. The vault's passphrase is asked for at the save, as *Show* asks.
  */
-import { PASSWORD_SOURCE_NAMES, type ImportIssue, type PasswordImportResult, type PasswordImportSummary, type PasswordImportUndone } from '@chord/core';
+import { importChoices, PASSWORD_SOURCE_NAMES, type ImportIssue, type PasswordImportResult, type PasswordImportSummary, type PasswordImportUndone } from '@chord/core';
 import type { ExportProgress, PasswordImportProgress, PasswordsView } from '@chord/ipc';
 import { size } from '@chord/tokens';
 import { Search, TriangleAlert } from 'lucide-react';
@@ -62,6 +62,7 @@ const WHY: Record<ImportIssue['kind'], string> = {
   password: 'no password',
   long: 'too long',
   kind: 'not a sign-in',
+  text: 'a username with characters a page can’t hold',
 };
 
 /** "3 rows without a usable address", or, mixed, "4 rows left out". */
@@ -153,12 +154,14 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
     if (step.at !== 'preview') return;
     const { stageId, name, preview } = step;
     if (preview.state === 'none' && !passphraseReady(first)) return setFirst({ ...first, touched: true });
-    const all = preview.conflicts.length + preview.conflictsMore;
-    // The fewer named: most taken means "take the file's, except these".
-    const takeFile = take.size * 2 > all;
-    const except = preview.conflicts.filter((c) => take.has(c.at) !== takeFile).map((c) => c.at);
+    // The ticked ones take the file's; the unlisted ones (past 10,000) only with the switch itself on.
+    const choices = importChoices(
+      preview.conflicts.map((c) => c.at),
+      preview.conflictsMore,
+      take,
+    );
     setStep({ at: 'writing', stageId, name, preview, done: 0, total: preview.added + take.size });
-    const run = await api.passwords.importRun(stageId, { take: takeFile ? 'file' : 'yours', except }, preview.state === 'none' ? first.passphrase : undefined).catch(() => ({ ok: false, problem: 'io' }) as const);
+    const run = await api.passwords.importRun(stageId, choices, preview.state === 'none' ? first.passphrase : undefined).catch(() => ({ ok: false, problem: 'io' }) as const);
     setFirst(EMPTY_PASSPHRASE);
     stage.current = null;
     if (run.ok) return setStep({ at: 'done', name, preview, importId: run.importId, result: run.result });
@@ -501,6 +504,7 @@ const EXPORT_PROBLEMS: Record<string, string> = {
   io: 'Chord couldn’t save there. Choose another place.',
   write: 'Chord couldn’t save there. Choose another place.',
   read: 'Chord couldn’t read your passwords to write the file.',
+  'vault-passphrase': 'Use a different passphrase from the one your passwords are locked with.',
 };
 
 /** The export card (option 2A): the kind, then the save, with the passphrase check there when it's due. */

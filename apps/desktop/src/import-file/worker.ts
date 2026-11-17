@@ -36,7 +36,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   DATA_HEAD,
   LOGIN_RECORD,
-  loginFromRecord,
+  loginFromFile,
   PASSWORD_IMPORT_LIMITS,
   PasswordCsv,
   type ImportedLogin,
@@ -266,7 +266,9 @@ async function readPasswords(path: string, port: MessagePortMain): Promise<FileR
     }
   }
   try {
-    if (fstatSync(fd).size > PASSWORD_IMPORT_LIMITS.bytes) return await finish('unreadable');
+    // A file, and not too big: a pipe or a device is never one, and its size says nothing.
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > PASSWORD_IMPORT_LIMITS.bytes) return await finish('unreadable');
     const csv = new PasswordCsv();
     const decoder = new TextDecoder('utf-8');
     const buffer = Buffer.allocUnsafe(CHUNK);
@@ -281,6 +283,8 @@ async function readPasswords(path: string, port: MessagePortMain): Promise<FileR
       const n = readSync(fd, buffer, 0, CHUNK, position);
       if (n === 0) break;
       position += n;
+      // Grown since it was looked at (another program still writing it): the limit holds whatever fstat said.
+      if (position > PASSWORD_IMPORT_LIMITS.bytes) return await finish('unreadable');
       await send(csv.push(decoder.decode(buffer.subarray(0, n), { stream: true })));
       if (csv.problem) break;
     }
@@ -361,7 +365,8 @@ async function openFile(job: FileJob, passphrase: string | null, stage: Stager |
     return readRecords(file, job.path, async (records) => {
       for (const r of records) {
         if (r.type === LOGIN_RECORD) {
-          const login = file.encrypted && stage && passwords.staged < PASSWORD_IMPORT_LIMITS.rows ? loginFromRecord(r) : null;
+          // Only an encrypted file's (S17 decision 6): a plain file's are passed over, and counted.
+          const login = stage && passwords.staged < PASSWORD_IMPORT_LIMITS.rows ? loginFromFile(r, file.encrypted) : null;
           if (login) {
             logins.push(login);
             passwords.staged++;

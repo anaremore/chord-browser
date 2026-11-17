@@ -126,6 +126,8 @@ describe('what the import process sends, checked again (a security review)', () 
     const { importPreview } = await run({ op: 'importPreview', stageId: 'junk' });
     expect(importPreview!.problem).toBe('unreadable');
     expect(importPreview!.issues).toEqual([{ row: 3, kind: 'app', address: `${'a'.repeat(199)}…`, username: '', name: 'n' }]);
+    transfer.staged('ctl', { logins: [login('https://a.example', 'ada\u0007', '1'), login('https://b.example', 'ada', '1')], done: { problem: null } });
+    expect((await run({ op: 'importPreview', stageId: 'ctl' })).importPreview).toMatchObject({ logins: 1, skipped: 1 });
     // A change time past the year 9999 isn't one.
     expect(importPreview!.logins).toBe(0);
   });
@@ -246,6 +248,25 @@ describe('Undo', () => {
     expect((await run({ op: 'importUndo', importId: 'i1' })).problem).toBe('missing');
   });
 
+  it('fails part way (a full disk) and is tried again: the rest, nothing twice', async () => {
+    await vault();
+    const file = Array.from({ length: 500 }, (_, i) => login(`https://s${i}.example`, 'ada', `p${i}`));
+    await run({ op: 'importRun', stageId: stage(file), importId: 'i1', choices: choose('yours') });
+    const vaultAccess = (db.passwords.transfer as unknown as { vault: { transaction(work: () => void): void } }).vault;
+    const real = vaultAccess.transaction.bind(vaultAccess);
+    let slices = 0;
+    vaultAccess.transaction = (work) => {
+      if (++slices === 2) throw Object.assign(new Error('database or disk is full'), { name: 'SqliteError' });
+      real(work);
+    };
+    await expect(run({ op: 'importUndo', importId: 'i1' })).rejects.toThrow('SqliteError');
+    vaultAccess.transaction = real;
+    // The first slice is gone; the rest is still this import's to undo.
+    expect((await run({ op: 'status' })).status!.count).toBe(300);
+    expect((await run({ op: 'importUndo', importId: 'i1' })).undone).toEqual({ removed: 500, restored: 0, changed: 0 });
+    expect((await run({ op: 'status' })).status!.count).toBe(0);
+  });
+
   it('leaves what you changed since, and says so', async () => {
     await vault(['https://b.example', 'ada', 'old-b']);
     await run({ op: 'importRun', stageId: stage([login('https://a.example', 'ada', 'a'), login('https://b.example', 'ada', 'new-b')]), importId: 'i1', choices: choose('file') });
@@ -337,8 +358,9 @@ describe(`${BIG} rows`, () => {
     expect(importPreview).toMatchObject({ added: BIG - SAVED, same: 0, different: SAVED });
     expect(imported).toEqual({ added: BIG - SAVED, updated: SAVED, kept: 0, same: 0, stopped: false });
     console.log(`${BIG} rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms`);
-    // A generous bound for CI's machines; the number above is what the PR reports.
-    expect(longest).toBeLessThan(1000);
+    // The budget (S17, Phase 2: import and export): CI's own step runs this alone at full size, where a tenfold regression
+    // of the 6–16 ms measured fails. In the whole suite, beside every other file, only a loose bound.
+    expect(longest).toBeLessThan(process.env['CHORD_PASSWORD_PERF'] === '1' ? 100 : 1000);
     const undo0 = performance.now();
     expect((await run({ op: 'importUndo', importId: 'big' })).undone).toEqual({ removed: BIG - SAVED, restored: SAVED, changed: 0 });
     console.log(`${BIG} rows: undo ${(performance.now() - undo0).toFixed(0)} ms`);
