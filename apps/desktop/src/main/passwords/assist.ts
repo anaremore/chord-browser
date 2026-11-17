@@ -192,8 +192,11 @@ export class PasswordAssist {
   private seq = 0;
   private readonly menus = new Map<WindowId, Menu>();
   private readonly pending = new Map<WebContents, Pending>();
-  /** A form whose menu was answered (a choice, Escape): no menu again in it until a real blur. */
-  private readonly quiet = new Map<WebContents, string>();
+  /**
+   * A form whose menu was answered (a choice, Escape), and its kind then: no menu again in it until a real blur, while
+   * it's that kind. A first step that turns into its password step in place (no blur: the page moves focus) gets one.
+   */
+  private readonly quiet = new Map<WebContents, { formId: string; kind: string }>();
   /** A press on a window's menu: the blur it causes doesn't close it, until then. */
   private readonly grace = new Map<WindowId, { until: number; contents: WebContents }>();
   private readonly docs = new WeakMap<WebContents, number>();
@@ -290,7 +293,8 @@ export class PasswordAssist {
       waiting.zoom = e.zoomFactor;
       return;
     }
-    if (this.quiet.get(e.contents) === e.formId || !host.shown(e.contents)) return;
+    const quiet = this.quiet.get(e.contents);
+    if ((quiet?.formId === e.formId && quiet.kind === e.kind) || !host.shown(e.contents)) return;
     host.prepareMenu(tab.windowId);
     const seq = ++this.seq;
     const pending: Pending = { seq, formId: e.formId, role: e.role, rect: e.rect, zoom: e.zoomFactor };
@@ -382,7 +386,7 @@ export class PasswordAssist {
     if (routed.choose !== undefined) return void this.choose(menu, routed.choose);
     if (!routed.menu) {
       // Escape: not again in this form until you leave it. Tab: the page moves on, and the next field may get its own.
-      if (input.key === 'Escape') this.quiet.set(menu.contents, menu.formId);
+      if (input.key === 'Escape') this.quiet.set(menu.contents, { formId: menu.formId, kind: menu.kind });
       this.close(menu);
       return;
     }
@@ -425,7 +429,7 @@ export class PasswordAssist {
   private async choose(menu: Menu, index: number): Promise<void> {
     const { host, vault } = this.options;
     this.close(menu);
-    this.quiet.set(menu.contents, menu.formId);
+    this.quiet.set(menu.contents, { formId: menu.formId, kind: menu.kind });
     if (menu.locked) {
       // The unlock card takes the keyboard; once the vault is open, the field has it again and its menu lists the accounts.
       const open = await vault.askUnlock(menu.tab.windowId);

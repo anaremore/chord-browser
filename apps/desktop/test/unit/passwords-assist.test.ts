@@ -261,6 +261,19 @@ describe('keys: the page keeps focus, and never sees the menu’s', () => {
     expect(t.assist.menuFor('w1')).not.toBeNull();
   });
 
+  it('a first step picked from, then its password step in the same form with no blur (the page moved focus): the password gets its menu', async () => {
+    const t = setup();
+    await t.focus({ kind: 'username-only', role: 'username' });
+    t.key('Enter');
+    await flush();
+    // The first step's field again, still a first step: quiet.
+    await t.focus({ kind: 'username-only', role: 'username' });
+    expect(t.assist.menuFor('w1')).toBeNull();
+    // Next swapped in the password step: the form is a sign-in now.
+    await t.focus({ kind: 'sign-in', role: 'current-password' });
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+  });
+
   it('once answered (a choice, Escape), not again in that form until you leave it', async () => {
     const t = setup();
     await t.focus();
