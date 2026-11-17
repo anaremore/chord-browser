@@ -1094,6 +1094,12 @@ Only what a real desktop can show; everything else above was measured.
 - **The sign-up's saved card replaces a quiet confirmation, and the matched change's update card a quiet update:** the mocks show both. A generated password is applied to an account only on **Update**. Closing the card leaves the presave as it was, *Not confirmed*.
 - **A password typed over the generated one before the submit** isn't told at the submit (that would send it before a sign-in worked). The sign-in that works offers the save card for it, and the presave stays *Not confirmed*.
 
+**After a security review** (a subagent's, of this half):
+- **A page can't make main generate in a loop.** Each generation draws at most 20,000 characters, whatever the length. Rules that can't be met are remembered for the document, so moving focus between such fields costs one generation, not one per focus.
+- **The tab's presave is offered again only while the vault is open.** Locked (by you or its clock) or started over, it's forgotten: a new password is made, and choosing asks to unlock. One offered just before a lock asks to unlock before it's filled.
+- **The generator's row takes no Enter for `durations.promptInputDelay`** (500 ms) after it opens, as the sign-in box's buttons don't, so a page can't focus a field by script under an Enter meant for something else.
+- **↻ sits over the row's end, outside its option** (axe's *nested-interactive*: a button can't be inside an option). The look is the mock's.
+
 **What it can't tell:** a sign-up whose submit Chord doesn't see (a formless one, phase 3) leaves its presave *Not confirmed*, with no username; the next sign-in with it confirms it. A change form with neither a username nor a current password's field can't be matched, so the card asks.
 
 **Measured:** the corpus is unchanged at **393 of 458 files** (the classifier wasn't touched); the agent is a few hundred bytes larger.
