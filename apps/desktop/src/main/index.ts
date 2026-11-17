@@ -520,7 +520,7 @@ function registerIpc(): void {
     );
   });
   handle('passwords:importDrop', ({ stageId }) => passwordTransfers?.drop(stageId));
-  handle('passwords:importUndo', ({ importId }) => passwordTransfers?.undo(importId) ?? null);
+  handle('passwords:importUndo', ({ importId }) => passwordTransfers?.undo(importId) ?? { ok: false, problem: 'missing' });
   handle('passwords:count', () => passwordTransfers?.count() ?? 0);
   handle('passwords:exportShow', ({ exportId }) => passwordTransfers?.show(exportId));
   handle('passwords:export', ({ passphrase }, sender) => (passwordTransfers ? passwordTransfers.exportCsv(browser!.settingsWindowOf(sender), passphrase) : { ok: false, problem: 'busy' }));

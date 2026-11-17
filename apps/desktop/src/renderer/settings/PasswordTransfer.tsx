@@ -92,6 +92,9 @@ export function undoneText(u: PasswordImportUndone): string {
   return `Import undone.${u.restored ? ` ${plural(u.restored, 'replaced password')} came back as ${u.restored === 1 ? 'it was' : 'they were'}.` : ''}${u.changed ? ` ${plural(u.changed, 'password')} you changed since stayed as you left ${u.changed === 1 ? 'it' : 'them'}.` : ''}`;
 }
 
+/** Undo stopped part way: the rest is still the import's, and its button stays. */
+export const UNDO_FAILED = 'Chord couldn’t undo all of the import. Try Undo again.';
+
 /* ---------- Import ---------- */
 
 type ImportStep =
@@ -108,6 +111,9 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
   const [take, setTake] = useState<Set<number>>(new Set());
   const [first, setFirst] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
   const [problem, setProblem] = useState<string | null>(null);
+  /** Undo running (its button waits), or what went wrong (its button stays, to try again). */
+  const [undoing, setUndoing] = useState(false);
+  const [undoProblem, setUndoProblem] = useState<string | null>(null);
   const stage = useRef<string | null>(null);
 
   const choose = async () => {
@@ -160,7 +166,9 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
       preview.conflictsMore,
       take,
     );
-    setStep({ at: 'writing', stageId, name, preview, done: 0, total: preview.added + take.size });
+    // With the switch on, the ones past the list take the file's too: the bar counts them.
+    const taking = choices.take === 'file' ? preview.conflicts.length + preview.conflictsMore - choices.except.length : choices.except.length;
+    setStep({ at: 'writing', stageId, name, preview, done: 0, total: preview.added + taking });
     const run = await api.passwords.importRun(stageId, choices, preview.state === 'none' ? first.passphrase : undefined).catch(() => ({ ok: false, problem: 'io' }) as const);
     setFirst(EMPTY_PASSPHRASE);
     stage.current = null;
@@ -222,9 +230,20 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
               <button
                 type="button"
                 className={styles.linkButton}
+                disabled={undoing}
                 onClick={() => {
                   const importId = step.importId!;
-                  void api.passwords.importUndo(importId).then((u) => u && setStep({ at: 'undone', text: undoneText(u) }));
+                  setUndoing(true);
+                  setUndoProblem(null);
+                  void api.passwords
+                    .importUndo(importId)
+                    .catch(() => ({ ok: false, problem: 'failed' }) as const)
+                    .then((u) => {
+                      setUndoing(false);
+                      if (u.ok) setStep({ at: 'undone', text: undoneText(u.undone) });
+                      // Taken back already (the window's toast): the card hears it through the progress, and says so.
+                      else if (u.problem === 'failed') setUndoProblem(UNDO_FAILED);
+                    });
                 }}
               >
                 Undo
@@ -232,6 +251,13 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
             )}
             {chooseAnother}
           </div>
+        </div>
+      )}
+      {step.at === 'done' && undoProblem && (
+        <div className={data.actions}>
+          <p className={local.problem} role="alert">
+            {undoProblem}
+          </p>
         </div>
       )}
       {step.at === 'undone' && <Row label={step.text} control={chooseAnother} />}
@@ -272,7 +298,7 @@ function ImportPreview({
     else next.add(at);
     onTake(next);
   };
-  const switchText = all ? `All ${numbers.format(differ)}.` : take.size > 0 ? `${numbers.format(take.size)} of ${numbers.format(differ)}. The others keep yours.` : 'Off: yours stay as they are. Tick the ones to take.';
+  const switchText = all ? `All ${numbers.format(differ + preview.conflictsMore)}.` : take.size > 0 ? `${numbers.format(take.size)} of ${numbers.format(differ)}. The others keep yours.` : 'Off: yours stay as they are. Tick the ones to take.';
   return (
     <>
       {preview.problem ? (
@@ -504,7 +530,6 @@ const EXPORT_PROBLEMS: Record<string, string> = {
   io: 'Chord couldn’t save there. Choose another place.',
   write: 'Chord couldn’t save there. Choose another place.',
   read: 'Chord couldn’t read your passwords to write the file.',
-  'vault-passphrase': 'Use a different passphrase from the one your passwords are locked with.',
 };
 
 /** The export card (option 2A): the kind, then the save, with the passphrase check there when it's due. */

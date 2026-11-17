@@ -23,9 +23,9 @@
  */
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { uuidv7, type PasswordImportChoices, type PasswordImportSummary, type PasswordImportUndone, type WindowId } from '@chord/core';
+import { uuidv7, type PasswordImportChoices, type PasswordImportSummary, type WindowId } from '@chord/core';
 import type { PasswordOp, PasswordResult, VaultState } from '@chord/data';
-import type { PasswordExportResult, PasswordImportOpened, PasswordImportProgress, PasswordImportRun, PasswordRevealResult, PasswordStepResult, Toast } from '@chord/ipc';
+import type { PasswordExportResult, PasswordImportOpened, PasswordImportProgress, PasswordImportRun, PasswordRevealResult, PasswordStepResult, PasswordUndoResult, Toast } from '@chord/ipc';
 import { dialog, shell, type BaseWindow, type MessagePortMain, type OpenDialogOptions, type SaveDialogOptions } from 'electron';
 import type { FileReply, FileRequest } from '../../import-file/worker';
 import { ImportProcess, type ImportGate } from '../import';
@@ -85,7 +85,7 @@ export class PasswordTransfers {
   /** Files staged in chord-data this session, by stage id: a renderer names one, never a path. */
   private readonly stages = new Set<string>();
   /** Imports this session with something to undo: the window its toast is in, and Settings' card to tell. */
-  private readonly imports = new Map<string, { windowId: WindowId | null; notify: ((progress: PasswordImportProgress) => void) | null; stageId: string }>();
+  private readonly imports = new Map<string, { windowId: WindowId | null; notify: ((progress: PasswordImportProgress) => void) | null; stageId: string; undoing?: boolean }>();
   /** The import writing now, for chord-data's progress. */
   private writing: { importId: string; stageId: string; notify: ((progress: PasswordImportProgress) => void) | null } | null = null;
   /** A dialog, a read or an import between its click and its answer: one at a time. */
@@ -252,18 +252,34 @@ export class PasswordTransfers {
     await this.options.data({ op: 'importDrop', stageId }).catch(() => undefined);
   }
 
-  /** An import's Undo, this session: null when there's nothing to undo. */
-  async undo(importId: string): Promise<PasswordImportUndone | null> {
+  /**
+   * An import's Undo, this session. The import is forgotten only once chord-data says it's all taken back: an Undo
+   * that fails part way (a full disk) keeps the rest there and here, so pressing Undo again takes back the rest.
+   * `busy`: one is running (a second click, or the card's and the toast's at once).
+   */
+  async undo(importId: string): Promise<PasswordUndoResult> {
     const record = this.imports.get(importId);
-    if (!record) return null;
+    if (!record) return { ok: false, problem: 'missing' };
+    if (record.undoing) return { ok: false, problem: 'busy' };
+    record.undoing = true;
+    let result: PasswordResult;
+    try {
+      result = await this.options.data({ op: 'importUndo', importId }).catch((): PasswordResult => ({}));
+    } finally {
+      record.undoing = false;
+    }
+    if (!result.undone) {
+      // Still this import's to undo: the toast keeps its Undo, and says so; Settings' card shows its own problem line.
+      if (record.windowId !== null)
+        this.options.toast?.(record.windowId, { id: `import:${importId}`, message: 'Chord couldn’t undo all of the import', action: { label: 'Try again', command: { t: 'import.undo', importId } } });
+      return { ok: false, problem: 'failed' };
+    }
     this.imports.delete(importId);
-    const result = await this.options.data({ op: 'importUndo', importId }).catch((): PasswordResult => ({}));
-    if (!result.undone) return null;
     this.options.vault.transferred(true);
     // Settings' card and the window's toast both say so, whichever Undo was pressed.
     record.notify?.({ stageId: record.stageId, importId, phase: 'undone', done: 0, total: 0, undone: result.undone });
     if (record.windowId !== null) this.options.toast?.(record.windowId, { id: `import:${importId}`, message: 'Import undone' });
-    return result.undone;
+    return { ok: true, undone: result.undone };
   }
 
   /* ---------- export ---------- */

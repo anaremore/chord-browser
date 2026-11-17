@@ -8,17 +8,28 @@
 import { describe, expect, it, vi } from 'vitest';
 import { dataHeader, loginFromFile, loginRecord, parseHeader, plainWriter, readDataFile } from '@chord/core';
 import { nodeCrypto } from '@chord/data/crypto';
-import type { ExportRequest } from '@chord/ipc';
+import type { ExportProgress, ExportRequest } from '@chord/ipc';
 
 const saves: unknown[] = [];
+/** Where the save dialog answers (null: closed), and the export process's replies, as the test sends them. */
+let saveTo: string | null = null;
+let reply: ((message: unknown) => void) | null = null;
 vi.mock('electron', () => ({
-  dialog: { showSaveDialog: async (...args: unknown[]) => (saves.push(args), { canceled: true }) },
+  dialog: { showSaveDialog: async (...args: unknown[]) => (saves.push(args), saveTo ? { canceled: false, filePath: saveTo } : { canceled: true }) },
   shell: {},
-  utilityProcess: { fork: () => ({ on: () => undefined, once: () => undefined, postMessage: () => undefined, kill: () => undefined }) },
+  utilityProcess: {
+    fork: () => ({
+      on: (event: string, handler: (message: unknown) => void) => void (event === 'message' && (reply = handler)),
+      once: () => undefined,
+      postMessage: () => undefined,
+      kill: () => undefined,
+    }),
+  },
 }));
 
 const { Exporter } = await import('../../src/main/export');
 const { passwordsPort } = await import('../../src/export/passwords');
+const { exportText } = await import('../../src/renderer/settings/export-text');
 
 const FILE = 'a long passphrase for the file';
 const VAULT = 'correct horse battery staple';
@@ -59,6 +70,50 @@ describe('main: the passwords’ port, only for an encrypted file that asks for 
       expect(result).toEqual({ ok: false, problem: c.problem });
     });
   }
+});
+
+describe('a file saved without passwords says how many were left out', () => {
+  const cases: { what: string; request: ExportRequest; done: { bytes: number; skipped: number; passwords?: number }; want: { passwords?: number; passwordsLeftOut?: number } }[] = [
+    { what: 'plain', request: { history: true, assistant: true, passphrase: null }, done: { bytes: 10, skipped: 0 }, want: { passwordsLeftOut: 3 } },
+    { what: 'plain, passwords asked for', request: { history: true, assistant: true, passwords: true, passphrase: null }, done: { bytes: 10, skipped: 0 }, want: { passwordsLeftOut: 3 } },
+    { what: 'encrypted, passwords off', request: { history: true, assistant: true, passwords: false, passphrase: FILE }, done: { bytes: 10, skipped: 0 }, want: { passwordsLeftOut: 3 } },
+    { what: 'encrypted, passwords on', request: { history: true, assistant: true, passwords: true, passphrase: FILE }, done: { bytes: 10, skipped: 0, passwords: 3 }, want: { passwords: 3 } },
+  ];
+  for (const c of cases) {
+    it(c.what, async () => {
+      saveTo = 'Chord data.jsonl';
+      reply = null;
+      const told: ExportProgress[] = [];
+      const result = await exporter([]).run(null, c.request, (p) => told.push(p));
+      saveTo = null;
+      expect(result.ok).toBe(true);
+      reply!({ type: 'done', ...c.done });
+      const done = told.find((p) => p.phase === 'done')!;
+      expect({ passwords: done.passwords, passwordsLeftOut: done.passwordsLeftOut }).toEqual({ passwords: undefined, passwordsLeftOut: undefined, ...c.want });
+    });
+  }
+});
+
+describe('what the result line says', () => {
+  const base: ExportProgress = { exportId: 'e', phase: 'done', done: 0, total: 0, share: 1, name: 'Chord data 2026-11-17.jsonl', bytes: 2_400_000 };
+  it.each([
+    [undefined, 'Saved Chord data 2026-11-17.jsonl, 2.4 MB'],
+    [1, 'Saved Chord data 2026-11-17.jsonl, 2.4 MB. Your 1 password was left out'],
+    [412, 'Saved Chord data 2026-11-17.jsonl, 2.4 MB. Your 412 passwords were left out'],
+  ])('%s left out', (passwordsLeftOut, text) => expect(exportText({ ...base, ...(passwordsLeftOut !== undefined ? { passwordsLeftOut } : {}) })).toBe(text));
+  it('with them', () => expect(exportText({ ...base, name: 'Chord data.chorddata', passwords: 2 })).toBe('Saved Chord data.chorddata, 2.4 MB, with 2 passwords'));
+});
+
+describe('the vault-passphrase check fails closed', () => {
+  it('a check that can’t be made refuses the export', async () => {
+    const asked: string[] = [];
+    const e = exporter(asked);
+    (e as unknown as { options: { isVaultPassphrase(p: string): Promise<boolean> } }).options.isVaultPassphrase = async () => {
+      throw new Error('chord-data isn’t answering');
+    };
+    expect(await e.run(null, { history: true, assistant: true, passwords: true, passphrase: FILE }, () => undefined)).toEqual({ ok: false, problem: 'locked' });
+    expect(asked).toEqual([]);
+  });
 });
 
 describe('the export process: the port closed unread unless the file is encrypted and asked for them', () => {

@@ -179,6 +179,9 @@ describe('which rows come in', () => {
     { what: 'two addresses joined by a comma', row: 'x,"https://a.example,https://b.example",u,p,', origin: 'https://a.example' },
     { what: 'two addresses joined by a line break', row: 'x,"https://a.example\nhttps://b.example",u,p,', origin: 'https://a.example' },
     { what: 'two addresses joined by a semicolon', row: 'x,"https://a.example;https://b.example",u,p,', origin: 'https://a.example' },
+    // Only percent-encoding gets a separator past the split into a host: the guard refuses it.
+    { what: 'a comma, percent-encoded into the host', row: 'x,https://a%2Cb.example/,u,p,', kind: 'address' },
+    { what: 'a semicolon, percent-encoded into the host', row: 'x,https://a%3Bb.example/,u,p,', kind: 'address' },
     { what: 'an app, then a site, joined by a comma', row: 'x,"android://x@com.example,https://b.example",u,p,', origin: 'https://b.example' },
     { what: 'a username with a control character', row: 'x,https://example.com,"ada\u0000",p,', kind: 'text' },
     { what: 'localhost', row: 'x,http://localhost:3000,u,p,', origin: 'http://localhost:3000' },

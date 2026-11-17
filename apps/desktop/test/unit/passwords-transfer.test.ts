@@ -36,10 +36,10 @@ const csv = (name: string, text: string) => {
   return path;
 };
 
-function transfers() {
+function transfers(data: (op: Parameters<ChordDatabase['passwords']['run']>[0]) => ReturnType<ChordDatabase['passwords']['run']> = (op) => db.passwords.run(op)) {
   return new PasswordTransfers({
     workerPath: 'unused',
-    data: (op) => db.passwords.run(op),
+    data,
     stagePort: async (stageId) => ({ stageId }) as never,
     exportPort: async () => ({ port: true }) as never,
     vault: {
@@ -164,10 +164,39 @@ describe('Import…', () => {
     if (!run.ok || !run.importId) throw new Error('not imported');
     expect(toasts.at(-1)).toEqual({ windowId: '3', toast: { id: `import:${run.importId}`, message: 'Imported 2 passwords', action: { label: 'Undo', command: { t: 'import.undo', importId: run.importId } } } });
     expect(t.owns(run.importId)).toBe(true);
-    expect(await t.undo(run.importId)).toEqual({ removed: 2, restored: 0, changed: 0 });
+    expect(await t.undo(run.importId)).toEqual({ ok: true, undone: { removed: 2, restored: 0, changed: 0 } });
     expect(toasts.at(-1)!.toast.message).toBe('Import undone');
     expect(told.at(-1)).toMatchObject({ phase: 'undone', importId: run.importId });
     expect(t.owns(run.importId)).toBe(false);
+    expect((await db.passwords.run({ op: 'status' })).status!.count).toBe(0);
+  });
+
+  it('an Undo that fails is kept, says so, and goes through when tried again; one at a time', async () => {
+    await db.passwords.run({ op: 'setup', passphrase: PASSPHRASE });
+    openPaths = [csv('a.csv', CHROME)];
+    let failNext = false;
+    const t = transfers(async (op) => {
+      if (op.op === 'importUndo' && failNext) {
+        failNext = false;
+        throw new Error('SqliteError');
+      }
+      return db.passwords.run(op);
+    });
+    const opened = await t.choose(null);
+    if (!opened.ok) throw new Error('not opened');
+    const run = await t.run(opened.stageId, { take: 'yours', except: [] }, undefined, { windowId: 4 as never, notify: null });
+    if (!run.ok || !run.importId) throw new Error('not imported');
+    failNext = true;
+    expect(await t.undo(run.importId)).toEqual({ ok: false, problem: 'failed' });
+    // Still the import's: the toast offers it again.
+    expect(t.owns(run.importId)).toBe(true);
+    expect(toasts.at(-1)!.toast).toMatchObject({ message: 'Chord couldn’t undo all of the import', action: { label: 'Try again', command: { t: 'import.undo', importId: run.importId } } });
+    // Two at once (the card's and the toast's): one goes, the other is told it's busy.
+    const [first, second] = await Promise.all([t.undo(run.importId), t.undo(run.importId)]);
+    expect([first, second]).toContainEqual({ ok: false, problem: 'busy' });
+    expect([first, second]).toContainEqual({ ok: true, undone: { removed: 2, restored: 0, changed: 0 } });
+    expect(t.owns(run.importId)).toBe(false);
+    expect(await t.undo(run.importId)).toEqual({ ok: false, problem: 'missing' });
     expect((await db.passwords.run({ op: 'status' })).status!.count).toBe(0);
   });
 

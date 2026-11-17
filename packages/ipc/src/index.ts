@@ -808,6 +808,12 @@ export interface PasswordImportProgress {
   undone?: PasswordImportUndone;
 }
 
+/**
+ * An import's Undo: what it took back, or why not. `failed`: part of it couldn't be taken back (a full disk), and the
+ * rest is still the import's, so Undo can be pressed again; `busy`: one is running; `missing`: nothing to undo.
+ */
+export type PasswordUndoResult = { ok: true; undone: PasswordImportUndone } | { ok: false; problem: 'missing' | 'busy' | 'failed' };
+
 /** *Export passwords…*: saved (`name`, how many), or why not. `passphrase`: it must be typed again first, as for *Show*. */
 export type PasswordExportResult =
   | { ok: true; exportId: string; name: string; count: number }
@@ -1540,7 +1546,7 @@ export const invokeChannels = {
   },
   'passwords:importDrop': { roles: ['internal'], request: z.strictObject({ stageId: id }), response: z.void() },
   /** An import's Undo, this session. */
-  'passwords:importUndo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.custom<PasswordImportUndone | null>() },
+  'passwords:importUndo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.custom<PasswordUndoResult>() },
   /** *Export…*: asks for the passphrase as *Show* does, then the save dialog; a CSV in Chrome's shape. */
   'passwords:export': { roles: ['internal'], request: z.strictObject({ passphrase: typedPassphrase.optional() }), response: z.custom<PasswordExportResult>() },
   /** How many passwords are saved, counted without opening the vault (Your data's export card). */
@@ -2220,7 +2226,7 @@ export interface PasswordsApi {
   importPreview(stageId: string): Promise<PasswordImportSummary | null>;
   importRun(stageId: string, choices: PasswordImportChoices, passphrase?: string): Promise<PasswordImportRun>;
   importDrop(stageId: string): Promise<void>;
-  importUndo(importId: string): Promise<PasswordImportUndone | null>;
+  importUndo(importId: string): Promise<PasswordUndoResult>;
   /** Export… as a CSV, after the passphrase check. */
   exportCsv(passphrase?: string): Promise<PasswordExportResult>;
   exportShow(exportId: string): Promise<void>;

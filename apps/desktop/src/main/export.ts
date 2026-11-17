@@ -88,7 +88,10 @@ export class Exporter {
     let passwords: MessagePortMain | null = null;
     if (request.passwords && encrypted) {
       // The file's passphrase is its own, never the one the passwords are locked with (S17, decided 2026-11-17).
-      if (await this.options.isVaultPassphrase?.(request.passphrase!).catch(() => false)) return { ok: false, problem: 'vault-passphrase' };
+      // Fails closed: when the check can't be made (chord-data not answering), the export doesn't go ahead.
+      const same = this.options.isVaultPassphrase ? await this.options.isVaultPassphrase(request.passphrase!).catch(() => null) : false;
+      if (same === null) return { ok: false, problem: 'locked' };
+      if (same) return { ok: false, problem: 'vault-passphrase' };
       const asked = await this.options.passwords?.(request.vaultPassphrase);
       if (!asked) return { ok: false, problem: 'locked' };
       if ('problem' in asked) return { ok: false, problem: asked.problem };

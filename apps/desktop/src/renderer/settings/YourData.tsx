@@ -12,6 +12,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { api } from './api';
 import { Row, SectionHeader, Switch } from './controls';
+import { exportText } from './export-text';
 import { PassphraseAsk } from './Passwords';
 import { FromChordFile } from './ChordFile';
 import { FromAnotherBrowser } from './Import';
@@ -20,6 +21,8 @@ import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
 const numbers = new Intl.NumberFormat('en-US');
+
+export { exportText, fileSize } from './export-text';
 
 /** "6 chords · 214 pinned tabs in 18 folders · 31 Today tabs · … · your settings." */
 export function whatGoesIn(c: ExportCounts): string {
@@ -34,34 +37,6 @@ export function whatGoesIn(c: ExportCounts): string {
     'your settings',
   ].filter(Boolean);
   return `${parts.join(' · ')}.`;
-}
-
-/** "3.8 MB", "640 KB". */
-export function fileSize(bytes: number): string {
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  if (bytes >= 1_000) return `${Math.round(bytes / 1_000)} KB`;
-  return plural(bytes, 'byte');
-}
-
-/** What the line under the bar says while Chord writes. */
-export function exportText(p: ExportProgress): string {
-  switch (p.phase) {
-    case 'key':
-      return 'Locking the file with your passphrase…';
-    case 'setup':
-      return 'Writing your setup…';
-    case 'today':
-      return 'Writing Today tabs…';
-    case 'history':
-      return `Writing history: ${numbers.format(p.done)} of ${plural(p.total, 'page')}`;
-    case 'assistant':
-      return `Writing assistant chats: ${numbers.format(p.done)} of ${plural(p.total, 'chat')}`;
-    case 'done':
-      return `Saved ${p.name}, ${fileSize(p.bytes ?? 0)}${p.passwords !== undefined ? `, with ${plural(p.passwords, 'password')}` : ''}${p.passwordsLeftOut ? `. Your ${plural(p.passwordsLeftOut, 'password')} ${p.passwordsLeftOut === 1 ? 'was' : 'were'} left out` : ''}${p.skipped ? `. ${plural(p.skipped, 'thing')} too big for the file (over 32 MB) stayed out.` : ''}`;
-    case 'failed':
-      if (p.problem === 'locked') return 'Your passwords locked while the file was written, so it wasn’t kept. Unlock them and save again.';
-      return p.problem === 'read' ? 'Chord couldn’t read your data to write the file. Choose where to save to try again.' : 'Chord couldn’t save there. Choose another place.';
-  }
 }
 
 /** The Export row, and the card under it once it's opened. */

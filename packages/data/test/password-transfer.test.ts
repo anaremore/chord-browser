@@ -359,7 +359,7 @@ describe(`${BIG} rows`, () => {
     expect(imported).toEqual({ added: BIG - SAVED, updated: SAVED, kept: 0, same: 0, stopped: false });
     console.log(`${BIG} rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms`);
     // The budget (S17, Phase 2: import and export): CI's own step runs this alone at full size, where a tenfold regression
-    // of the 6–16 ms measured fails. In the whole suite, beside every other file, only a loose bound.
+    // of the 9.4 ms measured there (10.6 ms on an SSD, 40 ms on a slower drive, on Windows) fails. In the whole suite, beside every other file, only a loose bound.
     expect(longest).toBeLessThan(process.env['CHORD_PASSWORD_PERF'] === '1' ? 100 : 1000);
     const undo0 = performance.now();
     expect((await run({ op: 'importUndo', importId: 'big' })).undone).toEqual({ removed: BIG - SAVED, restored: SAVED, changed: 0 });
