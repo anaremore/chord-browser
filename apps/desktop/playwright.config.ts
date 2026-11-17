@@ -3,8 +3,9 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: 'test/e2e',
   outputDir: 'test-results',
-  // One temp folder per run, removed when it ends: profiles never pile up.
-  globalSetup: './test/run-temp.ts',
+  // One temp folder per run, removed when it ends: profiles never pile up. Spelling dictionaries
+  // from a local server, never downloaded from Google during a test (test/dictionaries.ts).
+  globalSetup: ['./test/run-temp.ts', './test/dictionaries.ts'],
   timeout: 60_000,
   // CI's shared machines sometimes take more than the default 5 s over a cold app's first page load
   // (its tab still named by its address). A check that passes is no slower; one that fails says so later.

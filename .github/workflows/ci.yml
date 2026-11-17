@@ -151,6 +151,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
+      # E2E's spelling dictionary: a pinned, hash-checked download served to Chord from this machine
+      # (apps/desktop/test/dictionaries.ts), so no test downloads one from Google.
+      - name: Cache the spelling dictionary
+        uses: actions/cache@v6
+        with:
+          path: apps/desktop/test/.cache/dictionaries
+          key: dictionaries-${{ hashFiles('apps/desktop/test/dictionaries.ts') }}
+
       # Chord Player's E2E test (player.spec.ts, Linux and Windows x64) packages the player on castLabs ECS: its checked zip, kept.
       - name: Cache castLabs ECS
         if: (runner.os == 'Linux' || runner.os == 'Windows') && runner.arch == 'X64'

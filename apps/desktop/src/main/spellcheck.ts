@@ -6,7 +6,7 @@
  * right-click menu (context-menu.ts).
  */
 import type { SpellcheckSettings } from '@chord/core';
-import { session, type Session } from 'electron';
+import { app, session, type Session } from 'electron';
 
 /**
  * Where Hunspell dictionaries come from: Chromium's own default, a Google
@@ -23,6 +23,13 @@ export const SPELLCHECK_DICTIONARIES_URL = 'https://redirector.gvt1.com/edgedl/c
  * spellchecker (macOS always; Windows for the languages it checks itself).
  */
 export const SPELLCHECK_OFFLINE_URL = 'http://127.0.0.1:9/';
+
+/**
+ * Development and E2E only: a local server with pinned dictionaries in place of Google's CDN
+ * (test/e2e/dictionaries.ts), so tests never download one, nor see that download in what they record.
+ * Google-free mode still points at SPELLCHECK_OFFLINE_URL.
+ */
+const onlineSource = (!app.isPackaged && process.env['CHORD_E2E_SPELLCHECK_DICTIONARIES']) || SPELLCHECK_DICTIONARIES_URL;
 
 /** macOS checks spelling with the system's own spellchecker: no dictionaries, no language choice. */
 const systemManaged = process.platform === 'darwin';
@@ -46,7 +53,7 @@ export function spellcheckLanguages(): string[] {
  */
 export function setDictionarySource(googleFree: boolean): void {
   if (systemManaged) return;
-  const source = googleFree ? SPELLCHECK_OFFLINE_URL : SPELLCHECK_DICTIONARIES_URL;
+  const source = googleFree ? SPELLCHECK_OFFLINE_URL : onlineSource;
   if (source === dictionarySource) return;
   session.defaultSession.setSpellCheckerDictionaryDownloadURL(source);
   dictionarySource = source;

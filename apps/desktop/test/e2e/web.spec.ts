@@ -142,7 +142,8 @@ test('a misspelled word offers suggestions and Add to dictionary at the top of t
     await tab.keyboard.type('teh ');
     const id = (await contentsId(app, `${site.origin}/spell`))!;
     const menu = () => app.evaluate((_electron, contents) => (globalThis as unknown as { chordTestHooks: { contextMenu(id: number): string[] | null } }).chordTestHooks.contextMenu(contents), id);
-    // Spelling is checked as you type, once the dictionary has loaded (the first time, it downloads).
+    // Spelling is checked as you type, once the dictionary has loaded: downloaded at launch, from this computer
+    // (test/dictionaries.ts), never from Google's CDN.
     // Text typed before then isn't checked again: while the word isn't marked at all, type it again.
     await expect
       .poll(
@@ -163,7 +164,8 @@ test('a misspelled word offers suggestions and Add to dictionary at the top of t
           const ses = webContents.fromId(contents)!.session;
           return { enabled: ses.isSpellCheckerEnabled(), languages: ses.getSpellCheckerLanguages(), available: ses.availableSpellCheckerLanguages.length };
         }, id);
-        throw new Error(`${error.message}\nSpelling in the tab's session: ${JSON.stringify(spelling)}`);
+        const source = process.env['CHORD_E2E_SPELLCHECK_DICTIONARIES'] ?? "Google's CDN (test/dictionaries.ts didn't run)";
+        throw new Error(`${error.message}\nSpelling in the tab's session: ${JSON.stringify(spelling)}, dictionaries from ${source}`);
       });
     const labels = (await menu())!;
     expect(labels.indexOf('Add to dictionary')).toBeLessThan(labels.indexOf('Inspect'));

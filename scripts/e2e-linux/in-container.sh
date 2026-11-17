@@ -18,6 +18,8 @@ step() { echo "[e2e-linux] $1 ($(($(date +%s) - started)) s)"; }
 cd /work
 # Chord Player's E2E test packages the player on castLabs ECS: keep ECS's checked zip in the Electron volume too.
 export CHORD_ECS_CACHE="$HOME/.cache/electron/chord-ecs"
+# And E2E's pinned spelling dictionary (apps/desktop/test/dictionaries.ts).
+export CHORD_DICTIONARY_CACHE="$HOME/.cache/electron/chord-dictionaries"
 step "pnpm install (store and Electron download cached in volumes)"
 # The store is a volume and /work isn't, so pnpm copies packages out of it rather than linking them.
 pnpm install --frozen-lockfile --prefer-offline --store-dir "$HOME/.cache/pnpm-store" --package-import-method copy
