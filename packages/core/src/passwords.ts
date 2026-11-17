@@ -31,7 +31,6 @@ export const PASSWORD_REAUTH_MS = 5 * 60_000;
 /** A copied password leaves the clipboard after this, if it's still what's there. */
 export const PASSWORD_CLIPBOARD_MS = 60_000;
 
-/** What one sign-in may hold, in characters (S17 §8). Longer is refused, never cut: a cut password is a wrong one. */
 /**
  * The menu's ↻ by key (S17 §9, the owner's design of 2026-11-17): Ctrl+Shift+K, ⇧⌘K. The menu's keys go through
  * `before-input-event` and the arrows are the page's caret's; this is free in Chord's shortcuts (S8), isn't Chrome's,
@@ -40,6 +39,7 @@ export const PASSWORD_CLIPBOARD_MS = 60_000;
  */
 export const PASSWORD_REGENERATE_KEYS = 'Mod+Shift+K';
 
+/** What one sign-in may hold, in characters (S17 §8). Longer is refused, never cut: a cut password is a wrong one. */
 export const PASSWORD_LIMITS = { username: 500, password: 1000, note: 4000, realm: 200, origin: 2048 } as const;
 
 /** How long the vault stays open unused; null: until Chord quits or you lock it. */

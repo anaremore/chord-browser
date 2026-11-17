@@ -568,11 +568,15 @@ test('an account picked on a new password’s field (intoNew): a form with no cu
   await a.clear();
   await fill(page, FILL);
   expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false, reason: 'password' }]);
-  // A change form keeps its current password's field for the account, whichever field the menu was on.
-  a = await open(page, CHANGE);
-  await a.clear();
-  await fill(page, { ...FILL, intoNew: true });
-  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false, reason: 'password' }]);
+  // A change form: the account's password goes into its current field, whichever field the menu was on, and the new
+  // password and its confirmation stay empty, yours to choose (review round 1 of #53).
+  for (const payload of [FILL, { ...FILL, intoNew: true as const }]) {
+    a = await open(page, CHANGE);
+    await a.clear();
+    await fill(page, payload);
+    expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+    expect(await values(page)).toEqual({ o: 'secret pass', n: '', c: '' });
+  }
 });
 
 test('a change form’s submit carries its current password beside the new one, for main to find the account', async ({ page }) => {

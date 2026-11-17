@@ -14,10 +14,11 @@
  * About 125 KB together, so this is a subpath of core (`@chord/core/password-quirks`) that main imports the first time
  * it needs one, never at launch and never in a renderer (performance rule 1).
  *
- * A host is looked up as itself, then each parent domain down to two labels (`login.example.co.uk`,
- * `example.co.uk`, `co.uk`): the lists name sites by host or registrable domain, never a public suffix.
+ * A host is looked up as itself, then each parent domain down to its registrable domain (`login.example.co.uk`,
+ * `example.co.uk`; never `co.uk`), by the Public Suffix List with private suffixes on, as matching is (`tldts`).
  */
 import changeUrls from '../vendor/apple-password-manager-resources/change-password-URLs.json';
+import { getDomain } from 'tldts';
 import rules from '../vendor/apple-password-manager-resources/password-rules.json';
 
 /** Core has no DOM or Node types: the WHATWG URL, as main and chord-data have it (as in password-sites.ts). */
@@ -26,11 +27,15 @@ declare const URL: new (url: string, base?: string) => { protocol: string; hostn
 const RULES = rules as Record<string, { 'password-rules'?: string }>;
 const CHANGE_URLS = changeUrls as Record<string, string>;
 
-/** The host and its parents, longest first, down to two labels. */
+/** The host and its parents, longest first, down to its registrable domain; the host alone for an IP address, `localhost` or a public suffix. */
 function hostsOf(host: string): string[] {
-  const labels = host.toLowerCase().replace(/\.$/, '').split('.');
+  const clean = host.toLowerCase().replace(/\.$/, '');
+  const site = getDomain(clean, { allowPrivateDomains: true });
+  if (!site || !(clean === site || clean.endsWith(`.${site}`))) return [clean];
+  const labels = clean.split('.');
+  const floor = site.split('.').length;
   const out: string[] = [];
-  for (let i = 0; i <= labels.length - 2; i++) out.push(labels.slice(i).join('.'));
+  for (let i = 0; i <= labels.length - floor; i++) out.push(labels.slice(i).join('.'));
   return out;
 }
 

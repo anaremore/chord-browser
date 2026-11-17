@@ -168,6 +168,41 @@ export function passwordRulesFor(field: FieldPasswordRules, siteRules: string | 
 const SYMBOLS = NAMED['special']!.replace(' ', '');
 
 /**
+ * The floor under *Use a strong password* (review round 1 of #53, the planning thread's decision): a password the
+ * site's rules hold under 8 characters, or under about 40 bits, is still offered, the strongest they allow, but as
+ * *Use a password this site allows*.
+ */
+export const STRONG_PASSWORD = { length: 8, bits: 40 } as const;
+
+/** The characters a password for these rules is drawn from (as `generatePassword` draws them). */
+const poolOf = (rules: PasswordRuleSet): string => {
+  const allowed = rules.allowed.replace(/ /g, '');
+  return intersect(DEFAULT_ALPHABET, allowed) || allowed;
+};
+
+/** A password's strength as it was made for these rules: its length times the bits of each character drawn, a little under. */
+export function passwordBits(password: string, rules: PasswordRuleSet): number {
+  const pool = new Set([...poolOf(rules), ...rules.required.join('')]).size;
+  return pool > 1 ? password.length * Math.log2(pool) : 0;
+}
+
+/** Whether a password made for these rules may be called strong (`STRONG_PASSWORD`). */
+export const isStrongPassword = (password: string, rules: PasswordRuleSet): boolean =>
+  password.length >= STRONG_PASSWORD.length && passwordBits(password, rules) >= STRONG_PASSWORD.bits;
+
+/** The kinds of character a set holds, in words: `digits`, `letters and digits`, `letters, digits and symbols`. */
+function kindsOf(chars: string): string | null {
+  const kinds = [/[A-Za-z]/.test(chars) && 'letters', /[0-9]/.test(chars) && 'digits', [...SYMBOLS].some((c) => chars.includes(c)) && 'symbols'].filter((k): k is string => !!k);
+  if (!kinds.length) return null;
+  return kinds.length === 1 ? kinds[0]! : `${kinds.slice(0, -1).join(', ')} and ${kinds.at(-1)}`;
+}
+
+/** Why a password isn't strong, in words, for the row's second line: `Only 4 digits, as this site asks`. */
+export function describeWeakPassword(password: string, rules: PasswordRuleSet): string {
+  return `Only ${password.length} ${kindsOf(poolOf(rules)) ?? 'characters'}, as this site asks`;
+}
+
+/**
  * In plain words, what a site's rules asked of a password (S17 §9, the owner's design 3A): its characters where they
  * were narrowed, its length where it was bounded, a symbol where one was required. `Letters and digits, 12–16, as this
  * site asks`. Null for Chord's own default, with nothing narrowed.

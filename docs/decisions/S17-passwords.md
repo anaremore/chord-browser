@@ -1067,24 +1067,28 @@ Only what a real desktop can show; everything else above was measured.
 
   `@chord/core/password-quirks` and `@chord/core/password-generator` are subpaths that main loads the first time a new password's field takes focus, never at launch or in a renderer.
 - **The menu on a new password's field** (3A): *Use a strong password* first, built like an account row. The password is in mono on its second line, the site's rules in words under it where they shaped it (*Letters and digits, 12–16, as this site asks*), and ↻ at the row's end. The accounts and *Other passwords…* follow, past a hairline. ↓ ↑ Enter as ever.
-  - **↻ by key: Ctrl+Shift+K (⇧⌘K)**, shown in its tooltip, taken only while the menu is open. Arrows are the page's caret's. It's free in Chord's shortcuts (S8) and isn't Chrome's. It doesn't edit text: Ctrl+Shift+V pastes, Z redoes, and GTK's U starts Unicode input. It types no character, as Alt or Option would.
+  - **↻ by key: Ctrl+Shift+K (⇧⌘K)**, shown in its tooltip, taken only while the menu is open. Arrows are the page's caret's. It's free in Chord's shortcuts (S8) and isn't Chrome's. It doesn't edit text: Ctrl+Shift+V pastes, Z redoes, and GTK's U starts Unicode input. It types no character, as Alt or Option would. While the menu is open it wins over a shortcut of your own on the same key (Settings → Keyboard shortcuts), as the menu's arrows and Enter do.
+  - **On a form that reads as a sign-in** (its password field carrying `autocomplete=new-password`, as some sites' do), the first account is highlighted; the generator's row stays first.
+  - **A floor under "strong"** (review round 1): rules that hold the password under 8 characters, or under about 40 bits, still get the strongest password they allow, as *Use a password this site allows*, with the limit in words (*Only 4 digits, as this site asks*). No color or badge: the words say it.
   - It's offered on a `new-password` or `confirmation-password` field of any form but a first step, as the menu's accounts are on the others. Not in a private window (it never saves), nor where passwords are off.
 - **Saved the moment it's filled** (presave), before any submit: a new sign-in for the frame's origin, no username yet, *Not confirmed*.
   - Locked, the unlock card comes first. With no vault yet, the save card's passphrase step comes first, and nothing is filled until it's saved; cancel either, and nothing is filled.
   - It's saved on a site you said never to save for: generating is asking.
 - **Filled** only into the frame, origin and document main showed the menu for. The agent writes it only into the form's new password's field and its confirmation, each a visible `type=password` field you could type in, never the username or the current password. It refuses (*the form changed*) when the new password's field isn't the one it knew before its rescan, or when a field it saw as a password is text now (a show-password toggle).
-- **The tab remembers its presave for the site for 10 minutes** (`PRESAVE_MS`), in memory. A second step's confirmation, or the page reloaded, is offered *the same* password, so nothing is made twice. A new one in the same form before any submit changes that entry, keeping the one before. After a submit, it's a new entry, since the site may have the first.
+- **The tab remembers its presave for the site for 10 minutes** (`PRESAVE_MS`), in memory. A second step's confirmation, or the page reloaded, is offered *the same* password, so nothing is made twice. A new one (↻) in the same form, or in the site's page loaded again, before any submit, changes that entry, keeping the one before. A submit the site rejected (`failed`) counts as none. After a submit nothing failed, it's a new entry, since the site may have the first. Another form on the same page is another entry.
 - **The entry takes its username at the submit** of its own form (`submitted` now carries the username, never the password). A sign-in that worked with it confirms it, and the **saved card** says so (5A): *Your new password for example.com is saved.*, the username, **Done**, *Delete it*.
 - **Sign-up with a password you typed:** phase 1's save card, titled *Save the password for your new account on example.com?*
 - **Change and reset forms:** the agent's candidate at a submit carries the current password beside the new one (`values.current`), for main only.
-  - The account is the one saved under the form's username, where it has one, else the saved one on the site whose password is the current field (chord-data's `matchCurrent`).
+  - The account is the saved one on the site whose password is the current field (chord-data's `matchCurrent`), as the owner decided. The form's username only chooses among several that match; it never stands in for the current password. The change's own presave is never a match, nor among the chooser's rows.
+  - Locked when the change worked: the update card, whose **Update** unlocks first, then finds the account as above (and asks which, if it has to).
+  - Filling an account into a change form puts its password in the current field only: the new one and its confirmation stay empty, yours to choose (review round 1; phase 1's *never half a fill* left them in the way).
   - One → the update card, for a generated password too, applied on **Update** only. Updating also deletes the change's presave.
   - None or several → *Which account on example.com did you change?*, with the sign-in box's chooser rows. **Update** waits for a pick; *Save as new* keeps it as another sign-in. None saved for the site at all → the save card.
 - ***Not confirmed*** (4A).
   - In Settings → Passwords it replaces the date in the right column; *No username yet* where there's none. The row's detail says it in one line: *Not confirmed: Chord made this password today and kept it, but hasn't seen the site take it. If the sign-up didn't go through, delete it.*
   - In the menu it reads *Not confirmed · made today*, after the confirmed accounts.
   - Never lost: an entry no submit confirmed stays in the vault and in Settings for good. It's in the menu for a day after it was made (`UNCONFIRMED_IN_MENU_MS`), long enough to come back to a sign-up that failed, then in Settings only. A sign-in that works with it, or a save over it, confirms it.
-- ***Change password on the site*** (6A): Apple's page for the site where its list has one, else the site's `/.well-known/change-password`.
+- ***Change password on the site*** (6A): Apple's page for the site where its list has one, else the site's `/.well-known/change-password`. Apple's lists are looked up by the host and its parents down to its registrable domain (`tldts`, private suffixes on), never a public suffix such as `co.uk`.
   - Only `https`: an `http` sign-in's detail says *This site isn't on HTTPS, so Chord doesn't open its pages for you.* Main works out the address from the sign-in Settings was shown (`passwords:changeOnSite`), never from the renderer.
   - Once it's opened, one line: *Opened in a new tab. Use a strong password there, and Chord updates this one when the site takes it.*
 
@@ -1097,8 +1101,11 @@ Only what a real desktop can show; everything else above was measured.
 **After a security review** (a subagent's, of this half):
 - **A page can't make main generate in a loop.** Each generation draws at most 20,000 characters, whatever the length. Rules that can't be met are remembered for the document, so moving focus between such fields costs one generation, not one per focus.
 - **The tab's presave is offered again only while the vault is open.** Locked (by you or its clock) or started over, it's forgotten: a new password is made, and choosing asks to unlock. One offered just before a lock asks to unlock before it's filled.
-- **The generator's row takes no Enter for `durations.promptInputDelay`** (500 ms) after it opens, as the sign-in box's buttons don't, so a page can't focus a field by script under an Enter meant for something else.
+- **The generator's row takes no Enter, and no click, for `durations.promptInputDelay`** (500 ms) after it opens, as the sign-in box's buttons don't, so a page can't focus a field by script under an Enter or a click meant for something else.
+- **The frame is checked before the password is saved,** as well as before it's sent: a page that went meanwhile gets nothing and leaves no presave behind.
 - **↻ sits over the row's end, outside its option** (axe's *nested-interactive*: a button can't be inside an option). The look is the mock's.
+
+**The parser is Apple's, transliterated,** not a dependency: Apple publishes it as a tool, not a package, so Chord keeps a TypeScript port at the vendored commit, checked against Apple's own test cases, to update with the lists.
 
 **What it can't tell:** a sign-up whose submit Chord doesn't see (a formless one, phase 3) leaves its presave *Not confirmed*, with no username; the next sign-in with it confirms it. A change form with neither a username nor a current password's field can't be matched, so the card asks.
 

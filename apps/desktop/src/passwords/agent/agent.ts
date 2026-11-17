@@ -531,7 +531,15 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
         : [];
     // Never half a fill: a password field you could type in, with a role in this form, that the fill would leave
     // empty (main sent no password, as for a first step, or the field isn't the current password) gets nothing at all.
-    const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (!p.password || !into.includes(el)));
+    // A change form's new password and its confirmation are yours to choose: the account's password goes into its
+    // current field, and they stay empty (review round 1 of #53).
+    const intoCurrent = !!pass && !!p.password;
+    const left = k.scanned.elements.filter((el, i) => {
+      const role = c.roles.get(k.scanned.record.fields[i]!.key);
+      if (controlType(el) !== 'password' || !role || !usable(el)) return false;
+      if (intoCurrent && (role === 'new-password' || role === 'confirmation-password')) return false;
+      return !p.password || !into.includes(el);
+    });
     if (left.length) return 'password';
     if (!user && !into.length) return 'changed';
     // Main sent a password: the form had one when the menu showed. One with none now (hidden since) changed.

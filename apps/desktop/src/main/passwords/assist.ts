@@ -170,7 +170,7 @@ interface Menu {
    * On a new password's field: the generator's row, first, its password and its rules in words, the field's rules
    * (for ↻), and whether it's the tab's presave offered again (`again`). `vault`: what choosing it asks first.
    */
-  generate?: { password: string; rule: string | null; again: boolean; vault: 'open' | 'locked' | 'none'; readonly rules: GeneratorRules };
+  generate?: { password: string; rule: string | null; strong: boolean; again: boolean; vault: 'open' | 'locked' | 'none'; readonly rules: GeneratorRules };
 }
 
 /**
@@ -184,8 +184,9 @@ interface Presave {
   readonly doc: number;
   readonly formId: string;
   password: string;
-  /** Its rules in words, for the row that offers it again. */
+  /** Its rules in words, and whether it's strong, for the row that offers it again. */
   readonly rule: string | null;
+  readonly strong: boolean;
   /** A submit signal came since it was filled: the site may have it now, so ↻ makes another entry rather than changing this one. */
   submitted: boolean;
   timer: unknown;
@@ -225,6 +226,8 @@ interface Card {
   presaved?: string;
   /** A generated password with no vault yet: Save chooses the passphrase, saves it, then fills it as the menu would have. */
   generated?: { readonly menu: Menu };
+  /** A change's card made while locked: the form's current password, to find the account once unlocked. */
+  change?: { readonly current: string | null };
   /** The vault was locked when it was offered: Save asks to unlock first, and the vault decides new or update then. */
   locked: boolean;
   setup: boolean;
@@ -250,6 +253,27 @@ const hostOf = (origin: string) => {
 };
 const sameFrame = (a: Pick<FrameRef, 'processId' | 'routingId'> | null | undefined, b: Pick<FrameRef, 'processId' | 'routingId'> | null | undefined) =>
   !!a && !!b && a.processId === b.processId && a.routingId === b.routingId;
+
+/**
+ * Which card a change gets (S17 §6, the owner's decision): the account is the saved one whose password is the form's
+ * current one; the form's username only picks among several. One → update; none or several → the chooser, among
+ * those that matched or, when none did, the site's; none saved at all → a new one. The change's own presave is
+ * never among them.
+ */
+export function changeCard(
+  found: { matches: readonly { id: string; username: string }[]; accounts: readonly { id: string; username: string }[] },
+  values: { username: string; password: string },
+  presaved?: string,
+): { kind: 'update' | 'change' | 'new'; values: CandidateValues; accounts?: { id: string; username: string }[] } {
+  const own = (a: { id: string }) => a.id !== presaved;
+  const matched = found.matches.filter(own);
+  const byName = values.username && matched.length > 1 ? matched.filter((a) => a.username === values.username) : [];
+  const matches = byName.length === 1 ? byName : matched;
+  if (matches.length === 1) return { kind: 'update', values: { username: matches[0]!.username, password: values.password }, accounts: [matches[0]!] };
+  const among = matches.length > 1 ? matches : found.accounts.filter(own);
+  if (!among.length) return { kind: 'new', values: { username: values.username, password: values.password } };
+  return { kind: 'change', values: { username: among[0]!.username, password: values.password }, accounts: [...among] };
+}
 
 export class PasswordAssist {
   private readonly now: () => number;
@@ -292,7 +316,13 @@ export class PasswordAssist {
     events.on('blur', (e) => this.blurred(e.contents));
     events.on('signedIn', (e) => void this.signedIn(e));
     // A sign-in there that failed: what an earlier one left to save is no longer what you use.
-    events.on('failed', (e) => this.dropCardsOf(e.contents));
+    events.on('failed', (e) => {
+      this.dropCardsOf(e.contents);
+      // The site didn't take it: the tab's presave there is as if never submitted, so ↻ changes it rather than making
+      // another (review round 1 of #53).
+      const kept = this.presaveFor(e.contents, e.origin);
+      if (kept) kept.submitted = false;
+    });
     events.on('forms', (e) => {
       const kinds = new Map(e.forms.map((f) => [f.formId, f.kind] as const));
       this.kinds.set(e.contents, kinds);
@@ -437,7 +467,7 @@ export class PasswordAssist {
     // forgotten here (the entry stays in the vault), and a new password is made.
     if (vaultState !== 'open') this.dropPresave(e.contents);
     const kept = this.presaveFor(e.contents, e.origin);
-    const made = vaultState === 'off' ? null : kept ? { password: kept.password, rule: kept.rule } : await this.makeFor(e.contents, e.origin, rules);
+    const made = vaultState === 'off' ? null : kept ? { password: kept.password, rule: kept.rule, strong: kept.strong } : await this.makeFor(e.contents, e.origin, rules);
     // The saved accounts follow it (the owner's design 3A): a sign-in read as a sign-up, a change form's.
     const answer = vaultState === 'open' ? await vault.accountsFor(e.origin, tab.chordId).catch(() => ({ state: 'off' as const })) : null;
     if (this.pending.get(e.contents) !== pending) return;
@@ -468,8 +498,10 @@ export class PasswordAssist {
       locked: false,
       insecure: answer?.state === 'open' && answer.insecure,
       accounts,
-      index: 0,
-      ...(made ? { generate: { password: made.password, rule: made.rule, again: kept !== null, vault: vaultState, rules } } : {}),
+      // A form that reads as a sign-in, its password field carrying `autocomplete=new-password` (sites do): the first
+      // account is highlighted, the generator's row still first (review round 1 of #53).
+      index: made && accounts.length && e.kind === 'sign-in' ? 1 : 0,
+      ...(made ? { generate: { password: made.password, rule: made.rule, strong: made.strong, again: kept !== null, vault: vaultState, rules } } : {}),
     });
   }
 
@@ -498,7 +530,7 @@ export class PasswordAssist {
     if (!menu?.generate || menu.id !== id) return;
     const made = await this.makeFor(menu.contents, menu.origin, menu.generate.rules);
     if (made === null || this.menus.get(windowId) !== menu || !menu.generate) return;
-    menu.generate = { ...menu.generate, password: made.password, rule: made.rule, again: false };
+    menu.generate = { ...menu.generate, password: made.password, rule: made.rule, strong: made.strong, again: false };
     this.options.host.changed(windowId);
   }
 
@@ -576,6 +608,8 @@ export class PasswordAssist {
   chooseRow(windowId: WindowId, id: number, index: number): void {
     const menu = this.menus.get(windowId);
     if (!menu || menu.id !== id || index >= this.rowsOf(menu)) return;
+    // The generator's row takes no click in its first moments either, as it takes no Enter (security review).
+    if (menu.generate && index === 0 && this.now() - menu.openedAt < durations.promptInputDelay) return;
     void this.choose(menu, index);
   }
 
@@ -660,6 +694,8 @@ export class PasswordAssist {
   private async chooseGenerated(menu: Menu, password: string, passphrase?: string): Promise<void> {
     const { host, vault } = this.options;
     const contents = menu.contents;
+    // A page that went (another document, another frame) gets nothing, and leaves no presave behind (review round 1).
+    if (!this.frameFor(menu)) return;
     let kept = this.presaveFor(contents, menu.origin);
     // Offered again, it's filled only from an open vault: locked since, it asks first (security review).
     if (kept && kept.password === password && (await vault.generatorFor(menu.origin, menu.tab.chordId).catch(() => 'off' as const)) !== 'open') {
@@ -667,7 +703,10 @@ export class PasswordAssist {
       kept = this.presaveFor(contents, menu.origin);
     }
     if (!(kept && kept.password === password)) {
-      const sameForm = kept && !kept.submitted && kept.doc === menu.doc && kept.formId === menu.formId;
+      // The same form, or the site's page loaded again, and no submit since: that entry takes the new one (the one
+      // before is kept as `previous`), rather than another being made (review round 1 of #53). Another form on the
+      // same page is another entry.
+      const sameForm = kept && !kept.submitted && (kept.doc !== menu.doc || kept.formId === menu.formId);
       let id: string;
       let setup = false;
       if (kept && sameForm && (await vault.presaved('pending', kept.id, menu.origin, menu.tab.chordId, { password }).catch(() => false))) id = kept.id;
@@ -691,7 +730,7 @@ export class PasswordAssist {
       }
       if (contents.isDestroyed()) return;
       const site = await this.siteOf(menu.origin).catch(() => null);
-      this.keepPresave(contents, { id, origin: menu.origin, site, doc: menu.doc, formId: menu.formId, password, rule: menu.generate?.rule ?? null, submitted: false });
+      this.keepPresave(contents, { id, origin: menu.origin, site, doc: menu.doc, formId: menu.formId, password, rule: menu.generate?.rule ?? null, strong: menu.generate?.strong ?? true, submitted: false });
       if (setup) host.toast(menu.tab.windowId, 'passwords:saved', 'Saved. It’s in Settings → Passwords.');
     }
     const frame = this.frameFor(menu);
@@ -778,7 +817,7 @@ export class PasswordAssist {
       accounts: menu.accounts.map(({ username, host, madeAt }) => ({ username, host, ...(madeAt !== undefined ? { madeAt } : {}) })),
       index: menu.index,
       insecure: menu.insecure,
-      ...(menu.generate ? { generated: { password: menu.generate.password, again: menu.generate.again, vault: menu.generate.vault, rule: menu.generate.rule } } : {}),
+      ...(menu.generate ? { generated: { password: menu.generate.password, again: menu.generate.again, vault: menu.generate.vault, rule: menu.generate.rule, strong: menu.generate.strong } } : {}),
     };
   }
 
@@ -845,9 +884,10 @@ export class PasswordAssist {
   }
 
   /**
-   * A change or reset form's submit worked (S17 §6): the account is the one saved under its username, where it has
-   * one; else the one whose password is its current field. One → the update card (a generated password: the update
-   * itself, with a toast); none or several → the card asks which; none saved for the site at all → the save card.
+   * A change or reset form's submit worked (S17 §6, the owner's decision): the account is the saved one on the site
+   * whose password is its current field; the form's username only chooses among several. One → the update card (a
+   * generated password's too, applied on **Update**); none or several → the card asks which; none saved for the site
+   * at all → the save card. Locked: the update card, which unlocks on **Update** and then finds the account.
    */
   private async changed(e: PasswordDetectorEvents['signedIn'][0], tab: AssistTab, values: CandidateValues, generated: Presave | null): Promise<void> {
     const { vault } = this.options;
@@ -856,31 +896,19 @@ export class PasswordAssist {
     const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc && until > this.now();
     const found = await vault.changeAccounts(e.origin, tab.chordId, values.current ?? null).catch(() => ({ state: 'off' as const }));
     if (!here()) return;
-    if (found.state === 'locked' || found.state === 'none') {
-      // Nothing to tell it apart by yet: the save card, which unlocks (or sets up) and lets the vault decide.
-      if (generated) return;
-      return this.offerCard(e, tab, { username: values.username, password: values.password }, until, doc);
-    }
-    if (found.state !== 'open') return;
-    const byName = values.username ? found.accounts.filter((a) => a.username === values.username) : [];
-    const matches = byName.length === 1 ? byName : found.matches;
+    if (found.state === 'none' && !generated) return this.offerCard(e, tab, { username: values.username, password: values.password }, until, doc);
+    // No vault (started over since the presave), or passwords off: nothing to update.
+    if (found.state !== 'open' && found.state !== 'locked') return;
     const site = await this.siteOf(e.origin).catch(() => null);
     if (!here()) return;
-    const card = (made: Pick<Card, 'kind' | 'values'> & Partial<Pick<Card, 'accounts' | 'presaved'>>) =>
-      this.showCard({ tab, contents: e.contents, origin: e.origin, site, locked: false, setup: false, until, ...made });
     // A generated one is the tab's no longer: the card (or Settings, Not confirmed) has it now.
     if (generated) this.dropPresave(e.contents);
-    if (matches.length === 1) {
-      const account = matches[0]!;
-      // The update card for it, a generated password's too: it's applied on **Update** only (the owner's design 5A).
-      return card({ kind: 'update', values: { username: account.username, password: values.password }, accounts: [account], ...(generated ? { presaved: generated.id } : {}) });
+    const base = { tab, contents: e.contents, origin: e.origin, site, setup: false, until, ...(generated ? { presaved: generated.id } : {}) };
+    if (found.state === 'locked') {
+      // The update card, whose **Update** unlocks first and then finds the account (as phase 1's locked save does).
+      return this.showCard({ ...base, kind: 'update', locked: true, values: { username: values.username, password: values.password }, change: { current: values.current ?? null } });
     }
-    const among = matches.length > 1 ? matches : found.accounts;
-    if (among.length === 0) {
-      // Nothing saved for the site: a new one, the username as the form had it (the card lets you type it).
-      return card({ kind: 'new', values: { username: values.username, password: values.password }, ...(generated ? { presaved: generated.id } : {}) });
-    }
-    card({ kind: 'change', values: { username: among[0]!.username, password: values.password }, accounts: among, ...(generated ? { presaved: generated.id } : {}) });
+    if (found.state === 'open') this.showCard({ ...base, locked: false, ...changeCard(found, values, generated?.id) });
   }
 
   /** The save or update card, as the vault decides it (S17 §6 step 5). */
@@ -895,7 +923,7 @@ export class PasswordAssist {
   }
 
   private showCard(
-    made: Pick<Card, 'tab' | 'contents' | 'origin' | 'realm' | 'site' | 'kind' | 'locked' | 'setup' | 'values'> & Partial<Pick<Card, 'accounts' | 'presaved' | 'generated'>> & { until: number },
+    made: Pick<Card, 'tab' | 'contents' | 'origin' | 'realm' | 'site' | 'kind' | 'locked' | 'setup' | 'values'> & Partial<Pick<Card, 'accounts' | 'presaved' | 'generated' | 'signUp' | 'change'>> & { until: number },
   ): void {
     const { until, ...rest } = made;
     const before = this.cards.get(made.tab.nodeId);
@@ -1077,6 +1105,7 @@ export class PasswordAssist {
     if (!card.values) return;
     if (card.setup && details.passphrase === undefined) return;
     if (card.generated) return this.saveGenerated(card, card.generated.menu, details.passphrase!);
+    if (card.change && card.locked) return this.saveLockedChange(card, card.change.current);
     if (card.kind === 'change' || card.presaved) return this.saveChange(card, details, false);
     card.busy = true;
     card.problem = null;
@@ -1177,6 +1206,30 @@ export class PasswordAssist {
     card.busy = false;
     if (ok) return this.dropCard(card);
     card.problem = 'io';
+    host.changed(this.windowOf(card));
+  }
+
+  /** A change's update card, offered while locked: **Update** unlocks, then the account is found as for any change. */
+  private async saveLockedChange(card: Card, current: string | null): Promise<void> {
+    const { host, vault } = this.options;
+    card.busy = true;
+    card.problem = null;
+    host.changed(this.windowOf(card));
+    const open = await vault.askUnlock(this.windowOf(card));
+    const values = this.cards.get(card.tab.nodeId) === card ? card.values : null;
+    if (!values) return;
+    const found = open ? await vault.changeAccounts(card.origin, card.tab.chordId, current).catch(() => ({ state: 'off' as const })) : null;
+    if (this.cards.get(card.tab.nodeId) !== card) return;
+    card.busy = false;
+    if (!found) return host.changed(this.windowOf(card));
+    if (found.state !== 'open') {
+      card.problem = 'io';
+      return host.changed(this.windowOf(card));
+    }
+    const next = changeCard(found, values, card.presaved);
+    Object.assign(card, { locked: false, kind: next.kind, values: next.values, accounts: next.accounts });
+    // One account: updated now, as the Update you pressed asked. Otherwise the card asks which.
+    if (next.kind === 'update') return this.saveChange(card, {}, false);
     host.changed(this.windowOf(card));
   }
 

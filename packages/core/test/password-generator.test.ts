@@ -10,7 +10,11 @@ import changeList from '../vendor/apple-password-manager-resources/change-passwo
 import {
   DEFAULT_RULE_SET,
   describePasswordRules,
+  describeWeakPassword,
   GENERATED_LENGTH,
+  isStrongPassword,
+  passwordBits,
+  STRONG_PASSWORD,
   GENERATOR_CLASSES,
   generatePassword,
   passwordRulesFor,
@@ -267,5 +271,70 @@ describe("Apple's lists, by host", () => {
   it("doesn't take an object's own properties for a site", () => {
     expect(siteRulesFor('https://constructor.toString')).toBeNull();
     expect(changePasswordUrlFor('https://__proto__.example')).toBe('https://__proto__.example/.well-known/change-password');
+  });
+});
+
+/* ---------- review round 1 of #53 ---------- */
+
+describe('Apple’s rules read as written: hand-written rule sets, apart from the generator', () => {
+  const LOWER = 'abcdefghijklmnopqrstuvwxyz';
+  const UPPER = LOWER.toUpperCase();
+  const DIGITS = '0123456789';
+  const sorted = (s: string) => [...s].sort().join('');
+  it.each<[string, string, Partial<PasswordRuleSet>]>([
+    ['bounds and two classes', 'minlength: 8; maxlength: 12; required: lower; required: digit;', { minLength: 8, maxLength: 12, allowed: sorted(LOWER + DIGITS), required: [DIGITS, LOWER] }],
+    ['a class of either kind', 'required: lower, upper;', { allowed: sorted(LOWER + UPPER), required: [sorted(LOWER + UPPER)] }],
+    ['allowed beyond what’s required', 'required: digit; allowed: [-_];', { allowed: sorted(DIGITS + '-_'), required: [DIGITS] }],
+    ['max-consecutive is both run limits', 'max-consecutive: 2;', { maxRepeating: 2, maxSequential: 2 }],
+    ['the strictest of each limit', 'minlength: 6; minlength: 9; maxlength: 30; maxlength: 20; max-repeating: 3; max-repeating: 2;', { minLength: 9, maxLength: 20, maxRepeating: 2, maxSequential: null }],
+    ['nothing said: anything printable, any length', '', { minLength: 0, maxLength: 1000, required: [], maxRepeating: null }],
+    ['a custom class keeps its dash', 'required: [-!];', { allowed: sorted('-!'), required: [sorted('-!')] }],
+  ])('%s: %s', (_name, input, want) => {
+    const got = ruleSetOf(parsePasswordRules(input));
+    const { allowed, required, ...rest } = want;
+    expect(got).toMatchObject(rest);
+    if (allowed !== undefined) expect(got.allowed).toBe(allowed);
+    if (required !== undefined) expect([...got.required].sort()).toEqual([...required].sort());
+  });
+});
+
+describe('the floor under “strong” (review round 1 of #53)', () => {
+  it.each<[string, Parameters<typeof passwordRulesFor>[0], string | null, boolean, RegExp | null]>([
+    ['the default', {}, null, true, null],
+    ['four digits, by the field', { passwordrules: 'maxlength: 4; allowed: digit;' }, null, false, /^Only 4 digits, as this site asks$/],
+    ['maxlength=4 alone', { maxLength: 4 }, null, false, /^Only 4 letters, digits and symbols, as this site asks$/],
+    ['seven characters, however varied', { maxLength: 7 }, null, false, /^Only 7 /],
+    ['eight letters and digits: strong enough (about 46 bits)', {}, 'maxlength: 8; allowed: lower, upper, digit;', true, null],
+    ['ten digits: long enough, too few bits (about 30)', {}, 'minlength: 10; maxlength: 10; allowed: digit;', false, /^Only 10 digits, as this site asks$/],
+  ])('%s', (_name, field, site, strong, words) => {
+    const { rules } = passwordRulesFor(field, site);
+    const p = generatePassword(rules, seeded(12))!;
+    expect(isStrongPassword(p, rules)).toBe(strong);
+    if (words) expect(describeWeakPassword(p, rules)).toMatch(words);
+  });
+
+  it('as a property: a password is called strong exactly when it has 8 characters and about 40 bits, and is still the longest the rules allow', () => {
+    const r = seeded(13);
+    for (let i = 0; i < 2000; i++) {
+      const max = 1 + r(30);
+      const allowed = ['digit', 'lower', 'lower, digit', 'lower, upper, digit', '[ab]', 'ascii-printable'][r(6)]!;
+      const { rules } = passwordRulesFor({ maxLength: max }, `allowed: ${allowed};`);
+      const p = generatePassword(rules, r);
+      if (p === null) continue;
+      expect(p.length).toBe(Math.min(GENERATED_LENGTH, max));
+      const strong = p.length >= STRONG_PASSWORD.length && passwordBits(p, rules) >= STRONG_PASSWORD.bits;
+      expect(isStrongPassword(p, rules)).toBe(strong);
+      if (!strong) expect(describeWeakPassword(p, rules)).toMatch(new RegExp(`^Only ${p.length} .+, as this site asks$`));
+    }
+  });
+});
+
+describe('Apple’s lists by registrable domain (review round 1 of #53)', () => {
+  it('never takes a public suffix for a site', () => {
+    // Whatever Apple's lists hold, `co.uk` and `github.io` are suffixes: a page there looks itself up and its own site.
+    expect(changePasswordUrlFor('https://shop.example.co.uk')).toBe('https://shop.example.co.uk/.well-known/change-password');
+    expect(siteRulesFor('https://co.uk')).toBeNull();
+    expect(siteRulesFor('https://someone.github.io')).toBeNull();
+    expect(siteRulesFor('https://127.0.0.1:8080')).toBeNull();
   });
 });

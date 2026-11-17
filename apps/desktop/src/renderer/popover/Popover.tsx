@@ -693,7 +693,7 @@ function PasswordMenuCard({ menu, platform }: { menu: PasswordMenu; platform: Pl
                 <Sparkles size={12} strokeWidth={2} />
               </span>
               <span className={`${styles.menuText} ${styles.menuGrow}`}>
-                <span className={styles.menuUser}>Use a strong password</span>
+                <span className={styles.menuUser}>{generated.strong ? 'Use a strong password' : 'Use a password this site allows'}</span>
                 <span className={styles.menuMono} translate="no">
                   {generated.password}
                 </span>

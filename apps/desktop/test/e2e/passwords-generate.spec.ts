@@ -186,7 +186,14 @@ test('passwords: generate on a sign-up with no vault yet, confirm it, fill it, c
 
     // 4. A change form: the account found by its current password, the new one Chord's, Update.
     await tab.goto(`${site.origin}/change`);
-    await tab.fill('#o', generated);
+    // Its current password from the menu: the account fills that field alone, and the new one and its confirmation
+    // stay empty, yours to choose (review round 1 of #53).
+    await tab.focus('#o');
+    await expect(menu.getByRole('option', { name: USER })).toBeVisible({ timeout: 10_000 });
+    await menu.getByRole('option', { name: USER }).click();
+    await expect(tab.locator('#o')).toHaveValue(generated);
+    await expect(tab.locator('#n')).toHaveValue('');
+    await expect(tab.locator('#c')).toHaveValue('');
     await tab.focus('#n');
     await expect(menu.getByRole('option').first()).toContainText('Use a strong password', { timeout: 10_000 });
     // The accounts follow it.

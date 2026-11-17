@@ -812,8 +812,10 @@ export interface PasswordMenu {
    * `PASSWORD_REGENERATE_KEYS`). `again`: the one this tab saved for the site a moment ago (a second step's
    * confirmation, the page reloaded), offered again rather than a new one. `vault`: what choosing it asks first.
    * `rule`: the site's rules that shaped it, in plain words (`Letters and digits, 12–16, as this site asks`), or null.
+   * `strong`: false when the site's rules hold it under 8 characters or about 40 bits: the row is then *Use a password
+   * this site allows*, and `rule` says why (`Only 4 digits, as this site asks`).
    */
-  generated?: { password: string; again: boolean; vault: 'open' | 'locked' | 'none'; rule: string | null };
+  generated?: { password: string; again: boolean; vault: 'open' | 'locked' | 'none'; rule: string | null; strong: boolean };
   /** `madeAt`: a generated password no sign-in has confirmed yet (*Not confirmed · made today*), and when it was made. */
   accounts: { username: string; host: string | null; madeAt?: number }[];
   /**
