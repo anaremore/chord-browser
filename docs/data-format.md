@@ -22,10 +22,10 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
    | `app` | The Chord version that wrote it. |
    | `device` | The computer that wrote it: 64 random bits as 16 hex digits. Its stamps carry the same id. |
    | `created` | When, in UTC (ISO 8601). |
-   | `includes` | What's in it, in order: `setup`, `today`, and `history` and `assistant` unless you switched them off. |
+   | `includes` | What's in it, in order: `setup`, `today`, and `history` and `assistant` unless you switched them off, then `passwords` in an encrypted file that has them. Settings → Passwords → Export… writes an encrypted file of `passwords` alone. |
    | `about` | This page. |
 
-2. **Records**, one per line, in this order: setup (chords, Pinned's folders, tabs and splits, Favorites, themes, settings, link routes, Effects, zoom, permissions), then Today's tabs and splits, then the icons they and Favorites use, then history, then the assistant's chats. A reader that only wants setup can stop early.
+2. **Records**, one per line, in this order: setup (chords, Pinned's folders, tabs and splits, Favorites, themes, settings, link routes, Effects, zoom, permissions), then Today's tabs and splits, then the icons they and Favorites use, then history, then the assistant's chats, then, in an encrypted file only, passwords. A reader that only wants setup can stop early.
 
 3. **The end**, the last line: `{"end":<the number of records>}`. A file without it, or with a different count, was cut off or changed. A reader takes any object with a whole-number `end` and no `type` as the end line, since a later Chord may add to it.
 
@@ -70,8 +70,9 @@ UTF-8 [JSON Lines](https://jsonlines.org): one JSON value per line, each line en
 | `thread` | UUIDv7 | An assistant chat: `chord`; `title`; `provider` (`"claude"` or `"codex"`); `model` (or `null`); `scope` (`"every"`, `"ask"`, `"chord"`, `"all"`: what it may read); `created`; `updated`; `lastUsed` |
 | `message` | UUIDv7 | `thread`; `created`; `body`, as Chord keeps it, by its `role`: `user` (`text`, `attachments` `[{"ref","url","title"}]`, `images`?), `assistant` (`text`, `citations` `[{"n","ref","url","title","quote","tabId": null,"page"?}]`, `status`, `error`?, `images`?), `tool` (`tool`, `summary`, `detail`, `ok`), `approval` (`tool`, `description`, `target`, `decision`), `divider` (`text`). An image there is `{"id","mime","width","height","prompt"?}`. |
 | `image` | its id (24 hex digits) | An image in a chat: `mime` (PNG, JPEG or WebP); `width`; `height`; `data` (base64); `thumb` (the small JPEG the assistant's panel shows, base64, or `null`); `prompt` (what Codex made it from, or `null`) |
+| `login` | UUID | **An encrypted file's only** ([below](#passwords)). A saved sign-in: `origin` (scheme, host and port, `https://example.com`); `username`; `password`; `note`; `realm` (the browser's own sign-in box's realm, or `null` for a page's form); `created` and `changed` (ms: when it was saved, and when its password last changed) |
 
-History, the assistant's chats and icons never change once made, so their records have no `at`.
+History, the assistant's chats, icons and `login` records have no `at`: the first three never change once made, and a sign-in is merged by what it is, not when (below).
 
 ### Settings
 
@@ -99,7 +100,22 @@ Each setting that travels is a field of the `settings` record. A group's parts a
 
 Not in a file, because they're about one computer or happen once: the interface size, update checks, the mini window's size, developer tools' side and size, the assistant's app and model, when passwords lock, first run's flag. Themes you made are `theme` records.
 
-**Passwords are never in a file, nor in sync's folder** (docs/decisions/S17-passwords.md §10): no record type carries them yet, and a plain file never will. Nor does a file say where you have one, or which sites you told Chord never to save for, or whether your passwords are kept unlocked on a computer. An encrypted file may carry them later (phase 2), and sync only by a switch of its own (phase 5); both will be new record types, added as this section says.
+### Passwords
+
+**Only an encrypted file carries passwords** (docs/decisions/S17-passwords.md, decision 6), as `login` records, after everything else. A plain file never does: Chord's plain export leaves them out and says so, and an import passes over a `login` record in a plain file (counted with what it skipped).
+
+```json
+{"type":"login","id":"019a3c2e-7b1f-7c3d-9a1e-4f2b6c8d0e1a","set":{"origin":"https://example.com","username":"ada@example.com","password":"…","note":"","realm":null,"created":1764511391204,"changed":1764511391204}}
+```
+
+- **`origin`** is an origin, exactly as a URL's: scheme (`https` or `http`), host, and the port when it isn't the scheme's own. No path, no user or password in it. A record whose `origin` isn't one is left out.
+- **Limits:** a username of at most 500 characters, a password of at most 1,000 (and at least one), a note of 4,000, a realm of 200, an origin of 2,048. Longer is left out, never cut.
+- **What's not in it:** the password before the last change, which chords used it and when, and the sites you told Chord never to save for. Nor whether passwords are kept unlocked on a computer, or when they lock.
+- **The file's passphrase is its own:** a file is never encrypted with the passphrase your passwords are locked with, and Chord never offers to use it.
+- **Importing** one compares each with what's saved: the same origin, username and realm is the same sign-in. A new one comes in; one with the same password (and the file's note empty or yours) is left alone; one with another password or note keeps yours unless you choose the file's, and then keeps your password as the one before it. One Undo takes them back with the rest of the file. The passwords must be unlocked first, or a passphrase chosen for them.
+
+**Sync's folder never carries passwords:** sync has no `login` records (S17's phase 5 will add a switch of its own).
+
 
 ## The encrypted file
 
@@ -175,6 +191,7 @@ Settings → Your data → *From a Chord file* brings a file back. What Chord do
 - **Matches merge:** a `favorite` at an address Chord has is that Favorite; `route`, `effects`, `zoom` and `permission` by their ids, a site or an origin.
 - **Permissions:** only `block`. **Settings**, and a chord's own `proxy`, only when you turn on *Settings from the file*. **A chord Chord has keeps its sign-ins** (`profile`).
 - **`page`:** a visit Chord has (the same address at the same millisecond) isn't added again; `typed` takes the larger count. **`thread`, `message`:** added by id, never replaced; a message only into a chat the same file brings, never one Chord has; a chat comes with no session, reads no more than a new chat would, and its turns go to Claude Code or Codex only as data, never as instructions. **`image`:** only if its bytes are the PNG, JPEG or WebP its `mime` says, and no image of that id is here.
+- **`login`:** only from an encrypted file, compared with your passwords as [Passwords](#passwords) says, with a preview.
 - Every record is checked as Chord checks its own saved data. One that doesn't read, or points at a chord or folder that isn't there, is left out or put at its section's root.
 
 ## Sync's folder
@@ -210,4 +227,4 @@ Chord sync/
 
 ## Never in a file
 
-Passwords (Chord keeps none); cookies and sign-ins; open tabs' back/forward history (it can hold what you typed into forms); private windows; downloads; the archive; windows and their sizes; extensions; learned command bar picks; hover-preview pictures and screenshots; the assistant's provider sessions and the copies Codex keeps of its images. The one address of your computer's a file can hold is a proxy's configuration file, if you set one there.
+Passwords, except in an encrypted file ([above](#passwords)); cookies and sign-ins; open tabs' back/forward history (it can hold what you typed into forms); private windows; downloads; the archive; windows and their sizes; extensions; learned command bar picks; hover-preview pictures and screenshots; the assistant's provider sessions and the copies Codex keeps of its images. The one address of your computer's a file can hold is a proxy's configuration file, if you set one there.

@@ -4,7 +4,7 @@
  * this page shows what main says (`passwords:view`, usernames only) and asks.
  * A password reaches this page only through *Show*, after the passphrase
  * when it was typed more than 5 minutes ago; *Copy* never brings it here.
- * Delete has Undo for the session. Import and Export come in phase 2.
+ * Delete has Undo for the session. Import… and Export… are PasswordTransfer.tsx.
  */
 import { DEFAULT_PASSWORD_SETTINGS, lockAfterText, PASSWORD_LOCK_AFTER, PASSWORD_REAUTH_MS, passwordChordPatch, passwordChordRows, type LoginSummary, type PasswordLockAfter } from '@chord/core';
 import type { PasswordRevealResult, PasswordStepResult, PasswordsView, SettingsSnapshot } from '@chord/ipc';
@@ -14,6 +14,7 @@ import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type F
 import { Favicon } from '../shared/Favicon';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { api } from './api';
+import { ExportCard, ImportCard } from './PasswordTransfer';
 import { ResetButton, SectionHeader, Switch } from './controls';
 import local from './Passwords.module.css';
 import styles from './Settings.module.css';
@@ -52,8 +53,8 @@ export function whenText(at: number, now = Date.now()): string {
   return date.toLocaleDateString('en-US', sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-/** One passphrase field and its button, inline: unlocking, and Show or Copy asking again. */
-function PassphraseAsk({
+/** One passphrase field and its button, inline: unlocking, and Show or Copy asking again (and Import and Export, PasswordTransfer.tsx). */
+export function PassphraseAsk({
   text,
   button,
   problem,
@@ -680,6 +681,7 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [nevers, setNevers] = useState(false);
+  const [transfer, setTransfer] = useState<'import' | 'export' | null>(null);
   /** Counts the vault's locks main told of: a shown password goes at each. */
   const [hideSeq, setHideSeq] = useState(0);
   useEffect(() => {
@@ -749,11 +751,19 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
         </>
       )}
       {adding && view && <AddLogin needsPassphrase={view.state === 'none'} onView={setView} onDone={() => setAdding(false)} />}
-      {view && view.state !== 'locked' && (
+      {view && (
         <div className={local.foot}>
-          {!adding && (
+          {!adding && view.state !== 'locked' && (
             <button type="button" className={local.footLink} onClick={() => setAdding(true)}>
               Add a password…
+            </button>
+          )}
+          <button type="button" className={local.footLink} aria-expanded={transfer === 'import'} onClick={() => setTransfer(transfer === 'import' ? null : 'import')}>
+            Import…
+          </button>
+          {view.state === 'open' && view.count > 0 && (
+            <button type="button" className={local.footLink} aria-expanded={transfer === 'export'} onClick={() => setTransfer(transfer === 'export' ? null : 'export')}>
+              Export…
             </button>
           )}
           {view.state === 'open' && (
@@ -763,6 +773,8 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
           )}
         </div>
       )}
+      {transfer === 'import' && view && <ImportCard view={view} onClose={() => setTransfer(null)} />}
+      {transfer === 'export' && view?.state === 'open' && <ExportCard view={view} />}
       {nevers && view?.state === 'open' && (
         <div className={styles.group} role="group" aria-label="Sites Chord never saves for">
           {view.nevers.length === 0 && <p className={local.block}>
