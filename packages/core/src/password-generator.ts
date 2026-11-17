@@ -22,6 +22,9 @@
 import { PASSWORD_LIMITS } from './passwords';
 import { CustomCharacterClass, parsePasswordRules, passwordRulesSaySomething, type CharacterClass, type PasswordRule } from './password-rules-parser';
 
+/** The menu's ↻ by key: in `passwords.ts`, which renderers load, and here for main. */
+export { PASSWORD_REGENERATE_KEYS } from './passwords';
+
 /** The default's length (S17 §6 ⚠, the owner's decision of 2026-11-17). */
 export const GENERATED_LENGTH = 20;
 
@@ -155,6 +158,32 @@ export function passwordRulesFor(field: FieldPasswordRules, siteRules: string | 
   if (min > 0 && min <= maxLength) minLength = Math.max(minLength, min);
   if (max > 0 && max >= minLength) maxLength = Math.min(maxLength, max);
   return { source, rules: { ...base, minLength, maxLength } };
+}
+
+const SYMBOLS = NAMED['special']!.replace(' ', '');
+
+/**
+ * In plain words, what a site's rules asked of a password (S17 §9, the owner's design 3A): its characters where they
+ * were narrowed, its length where it was bounded, a symbol where one was required. `Letters and digits, 12–16, as this
+ * site asks`. Null for Chord's own default, with nothing narrowed.
+ */
+export function describePasswordRules(source: PasswordRulesSource, rules: PasswordRuleSet): string | null {
+  const allowed = rules.allowed.replace(/ /g, '');
+  const letters = /[A-Za-z]/.test(allowed);
+  const digits = /[0-9]/.test(allowed);
+  const symbols = [...SYMBOLS].some((c) => allowed.includes(c));
+  const all = [...ASCII_PRINTABLE.replace(' ', '')].every((c) => allowed.includes(c));
+  const kinds = [letters && 'letters', digits && 'digits', symbols && 'symbols'].filter((k): k is string => !!k);
+  // The default's own alphabet (no look-alikes, `-` only) is Chord's choice, not the site's.
+  const chars = source === 'default' || all || kinds.length === 0 ? null : kinds.length === 1 ? kinds[0]! : `${kinds.slice(0, -1).join(', ')} and ${kinds.at(-1)}`;
+  const min = rules.minLength;
+  const max = rules.maxLength < PASSWORD_LIMITS.password ? rules.maxLength : null;
+  const length = min > 0 && max !== null ? (min === max ? `${min}` : `${min}–${max}`) : min > 0 ? `at least ${min}` : max !== null ? `up to ${max}` : null;
+  const symbol = rules.required.some((cls) => [...cls].every((c) => SYMBOLS.includes(c))) ? 'with a symbol' : null;
+  const parts = [chars, length && (chars ? length : `${length} characters`), symbol].filter((p): p is string => !!p);
+  if (!parts.length) return null;
+  const text = `${parts.join(', ')}, as this site asks`;
+  return text[0]!.toUpperCase() + text.slice(1);
 }
 
 /** The longest run of identical characters, and of characters in order (a-z, A-Z, 0-9, either way). */

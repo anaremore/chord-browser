@@ -98,6 +98,7 @@ const api: SettingsApi = {
     undo: (id) => invoke('passwords:undelete', { id }),
     forgetNever: (site) => invoke('passwords:forgetNever', { site }),
     startOver: () => invoke('passwords:startOver'),
+    changeOnSite: (id) => invoke('passwords:changeOnSite', { id }),
     onChange: (listener) => subscribe('passwords:changed', listener),
   },
 };

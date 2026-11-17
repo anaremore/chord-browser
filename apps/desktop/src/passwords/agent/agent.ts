@@ -85,6 +85,15 @@ const plain = (s: string, n: number) =>
     .slice(0, n);
 const signature = (f: PasswordField | null): PasswordsFieldSignature | null => (f ? { type: plain(f.type, 20), id: plain(f.id, 80), name: plain(f.name, 80) } : null);
 const isField = (el: EventTarget | null | undefined): el is HTMLInputElement => el instanceof HTMLInputElement;
+/** The roles a generated password goes into (S17 §6). */
+const NEW_ROLES: ReadonlySet<PasswordFieldRole> = new Set(['new-password', 'confirmation-password']);
+const getAttribute = Element.prototype.getAttribute;
+/** What a new password's field says of the passwords it takes, for main's generator: never its value. */
+const rulesOf = (el: HTMLInputElement) => ({
+  passwordrules: plain(String(getAttribute.call(el, 'passwordrules') ?? ''), 2000),
+  minLength: Math.max(-1, Math.min(1_000_000, Math.trunc(el.minLength))),
+  maxLength: Math.max(-1, Math.min(1_000_000, Math.trunc(el.maxLength))),
+});
 /** A text-like field: never a checkbox, radio, button or file input, which never hold a credential. */
 const isTextField = (el: EventTarget | null | undefined): el is HTMLInputElement => isField(el) && !SKIP_TYPES.has(controlType(el));
 
@@ -99,6 +108,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const win = options.window ?? window;
   const typed = new WeakSet<Element>();
   const filled = new WeakSet<Element>();
+  /** Fields seen as `type=password` (S17 §4): one that's text now (a show-password toggle) means the form changed, for a generated password. */
+  const wasPassword = new WeakSet<Element>();
   const keys = new WeakMap<Element, number>();
   const nextKey = { value: 1 };
   const formIds = new WeakMap<FormKey, string>();
@@ -124,6 +135,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     scanWanted = false;
     const scanned = scanDocument(doc, { typed, filled, keys, nextKey });
     known = scanned.map((s) => ({ id: idOf(s.form ?? doc), scanned: s, classified: classifyPasswordForm(s.record, 'filling') }));
+    for (const s of scanned) for (const el of s.elements) if (controlType(el) === 'password') wasPassword.add(el);
     byElement = new WeakMap();
     for (const k of known) for (const el of k.scanned.elements) byElement.set(el, k);
     schedule();
@@ -251,7 +263,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
         return;
       }
       focusSentAt = performance.now();
-      bridge.send('focus', { formId: focused.formId, kind: focused.kind, role: focused.role, rect });
+      bridge.send('focus', { formId: focused.formId, kind: focused.kind, role: focused.role, rect, ...(NEW_ROLES.has(focused.role) ? { rules: rulesOf(el) } : {}) });
       told = { ref: focused.ref, formId: focused.formId, key };
     } else if (told) {
       bridge.send('blur', { formId: told.formId });
@@ -354,8 +366,12 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     // At a submit signal: what to save, the new password where the form has one. Left out when it can't be saved.
     const username = valueOf(c.username);
     const password = valueOf(c.newPassword ?? c.password);
+    // A change form's current password, beside its new one: how main finds the account it's for (S17 §6).
+    const current = c.newPassword && c.password ? valueOf(c.password) : '';
     const values =
-      signal !== 'blur' && password && password.length <= PASSWORD_LIMITS.password && username.length <= PASSWORD_LIMITS.username ? { username, password } : undefined;
+      signal !== 'blur' && password && password.length <= PASSWORD_LIMITS.password && username.length <= PASSWORD_LIMITS.username
+        ? { username, password, ...(current && current.length <= PASSWORD_LIMITS.password ? { current } : {}) }
+        : undefined;
     bridge.send('candidate', {
       formId: k.id,
       kind: c.kind,
@@ -454,7 +470,44 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   };
   /** Why a fill wrote nothing (PasswordsFilled's `reason`). */
   type Refused = 'changed' | 'password';
+  const outline = (fields: readonly HTMLInputElement[], highlight: PasswordsFill['highlight']) => {
+    const reduce = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const ring = (color: string) => ({ outline: `2px solid ${color}`, outlineOffset: '2px' });
+    fields.forEach((el, i) => {
+      el.animate([ring('transparent'), { ...ring(highlight.color), offset: 0.1 }, { ...ring(highlight.color), offset: 0.7 }, ring('transparent')], {
+        duration: highlight.ms,
+        delay: reduce ? 0 : i * highlight.stagger,
+        easing: highlight.easing,
+      });
+    });
+  };
+  /**
+   * A generated password (S17 §6): into the form's new password's field and its confirmation's, and nothing else
+   * (never the username or the current password). Only a visible `type=password` field you could type in gets it: a
+   * confirmation that isn't one yet (a later step's) is left for its own menu; a new password's field that isn't
+   * one is the form changed.
+   */
+  function fillGenerated(p: PasswordsFill & { generated: string }): true | Refused {
+    // The new password's field as the agent last knew it (the menu was shown from that scan): it must still be the one.
+    const before = known.find((x) => x.id === p.formId);
+    const was = before?.classified ? elementOf(before, before.classified.newPassword) : null;
+    rescan();
+    const k = known.find((x) => x.id === p.formId);
+    const c = k?.classified;
+    if (!k || !c) return 'changed';
+    // A password field of the form shown as text now: the form isn't as the menu showed it.
+    if (k.scanned.elements.some((el) => wasPassword.has(el) && controlType(el) !== 'password')) return 'changed';
+    const fresh = elementOf(k, c.newPassword);
+    if (!fresh || !usable(fresh) || controlType(fresh) !== 'password' || (was && was !== fresh)) return 'changed';
+    const confirm = elementOf(k, c.confirmation);
+    const fields = [fresh, ...(confirm && usable(confirm) && controlType(confirm) === 'password' ? [confirm] : [])];
+    if (!fields.some(onScreen)) return 'changed';
+    for (const el of fields) put(el, p.generated);
+    outline(fields, p.highlight);
+    return true;
+  }
   function fill(p: PasswordsFill): true | Refused {
+    if (p.generated !== undefined) return fillGenerated(p as PasswordsFill & { generated: string });
     // The page as it is now: a field swapped, hidden or re-rendered since the menu opened is seen here.
     rescan();
     const k = known.find((x) => x.id === p.formId);
@@ -467,34 +520,42 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const carried = !!named && !!pass && !usable(named) && (named as HTMLInputElement).value !== '' && ((named as HTMLInputElement).readOnly || !isShown(named));
     if (carried && (named as HTMLInputElement).value.trim().toLowerCase() !== p.username.trim().toLowerCase()) return 'changed';
     const user = carried ? null : named;
+    // No current password's field, and the account picked in the menu of the new password's field itself (`intoNew`:
+    // a sign-in read as a sign-up, S17 §9): its password goes into that field and its confirmation, visible
+    // `type=password` ones. Picked anywhere else, such a form gets nothing (never half a fill, below).
+    // (A current password's field is checked below, as before: usable and `type=password`, or the form changed.)
+    const into: HTMLInputElement[] = pass
+      ? [pass as HTMLInputElement]
+      : p.password && p.intoNew
+        ? [elementOf(k, c.newPassword), elementOf(k, c.confirmation)].filter((el): el is HTMLInputElement => !!el && usable(el) && controlType(el) === 'password')
+        : [];
     // Never half a fill: a password field you could type in, with a role in this form, that the fill would leave
     // empty (main sent no password, as for a first step, or the field isn't the current password) gets nothing at all.
-    const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (el !== pass || !p.password));
+    const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (!p.password || !into.includes(el)));
     if (left.length) return 'password';
-    if (!user && !pass) return 'changed';
+    if (!user && !into.length) return 'changed';
     // Main sent a password: the form had one when the menu showed. One with none now (hidden since) changed.
-    if (p.password && !pass) return 'changed';
+    if (p.password && !into.length) return 'changed';
     if (user && !usable(user)) return 'changed';
     // A password field needs the password: main leaves it out only for a first step, which has none.
     if (pass && (!p.password || !usable(pass) || controlType(pass) !== 'password')) return 'changed';
-    if (![user, pass].some((el) => el && onScreen(el))) return 'changed';
-    const fields = [user && p.username ? ([user, p.username] as const) : null, pass && p.password ? ([pass, p.password] as const) : null].filter((f) => f !== null);
+    if (![user, ...into].some((el) => el && onScreen(el))) return 'changed';
+    const fields = [user && p.username ? ([user, p.username] as const) : null, ...into.map((el) => (p.password ? ([el, p.password] as const) : null))].filter((f) => f !== null);
     for (const [el, value] of fields) put(el, value);
-    const reduce = win.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const ring = (color: string) => ({ outline: `2px solid ${color}`, outlineOffset: '2px' });
-    fields.forEach(([el], i) => {
-      el.animate([ring('transparent'), { ...ring(p.highlight.color), offset: 0.1 }, { ...ring(p.highlight.color), offset: 0.7 }, ring('transparent')], {
-        duration: p.highlight.ms,
-        delay: reduce ? 0 : i * p.highlight.stagger,
-        easing: p.highlight.easing,
-      });
-    });
+    outline(
+      fields.map(([el]) => el),
+      p.highlight,
+    );
     return true;
   }
   const onFill = (raw: unknown) => {
-    const p = raw as Partial<PasswordsFill> | null;
+    const p = raw as { formId?: unknown; username?: unknown; password?: unknown; generated?: unknown; intoNew?: unknown; highlight?: unknown } | null;
     const h = p?.highlight as Partial<PasswordsFill['highlight']> | undefined;
-    if (!p || typeof p.formId !== 'string' || typeof p.username !== 'string' || (p.password !== undefined && (typeof p.password !== 'string' || !p.password))) return;
+    if (!p || typeof p.formId !== 'string') return;
+    if (p.generated !== undefined) {
+      // A generated password: that alone, never with an account's username or password.
+      if (typeof p.generated !== 'string' || !p.generated || p.generated.length > PASSWORD_LIMITS.password || p.username !== undefined || p.password !== undefined) return;
+    } else if (typeof p.username !== 'string' || (p.password !== undefined && (typeof p.password !== 'string' || !p.password)) || (p.intoNew !== undefined && p.intoNew !== true)) return;
     if (!h || typeof h.color !== 'string' || typeof h.ms !== 'number' || typeof h.stagger !== 'number' || typeof h.easing !== 'string') return;
     let done: true | Refused;
     try {

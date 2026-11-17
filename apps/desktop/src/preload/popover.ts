@@ -24,6 +24,7 @@ const api: PopoverApi = {
   passwords: {
     unlock: (id, passphrase, keep) => invoke('passwords:unlockCard', { id, passphrase, keep }),
     choose: (id, index) => invoke('passwords:menuChoose', { id, index }),
+    regenerate: (id) => invoke('passwords:menuRegenerate', { id }),
     card: (id, action, details) => invoke('passwords:saveCard', { id, action, ...details }),
     reveal: (id) => invoke('passwords:saveCardReveal', { id }),
   },

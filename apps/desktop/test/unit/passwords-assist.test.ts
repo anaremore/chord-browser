@@ -70,7 +70,11 @@ function setup({
   tab = {} as Partial<AssistTab> | null,
   shown = true,
   siteOf = naiveSite as (origin: string) => Promise<string | null>,
+  generator = 'open' as 'open' | 'locked' | 'none' | 'off',
+  generate = null as ((origin: string) => Promise<{ password: string; rule: string | null } | null>) | null,
+  change = { state: 'open', matches: [], accounts: [] } as Awaited<ReturnType<AssistVault['changeAccounts']>>,
 } = {}) {
+  let made = 0;
   const events = new EventEmitter<PasswordDetectorEvents>();
   const timers = fakeTimers();
   const vault = {
@@ -80,6 +84,12 @@ function setup({
     saveCandidate: vi.fn(async (): Promise<SaveAnswer> => ({ ok: true, id: 'a1', kind: 'new' })),
     neverFor: vi.fn(async () => true),
     askUnlock: vi.fn(async () => true),
+    generatorFor: vi.fn(async () => generator),
+    presave: vi.fn(async (_r: { origin: string; password: string; chordId: string | null; passphrase?: string }): Promise<Awaited<ReturnType<AssistVault['presave']>>> => ({ ok: true, id: 'g1', setup: false })),
+    presaved: vi.fn(async (_action: 'pending' | 'confirm', _id: string, _origin: string, _chordId: string | null, _values: { username?: string; password?: string }) => true),
+    changeAccounts: vi.fn(async (_origin: string, _chordId: string | null, _current: string | null) => change),
+    changePassword: vi.fn(async (_r: { origin: string; chordId: string | null; account: string; password: string; presaved?: string }): Promise<SaveAnswer> => ({ ok: true, id: 'a1', kind: 'update' })),
+    deleteSaved: vi.fn(async (_id: string, _origin: string, _chordId: string | null) => true),
   } satisfies { [K in keyof AssistVault]: unknown };
   const page = fakePage();
   const theTab: AssistTab | null = tab === null ? null : { nodeId: 'n1', windowId: 'w1', chordId: 'c1', private: false, ...tab };
@@ -103,6 +113,7 @@ function setup({
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     siteOf,
+    generate: vi.fn(generate ?? (async () => ({ password: `Gen-${++made}`, rule: null }))),
   });
   assist.attachPage(page as unknown as WebContents);
   const contents = page as unknown as WebContents;
@@ -122,7 +133,11 @@ function setup({
     await flush();
     await flush();
   };
-  return { assist, vault, host, page, events, timers, focus, blur, key, signedIn, contents };
+  const submitted = async (over: Record<string, unknown> = {}) => {
+    events.emit('submitted', { contents, formId: 'f1', kind: 'sign-up', origin: ORIGIN, signal: 'submit', values: { username: VALUES.username }, ...over } as never);
+    await flush();
+  };
+  return { assist, vault, host, page, events, timers, focus, blur, key, signedIn, submitted, contents };
 }
 
 const sent = (page: FakePage) => page.mainFrame.send.mock.calls;
@@ -142,9 +157,29 @@ describe('the menu under the field: which focus gets one', () => {
     ['no vault yet: no menu', { accounts: { state: 'none' } }, {}, null, true],
     ['passwords off there (the switch, an extension, a page that can’t be saved): no menu', { accounts: { state: 'off' } }, {}, null, true],
     ['the password field', {}, { role: 'current-password' }, { id: 1, host: 'github.com', state: 'accounts', accounts: [{ username: 'ada@acme.dev', host: null }, { username: 'ada.lovelace', host: 'gist.github.com' }], index: 0, insecure: false }, true],
-    ['a sign-up form (the generator is phase 2’s): not even asked', {}, { kind: 'sign-up' }, null, false],
-    ['a new-password field: not asked', {}, { role: 'new-password' }, null, false],
-    ['a change-password form: not asked', {}, { kind: 'change', role: 'current-password' }, null, false],
+    ['a sign-up form’s username: no menu, not asked', {}, { kind: 'sign-up' }, null, false],
+    [
+      'a new-password field: the generator’s row first, then the accounts (the owner’s design 3A; more below)',
+      {},
+      { role: 'new-password' },
+      {
+        id: 1,
+        host: 'github.com',
+        state: 'generate',
+        accounts: [{ username: 'ada@acme.dev', host: null }, { username: 'ada.lovelace', host: 'gist.github.com' }],
+        index: 0,
+        insecure: false,
+        generated: { password: 'Gen-1', again: false, vault: 'open', rule: null },
+      },
+      true,
+    ],
+    [
+      'a change-password form’s current password: the accounts (phase 2)',
+      {},
+      { kind: 'change', role: 'current-password' },
+      { id: 1, host: 'github.com', state: 'accounts', accounts: [{ username: 'ada@acme.dev', host: null }, { username: 'ada.lovelace', host: 'gist.github.com' }], index: 0, insecure: false },
+      true,
+    ],
     ['a page that isn’t a tab’s: not asked', { tab: null }, {}, null, false],
     ['a tab not on screen: not asked', { shown: false }, {}, null, false],
     [
@@ -450,8 +485,8 @@ describe('the save and update cards: which sign-in gets one', () => {
     ['a private window: never, not even asked', { tab: { private: true } }, {}, null, false],
     ['not a tab’s page: not asked', { tab: null }, {}, null, false],
     ['nothing typed came with it: not asked', {}, { values: null }, null, false],
-    ['a sign-up form (phase 2): not asked', {}, { kind: 'sign-up' }, null, false],
-    ['a change-password form (phase 2): not asked', {}, { kind: 'change' }, null, false],
+    ['a sign-up with a password you typed: the save card (phase 2)', {}, { kind: 'sign-up' }, { kind: 'new', username: 'ada@acme.dev' }, true],
+    ['a change-password form: its own way (below), not the sign-in’s', {}, { kind: 'change' }, { kind: 'new' }, false],
   ])('%s', async (_name, options, event, card, asked) => {
     const t = setup(options);
     await t.signedIn(event);
@@ -986,5 +1021,431 @@ describe('the first save from the browser’s own sign-in box (S17 §10)', () =>
     t.timers.advance(1000);
     expect(t.assist.cardFor('n1')).toBeNull();
     expect(t.assist.reveal('w1', card.id)).toBeNull();
+  });
+});
+
+/* ---------- phase 2: the generator, sign-up and change forms (S17 §6) ---------- */
+
+const NEW = { kind: 'sign-up', role: 'new-password' };
+const filledWith = (page: FakePage) => sent(page).map(([channel, fill]) => [channel, (fill as { generated?: string; password?: string }).generated ?? (fill as { password?: string }).password]);
+const settle = async (n = 6) => {
+  for (let i = 0; i < n; i++) await flush();
+};
+
+describe('the generator’s row: which new password’s field gets one', () => {
+  it.each<[string, Parameters<typeof setup>[0], Record<string, unknown>, Partial<NonNullable<ReturnType<PasswordAssist['menuFor']>>> | null]>([
+    ['a sign-up’s new password, the vault open: the row, then the accounts', {}, NEW, { state: 'generate', generated: { password: 'Gen-1', again: false, vault: 'open', rule: null }, accounts: [{ username: 'ada@acme.dev', host: null }, { username: 'ada.lovelace', host: 'gist.github.com' }] }],
+    ['none saved for the site: the row alone, and Other passwords…', { accounts: { state: 'open', offers: [], insecure: false } }, NEW, { state: 'generate', accounts: [] }],
+    ['a site’s rules shaped it: they say so', { generate: async () => ({ password: 'Xq7mR4tKw9Hb3Pz2', rule: 'Letters and digits, 12–16, as this site asks' }) }, NEW, { generated: { password: 'Xq7mR4tKw9Hb3Pz2', again: false, vault: 'open', rule: 'Letters and digits, 12–16, as this site asks' } }],
+    [
+      'a Not confirmed account says when it was made',
+      { accounts: { state: 'open', offers: [{ ...OFFERS[0]!, madeAt: 5 }], insecure: false } },
+      NEW,
+      { accounts: [{ username: 'ada@acme.dev', host: null, madeAt: 5 }] },
+    ],
+    [
+      'rules that can’t be met, with accounts: the accounts alone',
+      { generate: async () => null },
+      NEW,
+      { state: 'accounts', accounts: [{ username: 'ada@acme.dev', host: null }, { username: 'ada.lovelace', host: 'gist.github.com' }] },
+    ],
+    ['its confirmation', {}, { ...NEW, role: 'confirmation-password' }, { state: 'generate' }],
+    ['a change form’s new password', {}, { kind: 'change', role: 'new-password' }, { state: 'generate' }],
+    ['a reset form’s', {}, { kind: 'reset', role: 'new-password' }, { state: 'generate' }],
+    ['a form of no kind, its field new (autocomplete=new-password)', {}, { kind: 'unknown', role: 'new-password' }, { state: 'generate' }],
+    ['locked: offered, and choosing asks to unlock', { generator: 'locked' }, NEW, { generated: { password: 'Gen-1', again: false, vault: 'locked', rule: null }, accounts: [] }],
+    ['no vault yet: offered, and choosing asks for the first passphrase', { generator: 'none' }, NEW, { generated: { password: 'Gen-1', again: false, vault: 'none', rule: null }, accounts: [] }],
+    ['passwords off there (the switch, a password manager’s extension): none', { generator: 'off' }, NEW, null],
+    ['a private window (it never saves): none', { tab: { private: true } }, NEW, null],
+    ['rules that can’t be met, nothing saved: none', { generate: async () => null, accounts: { state: 'open', offers: [], insecure: false } }, NEW, null],
+    ['a first step: none', {}, { kind: 'username-only', role: 'new-password' }, null],
+    ['a tab not on screen: none', { shown: false }, NEW, null],
+  ])('%s', async (_name, options, focus, menu) => {
+    const t = setup(options);
+    await t.focus(focus);
+    await settle(2);
+    const shown = t.assist.menuFor('w1');
+    if (menu) expect(shown).toMatchObject(menu);
+    else expect(shown).toBeNull();
+    // Nothing is saved by a focus, and the popover gets no account's password.
+    expect(t.vault.presave).not.toHaveBeenCalled();
+    expect(JSON.stringify(shown)).not.toMatch(/pw-/);
+  });
+
+  it('passes the field’s rules and the frame’s origin to the generator, and ↻ makes another to the same rules', async () => {
+    const t = setup();
+    const rules = { passwordrules: 'minlength: 30; required: digit;', minLength: -1, maxLength: 40 };
+    await t.focus({ ...NEW, rules });
+    await settle(2);
+    const generate = (t.assist as unknown as { generate: ReturnType<typeof vi.fn> }).generate;
+    expect(generate).toHaveBeenCalledWith(ORIGIN, rules);
+    const { id } = t.assist.menuFor('w1')!;
+    await t.assist.regenerate('w1', id);
+    expect(t.assist.menuFor('w1')!.generated!.password).toBe('Gen-2');
+    expect(generate).toHaveBeenLastCalledWith(ORIGIN, rules);
+    // Another window's ↻, or a stale menu's: nothing.
+    await t.assist.regenerate('w2', id);
+    await t.assist.regenerate('w1', id + 1);
+    expect(t.assist.menuFor('w1')!.generated!.password).toBe('Gen-2');
+  });
+
+  it('Enter chooses it, and the keys are the menu’s', async () => {
+    const t = setup();
+    await t.focus(NEW);
+    await settle(2);
+    expect(t.key('Enter')).toBe(true);
+    await settle();
+    expect(filledWith(t.page)).toEqual([[PASSWORDS_FILL, 'Gen-1']]);
+  });
+
+  it('↓ to an account and Enter fills the account, not a generated password', async () => {
+    const t = setup();
+    await t.focus(NEW);
+    await settle(2);
+    t.key('ArrowDown');
+    expect(t.assist.menuFor('w1')!.index).toBe(1);
+    t.key('Enter');
+    await settle();
+    expect(filledWith(t.page)).toEqual([[PASSWORDS_FILL, 'pw-one']]);
+    expect(t.vault.presave).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Record<string, unknown>, boolean]>([
+    [process.platform === 'darwin' ? '⌘⇧K' : 'Ctrl+Shift+K', process.platform === 'darwin' ? { meta: true, shift: true } : { control: true, shift: true }, true],
+    ['Shift+K (typing)', { shift: true }, false],
+    ['Alt+K', { alt: true }, false],
+  ])('↻ by key: %s → %s, and the page never sees it', async (_name, mods, taken) => {
+    const t = setup();
+    await t.focus(NEW);
+    await settle(2);
+    expect(t.key('K', { code: 'KeyK', ...mods })).toBe(taken);
+    await settle(2);
+    expect(t.assist.menuFor('w1')!.generated!.password).toBe(taken ? 'Gen-2' : 'Gen-1');
+  });
+});
+
+describe('choosing it: saved first, then filled, never lost', () => {
+  const chosen = async (options: Parameters<typeof setup>[0] = {}, before?: (t: ReturnType<typeof setup>) => void) => {
+    const t = setup(options);
+    before?.(t);
+    await t.focus(NEW);
+    await settle(2);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    return t;
+  };
+
+  it('open: presaved for the frame’s origin, then filled into that form only, with nothing else', async () => {
+    const t = await chosen();
+    expect(t.vault.presave).toHaveBeenCalledWith({ origin: ORIGIN, password: 'Gen-1', chordId: 'c1' });
+    expect(sent(t.page)).toEqual([[PASSWORDS_FILL, { formId: 'f1', generated: 'Gen-1', highlight: expect.any(Object) }]]);
+    expect(t.vault.presave.mock.invocationCallOrder[0]!).toBeLessThan(t.page.mainFrame.send.mock.invocationCallOrder[0]!);
+  });
+
+  it.each<[string, (t: ReturnType<typeof setup>) => void, { filled: boolean; unlock: boolean; toast?: boolean; card?: boolean }]>([
+    ['locked: the unlock card, then saved and filled', (t) => t.vault.presave.mockResolvedValueOnce({ ok: false, problem: 'locked' }), { filled: true, unlock: true }],
+    [
+      'locked and the unlock card cancelled: nothing filled',
+      (t) => (t.vault.presave.mockResolvedValue({ ok: false, problem: 'locked' }), t.vault.askUnlock.mockResolvedValue(false)),
+      { filled: false, unlock: true },
+    ],
+    ['it couldn’t be saved: nothing filled, and a toast says so', (t) => t.vault.presave.mockResolvedValue({ ok: false, problem: 'io' }), { filled: false, unlock: false, toast: true }],
+    ['no vault yet: the save card’s passphrase step, nothing filled yet', (t) => t.vault.presave.mockResolvedValue({ ok: false, problem: 'none' }), { filled: false, unlock: false, card: true }],
+  ])('%s', async (_name, before, want) => {
+    const t = await chosen({}, before);
+    expect(sent(t.page).length > 0).toBe(want.filled);
+    expect(t.vault.askUnlock).toHaveBeenCalledTimes(want.unlock ? 1 : 0);
+    expect(t.host.toast.mock.calls.some(([, id]) => id === 'passwords:fill')).toBe(!!want.toast);
+    expect(t.assist.cardFor('n1')).toEqual(want.card ? expect.objectContaining({ kind: 'new', setup: true, generated: true, username: '' }) : null);
+  });
+
+  it('no vault yet: the card’s Save chooses the passphrase, saves, then fills; the first save says where it went', async () => {
+    const t = await chosen({}, (t) => t.vault.presave.mockResolvedValueOnce({ ok: false, problem: 'none' }).mockResolvedValueOnce({ ok: true, id: 'g1', setup: true }));
+    const card = t.assist.cardFor('n1')!;
+    expect(JSON.stringify(card)).not.toContain('Gen-1');
+    await t.assist.answer('w1', card.id, 'save', { passphrase: 'a long enough passphrase' });
+    await settle();
+    expect(t.vault.presave).toHaveBeenLastCalledWith({ origin: ORIGIN, password: 'Gen-1', chordId: 'c1', passphrase: 'a long enough passphrase' });
+    expect(filledWith(t.page)).toEqual([[PASSWORDS_FILL, 'Gen-1']]);
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:saved', expect.any(String));
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it.each<[string, (t: ReturnType<typeof setup>) => void]>([
+    ['the page navigated', (t) => t.page.emit('did-navigate', {}, 'https://github.com/next', 200)],
+    ['the main frame is another', (t) => (t.page.mainFrame = { ...t.page.mainFrame, routingId: 99, send: vi.fn() })],
+    ['the frame’s origin changed', (t) => (t.page.mainFrame.origin = 'https://github.com.evil.example')],
+  ])('saved, but never sent, when %s since the menu showed', async (_name, between) => {
+    const t = setup();
+    let answer!: (a: Awaited<ReturnType<AssistVault['presave']>>) => void;
+    t.vault.presave.mockImplementationOnce(() => new Promise((done) => (answer = done)));
+    await t.focus(NEW);
+    await settle(2);
+    const send = t.page.mainFrame.send;
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await flush();
+    between(t);
+    answer({ ok: true, id: 'g1', setup: false });
+    await settle();
+    expect(send).not.toHaveBeenCalled();
+    expect(t.page.mainFrame.send).not.toHaveBeenCalled();
+    expect(t.vault.presave).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the tab’s presave: offered again, given its username, confirmed', () => {
+  const generated = async (t: ReturnType<typeof setup>, focus: Record<string, unknown> = NEW) => {
+    await t.focus(focus);
+    await settle(2);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+  };
+
+  it.each<[string, (t: ReturnType<typeof setup>) => Promise<void> | void, boolean]>([
+    ['a second step’s confirmation, on the next page', (t) => void t.page.emit('did-navigate', {}, 'https://github.com/signup/2', 200), true],
+    ['the page reloaded (a navigation of your own)', (t) => void (t.page.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }), t.page.emit('did-navigate', {}, 'https://github.com/signup', 200)), true],
+    ['after another site', (t) => void t.page.emit('did-navigate', {}, 'https://example.org/', 200), false],
+    ['ten minutes on', (t) => t.timers.advance(10 * 60_000), false],
+    ['passwords turned off for the chord', (t) => (t.host.passwordsOn.mockReturnValue(false), t.assist.switched()), false],
+  ])('offered again, not made anew: %s → %s', async (_name, between, again) => {
+    const t = setup();
+    await generated(t);
+    await between(t);
+    await settle(2);
+    await t.focus({ ...NEW, role: 'confirmation-password', formId: 'f2' });
+    await settle(2);
+    expect(t.assist.menuFor('w1')!.generated).toMatchObject(again ? { password: 'Gen-1', again: true } : { password: 'Gen-2', again: false });
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    // Offered again, it's filled and not saved twice.
+    expect(t.vault.presave).toHaveBeenCalledTimes(again ? 1 : 2);
+  });
+
+  it('↻ and choose again in the same form, before a submit: the same entry takes the new one (kept as the one before)', async () => {
+    const t = setup();
+    await generated(t);
+    await t.focus(NEW);
+    await settle(2);
+    await t.assist.regenerate('w1', t.assist.menuFor('w1')!.id);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    expect(t.vault.presave).toHaveBeenCalledTimes(1);
+    expect(t.vault.presaved).toHaveBeenCalledWith('pending', 'g1', ORIGIN, 'c1', { password: 'Gen-2' });
+    expect(filledWith(t.page).at(-1)).toEqual([PASSWORDS_FILL, 'Gen-2']);
+  });
+
+  it('…but after a submit, a new one is a new entry: the site may have the first', async () => {
+    const t = setup();
+    await generated(t);
+    await t.submitted({ values: { username: 'ada' } });
+    await t.focus(NEW);
+    await settle(2);
+    await t.assist.regenerate('w1', t.assist.menuFor('w1')!.id);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    expect(t.vault.presave).toHaveBeenCalledTimes(2);
+  });
+
+  it.each<[string, Record<string, unknown>, Parameters<AssistVault['presaved']>[4] | null]>([
+    ['its submit gives it the username', { values: { username: 'ada@example.com', password: 'Gen-1' } }, { username: 'ada@example.com' }],
+    ['the password is never told at the submit: the username alone', { values: { username: 'ada' } }, { username: 'ada' }],
+    ['a change form’s submit: no username (the account’s is found when it works)', { kind: 'change', values: { username: 'ada' } }, null],
+    ['another form’s: not this one’s (a second step’s sign-in confirms it, with its username)', { formId: 'f9', values: { username: 'x' } }, null],
+    ['another page’s', { values: { username: 'x' } }, null],
+    ['no values (a private window, a value too long)', { values: null }, null],
+  ])('%s', async (_name, event, values) => {
+    const t = setup();
+    await generated(t);
+    t.vault.presaved.mockClear();
+    if (_name.startsWith('another page')) t.page.emit('did-navigate', {}, 'https://github.com/next', 200);
+    await t.submitted(event);
+    if (values) expect(t.vault.presaved).toHaveBeenCalledWith('pending', 'g1', ORIGIN, 'c1', values);
+    else expect(t.vault.presaved).not.toHaveBeenCalled();
+  });
+
+  it('a sign-in that worked with it confirms it, and the saved card says so (the owner’s design 5A)', async () => {
+    const t = setup();
+    await generated(t);
+    await t.signedIn({ kind: 'sign-up', values: { username: 'ada', password: 'Gen-1' } });
+    await settle(2);
+    expect(t.vault.presaved).toHaveBeenCalledWith('confirm', 'g1', ORIGIN, 'c1', { username: 'ada', password: 'Gen-1' });
+    expect(t.vault.candidateFor).not.toHaveBeenCalled();
+    const card = t.assist.cardFor('n1')!;
+    expect(card).toMatchObject({ kind: 'saved', username: 'ada', host: 'github.com' });
+    // It has no password to show.
+    expect(t.assist.reveal('w1', card.id)).toBeNull();
+  });
+
+  it.each<[string, 'save' | 'close' | 'delete', boolean]>([
+    ['Done', 'save', false],
+    ['×', 'close', false],
+    ['Delete it', 'delete', true],
+  ])('the saved card’s %s: it goes; deleted → %s', async (_name, action, deleted) => {
+    const t = setup();
+    await generated(t);
+    await t.signedIn({ kind: 'sign-up', values: { username: 'ada', password: 'Gen-1' } });
+    await settle(2);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, action);
+    expect(t.vault.deleteSaved).toHaveBeenCalledTimes(deleted ? 1 : 0);
+    if (deleted) expect(t.vault.deleteSaved).toHaveBeenCalledWith('g1', ORIGIN, 'c1');
+    expect(t.assist.cardFor('n1')).toBeNull();
+    // Gone, not hidden: the key in the address has nothing to bring back.
+    expect(t.host.offer).not.toHaveBeenCalledWith('n1', true);
+  });
+
+  it('Delete it is only the saved card’s, and Save as new only the change card’s', async () => {
+    const t = setup();
+    await t.signedIn({ kind: 'sign-up' });
+    const card = t.assist.cardFor('n1')!;
+    expect(card).toMatchObject({ kind: 'new', signUp: true });
+    await t.assist.answer('w1', card.id, 'delete');
+    await t.assist.answer('w1', card.id, 'new');
+    expect(t.vault.deleteSaved).not.toHaveBeenCalled();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).not.toBeNull();
+  });
+
+  it('a sign-up with another password (typed over, after the submit): the save card, as for any', async () => {
+    const t = setup();
+    await generated(t);
+    await t.signedIn({ kind: 'sign-up', values: { username: 'ada', password: 'something else' } });
+    expect(t.vault.presaved).not.toHaveBeenCalledWith('confirm', expect.anything(), expect.anything(), expect.anything(), expect.anything());
+    expect(t.assist.cardFor('n1')).toMatchObject({ kind: 'new', username: 'ada' });
+  });
+
+  it('a private window has no presave and saves nothing', async () => {
+    const t = setup({ tab: { private: true } });
+    await t.focus(NEW);
+    await settle(2);
+    expect(t.assist.menuFor('w1')).toBeNull();
+    await t.submitted();
+    await t.signedIn({ kind: 'sign-up' });
+    expect(t.vault.presave).not.toHaveBeenCalled();
+    expect(t.vault.presaved).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it('the tab going forgets it (the entry stays in the vault)', async () => {
+    const t = setup();
+    await generated(t);
+    t.page.destroyed = true;
+    t.page.emit('destroyed');
+    expect((t.assist as unknown as { presaves: Map<unknown, unknown> }).presaves.size).toBe(0);
+  });
+});
+
+describe('a change-password form that worked: which account (S17 §6)', () => {
+  const A = { id: 'a1', username: 'ada@example.com' };
+  const B = { id: 'a2', username: 'bob@example.com' };
+  const CHANGE = { kind: 'change', values: { username: '', password: 'new-Pw', current: 'old-Pw' } };
+  type Change = Awaited<ReturnType<AssistVault['changeAccounts']>>;
+  it.each<[string, Change, Record<string, unknown>, Partial<NonNullable<ReturnType<PasswordAssist['cardFor']>>> | null]>([
+    ['one account has the current password: the update card for it', { state: 'open', matches: [A], accounts: [A, B] }, CHANGE, { kind: 'update', username: A.username }],
+    ['several have it: the card asks which, from those', { state: 'open', matches: [A, B], accounts: [A, B] }, CHANGE, { kind: 'change', accounts: [A.username, B.username] }],
+    ['none has it: the card asks which, from the site’s', { state: 'open', matches: [], accounts: [B, A] }, CHANGE, { kind: 'change', accounts: [B.username, A.username] }],
+    ['no current field (a reset form): asks which', { state: 'open', matches: [], accounts: [A, B] }, { kind: 'reset', values: { username: '', password: 'new-Pw' } }, { kind: 'change' }],
+    [
+      'the form names its username: that account',
+      { state: 'open', matches: [A, B], accounts: [A, B] },
+      { kind: 'change', values: { username: B.username, password: 'new-Pw', current: 'old-Pw' } },
+      { kind: 'update', username: B.username },
+    ],
+    ['nothing saved for the site: the save card, new', { state: 'open', matches: [], accounts: [] }, CHANGE, { kind: 'new', username: '' }],
+    ['locked: the save card, which unlocks first', { state: 'locked' }, CHANGE, { kind: 'new' }],
+    ['passwords off there: nothing', { state: 'off' }, CHANGE, null],
+  ])('%s', async (_name, change, event, card) => {
+    const t = setup({ change, candidate: { kind: 'locked' } });
+    await t.signedIn(event);
+    await settle(2);
+    const shown = t.assist.cardFor('n1');
+    if (card) expect(shown).toMatchObject(card);
+    else expect(shown).toBeNull();
+    expect(JSON.stringify(shown)).not.toMatch(/Pw/);
+  });
+
+  it('looks the account up by the form’s current password, for the frame’s origin', async () => {
+    const t = setup();
+    await t.signedIn(CHANGE);
+    expect(t.vault.changeAccounts).toHaveBeenCalledWith(ORIGIN, 'c1', 'old-Pw');
+  });
+
+  it('the card’s Save: the account you chose takes the new password', async () => {
+    const t = setup({ change: { state: 'open', matches: [A, B], accounts: [A, B] } });
+    await t.signedIn(CHANGE);
+    const card = t.assist.cardFor('n1')!;
+    await t.assist.answer('w1', card.id, 'save', { account: 1 });
+    expect(t.vault.changePassword).toHaveBeenCalledWith({ origin: ORIGIN, chordId: 'c1', account: 'a2', password: 'new-Pw' });
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it('Update waits for a pick: without one, nothing', async () => {
+    const t = setup({ change: { state: 'open', matches: [A, B], accounts: [A, B] } });
+    await t.signedIn(CHANGE);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save');
+    expect(t.vault.changePassword).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).not.toBeNull();
+  });
+
+  it('Save as new, a password you typed: another sign-in, as the save card would', async () => {
+    const t = setup({ change: { state: 'open', matches: [A, B], accounts: [A, B] } });
+    await t.signedIn(CHANGE);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'new');
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith({ origin: ORIGIN, username: A.username, password: 'new-Pw', chordId: 'c1' });
+  });
+
+  it('…an account it didn’t offer: nothing', async () => {
+    const t = setup({ change: { state: 'open', matches: [A, B], accounts: [A, B] } });
+    await t.signedIn(CHANGE);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { account: 7 });
+    expect(t.vault.changePassword).not.toHaveBeenCalled();
+  });
+
+  describe('with a generated password', () => {
+    const withPresave = async (change: Change) => {
+      const t = setup({ change });
+      await t.focus({ kind: 'change', role: 'new-password' });
+      await settle(2);
+      t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+      await settle();
+      await t.signedIn({ kind: 'change', values: { username: '', password: 'Gen-1', current: 'old-Pw' } });
+      await settle(3);
+      return t;
+    };
+    it('one account: the Update card (the owner’s design 5A), and Update applies it and deletes the presave', async () => {
+      const t = await withPresave({ state: 'open', matches: [A], accounts: [A, B] });
+      const card = t.assist.cardFor('n1')!;
+      expect(card).toMatchObject({ kind: 'update', username: A.username });
+      expect(t.vault.changePassword).not.toHaveBeenCalled();
+      await t.assist.answer('w1', card.id, 'save');
+      expect(t.vault.changePassword).toHaveBeenCalledWith({ origin: ORIGIN, chordId: 'c1', account: 'a1', password: 'Gen-1', presaved: 'g1' });
+      expect(t.assist.cardFor('n1')).toBeNull();
+    });
+    it('Save as new: the presave confirmed as another account', async () => {
+      const t = await withPresave({ state: 'open', matches: [A, B], accounts: [A, B] });
+      await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'new');
+      expect(t.vault.presaved).toHaveBeenCalledWith('confirm', 'g1', ORIGIN, 'c1', { username: A.username, password: 'Gen-1' });
+      expect(t.vault.changePassword).not.toHaveBeenCalled();
+    });
+    it('several: the card asks, and its Save applies it and deletes the presave', async () => {
+      const t = await withPresave({ state: 'open', matches: [A, B], accounts: [A, B] });
+      const card = t.assist.cardFor('n1')!;
+      expect(card).toMatchObject({ kind: 'change' });
+      await t.assist.answer('w1', card.id, 'save', { account: 0 });
+      expect(t.vault.changePassword).toHaveBeenCalledWith({ origin: ORIGIN, chordId: 'c1', account: 'a1', password: 'Gen-1', presaved: 'g1' });
+    });
+    it('nothing saved for the site: the new card’s Save confirms the presave with the username you typed', async () => {
+      const t = await withPresave({ state: 'open', matches: [], accounts: [] });
+      const card = t.assist.cardFor('n1')!;
+      await t.assist.answer('w1', card.id, 'save', { username: 'ada' });
+      expect(t.vault.presaved).toHaveBeenCalledWith('confirm', 'g1', ORIGIN, 'c1', { username: 'ada', password: 'Gen-1' });
+      expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    });
+    it('the card closed: the presave stays, Not confirmed (never lost)', async () => {
+      const t = await withPresave({ state: 'open', matches: [A, B], accounts: [A, B] });
+      await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'close');
+      expect(t.vault.changePassword).not.toHaveBeenCalled();
+      expect(t.vault.presaved).not.toHaveBeenCalledWith('confirm', expect.anything(), expect.anything(), expect.anything(), expect.anything());
+    });
   });
 });

@@ -8,10 +8,13 @@
  * (E2E presses them with `webContents.sendInputEvent`, which does).
  */
 
-/** The open menu: its highlighted row, and how many rows it has. */
+import { matches, PASSWORD_REGENERATE_KEYS, type Platform } from '@chord/core';
+
+/** The open menu: its highlighted row, how many rows it has, and whether it has a generated password ↻ can change. */
 export interface MenuKeys {
   readonly index: number;
   readonly rows: number;
+  readonly regenerate?: boolean;
 }
 
 /** The parts of Electron's `Input` the routing reads. */
@@ -34,10 +37,14 @@ export interface MenuKeyResult {
   readonly take: boolean;
   readonly menu: MenuKeys | null;
   readonly choose?: number;
+  /** ↻ by key (`PASSWORD_REGENERATE_KEYS`): another generated password, the menu left as it is. */
+  readonly regenerate?: true;
 }
 
-export function routeMenuKey(menu: MenuKeys | null, input: MenuKeyInput): MenuKeyResult {
+export function routeMenuKey(menu: MenuKeys | null, input: MenuKeyInput, platform: Platform = process.platform as Platform): MenuKeyResult {
   if (!menu || input.type !== 'keyDown') return { take: false, menu };
+  const key = { code: '', control: false, meta: false, alt: false, shift: false, ...input };
+  if (menu.regenerate && matches(key, PASSWORD_REGENERATE_KEYS, platform)) return { take: true, menu, regenerate: true };
   // A shortcut with a modifier is the app's or the page's, never the menu's.
   if (input.control || input.meta || input.alt) return { take: false, menu };
   switch (input.key) {

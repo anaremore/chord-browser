@@ -32,6 +32,14 @@ export const PASSWORD_REAUTH_MS = 5 * 60_000;
 export const PASSWORD_CLIPBOARD_MS = 60_000;
 
 /** What one sign-in may hold, in characters (S17 §8). Longer is refused, never cut: a cut password is a wrong one. */
+/**
+ * The menu's ↻ by key (S17 §9, the owner's design of 2026-11-17): Ctrl+Shift+K, ⌘⇧K. The menu's keys go through
+ * `before-input-event` and the arrows are the page's caret's; this is free in Chord's shortcuts (S8), isn't Chrome's,
+ * doesn't edit text (unlike Ctrl+Shift+V, Z, or GTK's U), and types no character (unlike Alt or Option). The menu
+ * takes it only while it's open.
+ */
+export const PASSWORD_REGENERATE_KEYS = 'Mod+Shift+K';
+
 export const PASSWORD_LIMITS = { username: 500, password: 1000, note: 4000, realm: 200, origin: 2048 } as const;
 
 /** How long the vault stays open unused; null: until Chord quits or you lock it. */
@@ -69,6 +77,11 @@ export interface LoginSecret {
   /** When the password last changed (ms). */
   changedAt: number;
   previous: { password: string; changedAt: number } | null;
+  /**
+   * A generated password saved the moment it was filled (S17 §6, *Generating*), before any submit worked: *Not
+   * confirmed* until one does. Absent (never `false`) once confirmed, and on everything else.
+   */
+  unconfirmed?: true;
 }
 
 /**
@@ -87,6 +100,8 @@ export interface LoginSummary {
   updatedAt: number;
   lastUsed: number | null;
   chordUsed: number | null;
+  /** A generated password no submit has confirmed yet (S17 §6): Settings marks it *Not confirmed*. */
+  unconfirmed?: true;
 }
 
 /** Whether a sign-in's parts are within PASSWORD_LIMITS; null when they are, else which isn't. */

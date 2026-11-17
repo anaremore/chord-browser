@@ -4,12 +4,12 @@
  * which source wins; rules that can't be met; and the property that every password made meets its rules, over every
  * site in Apple's list and over random rules.
  */
-import { randomInt } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import rulesList from '../vendor/apple-password-manager-resources/password-rules.json';
 import changeList from '../vendor/apple-password-manager-resources/change-password-URLs.json';
 import {
   DEFAULT_RULE_SET,
+  describePasswordRules,
   GENERATED_LENGTH,
   GENERATOR_CLASSES,
   generatePassword,
@@ -70,9 +70,10 @@ describe('the default', () => {
       expect(passwordSatisfies(p, DEFAULT_RULE_SET)).toBe(true);
     }
   });
-  it("uses crypto's numbers in main's way, and doesn't repeat", () => {
+  it("doesn't repeat (main's crypto.randomInt is tested in the desktop's unit tests)", () => {
     const seen = new Set<string>();
-    for (let i = 0; i < 500; i++) seen.add(generatePassword(DEFAULT_RULE_SET, randomInt)!);
+    const random = seeded(11);
+    for (let i = 0; i < 500; i++) seen.add(generatePassword(DEFAULT_RULE_SET, random)!);
     expect(seen.size).toBe(500);
   });
 });
@@ -113,6 +114,23 @@ describe('which rules count (S17 §6: the field, then the site, then minlength a
       const digits = generatePassword(passwordRulesFor({}, 'allowed: digit; minlength: 6; maxlength: 6;').rules, random)!;
       expect(digits).toMatch(/^[2-9]{6}$/);
     }
+  });
+});
+
+describe('the rules in plain words (the owner’s design 3A)', () => {
+  it.each<[string, Parameters<typeof passwordRulesFor>[0], string | null, string | null]>([
+    ['the default: nothing to say', {}, null, null],
+    ['the site’s letters and digits, 12–16', {}, 'minlength: 12; maxlength: 16; allowed: lower, upper, digit;', 'Letters and digits, 12–16, as this site asks'],
+    ['digits only, exactly 6', {}, 'allowed: digit; minlength: 6; maxlength: 6;', 'Digits, 6, as this site asks'],
+    ['any characters, 8 to 20', {}, 'minlength: 8; maxlength: 20;', '8–20 characters, as this site asks'],
+    // Apple's language: what's required is all that's allowed, unless `allowed` says more.
+    ['a symbol required', {}, 'minlength: 10; required: lower, upper, digit; required: [!#$];', 'Letters, digits and symbols, at least 10, with a symbol, as this site asks'],
+    ['a symbol required, anything allowed', {}, 'minlength: 10; required: [!#$]; allowed: ascii-printable;', 'At least 10 characters, with a symbol, as this site asks'],
+    ['the field’s own maxlength on the default', { maxLength: 16 }, null, 'Up to 16 characters, as this site asks'],
+    ['the field’s own passwordrules', { passwordrules: 'allowed: lower; maxlength: 30;' }, null, 'Letters, up to 30, as this site asks'],
+  ])('%s', (_name, field, site, words) => {
+    const { source, rules } = passwordRulesFor(field, site);
+    expect(describePasswordRules(source, rules)).toBe(words);
   });
 });
 
@@ -230,7 +248,8 @@ describe("Apple's lists, by host", () => {
   it("names a listed site's own page, else its /.well-known/change-password", () => {
     expect(changePasswordUrlFor(`https://www.${changeHost}`)).toBe(changeUrl);
     expect(changePasswordUrlFor('https://example.com')).toBe('https://example.com/.well-known/change-password');
-    expect(changePasswordUrlFor('http://router.test:8080')).toBe('http://router.test:8080/.well-known/change-password');
+    // https only: Chord doesn't open an http site's pages for you (the owner's design 6A).
+    expect(changePasswordUrlFor('http://router.test:8080')).toBeNull();
     expect(changePasswordUrlFor('file:///etc')).toBeNull();
     expect(changePasswordUrlFor('javascript:alert(1)')).toBeNull();
   });

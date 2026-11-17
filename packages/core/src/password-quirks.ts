@@ -20,6 +20,9 @@
 import changeUrls from '../vendor/apple-password-manager-resources/change-password-URLs.json';
 import rules from '../vendor/apple-password-manager-resources/password-rules.json';
 
+/** Core has no DOM or Node types: the WHATWG URL, as main and chord-data have it (as in password-sites.ts). */
+declare const URL: new (url: string, base?: string) => { protocol: string; hostname: string; href: string };
+
 const RULES = rules as Record<string, { 'password-rules'?: string }>;
 const CHANGE_URLS = changeUrls as Record<string, string>;
 
@@ -56,11 +59,11 @@ export function siteRulesFor(origin: string): string | null {
 /**
  * Where a sign-in's password is changed (S17 §9, *Change password on the site*): Apple's address for its site when
  * the list has one, else the site's `/.well-known/change-password` (W3C's draft), which a site that supports it
- * redirects to its own page. Null for an address that isn't `http:` or `https:`.
+ * redirects to its own page. `https` only (the owner's design 6A): null for any other address, an `http` site's too.
  */
 export function changePasswordUrlFor(origin: string): string | null {
   const host = hostOf(origin);
-  if (!host) return null;
+  if (!host || !/^https:/i.test(origin)) return null;
   for (const h of hostsOf(host)) {
     const listed = own(CHANGE_URLS, h);
     if (typeof listed === 'string' && /^https:\/\//.test(listed)) return listed;

@@ -473,3 +473,128 @@ test('a field hidden at the last scan, focused within the scan gap: classed agai
   for (let i = 0; i < 5; i++) await a.settle();
   expect((await scans()) - before).toBe(2);
 });
+
+/* ---------- phase 2: generated passwords, sign-up and change forms (S17 §6) ---------- */
+
+const SIGN_UP =
+  '<h1>Create your account</h1><form id="f"><input id="u" name="email" type="email" aria-label="Email"><input id="n" name="password" type="password" autocomplete="new-password" aria-label="Create a password" passwordrules="minlength: 12; required: digit;" minlength="10" maxlength="64"><input id="c" name="confirm" type="password" autocomplete="new-password" aria-label="Confirm password"><button>Sign up</button></form>';
+const CHANGE =
+  '<h1>Change your password</h1><form id="f"><input id="o" name="current" type="password" autocomplete="current-password" aria-label="Current password"><input id="n" name="new" type="password" autocomplete="new-password" aria-label="New password"><input id="c" name="confirm" type="password" autocomplete="new-password" aria-label="Confirm new password"><button>Change password</button></form>';
+const GENERATED = { formId: 'f1', generated: 'Gen3rated-Pa55-word-x', highlight: FILL.highlight };
+const values = (page: Page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('input')].map((i) => [i.id, i.value])));
+
+test('a new password’s field says its rules at focus, never its value', async ({ page }) => {
+  const a = await open(page, SIGN_UP);
+  await page.fill('#n', 'typed already');
+  await page.focus('#u');
+  await a.settle();
+  await a.clear();
+  await page.focus('#n');
+  await a.settle();
+  const focus = (await a.of('focus')).at(-1)!;
+  expect(focus).toMatchObject({ kind: 'sign-up', role: 'new-password', rules: { passwordrules: 'minlength: 12; required: digit;', minLength: 10, maxLength: 64 } });
+  expect(JSON.stringify(await a.messages())).not.toContain('typed already');
+  // An account's field says nothing of rules.
+  await page.focus('#u');
+  await a.settle();
+  expect((await a.of('focus')).find((f) => f['role'] === 'username')).not.toHaveProperty('rules');
+});
+
+test('a generated password: into the new password’s field and the confirmation’s, nothing else, as typing', async ({ page }) => {
+  for (const [name, html, filled] of [
+    ['a sign-up', SIGN_UP, { u: '', n: GENERATED.generated, c: GENERATED.generated }],
+    ['a change form: never the current password', CHANGE, { o: '', n: GENERATED.generated, c: GENERATED.generated }],
+    ['a second step’s confirmation alone', '<form id="f"><input id="c" type="password" autocomplete="new-password" aria-label="Confirm your password"><button>Continue</button></form>', { c: GENERATED.generated }],
+  ] as const) {
+    const a = await open(page, html);
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (globalThis as unknown as { seen: string[] }).seen = seen;
+      for (const el of document.querySelectorAll('input')) for (const type of ['input', 'change']) el.addEventListener(type, () => seen.push(`${el.id}:${type}`));
+    });
+    const before = await page.evaluate(() => document.documentElement.outerHTML);
+    await a.clear();
+    await fill(page, GENERATED);
+    expect(await a.of('filled'), name).toEqual([{ formId: 'f1', ok: true }]);
+    expect(await values(page), name).toEqual(filled);
+    expect((await page.evaluate(() => (globalThis as unknown as { seen: string[] }).seen)).length, name).toBe(Object.values(filled).filter(Boolean).length * 2);
+    expect(await page.evaluate(() => document.documentElement.outerHTML), name).toBe(before);
+  }
+});
+
+test('a generated password goes only into a visible type=password field', async ({ page }) => {
+  const cases: [string, string, { ok: boolean; n: string; c: string }][] = [
+    ['the new password’s field is text now (a show-password toggle)', "document.getElementById('n').type = 'text'", { ok: false, n: '', c: '' }],
+    ['the new password’s field is hidden', "document.getElementById('n').style.display = 'none'", { ok: false, n: '', c: '' }],
+    ['the form is under an invisible layer', "document.getElementById('f').style.opacity = '0'", { ok: false, n: '', c: '' }],
+    ['the confirmation is text now: the form changed', "document.getElementById('c').type = 'text'", { ok: false, n: '', c: '' }],
+    ['the confirmation is hidden (a later step): the new one alone', "document.getElementById('c').style.visibility = 'hidden'", { ok: true, n: GENERATED.generated, c: '' }],
+  ];
+  for (const [name, change, want] of cases) {
+    const a = await open(page, SIGN_UP);
+    await page.evaluate(change);
+    await a.clear();
+    await fill(page, GENERATED);
+    expect((await a.of('filled')).map((f) => f['ok']), name).toEqual([want.ok]);
+    const got = await values(page);
+    expect([got['u'], got['n'], got['c']], name).toEqual(['', want.n, want.c]);
+  }
+});
+
+test('a fill main never sends is refused whole: a generated password with an account’s values, or an empty one', async ({ page }) => {
+  for (const payload of [
+    { ...GENERATED, username: 'ada' },
+    { ...GENERATED, password: 'x' },
+    { ...GENERATED, generated: '' },
+    { ...FILL, intoNew: 'yes' },
+  ]) {
+    const a = await open(page, SIGN_UP);
+    await a.clear();
+    await fill(page, payload);
+    expect(await a.of('filled')).toEqual([]);
+    expect(Object.values(await values(page)).join('')).toBe('');
+  }
+});
+
+test('an account picked on a new password’s field (intoNew): a form with no current password takes it there; picked elsewhere, nothing', async ({ page }) => {
+  const READ_AS_NEW =
+    '<form id="f"><input id="u" name="email" type="email" aria-label="Email"><input id="n" name="password" type="password" aria-label="Create a password"><button>Log in</button></form>';
+  let a = await open(page, READ_AS_NEW);
+  await a.clear();
+  await fill(page, { ...FILL, intoNew: true });
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await values(page)).toEqual({ u: 'ada@example.com', n: 'secret pass' });
+  a = await open(page, READ_AS_NEW);
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false, reason: 'password' }]);
+  // A change form keeps its current password's field for the account, whichever field the menu was on.
+  a = await open(page, CHANGE);
+  await a.clear();
+  await fill(page, { ...FILL, intoNew: true });
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: false, reason: 'password' }]);
+});
+
+test('a change form’s submit carries its current password beside the new one, for main to find the account', async ({ page }) => {
+  const a = await open(page, CHANGE);
+  await page.evaluate(() => document.getElementById('f')!.addEventListener('submit', (e) => e.preventDefault()));
+  await page.fill('#o', 'old-Password-1');
+  await page.fill('#n', 'new-Password-2');
+  await page.fill('#c', 'new-Password-2');
+  await a.clear();
+  await page.press('#c', 'Enter');
+  await a.settle();
+  expect((await a.of('candidate'))[0]).toMatchObject({ kind: 'change', signal: 'enter', values: { username: '', password: 'new-Password-2', current: 'old-Password-1' } });
+  // A sign-up's has none.
+  const b = await open(page, SIGN_UP);
+  await page.evaluate(() => document.getElementById('f')!.addEventListener('submit', (e) => e.preventDefault()));
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#n', 'new-Password-2');
+  await page.fill('#c', 'new-Password-2');
+  await b.clear();
+  await page.press('#c', 'Enter');
+  await b.settle();
+  const candidate = (await b.of('candidate'))[0]!;
+  expect(candidate).toMatchObject({ kind: 'sign-up', values: { username: 'ada@example.com', password: 'new-Password-2' } });
+  expect(candidate['values']).not.toHaveProperty('current');
+});

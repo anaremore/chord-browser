@@ -556,3 +556,89 @@ describe('sign-ins from the browser’s own box (S17 §10): by origin and realm,
     expect((await run({ op: 'list', chordId: null })).logins!.find((l) => l.id === id)!.realm).toBe('Router admin');
   });
 });
+
+describe('generated passwords (S17 §6, phase 2): saved when filled, Not confirmed until a submit works', () => {
+  const SITE = 'https://example.com';
+  const GENERATED = 'Gen3rated-Pa55word-x';
+  const presave = async (origin = SITE) => {
+    if ((await run({ op: 'status' })).status!.state === 'none') await run({ op: 'setup', passphrase: PASSPHRASE });
+    const saved = await run({ op: 'presave', origin, password: GENERATED, chordId: 'work' }, 1000);
+    expect(saved.problem).toBeUndefined();
+    return saved.id!;
+  };
+  const listed = async (id: string) => (await run({ op: 'list', chordId: null })).logins!.find((l) => l.id === id);
+
+  it('presaves with no username, marked unconfirmed, sealed like any other', async () => {
+    const id = await presave();
+    expect(await listed(id)).toMatchObject({ origin: SITE, username: '', unconfirmed: true, realm: null });
+    expect((await run({ op: 'reveal', id })).password).toBe(GENERATED);
+    // A page's form fills from it, as from any sign-in.
+    expect((await run({ op: 'fill', id, origin: SITE, chordId: null })).password).toBe(GENERATED);
+  });
+
+  it('presaves on a site you said never to save for: generating is asking', async () => {
+    await run({ op: 'setup', passphrase: PASSPHRASE });
+    await run({ op: 'never', origin: SITE });
+    expect((await run({ op: 'presave', origin: SITE, password: GENERATED, chordId: null })).id).toBeDefined();
+  });
+
+  it('takes its username at the submit, still unconfirmed; then a submit that worked confirms it', async () => {
+    const id = await presave();
+    expect((await run({ op: 'pending', id, origin: SITE, username: 'ada@example.com' })).id).toBe(id);
+    expect(await listed(id)).toMatchObject({ username: 'ada@example.com', unconfirmed: true });
+    expect((await run({ op: 'confirm', id, origin: SITE, username: 'ada@example.com', password: GENERATED })).id).toBe(id);
+    const login = await listed(id);
+    expect(login!.username).toBe('ada@example.com');
+    expect(login!.unconfirmed).toBeUndefined();
+    // Confirmed, it's changed only by Save or Settings.
+    expect((await run({ op: 'pending', id, origin: SITE, username: 'grace' })).problem).toBe('refused');
+    expect((await run({ op: 'confirm', id, origin: SITE })).problem).toBe('refused');
+  });
+
+  it('a password typed over the generated one, before the submit, replaces it and keeps it as the one before', async () => {
+    const id = await presave();
+    await run({ op: 'pending', id, origin: SITE, password: 'typed-instead' }, 2000);
+    expect((await run({ op: 'reveal', id })).password).toBe('typed-instead');
+  });
+
+  it('is changed only for its own site, and only a form sign-in', async () => {
+    const id = await presave();
+    expect((await run({ op: 'pending', id, origin: 'https://example.org', username: 'x' })).problem).toBe('refused');
+    expect((await run({ op: 'confirm', id, origin: 'https://example.org' })).problem).toBe('refused');
+    expect((await run({ op: 'pending', id: 'nope', origin: SITE, username: 'x' })).problem).toBe('missing');
+    expect(await listed(id)).toMatchObject({ username: '', unconfirmed: true });
+  });
+
+  it('a save over it (a sign-in that worked, an update card) confirms it', async () => {
+    const id = await presave();
+    await run({ op: 'save', origin: SITE, username: 'ada', password: GENERATED, chordId: null, replace: id });
+    expect((await listed(id))!.unconfirmed).toBeUndefined();
+  });
+
+  it('is never in the clear in chord.db, nor whether it’s confirmed', async () => {
+    const id = await presave();
+    await run({ op: 'pending', id, origin: SITE, username: 'pending-user@example.com' });
+    expect((raw().prepare('PRAGMA table_info(login)').all() as { name: string }[]).map((c) => c.name)).toEqual(['id', 'site_tag', 'sealed', 'created_at', 'updated_at']);
+    db.close();
+    db = new ChordDatabase(file, 'linux', KDF);
+    for (const name of readdirSync(dir).filter((n) => n.startsWith('chord.db'))) {
+      const bytes = readFileSync(join(dir, name));
+      for (const secret of [GENERATED, 'pending-user', 'unconfirmed']) expect(bytes.includes(Buffer.from(secret, 'utf8')), `${secret} in ${name}`).toBe(false);
+    }
+  });
+
+  it('finds a change form’s account by its current password: one, several, or none', async () => {
+    await run({ op: 'setup', passphrase: PASSPHRASE });
+    const a = (await run({ op: 'add', login: { origin: SITE, username: 'ada', password: 'shared-old' }, chordId: null })).id!;
+    const b = (await run({ op: 'add', login: { origin: 'https://login.example.com', username: 'bob', password: 'shared-old' }, chordId: null })).id!;
+    await run({ op: 'add', login: { origin: SITE, username: 'cy', password: 'other' }, chordId: null });
+    await run({ op: 'add', login: { origin: 'https://example.org', username: 'dee', password: 'shared-old' }, chordId: null });
+    await run({ op: 'save', origin: SITE, realm: 'Box', username: 'eve', password: 'shared-old', chordId: null });
+    const match = async (current: string) => (await run({ op: 'matchCurrent', origin: SITE, current })).logins!.map((l) => l.id).sort();
+    // Another host of the site counts; another site and the browser's own box don't.
+    expect(await match('shared-old')).toEqual([a, b].sort());
+    expect(await match('other')).toHaveLength(1);
+    expect(await match('nobody-has-this')).toEqual([]);
+    expect(JSON.stringify((await run({ op: 'matchCurrent', origin: SITE, current: 'shared-old' })).logins)).not.toContain('shared-old');
+  });
+});

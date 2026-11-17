@@ -390,6 +390,13 @@
   margin: var(--space-3) var(--space-3) 0;
 }
 
+/* The account picked in a change card's chooser (the owner's design 5A). */
+.authTick {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--color-accent);
+}
+
 .authAccount:hover,
 .authUnlock:hover,
 .authAccount[aria-selected='true'] {
@@ -696,6 +703,37 @@
 .menuRow:hover,
 .menuRow[aria-selected='true'] {
   background: var(--color-item-hover);
+}
+
+/* The generator's row: its text takes the room, ↻ at the end. */
+.menuGrow {
+  flex: 1;
+}
+
+/* The generated password, on the row's second line: mono, small (the owner's design 3A). */
+.menuMono {
+  overflow: hidden;
+  color: var(--color-fg);
+  font: var(--text-small);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The first account under the generator's row, past a hairline as Other passwords… is. */
+.menuDivided {
+  position: relative;
+  margin-block-start: var(--space-2);
+}
+
+.menuDivided::before {
+  position: absolute;
+  inset-block-start: calc(var(--space-1) * -1);
+  inset-inline: var(--space-2);
+  block-size: var(--size-hairline);
+  background: var(--color-item-hover);
+  content: '';
 }
 
 /* Other passwords…: under the accounts, past a hairline. */
