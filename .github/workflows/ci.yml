@@ -38,10 +38,13 @@ jobs:
   # The password detector on DuckDuckGo's corpus of real sites' forms, in Playwright's own headless Chromium
   # (apps/desktop/test/forms; S17 §13 layer 2), held to its baseline. The corpus is a pinned, hash-checked
   # download, kept in this job's cache and never in the repository or a release (decided 2026-11-15).
+  # The same job runs it on Bitwarden's test-the-web (GPL-3.0, tested against, never vendored): a pinned,
+  # hash-checked download built into the same cache (test/forms/ttw.ts). With no network it skips with a
+  # warning; it never fails the build for that.
   forms:
     name: Password detector · corpus
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -53,8 +56,13 @@ jobs:
       - name: Cache the corpus
         uses: actions/cache@v6
         with:
-          path: apps/desktop/test/forms/.cache
+          path: apps/desktop/test/forms/.cache/ddg-*
           key: forms-corpus-${{ hashFiles('apps/desktop/test/forms/corpus.ts') }}
+      - name: Cache test-the-web's build
+        uses: actions/cache@v6
+        with:
+          path: apps/desktop/test/forms/.cache/ttw-*
+          key: forms-ttw-${{ hashFiles('apps/desktop/test/forms/ttw.ts') }}
       - name: Cache Playwright's Chromium
         uses: actions/cache@v6
         with:
@@ -67,7 +75,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: forms-score
-          path: apps/desktop/test-results/forms/score.json
+          path: |
+            apps/desktop/test-results/forms/score.json
+            apps/desktop/test-results/forms/ttw-score.json
           if-no-files-found: ignore
 
   # Chord Player (apps/player): packaged on castLabs ECS per OS and smoke-tested, with ECS's
