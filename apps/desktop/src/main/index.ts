@@ -506,6 +506,13 @@ function registerIpc(): void {
   handle('passwords:undelete', ({ id }) => passwords.undo(id));
   handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
   handle('passwords:startOver', () => passwords.startOver());
+  // *Change password on the site* (S17 §9): only a sign-in Settings was shown, only https, in a new tab.
+  handle('passwords:changeOnSite', async ({ id }) => {
+    const url = await passwords.changePasswordUrl(id);
+    if (!url) return false;
+    browser!.openUrlInLastWindow(url);
+    return true;
+  });
   handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
   // The menu under a field and the save card (S17 §9): each answers only its own window's page, the menu's view or the
   // cards' popover, never the other.
@@ -513,9 +520,18 @@ function registerIpc(): void {
     const windowId = browser?.popoverWindow(sender, 'menu');
     if (windowId) browser!.passwordAssist.chooseRow(windowId, id, index);
   });
-  handle('passwords:saveCard', async ({ id, action, username, passphrase }, sender) => {
+  handle('passwords:saveCard', async ({ id, action, username, passphrase, account }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');
-    if (windowId) await browser!.passwordAssist.answer(windowId, id, action, { ...(username !== undefined ? { username } : {}), ...(passphrase !== undefined ? { passphrase } : {}) });
+    if (windowId)
+      await browser!.passwordAssist.answer(windowId, id, action, {
+        ...(username !== undefined ? { username } : {}),
+        ...(passphrase !== undefined ? { passphrase } : {}),
+        ...(account !== undefined ? { account } : {}),
+      });
+  });
+  handle('passwords:menuRegenerate', ({ id }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'menu');
+    if (windowId) void browser!.passwordAssist.regenerate(windowId, id);
   });
   // The key beside the address: the sender's window's own tab's card only.
   handle('passwords:reopenCard', ({ nodeId }, sender) => browser!.passwordAssist.reopen(senderWindow(sender).id, nodeId));

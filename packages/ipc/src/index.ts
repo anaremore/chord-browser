@@ -801,10 +801,27 @@ export interface PasswordMenu {
   id: number;
   /** The page's host. */
   host: string;
-  /** `locked`: one row, *Unlock passwords*. */
-  state: 'accounts' | 'locked';
-  accounts: { username: string; host: string | null }[];
-  /** The highlighted row: an account's index, `accounts.length` for *Other passwords…*, 0 when locked. */
+  /**
+   * `locked`: one row, *Unlock passwords*. `generate`: a new password's field (S17 §6, §9; the owner's design 3A):
+   * *Use a strong password* first, with `generated`, then the accounts and *Other passwords…* as `accounts` has them;
+   * choosing it saves it (asking to unlock, or for the first passphrase, first) and fills.
+   */
+  state: 'accounts' | 'locked' | 'generate';
+  /**
+   * On a new password's field: the password, shown in mono, and ↻ for another (`passwords:menuRegenerate`, or
+   * `PASSWORD_REGENERATE_KEYS`). `again`: the one this tab saved for the site a moment ago (a second step's
+   * confirmation, the page reloaded), offered again rather than a new one. `vault`: what choosing it asks first.
+   * `rule`: the site's rules that shaped it, in plain words (`Letters and digits, 12–16, as this site asks`), or null.
+   * `strong`: false when the site's rules hold it under 8 characters or about 40 bits: the row is then *Use a password
+   * this site allows*, and `rule` says why (`Only 4 digits, as this site asks`).
+   */
+  generated?: { password: string; again: boolean; vault: 'open' | 'locked' | 'none'; rule: string | null; strong: boolean };
+  /** `madeAt`: a generated password no sign-in has confirmed yet (*Not confirmed · made today*), and when it was made. */
+  accounts: { username: string; host: string | null; madeAt?: number }[];
+  /**
+   * The highlighted row: an account's index, `accounts.length` for *Other passwords…*, 0 when locked. With `generated`,
+   * every row is one lower: 0 is *Use a strong password*.
+   */
   index: number;
   /** An `http:` page (S17 §5): the menu says it isn't secure. */
   insecure: boolean;
@@ -816,8 +833,23 @@ export interface PasswordMenu {
  */
 export interface PasswordSaveCard {
   id: number;
-  /** `update`: the site has this username saved with another password. */
-  kind: 'new' | 'update';
+  /**
+   * `update`: the site has this username saved with another password (or a change form's account Chord matched).
+   * `change`: a change-password form whose account Chord can't tell (none or several saved ones have its current
+   * password, S17 §6): the card asks which, from `accounts`, with the sign-in box's chooser; **Update** sends the one
+   * chosen (`account`), *Save as new* (`new`) keeps it as another. `saved`: a sign-up with Chord's own password, saved
+   * already and confirmed now: *Your new password … is saved*, **Done**, *Delete it* (`delete`).
+   */
+  kind: 'new' | 'update' | 'change' | 'saved';
+  /** A sign-up's (`new`): *Save the password for your new account on …?* */
+  signUp?: boolean;
+  /** `change`: the site's saved usernames to choose from, best first. */
+  accounts?: string[];
+  /**
+   * A generated password with no vault yet (S17 §6): Save chooses the passphrase, saves it, and only then fills it.
+   * Its username is empty: the form's submit gives it one.
+   */
+  generated?: boolean;
   host: string;
   username: string;
   /** The first password: the card chooses the passphrase too. */
@@ -1463,6 +1495,8 @@ export const invokeChannels = {
   'passwords:forgetNever': { roles: ['internal'], request: z.strictObject({ site: z.string().min(1).max(300) }), response: z.custom<PasswordStepResult>() },
   /** A forgotten passphrase: every password goes. */
   'passwords:startOver': { roles: ['internal'], request: z.void(), response: z.custom<PasswordsView>() },
+  /** *Change password on the site* (S17 §9): the site's own page for it opens in a tab. False when there's no address to open. */
+  'passwords:changeOnSite': { roles: ['internal'], request: z.strictObject({ id: loginId }), response: z.boolean() },
   /** The popover's unlock card: the passphrase (and whether to keep the vault unlocked here), or null to cancel. */
   'passwords:unlockCard': {
     roles: ['popover'],
@@ -1471,6 +1505,8 @@ export const invokeChannels = {
   },
   /** The menu under a field: a row clicked (the keyboard's choices go through main). */
   'passwords:menuChoose': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1), index: z.number().int().min(0).max(1000) }), response: z.void() },
+  /** The menu's ↻ on a new password's field: another password (S17 §6, §9). */
+  'passwords:menuRegenerate': { roles: ['popover'], request: z.strictObject({ id: z.number().int().min(1) }), response: z.void() },
   /**
    * The save card: Save (with the username as you left it, and the passphrase on the first one), *Never for this
    * site*, ×, and whether you're in it (`hold`: it doesn't go by itself meanwhile).
@@ -1479,9 +1515,11 @@ export const invokeChannels = {
     roles: ['popover'],
     request: z.strictObject({
       id: z.number().int().min(1),
-      action: z.enum(['save', 'never', 'close', 'hold', 'release']),
+      action: z.enum(['save', 'never', 'close', 'hold', 'release', 'new', 'delete']),
       username: z.string().max(500).optional(),
       passphrase: newPassphrase.optional(),
+      /** A `change` card's account: its index in `accounts`. */
+      account: z.number().int().min(0).max(1000).optional(),
     }),
     response: z.void(),
   },
@@ -2129,6 +2167,8 @@ export interface PasswordsApi {
   undo(id: string): Promise<PasswordStepResult>;
   forgetNever(site: string): Promise<PasswordStepResult>;
   startOver(): Promise<PasswordsView>;
+  /** *Change password on the site*: opens the site's page for it in a tab. */
+  changeOnSite(id: string): Promise<boolean>;
   /** `hide`: the vault locked; hide any shown password, and don't ask for the view. */
   onChange(listener: (change: { hide: true } | null) => void): () => void;
 }
@@ -2283,7 +2323,9 @@ export interface PopoverApi {
   passwords: {
     unlock(id: number, passphrase: string | null, keep: boolean): Promise<void>;
     choose(id: number, index: number): Promise<void>;
-    card(id: number, action: 'save' | 'never' | 'close' | 'hold' | 'release', details?: { username?: string; passphrase?: string }): Promise<void>;
+    /** The menu's ↻: another generated password. */
+    regenerate(id: number): Promise<void>;
+    card(id: number, action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete', details?: { username?: string; passphrase?: string; account?: number }): Promise<void>;
     reveal(id: number): Promise<{ password: string } | null>;
   };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */

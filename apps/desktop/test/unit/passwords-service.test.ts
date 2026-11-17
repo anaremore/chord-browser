@@ -13,7 +13,7 @@ import { ChordDatabase } from '@chord/data/db';
 import type { Session } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPasswordDetector } from '../../src/main/passwords/detector';
-import { PasswordService, type PasswordKeys, type PasswordPage } from '../../src/main/passwords/service';
+import { PasswordService, UNCONFIRMED_IN_MENU_MS, type PasswordKeys, type PasswordPage } from '../../src/main/passwords/service';
 
 const KDF = { N: 2 ** 10, r: 8, p: 1 };
 const PASSPHRASE = 'correct horse battery staple';
@@ -799,5 +799,104 @@ describe('the browser’s own sign-in box (S17 §10)', () => {
     await service.lock();
     expect(await service.httpAccountsFor(ROUTER, 'Router admin', 'work')).toEqual({ state: 'locked' });
     expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBeNull();
+  });
+});
+
+describe('generated passwords, sign-up and change forms (S17 §6, phase 2)', () => {
+  const SITE = 'https://example.com';
+  const listed = async () => (await db.passwords.run({ op: 'list', chordId: null })).logins!;
+
+  it.each<[string, () => Promise<void>, string, 'open' | 'locked' | 'none' | 'off']>([
+    ['no vault yet', async () => undefined, 'work', 'none'],
+    ['open', async () => void (await service.setup(PASSPHRASE)), 'work', 'open'],
+    ['locked', async () => void (await service.setup(PASSPHRASE), await service.lock()), 'work', 'locked'],
+    ['a private window', async () => void (await service.setup(PASSPHRASE)), 'priv', 'off'],
+    ['a chord main doesn’t know', async () => void (await service.setup(PASSPHRASE)), 'gone', 'off'],
+    ['passwords off', async () => void (await service.setup(PASSPHRASE), (settings = { ...settings, enabled: false })), 'work', 'off'],
+  ])('generatorFor, %s: %s', async (_name, before, chordId, state) => {
+    await before();
+    expect(await service.generatorFor(SITE, chordId)).toBe(state);
+  });
+
+  it('presave: the first sets the passphrase; saved Not confirmed with no username; never in a private window', async () => {
+    expect(await service.presave({ origin: SITE, password: 'Gen-1', chordId: 'work' })).toEqual({ ok: false, problem: 'none' });
+    expect(await service.presave({ origin: SITE, password: 'Gen-1', chordId: 'priv', passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'refused' });
+    const first = await service.presave({ origin: SITE, password: 'Gen-1', chordId: 'work', passphrase: PASSPHRASE });
+    expect(first).toEqual({ ok: true, id: expect.any(String), setup: true });
+    expect(await listed()).toEqual([expect.objectContaining({ origin: SITE, username: '', unconfirmed: true })]);
+    await service.lock();
+    expect(await service.presave({ origin: SITE, password: 'Gen-2', chordId: 'work' })).toEqual({ ok: false, problem: 'locked' });
+  });
+
+  it('a Not confirmed one is in the menu for a day after it was made, after the confirmed ones, saying when; confirmed, it’s like any', async () => {
+    await oneLogin();
+    await db.passwords.run({ op: 'add', login: { origin: 'https://github.com', username: 'zed', password: 'z' }, chordId: null });
+    const made = clock.now;
+    const g = (await service.presave({ origin: 'https://github.com', password: 'Gen-1', chordId: 'work' })) as { id: string };
+    const offers = async () => ((await service.accountsFor('https://github.com', 'work')) as { offers: { username: string; madeAt?: number }[] }).offers.map((o) => [o.username, o.madeAt]);
+    expect(await offers()).toEqual([['ada@acme.dev', undefined], ['zed', undefined], ['', made]]);
+    expect(await service.presaved('pending', g.id, 'https://github.com', 'work', { username: 'aaa-first-by-name' })).toBe(true);
+    expect((await offers()).at(-1)).toEqual(['aaa-first-by-name', made]);
+    // A day on, abandoned: in Settings only.
+    clock.now += UNCONFIRMED_IN_MENU_MS + 1;
+    expect(await offers()).toEqual([['ada@acme.dev', undefined], ['zed', undefined]]);
+    expect(await service.presaved('confirm', g.id, 'https://github.com', 'work', { password: 'Gen-1' })).toBe(true);
+    expect((await offers()).map(([u]) => u)).toContain('aaa-first-by-name');
+  });
+
+  it('presaved: for the frame’s origin only, never a private window’s, never once confirmed', async () => {
+    const { id } = (await service.presave({ origin: SITE, password: 'Gen-1', chordId: 'work', passphrase: PASSPHRASE })) as { id: string };
+    expect(await service.presaved('pending', id, 'https://example.org', 'work', { username: 'x' })).toBe(false);
+    expect(await service.presaved('pending', id, SITE, 'priv', { username: 'x' })).toBe(false);
+    expect(await service.presaved('pending', id, SITE, 'work', { username: 'u'.repeat(501) })).toBe(false);
+    expect(await service.presaved('confirm', id, SITE, 'work', { username: 'ada' })).toBe(true);
+    expect(await service.presaved('pending', id, SITE, 'work', { username: 'grace' })).toBe(false);
+    expect((await listed())[0]).toMatchObject({ username: 'ada' });
+    expect((await listed())[0]!.unconfirmed).toBeUndefined();
+  });
+
+  it('a sign-in that worked with exactly a Not confirmed password confirms it', async () => {
+    const { id } = (await service.presave({ origin: SITE, password: 'Gen-1', chordId: 'work', passphrase: PASSPHRASE })) as { id: string };
+    await service.presaved('pending', id, SITE, 'work', { username: 'ada' });
+    expect(await service.candidateFor({ origin: SITE, username: 'ada', password: 'Gen-1', chordId: 'work' })).toEqual({ kind: 'same', id });
+    expect((await listed())[0]!.unconfirmed).toBeUndefined();
+  });
+
+  it('changeAccounts: those with the current password, and the site’s to ask from; changePassword updates one and deletes the presave', async () => {
+    await service.setup(PASSPHRASE);
+    const add = async (username: string, password: string, origin = SITE) => (await db.passwords.run({ op: 'add', login: { origin, username, password }, chordId: null })).id!;
+    const ada = await add('ada', 'old');
+    const bob = await add('bob', 'old', 'https://login.example.com');
+    const cy = await add('cy', 'other');
+    await add('dee', 'old', 'https://example.org');
+    const found = await service.changeAccounts(SITE, 'work', 'old');
+    expect(found).toMatchObject({ state: 'open' });
+    if (found.state !== 'open') return;
+    expect(found.matches.map((m) => m.id).sort()).toEqual([ada, bob].sort());
+    expect(found.accounts.map((a) => a.id).sort()).toEqual([ada, bob, cy].sort());
+    expect(await service.changeAccounts(SITE, 'work', null)).toMatchObject({ matches: [] });
+    expect(JSON.stringify(found)).not.toContain('old');
+
+    const { id: presaved } = (await service.presave({ origin: SITE, password: 'Gen-1', chordId: 'work' })) as { id: string };
+    expect(await service.changePassword({ origin: SITE, chordId: 'work', account: ada, password: 'Gen-1', presaved })).toMatchObject({ ok: true, id: ada, kind: 'update' });
+    expect(await service.passwordFor(ada, SITE, 'work')).toBe('Gen-1');
+    expect((await listed()).map((l) => l.id)).not.toContain(presaved);
+    // Another site's account, a private window, or one that isn't there: refused.
+    const org = (await listed()).find((l) => l.username === 'dee')!.id;
+    expect(await service.changePassword({ origin: SITE, chordId: 'work', account: org, password: 'x' })).toEqual({ ok: false, problem: 'missing' });
+    expect(await service.changePassword({ origin: SITE, chordId: 'priv', account: ada, password: 'x' })).toEqual({ ok: false, problem: 'off' });
+    expect(await service.passwordFor(ada, SITE, 'work')).toBe('Gen-1');
+  });
+
+  it('changePasswordUrl: the site’s /.well-known/change-password, for a sign-in Settings was shown only', async () => {
+    const id = await oneLogin();
+    // A service whose Settings hasn't been shown the list (a relaunch): nothing.
+    expect(await make().changePasswordUrl(id)).toBeNull();
+    expect(await service.changePasswordUrl(id)).toMatch(/^https:\/\//);
+    await service.add({ origin: SITE, username: 'ada', password: 'p', note: '' });
+    const view = await service.view();
+    const mine = view.logins.find((l) => l.origin === SITE)!;
+    expect(await service.changePasswordUrl(mine.id)).toBe('https://example.com/.well-known/change-password');
+    expect(await service.changePasswordUrl('not-an-id')).toBeNull();
   });
 });

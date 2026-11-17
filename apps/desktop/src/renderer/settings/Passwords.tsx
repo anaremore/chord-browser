@@ -43,6 +43,13 @@ const hostOf = (origin: string) => {
 
 const day = (at: number) => new Date(at).toDateString();
 
+/** A *Not confirmed* sign-in's line in its detail (the owner's design 4A, S17 §6). */
+export function notConfirmedText(createdAt: number, now = Date.now()): string {
+  const when = whenText(createdAt, now);
+  const made = when === 'Today' || when === 'Yesterday' ? when.toLowerCase() : `on ${when}`;
+  return `Not confirmed: Chord made this password ${made} and kept it, but hasn’t seen the site take it. If the sign-up didn’t go through, delete it.`;
+}
+
 /** *Today*, *Yesterday*, *Nov 2*, *Nov 2, 2025*: when a sign-in was last used, or saved. */
 export function whenText(at: number, now = Date.now()): string {
   if (day(at) === day(now)) return 'Today';
@@ -131,6 +138,8 @@ function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummar
   const [asking, setAsking] = useState<'show' | 'copy' | 'address' | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [copied, setCopied] = useState<'username' | 'password' | null>(null);
+  /** *Change password on the site* was pressed: what happened (the owner's design 6A). */
+  const [changing, setChanging] = useState<'opened' | 'failed' | null>(null);
   const [origin, setOrigin] = useState(login.origin);
   const [username, setUsername] = useState(login.username);
   const [note, setNote] = useState(login.note);
@@ -207,6 +216,7 @@ function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummar
       role="group"
       aria-label={`${hostOf(login.origin)}${login.realm ? `, realm ${login.realm}` : ''}, ${login.username || 'no username'}`}
     >
+      {login.unconfirmed && <p className={local.quiet}>{notConfirmedText(login.createdAt)}</p>}
       <div className={local.field}>
         <label className={local.fieldLabel} htmlFor={`${ids}-origin`}>
           Address
@@ -229,6 +239,7 @@ function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummar
           id={`${ids}-username`}
           className={local.value}
           value={username}
+          placeholder="Add a username"
           spellCheck={false}
           autoComplete="off"
           onChange={(e) => setUsername(e.target.value)}
@@ -312,13 +323,19 @@ function LoginDetail({ login, hideSeq, onView, onDeleted }: { login: LoginSummar
           {problem}
         </p>
       )}
+      {changing && (
+        <p className={local.quiet} role="status">
+          {changing === 'opened' ? 'Opened in a new tab. Use a strong password there, and Chord updates this one when the site takes it.' : 'Chord couldn’t find where this site changes a password.'}
+        </p>
+      )}
       <div className={local.detailActions}>
         {secure ? (
-          <button type="button" className={local.tiny} onClick={() => void api.settings.openUrl(`${new URL(login.origin).origin}/.well-known/change-password`)}>
+          // The site's own page for it (Apple's list), else its /.well-known/change-password: main decides, https only (S17 §9).
+          <button type="button" className={local.tiny} onClick={() => void api.passwords.changeOnSite(login.id).then((opened) => setChanging(opened ? 'opened' : 'failed'))}>
             Change password on the site ↗
           </button>
         ) : (
-          <span />
+          <span className={local.quiet}>This site isn’t on HTTPS, so Chord doesn’t open its pages for you.</span>
         )}
         <button
           type="button"
@@ -735,9 +752,10 @@ export function PasswordsSection({ snapshot, appearance }: { snapshot: SettingsS
                       <span className={local.loginText}>
                         <span className={local.loginHost}>{hostOf(login.origin)}</span>
                         {login.realm !== null && <span className={local.loginUser}>{login.realm ? `Realm: ${login.realm}` : 'The site’s sign-in box'}</span>}
-                        <span className={local.loginUser}>{login.username || 'No username'}</span>
+                        <span className={local.loginUser}>{login.username || (login.unconfirmed ? 'No username yet' : 'No username')}</span>
                       </span>
-                      <span className={local.when}>{whenText(login.lastUsed ?? login.updatedAt)}</span>
+                      {/* Never used, so the date has nothing to say: the words take its place (the owner's design 4A). */}
+                      <span className={local.when}>{login.unconfirmed ? 'Not confirmed' : whenText(login.lastUsed ?? login.updatedAt)}</span>
                     </button>
                     {expanded && <LoginDetail login={login} hideSeq={hideSeq} onView={setView} onDeleted={() => setOpen(null)} />}
                   </li>

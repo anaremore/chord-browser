@@ -3,7 +3,7 @@
  * frame's top-right without blocking it. Main sizes the view to exactly
  * these cards, so the rest of the page stays clickable.
  */
-import { SAFE_BROWSING_NOTICE, type SitePermission } from '@chord/core';
+import { formatKeys, PASSWORD_REGENERATE_KEYS, SAFE_BROWSING_NOTICE, type Platform, type SitePermission } from '@chord/core';
 import {
   SYSTEM_SHARE_SOURCE,
   type AuthPrompt,
@@ -21,8 +21,30 @@ import {
   type SystemInfo,
 } from '@chord/ipc';
 import { durations, type Appearance } from '@chord/tokens';
-import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  Bell,
+  Camera,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Clipboard,
+  Eye,
+  EyeOff,
+  Fingerprint,
+  KeyRound,
+  LockKeyhole,
+  MapPin,
+  Mic,
+  MonitorPlay,
+  MonitorUp,
+  RotateCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  TriangleAlert,
+  X,
+} from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { useLive, type Live } from '../shared/live';
@@ -626,18 +648,61 @@ function UnlockPasswordsCard({ prompt }: { prompt: PasswordUnlockPrompt }) {
  * ↓ ↑ Enter go through main, which moves the highlight here. A click chooses a row (main gives
  * the page its focus back). Nothing here ever holds a password.
  */
-function PasswordMenuCard({ menu }: { menu: PasswordMenu }) {
+/** When a *Not confirmed* sign-in was made, as the menu says it (the owner's design 4A): `made today`. */
+export function madeWhen(madeAt: number, now = Date.now()): string {
+  const day = (t: number) => new Date(t).toDateString();
+  if (day(madeAt) === day(now)) return 'made today';
+  if (day(madeAt) === day(now - 86_400_000)) return 'made yesterday';
+  return `made ${new Date(madeAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
+
+/**
+ * The menu under a field (S17 §9). On a new password's field (the owner's design 3A, 2026-11-17): *Use a strong
+ * password* first, built like an account row, the password in mono on its second line, the site's rules in words
+ * under it where they shaped it, and ↻ at the row's end (and by key, its tooltip says which); then the accounts, past
+ * a hairline, and *Other passwords…*. ↓ ↑ Enter as ever. A *Not confirmed* account says so, and when it was made.
+ */
+function PasswordMenuCard({ menu, platform }: { menu: PasswordMenu; platform: Platform }) {
   const ids = useId();
   const choose = (index: number) => void api.passwords.choose(menu.id, index);
+  const generated = menu.state === 'generate' ? menu.generated : undefined;
+  const offset = generated ? 1 : 0;
+  const another = `Another password (${formatKeys(PASSWORD_REGENERATE_KEYS, platform)})`;
+  // ↻ sits at the generator row's end (the owner's design 3A) but outside its option: a button can't be inside one.
+  const generatorRow = useRef<HTMLDivElement>(null);
+  const regenerate = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const r = generatorRow.current;
+    const b = regenerate.current;
+    if (r && b) b.style.insetBlockStart = `${r.offsetTop + (r.offsetHeight - b.offsetHeight) / 2}px`;
+  });
   const rowId = (i: number) => `${ids}-row-${i}`;
-  const row = (i: number, content: ReactNode, className = styles.menuRow) => (
-    <div key={i} id={rowId(i)} role="option" aria-selected={menu.index === i} className={className} onClick={() => choose(i)}>
+  const row = (i: number, content: ReactNode, className = styles.menuRow, ref?: Ref<HTMLDivElement>) => (
+    <div key={i} ref={ref} id={rowId(i)} role="option" aria-selected={menu.index === i} className={className} onClick={() => choose(i)}>
       {content}
     </div>
   );
   return (
     <div className={`${styles.card} ${styles.passwordMenu}`}>
       <div role="listbox" aria-label={`Passwords for ${menu.host}`} aria-activedescendant={rowId(menu.index)} className={styles.menuList}>
+        {generated &&
+          row(
+            0,
+            <>
+              <span className={styles.menuIcon} aria-hidden>
+                <Sparkles size={12} strokeWidth={2} />
+              </span>
+              <span className={`${styles.menuText} ${styles.menuGrow}`}>
+                <span className={styles.menuUser}>{generated.strong ? 'Use a strong password' : 'Use a password this site allows'}</span>
+                <span className={styles.menuMono} translate="no">
+                  {generated.password}
+                </span>
+                {generated.rule && <span className={styles.menuHost}>{generated.rule}</span>}
+              </span>
+            </>,
+            `${styles.menuRow} ${styles.menuGenerator}`,
+            generatorRow,
+          )}
         {menu.state === 'locked'
           ? row(
               0,
@@ -650,20 +715,31 @@ function PasswordMenuCard({ menu }: { menu: PasswordMenu }) {
             )
           : menu.accounts.map((account, i) =>
               row(
-                i,
+                i + offset,
                 <>
                   <span className={styles.menuIcon} aria-hidden>
-                    {[...account.username.trim()][0]?.toUpperCase() || '·'}
+                    {[...account.username.trim()][0]?.toUpperCase() || (account.madeAt !== undefined ? 'N' : '·')}
                   </span>
                   <span className={styles.menuText}>
-                    <span className={styles.menuUser}>{account.username || 'No username'}</span>
-                    {account.host && <span className={styles.menuHost}>{account.host}</span>}
+                    <span className={styles.menuUser}>{account.username || (account.madeAt !== undefined ? 'No username yet' : 'No username')}</span>
+                    {(account.host || account.madeAt !== undefined) && (
+                      <span className={styles.menuHost}>
+                        {[account.host, account.madeAt !== undefined ? `Not confirmed · ${madeWhen(account.madeAt)}` : null].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
                   </span>
                 </>,
+                // Past a hairline under the generator's row.
+                generated && i === 0 ? `${styles.menuRow} ${styles.menuDivided}` : styles.menuRow,
               ),
             )}
-        {menu.state === 'accounts' && row(menu.accounts.length, <span className={styles.menuText}>Other passwords…</span>, `${styles.menuRow} ${styles.menuMore}`)}
+        {menu.state !== 'locked' && row(menu.accounts.length + offset, <span className={styles.menuText}>Other passwords…</span>, `${styles.menuRow} ${styles.menuMore}`)}
       </div>
+      {generated && (
+        <button ref={regenerate} type="button" className={`${styles.iconButton} ${styles.menuRegenerate}`} aria-label={another} title={another} onClick={() => void api.passwords.regenerate(menu.id)}>
+          <RotateCw size={14} strokeWidth={2} />
+        </button>
+      )}
       {menu.insecure && (
         <p className={styles.menuWarning}>
           <TriangleAlert size={12} strokeWidth={2} aria-hidden />
@@ -683,18 +759,29 @@ const DOTS = '••••••••••';
  * *Never for this site* · ×. Updating: *Update the password for [username]?* · **Update**.
  * The very first also chooses the passphrase (the passphrase step Settings uses). The
  * password reaches this page only for the eye, and goes again when the card does.
+ *
+ * Phase 2 (the owner's design 5A, 2026-11-17), the same anatomy with new titles: a sign-up's *Save the password for
+ * your new account on …?*; a sign-up with Chord's own password, saved already, *Your new password for … is saved.*
+ * (**Done** · *Delete it*); and a change Chord can't place, *Which account on … did you change?*, with the sign-in
+ * box's chooser: **Update** waits for a pick, or *Save as new*. A generated password with no vault yet chooses the
+ * passphrase here, with no username (its form's submit gives it one). Never taking focus.
  */
 function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
   const ids = useId();
   const [username, setUsername] = useState(card.username);
   const [passphrase, setPassphrase] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
   const [shown, setShown] = useState<string | null>(null);
-  const act = (action: 'save' | 'never' | 'close' | 'hold' | 'release', details?: { username?: string; passphrase?: string }) => void api.passwords.card(card.id, action, details);
-  const ready = !card.busy && (!card.setup || passphraseReady(passphrase));
+  const [account, setAccount] = useState<number | null>(null);
+  const act = (action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete', details?: { username?: string; passphrase?: string; account?: number }) =>
+    void api.passwords.card(card.id, action, details);
   const update = card.kind === 'update';
+  const change = card.kind === 'change';
+  const saved = card.kind === 'saved';
+  const ready = !card.busy && (!card.setup || passphraseReady(passphrase)) && (!change || account !== null);
   const save = () => {
     if (card.setup && !passphraseReady(passphrase)) return setPassphrase({ ...passphrase, touched: true });
     if (!ready) return;
+    if (change) return act('save', { account: account! });
     act('save', { username, ...(card.setup ? { passphrase: passphrase.passphrase } : {}) });
   };
   const toggle = async () => {
@@ -728,7 +815,27 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
         <p id={`${ids}-title`} className={styles.permissionTitle}>
           {update ? (
             <>
-              Update the password for <span className={styles.host}>{card.username}</span>?
+              {card.username ? (
+                <>
+                  Update the password for <span className={styles.host}>{card.username}</span>?
+                </>
+              ) : (
+                <>
+                  Update a password for <span className={styles.host}>{card.host}</span>?
+                </>
+              )}
+            </>
+          ) : saved ? (
+            <>
+              Your new password for <span className={styles.host}>{card.host}</span> is saved.
+            </>
+          ) : change ? (
+            <>
+              Which account on <span className={styles.host}>{card.host}</span> did you change?
+            </>
+          ) : card.signUp ? (
+            <>
+              Save the password for your new account on <span className={styles.host}>{card.host}</span>?
             </>
           ) : (
             <>
@@ -740,8 +847,30 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
           <X {...ICON} />
         </button>
       </div>
-      <div className={styles.authFields}>
-        {!update && (
+      {change && (
+        <>
+          <div className={styles.authChooser} role="listbox" aria-label={`Accounts on ${card.host}`}>
+            {(card.accounts ?? []).map((name, i) => (
+              <button key={i} type="button" role="option" aria-selected={account === i} className={styles.authAccount} disabled={card.busy} onClick={() => setAccount(i)}>
+                <span className={styles.menuIcon} aria-hidden>
+                  {[...name.trim()][0]?.toUpperCase() || '·'}
+                </span>
+                <span className={styles.menuUser}>{name || 'No username'}</span>
+                {account === i && <Check className={styles.authTick} size={14} strokeWidth={2} aria-hidden />}
+              </button>
+            ))}
+          </div>
+          <p className={styles.offerNotice}>Or save it as another account.</p>
+        </>
+      )}
+      {saved && (
+        <div className={styles.authFields}>
+          <span className={styles.authLabel}>Username</span>
+          <span className={styles.savedPassword}>{card.username || 'No username yet'}</span>
+        </div>
+      )}
+      <div className={styles.authFields} hidden={change || saved}>
+        {!update && !card.generated && !change && !saved && (
           <>
             <label className={styles.authLabel} htmlFor={`${ids}-username`}>
               Username
@@ -758,7 +887,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
             />
           </>
         )}
-        {!card.setup && (
+        {!card.setup && !change && !saved && (
           <>
             <span className={styles.authLabel} id={`${ids}-password`}>
               Password
@@ -783,13 +912,23 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
         </p>
       )}
       <div className={styles.actions}>
-        {!update && !card.setup && (
+        {!update && !card.setup && !change && !saved && (
           <button type="button" className={styles.link} disabled={card.busy} onClick={() => act('never')}>
             Never for this site
           </button>
         )}
-        <button type="submit" className={styles.primary} disabled={card.busy}>
-          {update ? 'Update' : 'Save'}
+        {change && (
+          <button type="button" className={styles.link} disabled={card.busy} onClick={() => act('new')}>
+            Save as new
+          </button>
+        )}
+        {saved && (
+          <button type="button" className={styles.link} disabled={card.busy} onClick={() => act('delete')}>
+            Delete it
+          </button>
+        )}
+        <button type="submit" className={styles.primary} disabled={card.busy || (change && account === null)}>
+          {update || change ? 'Update' : saved ? 'Done' : 'Save'}
         </button>
       </div>
     </form>
@@ -967,7 +1106,7 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
   if (menuOnly)
     return (
       <div ref={root} className={`${styles.root} ${styles.menuRoot}`} style={style}>
-        {menu && <PasswordMenuCard key={menu.id} menu={menu} />}
+        {menu && <PasswordMenuCard key={menu.id} menu={menu} platform={info.platform} />}
       </div>
     );
   return (
