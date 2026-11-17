@@ -4,7 +4,7 @@
  * what each form posted, with a fresh profile and no keyring (so the vault starts with no passphrase):
  *
  * 1. **Sign up with Chord's password, no vault yet.** The new password's field opens the menu: *Use a strong
- *    password* first, the password in mono, the site's `passwordrules` in words. ↻ by Ctrl+Shift+K (⌘⇧K) makes
+ *    password* first, the password in mono, the site's `passwordrules` in words. ↻ by Ctrl+Shift+K (⇧⌘K) makes
  *    another; Enter takes it. With no vault, the save card chooses the passphrase first; then the password is saved
  *    (*Not confirmed*) and filled into the new field and the confirmation's, meeting the site's rules, before any submit.
  * 2. **The submit works.** The site got that password, and the saved card says so: *Your new password … is saved.*
@@ -134,7 +134,7 @@ test('passwords: generate on a sign-up with no vault yet, confirm it, fill it, c
     findings.push(...(await audit(menuPage, 'the menu with the generator’s row', { appearance: 'light' })));
     await menuPage.locator('body').screenshot({ path: resolve(capturesDir, 'passwords-generate-menu-light.png') });
     // ↻ by its key: another password, and the page never sees the key.
-    await expect(menuPage.getByRole('button', { name: /^Another password \((Ctrl\+Shift\+K|⌘⇧K)\)$/ })).toBeVisible();
+    await expect(menuPage.getByRole('button', { name: /^Another password \((Ctrl\+Shift\+K|⇧⌘K)\)$/ })).toBeVisible();
     await tab.evaluate(() => {
       const w = window as unknown as { keys: string[] };
       w.keys = [];

@@ -1135,7 +1135,7 @@ describe('the generator’s row: which new password’s field gets one', () => {
   });
 
   it.each<[string, Record<string, unknown>, boolean]>([
-    [process.platform === 'darwin' ? '⌘⇧K' : 'Ctrl+Shift+K', process.platform === 'darwin' ? { meta: true, shift: true } : { control: true, shift: true }, true],
+    [process.platform === 'darwin' ? '⇧⌘K' : 'Ctrl+Shift+K', process.platform === 'darwin' ? { meta: true, shift: true } : { control: true, shift: true }, true],
     ['Shift+K (typing)', { shift: true }, false],
     ['Alt+K', { alt: true }, false],
   ])('↻ by key: %s → %s, and the page never sees it', async (_name, mods, taken) => {

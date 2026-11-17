@@ -33,7 +33,7 @@ export const PASSWORD_CLIPBOARD_MS = 60_000;
 
 /** What one sign-in may hold, in characters (S17 §8). Longer is refused, never cut: a cut password is a wrong one. */
 /**
- * The menu's ↻ by key (S17 §9, the owner's design of 2026-11-17): Ctrl+Shift+K, ⌘⇧K. The menu's keys go through
+ * The menu's ↻ by key (S17 §9, the owner's design of 2026-11-17): Ctrl+Shift+K, ⇧⌘K. The menu's keys go through
  * `before-input-event` and the arrows are the page's caret's; this is free in Chord's shortcuts (S8), isn't Chrome's,
  * doesn't edit text (unlike Ctrl+Shift+V, Z, or GTK's U), and types no character (unlike Alt or Option). The menu
  * takes it only while it's open.
