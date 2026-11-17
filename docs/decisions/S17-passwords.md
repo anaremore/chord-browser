@@ -1026,6 +1026,6 @@ Only what a real desktop can show; everything else above was measured.
 - Sign-in and sign-up forms that reuse ids: a `label[for]` counts only from the field's own form or outside any form, so the sign-in password no longer reads as a new one.
 - *Log in or sign up* over one email field, its Continue outside the `<form>`: a first step.
 - A first step whose next password field is in the same form, focusable but transparent: a first step, not a sign-in the fill then refused.
-- A first step swapped into its password step in place, focus moved by the page with no blur: the password gets its menu (main's "not again in this form" holds only while the form keeps its kind).
+- A first step swapped into its password step in place, focus moved by the page with no blur: the password gets its menu (main's "not again in this form" holds while the form keeps its role or its kind (it reopens only when both change)).
 
 **Left as proposals:** phone-number first steps (mostly one-time codes: no password to fill); fields a page clears or re-renders after a fill; a step after an unknown email that reads both as sign-up and as a current password; and the later phases' patterns: open shadow roots and same-origin frames (phase 3), other sites' frames (phase 4).

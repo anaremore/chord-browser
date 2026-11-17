@@ -30,7 +30,7 @@
 // The pure parts are exported for scripts/test/e2e-linux.test.ts.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readlinkSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, statSync, readFileSync, readlinkSync, renameSync, rmSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -225,7 +225,7 @@ async function main() {
     return 0;
   }
   if (options.cpus !== null && !(Number.isInteger(options.cpus) && options.cpus > 0)) fail('--cpus takes a whole number of CPUs, such as 4');
-  if (options.share !== null && !(options.share && lstatSync(options.share, { throwIfNoEntry: false })?.isDirectory())) fail('--share takes a folder that exists');
+  if (options.share !== null && !(options.share && statSync(options.share, { throwIfNoEntry: false })?.isDirectory())) fail('--share takes a folder that exists');
 
   // Every spawn has windowsHide: started without a console (an editor's task, a background shell),
   // each wsl.exe and git would flash a console window of its own.

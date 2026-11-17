@@ -205,10 +205,14 @@ function asFirstStep(form: PasswordFormRecord, mode: ParseMode, options: Classif
   const passwords = form.fields.filter((f) => f.type === 'password');
   if (!passwords.length || !passwords.every(unseen)) return null;
   // Focusable but not shown (a transparent pane) counts as hidden only where the form says it's a first step: its submit
-  // reads Next or Continue, or the password field has no name a person would read. A real password field drawn over by
-  // a custom one (transparent, labelled, under a Sign in button) keeps the form a sign-in.
-  const nextStep = form.words.submits.some((b) => NEXT.test(b));
-  if (!passwords.every(hidden) && !nextStep && !passwords.every((f) => !f.label.trim() && !f.placeholder.trim())) return null;
+  // reads Next or Continue, or the password field has no name a person would read. A submit that reads Sign in always
+  // keeps such a form a sign-in: a real password field drawn over by a custom one (transparent, labelled or not) is the
+  // form's own, and withholding the password there is the failure this rule must never cause.
+  if (!passwords.every(hidden)) {
+    if (form.words.submits.some((b) => SIGN_IN.test(b))) return null;
+    const nextStep = form.words.submits.some((b) => NEXT.test(b));
+    if (!nextStep && !passwords.every((f) => !f.label.trim() && !f.placeholder.trim())) return null;
+  }
   const c = classifyPasswordForm({ ...form, fields: form.fields.filter((f) => f.type !== 'password') }, mode, options);
   return c?.kind === 'username-only' ? c : null;
 }
