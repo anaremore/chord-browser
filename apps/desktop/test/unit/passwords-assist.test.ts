@@ -927,3 +927,36 @@ describe('the password while the unlock card is up (security review, round 2)', 
     expect(t.vault.saveCandidate.mock.calls[1]).toEqual([{ origin: ORIGIN, username: 'ada.edited', password: VALUES.password, chordId: 'c1' }]);
   });
 });
+
+describe('the first save from the browser’s own sign-in box (S17 §10)', () => {
+  const ROUTER = 'http://router.test:8080';
+  const signIn = { origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit' };
+
+  it('shows the save card with its passphrase step, and saves with the realm', async () => {
+    const t = setup();
+    await t.assist.offerFirstSave(t.contents, { ...signIn, until: HOLD_MS });
+    const card = t.assist.cardFor('n1')!;
+    expect(card).toMatchObject({ kind: 'new', setup: true, host: 'router.test:8080', username: 'ada@example.com' });
+    expect(JSON.stringify(card)).not.toContain('box-Sekrit');
+    await t.assist.answer('w1', card.id, 'save', { username: 'ada@example.com', passphrase: 'a long enough passphrase' });
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith({ origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit', chordId: 'c1', passphrase: 'a long enough passphrase' });
+  });
+
+  it.each([
+    ['in a private window', { tab: { private: true } }, HOLD_MS],
+    ['once what was typed has expired', {}, 0],
+  ])('never %s', async (_name, options, until) => {
+    const t = setup(options);
+    await t.assist.offerFirstSave(t.contents, { ...signIn, until });
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it('goes, and what was typed with it, at the deadline it was given', async () => {
+    const t = setup();
+    await t.assist.offerFirstSave(t.contents, { ...signIn, until: 1000 });
+    const card = t.assist.cardFor('n1')!;
+    t.timers.advance(1000);
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.assist.reveal('w1', card.id)).toBeNull();
+  });
+});

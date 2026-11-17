@@ -406,7 +406,7 @@ Sign-ins aren't in the model or the reducer: nothing in the shell renders them, 
 
 **Passkeys** don't change (§9, *Passkeys*): Windows Hello, Touch ID once builds are signed, security keys. Chord storing passkeys would mean being a WebAuthn authenticator, which Electron doesn't let an app be ⚠. The menu built here is the list *Later: Chord's own passkey list, like Chrome's* needs, so passkey autofill (`mediation: 'conditional'`) can come back through it one day.
 
-**HTTP sign-in** (`AuthCard`, phase 3). The box gains *Remember*, and a saved sign-in for the origin and realm fills the box, never answers by itself. A proxy's password stays unsaved, as DESIGN.md §9 promises, unless the maintainer wants that too.
+**HTTP sign-in** (`AuthCard`, phase 3; [built 2026-11-16](#http-sign-in-built-2026-11-16)). The box gains *Remember*, and a saved sign-in for the origin and realm fills the box, never answers by itself. A proxy's password stays unsaved, as DESIGN.md §9 promises, unless the maintainer wants that too.
 
 **One-time codes (TOTP):** not planned. Keeping the second factor beside the password is a decision of its own (question 7).
 
@@ -1013,3 +1013,23 @@ Only what a real desktop can show; everything else above was measured.
 **Tests:** the wiring and the gates table-driven in `unit/passwords-assist.test.ts` and `unit/passwords-menu-keys.test.ts`; the values in `unit/passwords-saving.test.ts` and `passwords-detector.test.ts`; the agent's fill in `forms/agent.spec.ts`; and one journey in `e2e/passwords-fill.spec.ts`: save with the first passphrase, offer and fill by keys (the page sees none of them) and by click, update, *Never*, and a private window that fills and never saves, with axe and captures.
 
 **Left for later:** *Lock passwords* in the menu (the vault's note); generating, sign-up and change forms (phase 2); the owner's by-hand checks of keys and clicks on macOS and Windows (M0, *What the owner checks by hand*), which this piece makes possible.
+
+## HTTP sign-in (built 2026-11-16)
+
+*Branch `feat/passwords-http-auth`, for 0.11.1: §10's *HTTP sign-in*, the browser's own box (`AuthCard`) for HTTP Basic and Digest. ARCHITECTURE.md §9, *Sites that ask for a password*, has the wiring.*
+
+**Built**, as §10 planned:
+- **Fill.** The box asks the vault (`httpAccountsFor`) for sign-ins saved from the box for the request's own origin (scheme, host and port, from the request main answers, never from the page) and realm (the challenge's, as the box shows it). The popover gets their usernames only (`AuthPrompt.accounts`), best first by this chord's use. It opens filled with the first, the password field holding a mask, never the password, and Sign in focused; a chooser of usernames picks another. Sign in sends `{ account }` and main answers Chromium's callback from the vault (`httpPasswordFor`, checked in main and in chord-data). Nothing is sent before Sign in. A box waits up to 400 ms for the vault, then shows unfilled and fills when the answer comes, unless you've typed.
+- **Locked.** An *Unlock passwords* row (the vault can't tell, locked, whether it holds one for the site, as the menu can't); unlocking fills the box.
+- **Remember.** Off for a site with nothing saved, on when the box was filled. What's typed with it ticked stays in main (`http-auth.ts`), never logged, never in a zod message (`auth:` channels are parsed as `passwords:` ones are), until the server's answer: the page, or a frame of it, commits for that origin with anything but a 401, and it's saved (`saveCandidate` with the realm: new, or the same username's new password with the one before it kept). Chromium's retry (the same box again), a 401, Cancel, a navigation, leaving the origin, the tab closing, or 5 minutes (`HOLD_MS`) drop it. A locked vault at that moment shows the unlock card first. The first save ever goes to the form save card (`offerFirstSave`), which chooses the passphrase in its step.
+- **Storage.** The sealed blob's `realm`. chord-data keeps the two kinds apart in every op (`fits`): a form is never offered, filled from, compared with or updated into a box's sign-in, nor the box a form's; the box's match is exact (no http→https upgrade, no rest of the site).
+- **Never** for a proxy: its box doesn't ask the vault, and `saveCandidate` refuses one. **Private windows** fill and never save (*Remember* hidden). **Where passwords are off** (the switch, a chord's own, a password manager's extension), the box is as before.
+- **Settings → Passwords** shows *Realm: …* under the site; search reads it too. Edit and Delete are a form sign-in's.
+
+**Decided here** (not the owner's):
+- ***Never for this site* doesn't stop *Remember*.** It stops offers to save; ticking *Remember* is asking.
+- **No save card or toast when the vault is open:** you ticked *Remember*, so it's saved quietly. The first save's card says where it went, as a form's does.
+
+**What it can't tell:** a box answered for a page's own script request (not a navigation) has no commit to read the answer from, so what's typed with *Remember* expires unsaved after 5 minutes.
+
+**Tests:** chord-data's matching, comparing and updating by realm in `packages/data/test/passwords.test.ts`; the service's gates in `unit/passwords-service.test.ts`; the box's fill, *Remember*'s default, saving only on success, the drops, private windows, proxies, the switch and unlocking, table-driven in `unit/http-auth.test.ts`; the first save's card in `unit/passwords-assist.test.ts`; and `e2e/passwords-http-auth.spec.ts` on the Linux runner: a wrong password not saved, *Remember* and the first passphrase, a reload filled, a private window that fills and doesn't save, and a proxy's box without *Remember*, with axe and captures.

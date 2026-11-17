@@ -148,7 +148,7 @@ export interface BrowserOptions {
   /** Chooses a passkey when an authenticator holds several for a site; connected here once the store exists. */
   passkeys: PasskeyBroker;
   /** Chord's own passwords: the unlock card each window's popover may show, and what the menu under a field and the save cards ask. */
-  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed'> & AssistVault;
+  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed' | 'httpAccountsFor' | 'httpPasswordFor'> & AssistVault;
   /** The password detector (S17): a tab's page is the only one its agent's channels answer. */
   passwordDetector: PasswordDetector;
   /** Persistence hook: every change, after it's applied. */
@@ -753,6 +753,19 @@ export class Browser {
         return this.tabs.nodeFor(contents) ?? (floating && this.peeks.windowOf(floating) ? floating : undefined);
       },
       onChange: () => this.syncPopovers(),
+      // Chord's passwords fill the box and remember what you ask it to (S17 §10): the vault's own gates decide.
+      tabOf: (nodeId) => {
+        const node = nodeOf(this.store.state, nodeId);
+        return node ? { chordId: node.chordId, private: isPrivateChord(this.store.state, node.chordId) } : null;
+      },
+      windowOf: (nodeId) => this.windowShowing(nodeId),
+      vault: {
+        accounts: (origin, realm, chordId) => options.passwords.httpAccountsFor(origin, realm, chordId),
+        password: (id, origin, realm, chordId) => options.passwords.httpPasswordFor(id, origin, realm, chordId),
+        remember: (signIn) => options.passwords.saveCandidate(signIn),
+        askUnlock: (windowId) => options.passwords.askUnlock(windowId),
+      },
+      firstSave: (contents, signIn) => this.passwordAssist.offerFirstSave(contents, signIn),
     });
     // Choosing a passkey, over the same tab or Peek a sign-in box would show over.
     options.passkeys.connect({

@@ -480,7 +480,8 @@ function registerIpc(): void {
   handle('media:view', (_request, sender) => browser!.nowPlaying(senderWindow(sender).id));
   handle('player:view', () => browser!.player.frame());
   handle('media:do', ({ nodeId, action }, sender) => browser!.mediaAction(senderWindow(sender), nodeId, action));
-  handle('auth:respond', ({ id, credentials }) => httpAuth.respond(id, credentials));
+  handle('auth:respond', ({ id, credentials, remember }) => httpAuth.respond(id, credentials, remember));
+  handle('auth:unlock', ({ id }) => httpAuth.unlock(id));
   handle('passkey:respond', ({ id, credentialId }) => passkeys.respond(id, credentialId));
   // Settings → Passwords, and the popover's unlock card (S17 §9).
   handle('passwords:view', () => passwords.view());
