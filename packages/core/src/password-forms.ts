@@ -203,9 +203,12 @@ function withoutHiddenRivals(fields: readonly PasswordField[]): PasswordField[] 
  */
 function asFirstStep(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions): PasswordFormClassification | null {
   const passwords = form.fields.filter((f) => f.type === 'password');
-  // Not shown is enough here: a first step can keep the next step's password field focusable but out of sight
-  // (a transparent pane). Only a username-only result is taken, so a sign-in form is unchanged.
   if (!passwords.length || !passwords.every(unseen)) return null;
+  // Focusable but not shown (a transparent pane) counts as hidden only where the form says it's a first step: its submit
+  // reads Next or Continue, or the password field has no name a person would read. A real password field drawn over by
+  // a custom one (transparent, labelled, under a Sign in button) keeps the form a sign-in.
+  const nextStep = form.words.submits.some((b) => NEXT.test(b));
+  if (!passwords.every(hidden) && !nextStep && !passwords.every((f) => !f.label.trim() && !f.placeholder.trim())) return null;
   const c = classifyPasswordForm({ ...form, fields: form.fields.filter((f) => f.type !== 'password') }, mode, options);
   return c?.kind === 'username-only' ? c : null;
 }

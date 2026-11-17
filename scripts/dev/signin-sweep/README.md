@@ -26,7 +26,7 @@ node scripts/dev/signin-sweep/report.mjs --dir <dir>
 
 `<dir>/sites.txt` can be any file of URLs, one a line: a home page or a sign-in page. A site that
 has a result already is skipped, so a run that stopped carries on where it was; delete
-`<dir>/results` to start over. `sweep.mjs` passes other arguments to Playwright (`-g github` for
+`<dir>/results` to start over. `sweep.mjs` passes other arguments to Playwright (`-g example.com` for
 one site). It takes about 20 s a site.
 
 ## What it does on each site
@@ -46,7 +46,9 @@ world 4440, as it does in Chord, with a fake bridge that records what it would s
    code or a link, then 2 to 4 on the step that follows.
 
 Nothing is ever submitted beyond that one Next, and never on a page that would send a code or an
-email. No account is signed in to or made.
+email. Besides it, on a page that shows no sign-in field, the sweep may click a *Sign in* button that
+has no address (one that opens a dialog or a panel), never a button of a form with a sign-in field
+in it. No account is signed in to or made.
 
 ## What counts as a problem
 

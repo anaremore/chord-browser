@@ -138,6 +138,7 @@ const signInFields = (s: ProbeSnapshot | null) => (s ? s.fields.filter((f) => is
 async function look(app: ElectronApplication, id: number, ms: number): Promise<ProbeSnapshot | null> {
   const until = Date.now() + ms;
   for (;;) {
+    if (stopped.has(id)) return null;
     await ensureAgent(app, id);
     const snap = await world<ProbeSnapshot>(app, id, 'chordSweep.snapshot()');
     if ((snap && signInFields(snap).length) || Date.now() > until) return snap;
@@ -240,7 +241,14 @@ async function sweepStep(app: ElectronApplication, id: number, page: Page, snap:
   return step;
 }
 
-async function sweepSite(app: ElectronApplication, url: string, index: number): Promise<SiteResult> {
+/** A site's run: its window, once open. */
+interface Run {
+  window: number | null;
+}
+/** Windows of sites whose time ran out: their steps stop at the next look. */
+const stopped = new Set<number>();
+
+async function sweepSite(app: ElectronApplication, url: string, index: number, run: Run): Promise<SiteResult> {
   const started = Date.now();
   const r: SiteResult = { url, host: hostOf(url), at: new Date().toISOString(), outcome: 'ok', problems: [], notes: [], steps: [], ms: 0 };
   const unreachable = (why: string): SiteResult => {
@@ -254,6 +262,7 @@ async function sweepSite(app: ElectronApplication, url: string, index: number): 
     void w.loadURL('about:blank');
     return w.id;
   }, `sweep-${index}`);
+  run.window = id;
   const page = await pageEvent;
   try {
     // 1. The page, and its sign-in.
@@ -325,6 +334,7 @@ async function sweepSite(app: ElectronApplication, url: string, index: number): 
         r.problems.push('later: sign-in fields in an open shadow root (phase 3)');
       } else if (BOT_WALL.test(`${snap.title} ${snap.text.slice(0, 600)}`)) return unreachable(`bot wall or captcha (“${snap.title.slice(0, 60)}”)`);
       else if (r.status && r.status >= 400) return unreachable(`HTTP ${r.status}`);
+      // The generic social sign-in pattern ("Continue with <provider>"): the page offers only other sites' sign-in.
       else if (/continue with (google|apple|facebook)|sign in with (google|apple|facebook)/i.test(snap.text)) return unreachable('no sign-in form: other sites’ sign-in buttons only');
       else return unreachable(r.followed ? 'no sign-in form after the sign-in link' : 'no sign-in link or form found');
       r.outcome = 'problem';
@@ -373,10 +383,23 @@ sites.forEach((url, index) => {
   test(url, async ({ app }) => {
     const file = join(RESULTS, `${hostOf(url)}.json`);
     if (existsSync(file)) return;
-    const budget = new Promise<SiteResult>((done) =>
-      setTimeout(() => done({ url, host: hostOf(url), at: new Date().toISOString(), outcome: 'unreachable', why: 'timed out (150 s)', problems: [], notes: [], steps: [], ms: 150_000 }), 150_000),
-    );
-    const result = await Promise.race([sweepSite(app, url, index), budget]);
-    writeFileSync(file, JSON.stringify(result, null, 1));
+    const run: Run = { window: null };
+    let timer: NodeJS.Timeout | undefined;
+    const budget = new Promise<'out of time'>((done) => {
+      timer = setTimeout(() => done('out of time'), 150_000);
+    });
+    const sweeping = sweepSite(app, url, index, run);
+    const result = await Promise.race([sweeping, budget]);
+    clearTimeout(timer);
+    if (result === 'out of time') {
+      // Its window closed now, so its page stops and its steps end (every call to it fails or comes back empty) before
+      // the next site starts: a worker never has two sites open, so at most --workers run at once.
+      if (run.window !== null) {
+        stopped.add(run.window);
+        await app.evaluate(({ BrowserWindow }, w) => BrowserWindow.fromId(w)?.destroy(), run.window).catch(() => {});
+      }
+      await timeout(sweeping.catch(() => null), 30_000, null);
+      writeFileSync(file, JSON.stringify({ url, host: hostOf(url), at: new Date().toISOString(), outcome: 'unreachable', why: 'timed out (150 s)', problems: [], notes: [], steps: [], ms: 150_000 } satisfies SiteResult, null, 1));
+    } else writeFileSync(file, JSON.stringify(result, null, 1));
   });
 });

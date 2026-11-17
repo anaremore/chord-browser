@@ -178,6 +178,7 @@ function signInLink(): { href: string | null; x: number; y: number; text: string
     else if (/\b(sign ?in|log ?in|login)\b/i.test(text) && !/sign ?up|register|create/i.test(text)) score += 6;
     if (href && SIGN_IN_HREF.test(href)) score += 3;
     if (href && /\/(log-?in|sign-?in|signin|users\/sign_in|session\/new|auth\/login|account\/login)\b/i.test(new URL(href).pathname)) score += 4;
+    // Sign-in providers' names: the generic "sign in with another site" button, never the page's own sign-in.
     if (/google|apple|facebook|microsoft|github/i.test(text)) score -= 20;
     // A link out of sight (a closed menu) only by its words and its address together.
     if (!visible) score -= 6;
@@ -204,6 +205,7 @@ function nextButton(i: number): { x: number; y: number; text: string } | null {
       const text = String(b instanceof HTMLInputElement ? b.value : (b as HTMLElement).innerText || b.getAttribute('aria-label') || '')
         .replace(/\s+/g, ' ')
         .trim();
+      // Not a "continue with <provider>" button (the generic social sign-in pattern), nor one that sends a code or a link.
       if (NEXT_WORDS.test(text) && !/google|apple|facebook|microsoft|github|passkey|code|link/i.test(text)) {
         const r = b.getBoundingClientRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2, text };

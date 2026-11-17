@@ -9,8 +9,9 @@
  * 2. **Step 1 fill:** the menu under the email offers the account; picking it (Enter, as Electron's
  *    own input) fills the email only, and no password goes in.
  * 3. **Step 2 fill:** Next, then the password's menu offers the account; picking it fills the
- *    password, and the carried email is left as it was.
- * 4. **Update:** a sign-in with a changed password gets the update card for the same account.
+ *    password, and the carried email gets no event at all.
+ * 4. **Update:** a sign-in with a changed password gets the update card for the same account, and
+ *    the next fill, step by step, is the new password.
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -125,13 +126,20 @@ test('passwords: a two-step identifier-then-password sign-in is saved, filled st
     // 3. Next: on step 2, the password's menu offers the account; Enter fills the password, and the carried email stays.
     await page.click('#next');
     await page.waitForSelector('#password');
+    // Every event the carried email gets from here: the fill must send it none.
+    await page.evaluate(() => {
+      const w = window as unknown as { carriedEvents: number };
+      w.carriedEvents = 0;
+      for (const type of ['input', 'change']) document.getElementById('carried')!.addEventListener(type, () => w.carriedEvents++);
+    });
     await page.focus('#password');
     await expect(menu).toBeVisible({ timeout: 10_000 });
     await expect(menu.getByRole('option', { name: USER })).toHaveAttribute('aria-selected', 'true');
     await press(app, 'Enter');
     await expect(page.locator('#password')).toHaveValue(FIRST);
-    await expect(page.locator('#carried')).toHaveValue(USER);
     await expect(menu).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { carriedEvents: number }).carriedEvents)).toBe(0);
+    await expect(page.locator('#carried')).toHaveValue(USER);
     // Submitting what was filled: the site gets it, and nothing is offered (it's what's saved).
     await page.press('#password', 'Enter');
     await page.waitForURL(`${site.origin}/session`);
@@ -143,6 +151,18 @@ test('passwords: a two-step identifier-then-password sign-in is saved, filled st
     await expect(update).toBeVisible({ timeout: 15_000 });
     await update.getByRole('button', { name: 'Update' }).click();
     await expect(update).toHaveCount(0);
+    // The next fill is the new password: step 1, Next, step 2.
+    await page.goto(`${site.origin}/login`);
+    await page.focus('#identifier');
+    await expect(menu).toBeVisible({ timeout: 10_000 });
+    await press(app, 'Enter');
+    await expect(page.locator('#identifier')).toHaveValue(USER);
+    await page.click('#next');
+    await page.waitForSelector('#password');
+    await page.focus('#password');
+    await expect(menu).toBeVisible({ timeout: 10_000 });
+    await press(app, 'Enter');
+    await expect(page.locator('#password')).toHaveValue(SECOND);
   } finally {
     await app.close();
   }

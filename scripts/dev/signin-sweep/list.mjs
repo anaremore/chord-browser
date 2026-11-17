@@ -12,21 +12,24 @@
 //   words in its name (INFRA);
 // - adult, gambling and similar sites, by the words in their names (UNWANTED), and every domain in
 //   --exclude (one a line, # for comments), which holds what the words miss: kept beside the
-//   results, since it names sites;
-// - a second domain of a brand already listed (amazon.de after amazon.com): the same sign-in.
+//   results, never in the repo, since it names sites (the rules here are generic words only);
+// - a second domain of a brand already listed (example.de after example.com): the same sign-in.
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
-/** Names of hosts that serve no sign-in page: CDNs, DNS, ads, analytics, telemetry, APIs, captive-portal checks. */
+/**
+ * Words in the names of hosts that serve no sign-in page: CDNs, DNS, ads, analytics, telemetry, APIs, certificates,
+ * captive-portal checks. Generic words only: named services the words miss go in --exclude, outside the repo.
+ */
 export const INFRA =
-  /(^|[.-])(cdn|cdns|dns|ns\d*|edge|static|img|images|media|assets|api|apis|sdk|ads?|adserver|adsystem|adservice|adservices|analytics|metrics|telemetry|tracking|pixel|tag|tags|sync|rpc|relay|ntp|ocsp|crl|pki|cert|certs|update|updates|gslb|lb|cache|proxy|push|mirror|captive|connecttest|ncsi)([.-]|\d|$)|cdn|dns\b|akam|msedge|cloudfront|fastly|gstatic|googleapis|googlevideo|googleusercontent|googlesyndication|googletagmanager|googleadservices|doubleclick|ytimg|fbcdn|fbsbx|twimg|licdn|pinimg|scdn\.co|nflx|mzstatic|ggpht|gvt\d|usercontent|amazonaws|azureedge|azurefd|trafficmanager|windowsupdate|cloudapp|workers\.dev|pages\.dev|vercel-dns|herokudns|\.arpa$|root-servers|gtld|tiktokv|tiktokcdn|byteoversea|bytefcdn|ibyteimg|captive|portal-detection|adnxs|criteo|pubmatic|rubiconproject|casalemedia|taboola|outbrain|scorecardresearch|demdex|omtrdc|everesttech|adsrvr|openx|lijit|3lift|smartadserver|bidswitch|crwdcntrl|rlcdn|agkn|quantserve|flashtalking|doubleverify|adsafeprotected|moloco|applovin|appsflyer|adjust\.com|branch\.io|onelink|braze|amplitude|mixpanel|segment|sentry|bugsnag|datadoghq|newrelic|nr-data|hotjar|clarity\.ms|app-measurement|crashlytics|launchdarkly|statsig|optimizely|onetrust|cookielaw|privacy-mgmt|imrworldwide|conviva|teads|seedtag|sharethrough|33across|yieldmo|inmobi|vungle|unity3d|liftoff|smaato|presage|btloader|id5-sync|liadm|a-mo\.net|px-cloud|online-metrix|forter|awswaf|hcaptcha|recaptcha|lencr|digicert|globalsign|verisign|amazontrust|pki\.goog|icanhazip|ipify|ip-api|gandi-ns|domaincontrol|registrar-servers|name-services|dnsowl|ui-dns|nstld|markmonitor/i;
+  /(^|[.-])(cdn|cdns|dns|ns\d*|edge|static|img|images|media|assets|api|apis|sdk|ads?|adserver|adsystem|adservices?|analytics|metrics|telemetry|tracking|pixel|tag|tags|sync|rpc|relay|ntp|ocsp|crl|pki|cert|certs|update|updates|gslb|lb|cache|proxy|push|mirror|captive|connecttest|ncsi)([.-]|\d|$)|cdn|dns\b|edge|static|usercontent|syndication|tagmanager|adservice|adsystem|adserver|analytics|metrics|telemetry|tracking|measurement|crashlytics|captcha|cookie|consent|privacy-mgmt|portal-detection|\.arpa$|root-servers|gtld/i;
 
-/** Adult, gambling, betting and similar: never visited. --exclude holds what these words miss. */
-export const UNWANTED = /porn|xxx|sex|xvideo|xnxx|xhamster|hentai|erome|eporner|chaturbate|stripchat|onlyfans|livejasmin|bongacams|cam4|camsoda|nude|adult|escort|casino|gambl|poker|slots?\b|bet(s|ting|365|way|fair)?\b|1xbet|stake\.|lotter|bingo|sportsbook|bookmaker|draftkings|fanduel/i;
+/** Adult, gambling, betting and similar, by generic words: never visited. --exclude holds what these words miss. */
+export const UNWANTED = /porn|xxx|sex|hentai|nude|adult|escort|fetish|\bcams?\b|casino|gambl|poker|slots?\b|bet(s|ting)?\b|lotter|bingo|sportsbook|bookmaker/i;
 
-/** Brands listed under several domains (google.com, google.de): the first label of the domain, which is enough here. */
+/** Brands listed under several domains (example.com, example.de): the first label of the domain, which is enough here. */
 export const brandOf = (domain) => domain.replace(/^www\./, '').split('.')[0];
 
 /** Tranco's CSV (rank,domain) to the sweep's list. */
