@@ -121,6 +121,13 @@ const UNDO_SLICE = 200;
 const PAGE = 100;
 /** A file read but not imported is let go after this. */
 const STAGE_MS = 10 * 60_000;
+/** The characters of sign-ins one file may hold in memory: far past 50,000 real ones (a CSV is at most 64 MB). */
+const STAGE_CHARS = 64 * 1024 * 1024;
+/** The end of the year 9999, as a stamp's limit (docs/data-format.md). */
+const MAX_TIME = 253402300799999;
+const ISSUE_KINDS: ReadonlySet<unknown> = new Set(['address', 'app', 'password', 'long', 'kind']);
+/** Text a listed row shows, as the import process cuts it; anything that isn't text is nothing. */
+const shown = (v: unknown) => (typeof v === 'string' ? (v.length > PASSWORD_IMPORT_LIMITS.shown ? `${v.slice(0, PASSWORD_IMPORT_LIMITS.shown - 1)}…` : v) : '');
 
 interface Stage {
   logins: ImportedLogin[];
@@ -131,6 +138,8 @@ interface Stage {
   done: boolean;
   /** The same sign-in twice in the file: kept once, the later row's. */
   duplicates: number;
+  /** Characters of the sign-ins held, against STAGE_CHARS. */
+  chars: number;
   running: boolean;
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -158,7 +167,7 @@ export class PasswordTransfer {
   private stage(stageId: string): Stage {
     let stage = this.stages.get(stageId);
     if (!stage) {
-      stage = { logins: [], issues: [], counts: { rows: 0, otp: 0, capped: 0, issuesMore: 0, skipped: 0 }, source: null, problem: null, done: false, duplicates: 0, running: false, timer: null };
+      stage = { logins: [], issues: [], counts: { rows: 0, otp: 0, capped: 0, issuesMore: 0, skipped: 0 }, source: null, problem: null, done: false, duplicates: 0, chars: 0, running: false, timer: null };
       this.stages.set(stageId, stage);
     }
     if (stage.timer) clearTimeout(stage.timer);
@@ -173,14 +182,15 @@ export class PasswordTransfer {
    * import reads in all.
    */
   staged(stageId: string, batch: PasswordStageBatch): PasswordStageReply {
+    if (!batch || typeof batch !== 'object') return { ok: false, error: 'not a batch' };
     const stage = this.stage(stageId);
     if (stage.done) return { ok: false, error: 'stage done' };
-    for (const login of batch.logins ?? []) {
+    for (const login of Array.isArray(batch.logins) ? batch.logins : []) {
       if (stage.logins.length >= PASSWORD_IMPORT_LIMITS.rows) {
         stage.counts.capped++;
         continue;
       }
-      const where = typeof login?.origin === 'string' ? importOrigin(login.origin) : null;
+      const where = login && typeof login.origin === 'string' ? importOrigin(login.origin) : null;
       const ok =
         where !== null &&
         'origin' in where &&
@@ -189,16 +199,26 @@ export class PasswordTransfer {
         typeof login.password === 'string' &&
         typeof login.note === 'string' &&
         (login.realm === null || typeof login.realm === 'string') &&
-        (login.changedAt === null || (Number.isInteger(login.changedAt) && login.changedAt >= 0)) &&
+        (login.changedAt === null || (Number.isInteger(login.changedAt) && login.changedAt >= 0 && login.changedAt <= MAX_TIME)) &&
         loginProblem(login) === null;
+      const size = ok ? login.origin.length + login.username.length + login.password.length + login.note.length + (login.realm?.length ?? 0) : 0;
+      // A file's sign-ins are held in memory until they're imported: past STAGE_CHARS in all, the rest are left out.
+      if (ok && stage.chars + size > STAGE_CHARS) {
+        stage.counts.capped++;
+        continue;
+      }
+      stage.chars += size;
       if (ok) stage.logins.push({ origin: login.origin, username: login.username, password: login.password, note: login.note, realm: login.realm, changedAt: login.changedAt });
       else stage.counts.skipped++;
     }
-    for (const issue of batch.issues ?? []) {
-      if (stage.issues.length < PASSWORD_IMPORT_LIMITS.issues) stage.issues.push(issue);
+    for (const issue of Array.isArray(batch.issues) ? batch.issues : []) {
+      // What reaches Settings is checked here, whatever the import process sent: the row, why, and short text.
+      const kind = issue && ISSUE_KINDS.has(issue.kind) ? issue.kind : null;
+      if (!kind || !Number.isInteger(issue.row) || issue.row < 1) continue;
+      if (stage.issues.length < PASSWORD_IMPORT_LIMITS.issues) stage.issues.push({ row: issue.row, kind, address: shown(issue.address), username: shown(issue.username), name: shown(issue.name) });
       else stage.counts.issuesMore++;
     }
-    const counts = batch.counts ?? {};
+    const counts = batch.counts && typeof batch.counts === 'object' ? batch.counts : {};
     if (batch.source !== undefined && batch.source !== null && ['chrome', 'firefox', 'safari', 'bitwarden', '1password'].includes(batch.source)) stage.source = batch.source;
     for (const key of ['rows', 'otp', 'capped', 'issuesMore', 'skipped'] as const) {
       const n = counts[key];
@@ -206,7 +226,8 @@ export class PasswordTransfer {
     }
     if (batch.done) {
       stage.done = true;
-      stage.problem = batch.done.problem;
+      const problem = batch.done.problem;
+      stage.problem = problem === null || problem === 'url' || problem === 'password' || problem === 'empty' ? problem : 'unreadable';
       // The file's sign-ins once each, the later row's: what the preview and the import both read.
       const unique = uniqueLogins(stage.logins);
       stage.logins = unique.logins;
@@ -345,6 +366,39 @@ export class PasswordTransfer {
         this.onProgress?.(importId, done, steps.length);
       };
       report(0, true);
+      try {
+        await this.writeSteps(steps, stage, landed, result, generation, now, report);
+      } catch (error) {
+        // Part written, then it failed (a full disk): what landed keeps its Undo, and says it stopped. Never the error's
+        // text: chord-data's replies carry it, and it could quote a row.
+        // (A slice that failed rolled back: its rows aren't there, and Undo passes over what it doesn't find.)
+        if (landed.added.length === 0 && landed.replaced.length === 0) {
+          this.landed.delete(importId);
+          // eslint-disable-next-line preserve-caught-error -- its cause could quote a row: only its name goes on.
+          throw new Error(error instanceof Error ? error.name : 'error');
+        }
+        result.stopped = true;
+      }
+      if (landed.added.length === 0 && landed.replaced.length === 0) this.landed.delete(importId);
+      return { imported: result };
+    } finally {
+      if (writing) this.vault.importing(false);
+      stage.running = false;
+      // Written (or stopped): the file's passwords leave memory. Another try reads the file again.
+      this.drop(stageId);
+    }
+  }
+
+  private async writeSteps(
+    steps: ({ add: number } | { replace: { at: number; id: string } })[],
+    stage: Stage,
+    landed: Landed,
+    result: PasswordImportResult,
+    generation: number,
+    now: number,
+    report: (done: number) => void,
+  ): Promise<void> {
+    {
       for (let next = 0; next < steps.length; ) {
         // Locked (Lock now, or idle) since it began: it stops here, and what landed keeps its Undo.
         if (this.vault.state() !== 'open' || this.vault.generation() !== generation) {
@@ -373,13 +427,6 @@ export class PasswordTransfer {
         report(next);
         await yieldNow();
       }
-      if (landed.added.length === 0 && landed.replaced.length === 0) this.landed.delete(importId);
-      return { imported: result };
-    } finally {
-      if (writing) this.vault.importing(false);
-      stage.running = false;
-      // Written (or stopped): the file's passwords leave memory. Another try reads the file again.
-      this.drop(stageId);
     }
   }
 
@@ -486,6 +533,11 @@ export class PasswordTransfer {
 
   generation(): number {
     return this.vault.generation();
+  }
+
+  /** *Lock now* or idle: a staged file's passwords leave memory (an import's Undo stays: it holds sealed copies only). */
+  locked(): void {
+    for (const [stageId, stage] of this.stages) if (!stage.running) this.drop(stageId);
   }
 
   /** chord-data closing, or *Start over*: staged passwords and every Undo go. */

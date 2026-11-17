@@ -137,10 +137,12 @@ process.parentPort.on('message', (event) => {
         const { stageId } = request;
         let done = false;
         port.on('message', ({ data }) => {
-          const batch = data as PasswordStageBatch;
-          if (batch.done) done = true;
+          // All of it inside the try: a batch that isn't one is refused, never a crash of chord-data.
           try {
-            port.postMessage(transfer.staged(stageId, batch));
+            const batch = data as PasswordStageBatch;
+            const answer = transfer.staged(stageId, batch);
+            if (answer.ok && batch?.done) done = true;
+            port.postMessage(answer);
           } catch (error) {
             port.postMessage({ ok: false, error: error instanceof Error ? error.name : 'error' });
           }

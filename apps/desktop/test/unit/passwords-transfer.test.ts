@@ -25,7 +25,7 @@ const PASSPHRASE = 'correct horse battery staple';
 let dir: string;
 let db: ChordDatabase;
 let typedRecently: boolean;
-let toasts: { windowId: number; toast: Toast }[];
+let toasts: { windowId: string; toast: Toast }[];
 let gate: InstanceType<typeof ImportGate>;
 let openPaths: string[] | null;
 let savePath: string | null;
@@ -80,7 +80,7 @@ function transfers() {
         end: () => undefined,
       };
     },
-    toast: (windowId, toast) => toasts.push({ windowId: windowId as number, toast }),
+    toast: (windowId, toast) => toasts.push({ windowId: String(windowId), toast }),
   });
 }
 
@@ -162,7 +162,7 @@ describe('Import…', () => {
     const told: PasswordImportProgress[] = [];
     const run = await t.run(opened.stageId, { take: 'yours', except: [] }, undefined, { windowId: 3 as never, notify: (p) => told.push(p) });
     if (!run.ok || !run.importId) throw new Error('not imported');
-    expect(toasts.at(-1)).toEqual({ windowId: 3, toast: { id: `import:${run.importId}`, message: 'Imported 2 passwords', action: { label: 'Undo', command: { t: 'import.undo', importId: run.importId } } } });
+    expect(toasts.at(-1)).toEqual({ windowId: '3', toast: { id: `import:${run.importId}`, message: 'Imported 2 passwords', action: { label: 'Undo', command: { t: 'import.undo', importId: run.importId } } } });
     expect(t.owns(run.importId)).toBe(true);
     expect(await t.undo(run.importId)).toEqual({ removed: 2, restored: 0, changed: 0 });
     expect(toasts.at(-1)!.toast.message).toBe('Import undone');

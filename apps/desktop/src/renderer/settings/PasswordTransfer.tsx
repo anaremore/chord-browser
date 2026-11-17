@@ -135,7 +135,10 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
   useEffect(() => {
     if (previewState !== 'locked' || view.state !== 'open' || step.at !== 'preview') return;
     const { stageId, name } = step;
-    void api.passwords.importPreview(stageId).then((preview) => preview && setStep({ at: 'preview', stageId, name, preview }));
+    // Null: the lock let the file go (its passwords leave memory at a lock), so it's chosen again.
+    void api.passwords.importPreview(stageId).then((preview) =>
+      setStep(preview ? { at: 'preview', stageId, name, preview } : { at: 'problem', text: 'Your passwords locked, so Chord let the file go. Choose it again.' }),
+    );
   }, [previewState, view.state, step]);
   useEffect(
     () =>

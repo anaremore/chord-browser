@@ -621,6 +621,7 @@ export class PasswordStore {
       case 'lock': {
         this.generation++;
         this.wipe();
+        this.transfer.locked();
         const meta = this.meta;
         if (op.held && meta && !meta.held) this.setMeta({ ...meta, held: true });
         return { status: this.status() };

@@ -177,7 +177,7 @@ test('passwords: an encrypted Chord file’s passwords come in through Your data
   // Made by the journey above's export, in its own profile: here, a new one.
   const first = await chord('light');
   const chordPath = join(dir, 'Chord passwords round trip.chorddata');
-  let suggested = '';
+  let suggested: string;
   try {
     await firstPassword(first.settings, 'https://shop.example.com', 'ada@example.com', 'Sekrit-mine-2');
     const main = first.settings.getByRole('main');

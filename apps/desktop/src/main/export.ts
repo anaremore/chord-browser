@@ -99,7 +99,15 @@ export class Exporter {
       passwords?.close();
       return { ok: false, problem: 'cancelled' };
     }
-    const target = chosen.filePath;
+    try {
+      return await this.fork(chosen.filePath, request, passwords, passwordsOnly, notify);
+    } catch (error) {
+      passwords?.close();
+      throw error;
+    }
+  }
+
+  private async fork(target: string, request: ExportRequest, passwords: MessagePortMain | null, passwordsOnly: boolean, notify: (progress: ExportProgress) => void): Promise<ExportRunResult> {
     this.folder = dirname(target);
     const name = basename(target);
     const id = uuidv7();

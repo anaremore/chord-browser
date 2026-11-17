@@ -21,6 +21,7 @@
  *
  * Nothing here logs a value.
  */
+import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { uuidv7, type PasswordImportChoices, type PasswordImportSummary, type PasswordImportUndone, type WindowId } from '@chord/core';
 import type { PasswordOp, PasswordResult, VaultState } from '@chord/data';
@@ -295,6 +296,8 @@ export class PasswordTransfers {
       if (chosen.canceled || !chosen.filePath) return { ok: false, problem: 'cancelled' };
       this.folder = dirname(chosen.filePath);
       const result = await this.options.data({ op: 'exportCsv', path: chosen.filePath }).catch((): PasswordResult => ({ problem: 'invalid' }));
+      // chord-data gone part way (a crash) can't take its unfinished file with it: every password in it is in the clear.
+      if (!result.exported) await rm(`${chosen.filePath}.part`, { force: true, maxRetries: 3 }).catch(() => undefined);
       if (!result.exported) return { ok: false, problem: result.problem === 'locked' || result.problem === 'none' ? result.problem : 'io' };
       this.options.vault.transferred(false);
       const exportId = uuidv7();

@@ -116,6 +116,49 @@ describe('the preview', () => {
   });
 });
 
+describe('what the import process sends, checked again (a security review)', () => {
+  it('junk is refused, never thrown on; listed rows are cut and typed; an unknown problem reads as unreadable', async () => {
+    const transfer = db.passwords.transfer;
+    for (const junk of [null, 7, 'x', { logins: 'no' }, { logins: [null, 3, { origin: 5 }] }, { issues: [null, { row: 'a', kind: 'app' }, { row: 2, kind: 'evil' }] }])
+      expect(() => transfer.staged('junk', junk as never)).not.toThrow();
+    transfer.staged('junk', { issues: [{ row: 3, kind: 'app', address: 'a'.repeat(10_000), username: { evil: true } as never, name: 'n' }] });
+    transfer.staged('junk', { logins: [login('https://a.example', 'a', '1', { changedAt: 9e15 })], done: { problem: 'whatever' as never } });
+    const { importPreview } = await run({ op: 'importPreview', stageId: 'junk' });
+    expect(importPreview!.problem).toBe('unreadable');
+    expect(importPreview!.issues).toEqual([{ row: 3, kind: 'app', address: `${'a'.repeat(199)}…`, username: '', name: 'n' }]);
+    // A change time past the year 9999 isn't one.
+    expect(importPreview!.logins).toBe(0);
+  });
+
+  it('a lock lets a staged file go: its passwords leave memory', async () => {
+    await vault();
+    const stageId = stage([login('https://a.example', 'a', '1')]);
+    await run({ op: 'lock' });
+    await run({ op: 'unlock', passphrase: PASSPHRASE });
+    expect((await run({ op: 'importPreview', stageId })).problem).toBe('missing');
+  });
+
+  it('a failure part way (a full disk) keeps what landed, with its Undo', async () => {
+    await vault();
+    const vaultAccess = (db.passwords.transfer as unknown as { vault: { transaction(work: () => void): void } }).vault;
+    const real = vaultAccess.transaction.bind(vaultAccess);
+    let slices = 0;
+    vaultAccess.transaction = (work) => {
+      if (++slices === 3) throw Object.assign(new Error('database or disk is full: Sekrit'), { name: 'SqliteError' });
+      real(work);
+    };
+    // Rows whose writes take long enough for several slices.
+    const file = Array.from({ length: 3000 }, (_, i) => login(`https://s${i}.example`, 'ada', `p${i}`));
+    const { imported } = await run({ op: 'importRun', stageId: stage(file), importId: 'i1', choices: choose('yours') });
+    vaultAccess.transaction = real;
+    expect(imported!.stopped).toBe(true);
+    const count = (await run({ op: 'status' })).status!.count;
+    expect(count).toBeGreaterThan(0);
+    expect((await run({ op: 'importUndo', importId: 'i1' })).undone!.removed).toBe(count);
+    expect((await run({ op: 'status' })).status!.count).toBe(0);
+  });
+});
+
 describe('the import', () => {
   it('as chosen: new ones in, yours kept or the file’s taken (the one before kept), the same untouched', async () => {
     const [, b, c] = await vault(['https://a.example', 'ada', 'same'], ['https://b.example', 'ada', 'old-b'], ['https://c.example', 'ada', 'old-c']);
