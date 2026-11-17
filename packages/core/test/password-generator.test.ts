@@ -146,6 +146,17 @@ describe("rules that can't be met: nothing is offered", () => {
   });
 });
 
+describe('the work a page can ask of main (security review)', () => {
+  it('rules that can’t be met, at 1,000 characters, cost a bounded number of draws', () => {
+    let draws = 0;
+    const random = seeded(9);
+    const counted: RandomInt = (n) => (draws++, random(n));
+    const { rules } = passwordRulesFor({ passwordrules: 'required: [ab]; allowed: [ab]; max-consecutive: 1;', minLength: 1000 }, null);
+    expect(generatePassword(rules, counted)).toBeNull();
+    expect(draws).toBeLessThanOrEqual(25_000);
+  });
+});
+
 describe('passwordSatisfies', () => {
   const set = (over: Partial<PasswordRuleSet>): PasswordRuleSet => ({ ...DEFAULT_RULE_SET, allowed: 'abcdefghijklmnopqrstuvwxyz0123456789', ...over });
   it.each([

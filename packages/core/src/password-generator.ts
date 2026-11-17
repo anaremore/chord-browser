@@ -39,6 +39,11 @@ const DEFAULT_ALPHABET = Object.values(GENERATOR_CLASSES).join('');
 
 /** How many tries a generation gets before it says the rules can't be met (a run limit is met by chance, often). */
 const TRIES = 300;
+/**
+ * At most this many characters drawn in all, whatever the length (security review): a page's rules that can't be met,
+ * at 1,000 characters, would otherwise cost main 300,000 draws a focus.
+ */
+const DRAW_BUDGET = 20_000;
 
 /** `randomInt(n)`: a uniform integer in [0, n). */
 export type RandomInt = (n: number) => number;
@@ -262,7 +267,8 @@ export function generatePassword(rules: PasswordRuleSet, randomInt: RandomInt): 
     if (own && required.length < length && !required.some((r) => [...r].every((c) => own.includes(c)))) required.push(own);
   }
   const pick = (from: string) => from[randomInt(from.length)]!;
-  for (let attempt = 0; attempt < TRIES; attempt++) {
+  const tries = Math.max(1, Math.min(TRIES, Math.floor(DRAW_BUDGET / (length * 2))));
+  for (let attempt = 0; attempt < tries; attempt++) {
     const chars = required.map(pick);
     while (chars.length < length) chars.push(pick(pool));
     // Fisher–Yates, so the required characters are anywhere.

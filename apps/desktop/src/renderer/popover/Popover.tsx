@@ -44,7 +44,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { useLive, type Live } from '../shared/live';
@@ -668,9 +668,17 @@ function PasswordMenuCard({ menu, platform }: { menu: PasswordMenu; platform: Pl
   const generated = menu.state === 'generate' ? menu.generated : undefined;
   const offset = generated ? 1 : 0;
   const another = `Another password (${formatKeys(PASSWORD_REGENERATE_KEYS, platform)})`;
+  // ↻ sits at the generator row's end (the owner's design 3A) but outside its option: a button can't be inside one.
+  const generatorRow = useRef<HTMLDivElement>(null);
+  const regenerate = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const r = generatorRow.current;
+    const b = regenerate.current;
+    if (r && b) b.style.insetBlockStart = `${r.offsetTop + (r.offsetHeight - b.offsetHeight) / 2}px`;
+  });
   const rowId = (i: number) => `${ids}-row-${i}`;
-  const row = (i: number, content: ReactNode, className = styles.menuRow) => (
-    <div key={i} id={rowId(i)} role="option" aria-selected={menu.index === i} className={className} onClick={() => choose(i)}>
+  const row = (i: number, content: ReactNode, className = styles.menuRow, ref?: Ref<HTMLDivElement>) => (
+    <div key={i} ref={ref} id={rowId(i)} role="option" aria-selected={menu.index === i} className={className} onClick={() => choose(i)}>
       {content}
     </div>
   );
@@ -691,20 +699,9 @@ function PasswordMenuCard({ menu, platform }: { menu: PasswordMenu; platform: Pl
                 </span>
                 {generated.rule && <span className={styles.menuHost}>{generated.rule}</span>}
               </span>
-              <button
-                type="button"
-                className={styles.iconButton}
-                aria-label={another}
-                title={another}
-                onClick={(e) => {
-                  // ↻ changes the row; it doesn't choose it.
-                  e.stopPropagation();
-                  void api.passwords.regenerate(menu.id);
-                }}
-              >
-                <RotateCw size={14} strokeWidth={2} />
-              </button>
             </>,
+            `${styles.menuRow} ${styles.menuGenerator}`,
+            generatorRow,
           )}
         {menu.state === 'locked'
           ? row(
@@ -738,6 +735,11 @@ function PasswordMenuCard({ menu, platform }: { menu: PasswordMenu; platform: Pl
             )}
         {menu.state !== 'locked' && row(menu.accounts.length + offset, <span className={styles.menuText}>Other passwords…</span>, `${styles.menuRow} ${styles.menuMore}`)}
       </div>
+      {generated && (
+        <button ref={regenerate} type="button" className={`${styles.iconButton} ${styles.menuRegenerate}`} aria-label={another} title={another} onClick={() => void api.passwords.regenerate(menu.id)}>
+          <RotateCw size={14} strokeWidth={2} />
+        </button>
+      )}
       {menu.insecure && (
         <p className={styles.menuWarning}>
           <TriangleAlert size={12} strokeWidth={2} aria-hidden />

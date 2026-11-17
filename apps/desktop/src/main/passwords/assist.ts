@@ -164,6 +164,8 @@ interface Menu {
   readonly insecure: boolean;
   readonly accounts: readonly { id: string; username: string; host: string | null; madeAt?: number }[];
   index: number;
+  /** When it opened (Enter waits `durations.promptInputDelay` on the generator's row). */
+  readonly openedAt: number;
   /**
    * On a new password's field: the generator's row, first, its password and its rules in words, the field's rules
    * (for ↻), and whether it's the tab's presave offered again (`again`). `vault`: what choosing it asks first.
@@ -267,6 +269,8 @@ export class PasswordAssist {
   private readonly quiet = new Map<WebContents, { formId: string; role: string; kind: string; generate: boolean }>();
   /** Each tab page's generated password, saved for a site (S17 §6). */
   private readonly presaves = new Map<WebContents, Presave>();
+  /** Rules each page asked for that can't be met (`makeFor`). */
+  private readonly unmet = new WeakMap<WebContents, Set<string>>();
   private readonly generate: (origin: string, rules: GeneratorRules) => Promise<Generated | null>;
   /** A press on a window's menu: the blur it causes doesn't close it, until then. */
   private readonly grace = new Map<WindowId, { until: number; contents: WebContents }>();
@@ -388,7 +392,7 @@ export class PasswordAssist {
     if (answer.state !== 'open' && answer.state !== 'locked') return;
     const accounts = answer.state === 'open' ? answer.offers.map((o) => ({ id: o.id, username: o.username, host: o.host !== hostOf(e.origin) ? o.host : null })) : [];
     if (answer.state === 'open' && accounts.length === 0) return;
-    const menu: Menu = {
+    const menu: Omit<Menu, 'openedAt'> = {
       id: this.nextId++,
       tab,
       contents: e.contents,
@@ -410,7 +414,8 @@ export class PasswordAssist {
     this.openMenu(menu);
   }
 
-  private openMenu(menu: Menu): void {
+  private openMenu(made: Omit<Menu, 'openedAt'>): void {
+    const menu: Menu = { ...made, openedAt: this.now() };
     // One menu a window: another pane's, still open, closes first (its keys with it).
     const replaced = this.menus.get(menu.tab.windowId);
     if (replaced) this.close(replaced);
@@ -428,8 +433,11 @@ export class PasswordAssist {
     const { host, vault } = this.options;
     const rules = e.rules ?? NO_RULES;
     const vaultState = await vault.generatorFor(e.origin, tab.chordId).catch(() => 'off' as const);
+    // The tab's presave is offered again only while the vault is open (security review): locked, or started over, it's
+    // forgotten here (the entry stays in the vault), and a new password is made.
+    if (vaultState !== 'open') this.dropPresave(e.contents);
     const kept = this.presaveFor(e.contents, e.origin);
-    const made = vaultState === 'off' ? null : kept ? { password: kept.password, rule: kept.rule } : await this.generate(e.origin, rules).catch(() => null);
+    const made = vaultState === 'off' ? null : kept ? { password: kept.password, rule: kept.rule } : await this.makeFor(e.contents, e.origin, rules);
     // The saved accounts follow it (the owner's design 3A): a sign-in read as a sign-up, a change form's.
     const answer = vaultState === 'open' ? await vault.accountsFor(e.origin, tab.chordId).catch(() => ({ state: 'off' as const })) : null;
     if (this.pending.get(e.contents) !== pending) return;
@@ -465,11 +473,30 @@ export class PasswordAssist {
     });
   }
 
+  /**
+   * A password to a field's rules, or null; rules that can't be met are remembered for the document, so a page that
+   * moves focus between such fields in a loop costs main one generation each, not one a focus (security review).
+   */
+  private async makeFor(contents: WebContents, origin: string, rules: GeneratorRules): Promise<Generated | null> {
+    const key = `${this.docs.get(contents) ?? 0}\0${origin}\0${rules.passwordrules}\0${rules.minLength}\0${rules.maxLength}`;
+    const unmet = this.unmet.get(contents);
+    if (unmet?.has(key)) return null;
+    const made = await this.generate(origin, rules).catch(() => null);
+    if (made === null) {
+      const set = unmet ?? new Set<string>();
+      // A page making new rules in a loop: the set is cut back rather than grown without end.
+      if (set.size >= 64) set.clear();
+      set.add(key);
+      this.unmet.set(contents, set);
+    }
+    return made;
+  }
+
   /** The menu's ↻: another password, to the same rules (from its window's popover, checked by the caller). */
   async regenerate(windowId: WindowId, id: number): Promise<void> {
     const menu = this.menus.get(windowId);
     if (!menu?.generate || menu.id !== id) return;
-    const made = await this.generate(menu.origin, menu.generate.rules).catch(() => null);
+    const made = await this.makeFor(menu.contents, menu.origin, menu.generate.rules);
     if (made === null || this.menus.get(windowId) !== menu || !menu.generate) return;
     menu.generate = { ...menu.generate, password: made.password, rule: made.rule, again: false };
     this.options.host.changed(windowId);
@@ -524,6 +551,9 @@ export class PasswordAssist {
       guard.patience = TAKEN_KEY_PATIENCE;
     }
     if (routed.regenerate) return void this.regenerate(menu.tab.windowId, menu.id);
+    // A page can focus a new password's field by script just as you press Enter elsewhere: the generator's row, which
+    // saves and fills, doesn't take an Enter in its first moments (as the sign-in box's buttons don't; security review).
+    if (routed.choose !== undefined && menu.generate && this.now() - menu.openedAt < durations.promptInputDelay) return;
     if (routed.choose !== undefined) return void this.choose(menu, routed.choose);
     if (!routed.menu) {
       // Escape: not again in this form until you leave it. Tab: the page moves on, and the next field may get its own.
@@ -630,12 +660,17 @@ export class PasswordAssist {
   private async chooseGenerated(menu: Menu, password: string, passphrase?: string): Promise<void> {
     const { host, vault } = this.options;
     const contents = menu.contents;
-    const kept = this.presaveFor(contents, menu.origin);
+    let kept = this.presaveFor(contents, menu.origin);
+    // Offered again, it's filled only from an open vault: locked since, it asks first (security review).
+    if (kept && kept.password === password && (await vault.generatorFor(menu.origin, menu.tab.chordId).catch(() => 'off' as const)) !== 'open') {
+      if (!(await vault.askUnlock(menu.tab.windowId))) return;
+      kept = this.presaveFor(contents, menu.origin);
+    }
     if (!(kept && kept.password === password)) {
       const sameForm = kept && !kept.submitted && kept.doc === menu.doc && kept.formId === menu.formId;
       let id: string;
       let setup = false;
-      if (sameForm && (await vault.presaved('pending', kept.id, menu.origin, menu.tab.chordId, { password }).catch(() => false))) id = kept.id;
+      if (kept && sameForm && (await vault.presaved('pending', kept.id, menu.origin, menu.tab.chordId, { password }).catch(() => false))) id = kept.id;
       else {
         const request = { origin: menu.origin, password, chordId: menu.tab.chordId, ...(passphrase !== undefined ? { passphrase } : {}) };
         const send = () => vault.presave(request).catch(() => ({ ok: false as const, problem: 'io' as const }));

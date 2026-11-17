@@ -1093,9 +1093,32 @@ describe('the generator’s row: which new password’s field gets one', () => {
     const t = setup();
     await t.focus(NEW);
     await settle(2);
+    // Not in its first moments: a page can focus the field by script as you press Enter elsewhere (security review).
+    expect(t.key('Enter')).toBe(true);
+    await settle();
+    expect(filledWith(t.page)).toEqual([]);
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    t.timers.advance(500);
     expect(t.key('Enter')).toBe(true);
     await settle();
     expect(filledWith(t.page)).toEqual([[PASSWORDS_FILL, 'Gen-1']]);
+  });
+
+  it('rules that can’t be met are worked out once a document, however often a page moves focus between such fields (security review)', async () => {
+    const t = setup({ generate: async () => null, accounts: { state: 'open', offers: [], insecure: false } });
+    const generate = (t.assist as unknown as { generate: ReturnType<typeof vi.fn> }).generate;
+    const rules = { passwordrules: 'allowed: [ab]; max-consecutive: 1;', minLength: 1000, maxLength: -1 };
+    for (let i = 0; i < 20; i++) {
+      await t.focus({ ...NEW, formId: i % 2 ? 'f1' : 'f2', rules });
+      await settle(2);
+      t.blur();
+    }
+    expect(generate).toHaveBeenCalledTimes(1);
+    // A new document asks again.
+    t.page.emit('did-navigate', {}, 'https://github.com/signup', 200);
+    await t.focus({ ...NEW, rules });
+    await settle(2);
+    expect(generate).toHaveBeenCalledTimes(2);
   });
 
   it('↓ to an account and Enter fills the account, not a generated password', async () => {
@@ -1104,6 +1127,7 @@ describe('the generator’s row: which new password’s field gets one', () => {
     await settle(2);
     t.key('ArrowDown');
     expect(t.assist.menuFor('w1')!.index).toBe(1);
+    t.timers.advance(500);
     t.key('Enter');
     await settle();
     expect(filledWith(t.page)).toEqual([[PASSWORDS_FILL, 'pw-one']]);
@@ -1220,6 +1244,31 @@ describe('the tab’s presave: offered again, given its username, confirmed', ()
     await settle();
     // Offered again, it's filled and not saved twice.
     expect(t.vault.presave).toHaveBeenCalledTimes(again ? 1 : 2);
+  });
+
+  it('locked since (by you, or its clock): the presave isn’t shown or filled again; a new one is made, and choosing it asks to unlock (security review)', async () => {
+    const t = setup();
+    await generated(t);
+    t.vault.generatorFor.mockResolvedValue('locked');
+    await t.focus({ ...NEW, role: 'confirmation-password', formId: 'f2' });
+    await settle(2);
+    expect(t.assist.menuFor('w1')!.generated).toMatchObject({ password: 'Gen-2', again: false, vault: 'locked' });
+    expect(JSON.stringify(t.assist.menuFor('w1'))).not.toContain('Gen-1');
+  });
+
+  it('…and locked between the menu and your pick: it asks to unlock before filling the one offered again', async () => {
+    const t = setup();
+    await generated(t);
+    await t.focus({ ...NEW, role: 'confirmation-password', formId: 'f2' });
+    await settle(2);
+    expect(t.assist.menuFor('w1')!.generated).toMatchObject({ again: true });
+    t.page.mainFrame.send.mockClear();
+    t.vault.generatorFor.mockResolvedValue('locked');
+    t.vault.askUnlock.mockResolvedValue(false);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    expect(t.vault.askUnlock).toHaveBeenCalled();
+    expect(t.page.mainFrame.send).not.toHaveBeenCalled();
   });
 
   it('↻ and choose again in the same form, before a submit: the same entry takes the new one (kept as the one before)', async () => {

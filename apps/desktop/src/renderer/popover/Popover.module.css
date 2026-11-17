@@ -680,6 +680,7 @@
 }
 
 .passwordMenu {
+  position: relative;
   inline-size: max-content;
   min-inline-size: var(--size-password-menu);
   max-inline-size: var(--size-popover-card);
@@ -705,9 +706,19 @@
   background: var(--color-item-hover);
 }
 
-/* The generator's row: its text takes the room, ↻ at the end. */
+/* The generator's row: its text takes the room, leaving ↻'s at the end. */
 .menuGrow {
   flex: 1;
+}
+
+.menuGenerator {
+  padding-inline-end: calc(var(--size-icon-button) + var(--space-2));
+}
+
+/* ↻, over the generator row's end: beside its option, not in it (a button can't be inside one). */
+.menuRegenerate {
+  position: absolute;
+  inset-inline-end: calc(var(--space-2) + var(--space-1));
 }
 
 /* The generated password, on the row's second line: mono, small (the owner's design 3A). */
