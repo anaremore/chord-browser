@@ -537,15 +537,20 @@ describe('sign-ins from the browser’s own box (S17 §10): by origin and realm,
     expect(await compare('box-Sekrit')).toEqual({ kind: 'same', id });
     expect(await compare('new-Sekrit')).toEqual({ kind: 'update', id });
     expect(await compare('box-Sekrit', 'Other')).toEqual({ kind: 'new' });
-    expect((await run({ op: 'save', origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'new-Sekrit', chordId: null, replace: id! })).id).toBe(id);
+    const updated = await run({ op: 'save', origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'new-Sekrit', chordId: null, replace: id! }, 5000);
+    expect(updated).toEqual({ id, changedAt: 5000 });
     expect((await run({ op: 'reveal', id: id! })).password).toBe('new-Sekrit');
     // A form's save can't replace the box's, nor another realm's.
     expect((await run({ op: 'save', origin: ROUTER, username: 'ada@example.com', password: 'x', chordId: null, replace: id! })).problem).toBe('refused');
     expect((await run({ op: 'save', origin: ROUTER, realm: 'Other', username: 'ada@example.com', password: 'x', chordId: null, replace: id! })).problem).toBe('refused');
-    // Undo of that update: the one before it back, and the wrong one kept as the one before.
-    expect((await run({ op: 'revert', id: id! })).id).toBe(id);
+    // Undo of that update: the one before it back, and the wrong one kept as the one before; only once, and never
+    // for an update that isn't the latest change.
+    expect((await run({ op: 'revert', id: id!, changedAt: 4999 })).problem).toBe('refused');
+    expect((await run({ op: 'revert', id: id!, changedAt: 5000 }, 6000)).id).toBe(id);
     expect((await run({ op: 'reveal', id: id! })).password).toBe('box-Sekrit');
-    expect((await run({ op: 'revert', id: 'gone' })).problem).toBe('missing');
+    expect((await run({ op: 'revert', id: id!, changedAt: 5000 })).problem).toBe('refused');
+    expect((await run({ op: 'reveal', id: id! })).password).toBe('box-Sekrit');
+    expect((await run({ op: 'revert', id: 'gone', changedAt: 5000 })).problem).toBe('missing');
     // Edited in Settings, it stays the box's.
     await run({ op: 'edit', id: id!, patch: { note: 'the router' } });
     expect((await run({ op: 'list', chordId: null })).logins!.find((l) => l.id === id)!.realm).toBe('Router admin');

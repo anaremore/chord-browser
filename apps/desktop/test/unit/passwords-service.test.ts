@@ -500,7 +500,7 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
     const first = await service.saveCandidate({ ...at, passphrase: PASSPHRASE });
     expect(first).toEqual({ ok: true, id: expect.any(String), kind: 'new' });
     const id = (first as { id: string }).id;
-    expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'update' });
+    expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'update', changedAt: clock.now });
     expect(await service.passwordFor(id, 'https://github.com', 'work')).toBe('two');
     expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'same' });
     expect(await service.candidateFor({ ...at, username: 'grace' })).toEqual({ kind: 'new', setup: false });
@@ -713,7 +713,7 @@ describe('the browser’s own sign-in box (S17 §10)', () => {
     const first = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
     expect(first).toMatchObject({ ok: true, kind: 'new' });
     const id = (first as { id: string }).id;
-    expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'update' });
+    expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'update', changedAt: clock.now });
     expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'same' });
     // Updated with the one before it kept, as a form's.
     expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('two-Sekrit');
@@ -764,15 +764,25 @@ describe('the browser’s own sign-in box (S17 §10)', () => {
     expect(await careless.httpPasswordFor('box', ROUTER, 'Router admin', 'work')).toBe('box-Sekrit');
   });
 
-  it('Undo of an update: the password before it back; nothing when locked or with nothing before it', async () => {
+  it('Undo of an update: the password before it back, only while it’s still what that update wrote; nothing when locked', async () => {
     const first = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
     const id = (first as { id: string }).id;
-    expect(await service.revertUpdate(id)).toBe(false);
-    expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'update' });
-    expect(await service.revertUpdate(id)).toBe(true);
-    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('box-Sekrit');
+    expect(await service.revertUpdate(id, clock.now)).toBe(false);
+    clock.now += 1000;
+    const update = await service.saveCandidate({ ...signIn, password: 'two-Sekrit' });
+    expect(update).toEqual({ ok: true, id, kind: 'update', changedAt: clock.now });
+    const changedAt = (update as { changedAt: number }).changedAt;
+    // Changed again since (in Settings, say): Undo of the earlier update would bring back the wrong one.
+    clock.now += 1000;
+    await service.edit(id, { password: 'three-Sekrit' });
+    expect(await service.revertUpdate(id, changedAt)).toBe(false);
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('three-Sekrit');
+    clock.now += 1000;
+    const again = await service.saveCandidate({ ...signIn, password: 'four-Sekrit' });
+    expect(await service.revertUpdate(id, (again as { changedAt: number }).changedAt)).toBe(true);
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('three-Sekrit');
     await service.lock();
-    expect(await service.revertUpdate(id)).toBe(false);
+    expect(await service.revertUpdate(id, clock.now)).toBe(false);
   });
 
   it('off where passwords are off, locked when locked, nothing for a chord main doesn’t know', async () => {

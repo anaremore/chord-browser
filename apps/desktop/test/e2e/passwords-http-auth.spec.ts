@@ -56,6 +56,17 @@ function startRouter(): Promise<Router> {
   const tried: string[] = [];
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
+    // A public router page, and a page of the framing site's that sends a frame there (a redirect).
+    if (path === '/public') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<title>Router</title><p>Public</p>');
+      return;
+    }
+    if (path === '/slow') {
+      res.writeHead(302, { location: `http://router.test:${(req.headers.host ?? '').split(':')[1]}/public` });
+      res.end();
+      return;
+    }
     // Another site's page (site.test) that frames the router's admin page.
     if (path === '/frame') {
       const port = (req.headers.host ?? '').split(':')[1];
@@ -198,6 +209,16 @@ test('the sign-in box: a wrong password isn’t saved, Remember saves the right 
     const sentBefore = router.tried.length;
     await popover.waitForTimeout(500);
     expect(router.tried.length).toBe(sentBefore);
+    // The page sends the frame elsewhere while the box is up (a redirect back to the router, which answers 200): the
+    // request the box was for is gone, and so is the box. Nothing can be answered, or saved, for it.
+    const framingTab = await pageWhere(app, (u) => u === framing);
+    await framingTab.evaluate((slow) => ((document.getElementById('router') as HTMLIFrameElement).src = slow), framing.replace('/frame', '/slow'));
+    await expect(box).toBeHidden();
+    await expect.poll(() => framingTab.frames().some((f) => f.url().endsWith('/public'))).toBe(true);
+    expect(router.tried.length).toBe(sentBefore);
+    // Framed again: the box again, and a click on the saved username signs in.
+    await framingTab.evaluate((admin) => ((document.getElementById('router') as HTMLIFrameElement).src = admin), `${router.origin}/admin`);
+    await expect(box).toBeVisible();
     await chooser.getByRole('option', { name: USER }).click();
     await expect(box.getByLabel('Username')).toHaveValue(USER);
     await box.getByRole('button', { name: 'Sign in' }).click();

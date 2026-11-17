@@ -107,8 +107,11 @@ export type PasswordOp =
   | { op: 'used'; id: string; chordId: string }
   | { op: 'add'; login: NewLogin; chordId: string | null }
   | { op: 'edit'; id: string; patch: LoginPatch }
-  /** Undo of an update: the password before it back (the one it replaces becomes the one before). */
-  | { op: 'revert'; id: string }
+  /**
+   * Undo of an update: the password before it back (the one it replaces becomes the one before), only while the
+   * password is still the one that update wrote (`changedAt`, from `save`): refused once anything changed it since.
+   */
+  | { op: 'revert'; id: string; changedAt: number }
   /** Deleted, and kept sealed in memory for its Undo until chord-data quits. */
   | { op: 'delete'; id: string }
   | { op: 'undelete'; id: string }
@@ -146,6 +149,8 @@ export interface PasswordResult {
   loginOrigin?: string;
   /** From `fill`: the sign-in's realm (null for a form's), so main checks that too. */
   loginRealm?: string | null;
+  /** From `save` (an update): when its password changed, which a `revert` names. */
+  changedAt?: number;
 }
 
 /** What `meta` keeps under `passwords`. */
@@ -659,6 +664,8 @@ export class PasswordStore {
         const row = this.rowById(op.id);
         const secret = row ? this.openRow(row) : null;
         if (!row || !secret?.previous) return { problem: 'missing' };
+        // Changed again since (by hand, another save, an earlier Undo): what's before it isn't what Undo meant.
+        if (secret.changedAt !== op.changedAt) return { problem: 'refused' };
         const problem = this.rewrite(row, secret, { password: secret.previous.password }, now);
         return problem ? { problem } : { id: op.id };
       }
@@ -707,7 +714,7 @@ export class PasswordStore {
           const problem = this.rewrite(row, secret, { ...upgrade, username: op.username, password: op.password }, now);
           if (problem) return { problem };
           if (op.chordId) this.use(op.replace, op.chordId, now);
-          return { id: op.replace };
+          return { id: op.replace, changedAt: secret.password === op.password ? secret.changedAt : now };
         }
         const id = this.insert({ origin: op.origin, username: op.username, password: op.password, ...(op.realm !== undefined ? { realm: op.realm } : {}) }, op.chordId, now);
         return id === 'invalid' ? { problem: 'invalid' } : { id };

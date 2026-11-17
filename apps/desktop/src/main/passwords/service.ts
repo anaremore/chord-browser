@@ -83,7 +83,8 @@ export interface DetectorSwitch {
 type DetectorState = { settings: { passwords: PasswordSettings }; chords: Record<string, { id: string; profileId: string; private?: boolean }>; extensions: Record<string, InstalledExtension> };
 
 /** What the save card's Save did, or why it didn't. */
-export type SaveAnswer = { ok: true; id: string; kind: 'new' | 'update' | 'same' } | { ok: false; problem: PasswordProblem | 'off' | 'io' | 'never' };
+/** `changedAt`: an update's, for its Undo (`revertUpdate`). */
+export type SaveAnswer = { ok: true; id: string; kind: 'new' | 'update' | 'same'; changedAt?: number } | { ok: false; problem: PasswordProblem | 'off' | 'io' | 'never' };
 
 /** Who's asking for a page's accounts, or saving one: the page's origin as Chromium reports it for the frame, never what its script says. */
 export interface PasswordPage {
@@ -624,7 +625,7 @@ export class PasswordService {
    * Refused from a private window, for a proxy, or for a site you said never
    * to save for.
    */
-  async save(request: SaveRequest, extensions: Record<string, InstalledExtension>): Promise<{ ok: true; id: string } | { ok: false; problem: PasswordProblem | 'off' | 'io' }> {
+  async save(request: SaveRequest, extensions: Record<string, InstalledExtension>): Promise<{ ok: true; id: string; changedAt?: number } | { ok: false; problem: PasswordProblem | 'off' | 'io' }> {
     if (request.private || request.proxy || loginProblem(request) !== null) return { ok: false, problem: 'refused' };
     if (!(await this.onFor(request, extensions))) return { ok: false, problem: 'off' };
     try {
@@ -650,7 +651,7 @@ export class PasswordService {
       if (!saved.id) return { ok: false, problem: saved.problem ?? 'invalid' };
       this.touch();
       this.options.changed();
-      return { ok: true, id: saved.id };
+      return { ok: true, id: saved.id, ...(saved.changedAt !== undefined ? { changedAt: saved.changedAt } : {}) };
     } catch {
       return { ok: false, problem: 'io' };
     }
@@ -735,7 +736,7 @@ export class PasswordService {
         return { ok: true, id: kind.id, kind: 'same' };
       case 'update': {
         const saved = await this.save({ ...request, replace: kind.id }, extensions);
-        return saved.ok ? { ok: true, id: saved.id, kind: 'update' } : saved;
+        return saved.ok ? { ok: true, id: saved.id, kind: 'update', ...(saved.changedAt !== undefined ? { changedAt: saved.changedAt } : {}) } : saved;
       }
       case 'new': {
         const saved = await this.save(request, extensions);
@@ -780,10 +781,13 @@ export class PasswordService {
     return result.password;
   }
 
-  /** Undo of an update *Remember* made: the password before it back. False when it can't (locked, gone, nothing before it). */
-  async revertUpdate(id: string): Promise<boolean> {
+  /**
+   * Undo of an update *Remember* made: the password before it back, only while the password is still the one that
+   * update wrote (`changedAt`). False when it can't (locked, gone, changed since).
+   */
+  async revertUpdate(id: string, changedAt: number): Promise<boolean> {
     if ((await this.ensureOpen()) !== 'open') return false;
-    const result = await this.data({ op: 'revert', id }).catch(() => ({}) as PasswordResult);
+    const result = await this.data({ op: 'revert', id, changedAt }).catch(() => ({}) as PasswordResult);
     if (!result.id) return false;
     this.touch();
     this.options.changed();

@@ -61,7 +61,7 @@ import {
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import type { ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
 import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
-import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
+import { createChordTheme, durations, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, webFrameMain, type Session, type WebContents, type WebContentsView } from 'electron';
@@ -447,7 +447,6 @@ export class Browser {
           options.screenShare.forgetTab(nodeId);
           options.httpAuth.forgetTab(nodeId);
           options.passkeys.forgetTab(nodeId);
-          options.passkeys.forgetTab(nodeId);
         });
         contents.once('destroyed', () => {
           options.permissions.forgetTab(nodeId);
@@ -768,8 +767,12 @@ export class Browser {
       firstSave: (contents, signIn) => void this.passwordAssist.offerFirstSave(contents, signIn),
       frameOf: (processId, routingId) => webFrameMain.fromId(processId, routingId)?.frameTreeNodeId,
       // A changed password says so, with Undo: the one before it back.
-      updated: (windowId, { id, host }) => {
-        this.passwordReverts.set(id, windowId);
+      updated: (windowId, { id, host, changedAt }) => {
+        const before = this.passwordReverts.get(id);
+        if (before) clearTimeout(before.expires);
+        // Undo lasts as long as its toast could (it pauses under the pointer), then goes.
+        const expires = setTimeout(() => this.passwordReverts.get(id)?.expires === expires && this.passwordReverts.delete(id), Browser.PASSWORD_UNDO_MS);
+        this.passwordReverts.set(id, { windowId, changedAt, expires });
         this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: `Password updated for ${host}`, action: { label: 'Undo', passwordRevert: id } });
       },
     });
@@ -1422,14 +1425,19 @@ export class Browser {
     }
   }
 
-  /** Passwords *Remember* just changed, by id: the window whose toast may undo each, once. */
-  private readonly passwordReverts = new Map<string, WindowId>();
+  /** How long *Password updated*'s Undo works: its toast's time, five times over, as a toast pauses under the pointer. */
+  private static readonly PASSWORD_UNDO_MS = durations.toast * 5;
 
-  /** *Password updated*'s Undo, from that window's toast only: the password before it back. */
+  /** Passwords *Remember* just changed, by id: the window whose toast may undo each, once, while it lasts, and what the update wrote. */
+  private readonly passwordReverts = new Map<string, { windowId: WindowId; changedAt: number; expires: ReturnType<typeof setTimeout> }>();
+
+  /** *Password updated*'s Undo, from that window's toast only, while it lasts: the password before it back, if it's still what Remember wrote. */
   async revertPasswordUpdate(windowId: WindowId, id: string): Promise<void> {
-    if (this.passwordReverts.get(id) !== windowId) return;
+    const revert = this.passwordReverts.get(id);
+    if (revert?.windowId !== windowId) return;
+    clearTimeout(revert.expires);
     this.passwordReverts.delete(id);
-    if (!(await this.options.passwords.revertUpdate(id))) this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: 'Chord couldn’t undo that. The password is in Settings → Passwords.' });
+    if (!(await this.options.passwords.revertUpdate(id, revert.changedAt))) this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: 'Chord couldn’t undo that. The password is in Settings → Passwords.' });
   }
 
   /** What a window's popover shows: the find bar for its page, and the active tab's permission prompt. */

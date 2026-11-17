@@ -24,7 +24,7 @@ describe('AuthBroker', () => {
     expect(broker.login(page('https://example.com/'), details('http://router.local/'), info(), answer)).toBe(true);
     expect(onChange).toHaveBeenCalledOnce();
     const prompt = broker.promptFor('tab-1' as never)!;
-    expect(prompt).toEqual({ id: prompt.id, origin: 'http://router.local', realm: 'Admin', proxy: false, insecure: true, retry: false, accounts: [], locked: false, remember: null, fill: false, embeddedIn: null });
+    expect(prompt).toEqual({ id: prompt.id, origin: 'http://router.local', realm: 'Admin', proxy: false, insecure: true, retry: false, accounts: [], locked: false, remember: null, fill: false, embedded: null });
     expect(broker.promptFor('tab-2' as never)).toBeNull();
 
     void broker.respond(prompt.id, { username: 'me', password: 'secret' });
@@ -117,6 +117,10 @@ describe('AuthBroker with the vault', () => {
     redirect(url: string, frame = MAIN) {
       this.emit('did-redirect-navigation', { url, isSameDocument: false, isMainFrame: frame === MAIN, frame: { frameTreeNodeId: frame } });
     }
+    /** The frame's navigation to `url` failed or was cancelled before it committed. */
+    fail(url: string, frame = MAIN) {
+      this.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', url, frame === MAIN, frame, frame);
+    }
     /** The server answered `code` and the frame committed `url`. */
     commit(url: string, code: number, frame = MAIN) {
       this.emit('did-frame-navigate', {}, url, code, '', frame === MAIN, frame, frame);
@@ -132,7 +136,7 @@ describe('AuthBroker with the vault', () => {
     const vault = {
       accounts: vi.fn(async (..._args: unknown[]): Promise<unknown> => (state === 'open' ? { state, accounts } : { state })),
       password: vi.fn(async (id: string, ..._rest: unknown[]) => (state === 'open' && accounts.some((a) => a.id === id) ? `pw-of-${id}` : null)),
-      remember: vi.fn(async (..._args: unknown[]) => (state === 'open' ? { ok: true, id: 'saved-1', kind: options.saved ?? 'new' } : { ok: false, problem: state })),
+      remember: vi.fn(async (..._args: unknown[]) => (state === 'open' ? { ok: true, id: 'saved-1', kind: options.saved ?? 'new', changedAt: 42 } : { ok: false, problem: state })),
       askUnlock: vi.fn(async (..._args: unknown[]) => {
         state = 'open';
         return true;
@@ -194,7 +198,7 @@ describe('AuthBroker with the vault', () => {
     const tab = page();
     const { answer, prompt } = await ask(broker, tab);
     expect(vault.accounts).toHaveBeenCalledWith(ORIGIN, 'Router admin', 'work');
-    expect(prompt).toMatchObject({ accounts: ['ada@example.com', 'grace@example.com'], locked: false, remember: true, fill: true, embeddedIn: null });
+    expect(prompt).toMatchObject({ accounts: ['ada@example.com', 'grace@example.com'], locked: false, remember: true, fill: true, embedded: null });
     expect(JSON.stringify(prompt)).not.toContain('pw-of');
     // Nothing is sent until Sign in.
     expect(answer).not.toHaveBeenCalled();
@@ -246,7 +250,7 @@ describe('AuthBroker with the vault', () => {
     const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada@example.com' }] });
     const tab = page('https://evil.example/');
     const { prompt, answer } = await ask(broker, tab, { frame: FRAME });
-    expect(prompt).toMatchObject({ origin: ORIGIN, embeddedIn: 'evil.example', fill: false, accounts: ['ada@example.com'], remember: false });
+    expect(prompt).toMatchObject({ origin: ORIGIN, embedded: { host: 'evil.example' }, fill: false, accounts: ['ada@example.com'], remember: false });
     expect(answer).not.toHaveBeenCalled();
     await broker.respond(prompt!.id, { account: 0, username: 'ada@example.com' });
     expect(answer).toHaveBeenCalledWith('ada@example.com', 'pw-of-a');
@@ -256,10 +260,10 @@ describe('AuthBroker with the vault', () => {
     const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
     // Leaving evil.example for the router: the main frame, so the box is filled.
     const top = await ask(broker, page('https://evil.example/'));
-    expect(top.prompt).toMatchObject({ fill: true, embeddedIn: null });
+    expect(top.prompt).toMatchObject({ fill: true, embedded: null });
     const other = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
     const own = await ask(other.broker, other.page(`${ORIGIN}/`), { frame: FRAME });
-    expect(own.prompt).toMatchObject({ fill: true, embeddedIn: null });
+    expect(own.prompt).toMatchObject({ fill: true, embedded: null });
   });
 
   it('waits a moment for the vault, then shows the box anyway, and fills it when the answer comes', async () => {
@@ -496,6 +500,69 @@ describe('AuthBroker with the vault', () => {
     await changed.broker.respond(two.prompt!.id, { username: 'ada', password: 'new' }, true);
     b.commit(ADDRESS, 200);
     await settle();
-    expect(changed.updated).toHaveBeenCalledExactlyOnceWith('w1', { id: 'saved-1', host: 'router.test:8080' });
+    expect(changed.updated).toHaveBeenCalledExactlyOnceWith('w1', { id: 'saved-1', host: 'router.test:8080', changedAt: 42 });
+  });
+
+  it('the frame starting another navigation after the answer: its redirect to a router page and that 200 save nothing', async () => {
+    const { broker, vault, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    const tab = page('https://evil.example/');
+    const { prompt } = await ask(broker, tab, { frame: FRAME });
+    await broker.respond(prompt!.id, { username: 'ada', password: 'wrong' }, true);
+    // evil.example sends the frame elsewhere, which redirects back to the router, which answers 200.
+    tab.navigate('https://evil.example/slow', FRAME);
+    tab.redirect(`${ORIGIN}/`, FRAME);
+    tab.commit(`${ORIGIN}/`, 200, FRAME);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+  });
+
+  it('a box whose request goes away closes, and an answer to it saves nothing', async () => {
+    for (const leave of [
+      // The page sends the frame elsewhere while the box is up (the request is cancelled)...
+      (tab: Page) => tab.navigate('https://evil.example/slow', FRAME),
+      // ...or the request fails.
+      (tab: Page) => tab.fail(ADDRESS, FRAME),
+    ]) {
+      const { broker, vault, page } = setUp();
+      const tab = page('https://evil.example/');
+      const { prompt, answer } = await ask(broker, tab, { frame: FRAME });
+      leave(tab);
+      expect(broker.promptFor('tab-1' as never)).toBeNull();
+      expect(answer).toHaveBeenCalledWith();
+      await broker.respond(prompt!.id, { username: 'ada', password: 'typed' }, true);
+      tab.redirect(`${ORIGIN}/`, FRAME);
+      tab.commit(`${ORIGIN}/`, 200, FRAME);
+      await settle();
+      expect(answer).toHaveBeenCalledTimes(1);
+      expect(vault.remember).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a cancelled navigation’s failure that comes after the next one’s start leaves the next one’s box alone', async () => {
+    const { broker, page } = setUp();
+    const tab = page();
+    await ask(broker, tab);
+    // Another navigation to the router starts (it asks too), then the first one's cancellation arrives.
+    const next = await ask(broker, tab, { url: `${ORIGIN}/other` });
+    tab.fail(ADDRESS);
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: next.prompt!.id });
+  });
+
+  it('saves only on a 2xx: a 403 (a router’s wrong password) drops it', async () => {
+    const { broker, vault, page } = setUp();
+    const tab = page();
+    const { prompt } = await ask(broker, tab);
+    await broker.respond(prompt!.id, { username: 'ada', password: 'wrong' }, true);
+    tab.commit(ADDRESS, 403);
+    await settle();
+    tab.commit(ADDRESS, 200);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+  });
+
+  it('a frame inside a page with no origin of its own (file:) says “inside another page”, and isn’t filled', async () => {
+    const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    const { prompt } = await ask(broker, page('file:///home/ada/router.html'), { frame: FRAME });
+    expect(prompt).toMatchObject({ embedded: { host: null }, fill: false });
   });
 });

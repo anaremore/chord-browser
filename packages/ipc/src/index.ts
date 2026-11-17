@@ -596,8 +596,11 @@ export interface AuthPrompt {
   remember: boolean | null;
   /** Whether the box opens filled with the first account; false for a frame of another site's page: the chooser, a click. */
   fill: boolean;
-  /** A frame of another site's page asked: that page's host (*Asked by router.test, inside evil.example*). */
-  embeddedIn: string | null;
+  /**
+   * A frame of another page asked: that page's host (*Asked by router.test, inside evil.example.*), or null for a
+   * page with no origin of its own, a `file:` one say (*…inside another page.*).
+   */
+  embedded: { host: string | null } | null;
 }
 
 /** Choosing which passkey signs you in, when the authenticator holds several for the site. */

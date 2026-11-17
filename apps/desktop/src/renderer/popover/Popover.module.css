@@ -358,6 +358,11 @@
     0 0 0 var(--size-focus-ring) var(--color-accent);
 }
 
+/* The sign-in box holds the keyboard itself (Escape) while Sign in waits its moment: no ring for that. */
+.authBox:focus {
+  outline: none;
+}
+
 /* The sign-in box's saved sign-ins (S17 §10): a chooser of usernames, and *Unlock passwords* while locked. */
 .authChooser {
   display: flex;

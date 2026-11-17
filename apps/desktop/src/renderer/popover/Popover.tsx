@@ -20,7 +20,7 @@ import {
   type ShareSource,
   type SystemInfo,
 } from '@chord/ipc';
-import type { Appearance } from '@chord/tokens';
+import { durations, type Appearance } from '@chord/tokens';
 import { Bell, Camera, ChevronDown, ChevronUp, Clipboard, Eye, EyeOff, Fingerprint, KeyRound, LockKeyhole, MapPin, Mic, MonitorPlay, MonitorUp, Search, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Favicon } from '../shared/Favicon';
@@ -284,6 +284,7 @@ const FILLED_MASK = '•'.repeat(10);
  * and a private window fills without *Remember*.
  */
 function AuthCard({ prompt }: { prompt: AuthPrompt }) {
+  const form = useRef<HTMLFormElement>(null);
   const usernameField = useRef<HTMLInputElement>(null);
   const signIn = useRef<HTMLButtonElement>(null);
   const [sent, setSent] = useState(false);
@@ -294,8 +295,19 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const [typed, setTyped] = useState(false);
   const [remember, setRemember] = useState(prompt.remember ?? false);
   const ids = useId();
+  // Sign in, the chooser and Unlock wait a moment after the box appears (disabled, so Enter doesn't submit either): a
+  // page can't time the box to appear under a click, or a held Enter, meant for itself. Cancel and Escape always work.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setArmed(true), durations.promptInputDelay);
+    return () => clearTimeout(timer);
+  }, []);
   // The username field has the keyboard when the box appears (main focuses the popover too); Sign in when it's filled.
-  useEffect(() => (prompt.fill && prompt.accounts.length > 0 ? signIn.current : usernameField.current)?.focus(), []);
+  // Filled, the box itself holds it (Escape cancels) until Sign in can take it.
+  useEffect(() => (prompt.fill && prompt.accounts.length > 0 ? form.current : usernameField.current)?.focus(), []);
+  useEffect(() => {
+    if (armed && filled !== null && !typed && form.current?.contains(document.activeElement)) signIn.current?.focus();
+  }, [armed]);
   // Filled after the box appeared (the vault answered late, or was just unlocked): unless you've typed already.
   const accounts = prompt.accounts.join('\n');
   useEffect(() => {
@@ -323,12 +335,15 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const title = prompt.proxy ? 'The proxy' : 'Sign in to';
   return (
     <form
-      className={styles.card}
+      ref={form}
+      tabIndex={-1}
+      className={`${styles.card} ${styles.authBox}`}
       role="alertdialog"
       aria-labelledby={`${ids}-title`}
       aria-describedby={`${ids}-notes`}
       onSubmit={(e) => {
         e.preventDefault();
+        if (!armed) return;
         respond(filled !== null ? { account: filled, username: prompt.accounts[filled]! } : { username, password });
       }}
       onKeyDown={(e) => {
@@ -349,9 +364,10 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         </button>
       </div>
       <div id={`${ids}-notes`} className={styles.authNotes}>
-        {prompt.embeddedIn && (
+        {prompt.embedded && (
           <p className={styles.offerNotice}>
-            Asked by <span className={styles.host}>{new URL(prompt.origin).host}</span>, inside <span className={styles.host}>{prompt.embeddedIn}</span>.
+            Asked by <span className={styles.host}>{new URL(prompt.origin).host}</span>, inside{' '}
+            {prompt.embedded.host ? <span className={styles.host}>{prompt.embedded.host}</span> : 'another page'}.
           </p>
         )}
         {prompt.retry && <p className={styles.authRetry}>That username and password didn't work.</p>}
@@ -368,7 +384,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         )}
       </div>
       {prompt.locked && (
-        <button type="button" className={styles.authUnlock} onClick={() => void api.auth.unlock(prompt.id)}>
+        <button type="button" className={styles.authUnlock} disabled={!armed} onClick={() => void api.auth.unlock(prompt.id)}>
           <span className={styles.menuIcon} aria-hidden>
             <LockKeyhole size={12} strokeWidth={2} />
           </span>
@@ -378,7 +394,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
       {(prompt.accounts.length > 1 || (!prompt.fill && prompt.accounts.length > 0)) && (
         <div className={styles.authChooser} role="listbox" aria-label="Saved sign-ins">
           {prompt.accounts.map((name, i) => (
-            <button key={i} type="button" role="option" aria-selected={filled === i} className={styles.authAccount} onClick={() => choose(i)}>
+            <button key={i} type="button" role="option" aria-selected={filled === i} className={styles.authAccount} disabled={!armed} onClick={() => choose(i)}>
               <span className={styles.menuIcon} aria-hidden>
                 {[...name.trim()][0]?.toUpperCase() || '·'}
               </span>
@@ -441,7 +457,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         <button type="button" className={styles.secondary} onClick={() => respond(null)}>
           Cancel
         </button>
-        <button ref={signIn} type="submit" className={styles.primary} disabled={sent}>
+        <button ref={signIn} type="submit" className={styles.primary} disabled={sent || !armed}>
           Sign in
         </button>
       </div>

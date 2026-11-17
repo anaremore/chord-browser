@@ -18,21 +18,28 @@
  *   which main checks against the box's list as it is now and answers from
  *   the vault straight into Chromium's callback. Nothing is sent before you
  *   press Sign in. A locked vault shows *Unlock passwords*.
- * - **A frame of another site's page** (router.test inside evil.example):
- *   the box says so, and isn't filled: the saved usernames are a chooser, so
- *   signing in takes a click on one, never just Enter.
+ * - **A frame of another page** (router.test inside evil.example): the box
+ *   says so, and isn't filled: the saved usernames are a chooser, so signing
+ *   in takes a click on one, never just Enter.
+ * - **Each navigation is followed** (`attachPage`, on every page): every
+ *   frame's navigation gets a number at its `did-start-navigation`, keeps it
+ *   through its redirects, and ends at its commit or its failure. A box for a
+ *   frame's navigation is tied to that navigation, and closes once every
+ *   navigation it answers is gone (the frame started another, or the request
+ *   failed or was cancelled): a box never outlives its request.
  * - **Remember.** A sign-in typed with *Remember* ticked is held here (never
- *   logged, never sent anywhere) until the server answers **the request that
- *   was answered**: the frame that was navigating to it (tracked from its
- *   `did-start-navigation`, through its redirects) commits that address with
- *   anything but a 401, and it's saved. Any other frame's commit says nothing.
- *   Chromium's retry (the same box again), a 401, Cancel, the frame going
- *   elsewhere, a navigation of the tab, the tab closing, or HOLD_MS drop it.
- *   A box for a page's own script request (not a navigation) has no commit to
- *   read, so it offers no *Remember*. Once accepted, the save goes on through
- *   a navigation (the server took it), but not through the tab closing.
- *   The first save ever chooses the passphrase in the form save card's step
- *   (`firstSave`); an update into an open vault says so, with Undo (`updated`).
+ *   logged, never sent anywhere) until the server answers **that
+ *   navigation**: the same frame, the same navigation (its redirects
+ *   followed, never another's), commits that address with a 2xx, and it's
+ *   saved. Anything else drops it: a 401 or any other status, another
+ *   navigation starting in the frame, the request failing, Chromium's retry
+ *   (the same box again), Cancel, a navigation of the tab, the tab closing,
+ *   or HOLD_MS. Any other frame's commit says nothing. A box for a page's own
+ *   script request (not a navigation) has nothing to follow, so it offers no
+ *   *Remember*. Once accepted, the save goes on through a navigation (the
+ *   server took it), but not through the tab closing. The first save ever
+ *   chooses the passphrase in the form save card's step (`firstSave`); an
+ *   update says so, with Undo (`updated`).
  * - **Never** for a proxy (decision 11, DESIGN.md §9): no fill, no *Remember*.
  *   A private window fills and never saves (*Remember* hidden there).
  */
@@ -75,13 +82,13 @@ export interface AuthDeps {
   tabOf?(nodeId: NodeId): AuthTab | null;
   /** The window a node is shown in: the unlock card's, and the only popover whose answers count. */
   windowOf?(nodeId: NodeId): WindowId | undefined;
-  /** A committed frame's tree node id (`webFrameMain.fromId(…).frameTreeNodeId`), stable across its navigations. */
+  /** A frame's tree node id (`webFrameMain.fromId(…).frameTreeNodeId`), stable across its navigations. */
   frameOf?(processId: number, routingId: number): number | undefined;
   vault?: AuthVault;
   /** No vault yet: the form save card, with its passphrase step, saves this one. */
   firstSave?(contents: WebContents, signIn: FirstHttpSave): void;
-  /** *Remember* changed a saved password: the window says so, with Undo. */
-  updated?(windowId: WindowId, update: { id: string; host: string }): void;
+  /** *Remember* changed a saved password: the window says so, with Undo while it's still what Remember wrote. */
+  updated?(windowId: WindowId, update: { id: string; host: string; changedAt: number }): void;
   now?: () => number;
   setTimeout?: (run: () => void, ms: number) => unknown;
   clearTimeout?: (timer: unknown) => void;
@@ -95,6 +102,12 @@ type Answer = (username?: string, password?: string) => void;
  */
 export type AuthAnswer = { username: string; password: string } | { account: number; username: string } | null;
 
+/** One frame's navigation: its number (from its start) and the address it's asking for now (after its redirects). */
+interface Navigation {
+  nav: number;
+  url: string;
+}
+
 interface Pending {
   id: number;
   nodeId: NodeId;
@@ -106,11 +119,13 @@ interface Pending {
   retry: boolean;
   /** Every request waiting on this box: a page often asks several times at once. */
   answers: Answer[];
-  /** The frames whose navigation this box answers, by tree node id, and the address each asked for. */
-  frames: Map<number, string>;
-  /** A frame of another site's page asked: its top page's host. */
-  embeddedIn: string | null;
-  /** Filled at once; false for a frame of another site's page, or one main couldn't place. */
+  /** The frames' navigations this box answers, by tree node id. */
+  frames: Map<number, Navigation>;
+  /** It answers frames' navigations: it closes when the last of them is gone. */
+  followed: boolean;
+  /** A frame of another page asked (its host, or null for a page with no origin of its own, `file:` and the like). */
+  embedded: { host: string | null } | null;
+  /** Filled at once; false for a frame of another page, or one main couldn't place. */
   fill: boolean;
   /** The vault's part: null when it has none here (a proxy, passwords off, no tab). */
   tab: AuthTab | null;
@@ -133,14 +148,14 @@ interface Held {
   origin: string;
   realm: string;
   chordId: string | null;
-  /** The frames whose request was answered, and the address each should commit (followed through redirects). */
-  frames: Map<number, string>;
+  /** The navigations that were answered, by frame: only these, committing their address with a 2xx, are the server taking it. */
+  frames: Map<number, Navigation>;
+  /** Waiting for that commit; false once accepted (being saved). */
+  waiting: boolean;
   /** What was typed: null once it's dropped. */
   values: { username: string; password: string } | null;
   until: number;
   timer: unknown;
-  /** Listening for the answered request's redirect and commit; null once accepted (or dropped). */
-  listeners: { redirect: (details: { url: string; frame?: { frameTreeNodeId: number } | null }) => void; commit: (...args: unknown[]) => void } | null;
 }
 
 /** Realms are the site's own words: kept short and on one line. */
@@ -177,6 +192,9 @@ function isInsecure(url: string): boolean {
   }
 }
 
+const sameNavigations = (a: Map<number, Navigation>, b: Map<number, Navigation> | undefined) =>
+  !!b && [...a].every(([id, n]) => b.get(id)?.nav === n.nav);
+
 type NavigationDetails = { url: string; isSameDocument?: boolean; frame?: { frameTreeNodeId: number } | null };
 
 export class AuthBroker {
@@ -184,9 +202,10 @@ export class AuthBroker {
   private readonly pending: Pending[] = [];
   /** Sign-ins typed with *Remember*, by tab, until the server answers. */
   private readonly held = new Map<NodeId, Held>();
-  /** Each page's frames that are navigating: tree node id → the address it's asking for now. */
-  private readonly navigating = new WeakMap<WebContents, Map<number, string>>();
+  /** Each page's frames that are navigating: tree node id → that navigation. */
+  private readonly navigating = new WeakMap<WebContents, Map<number, Navigation>>();
   private nextId = 1;
+  private nextNav = 1;
 
   /** Called once Browser exists; a request before that is cancelled. */
   connect(deps: AuthDeps): void {
@@ -194,24 +213,45 @@ export class AuthBroker {
   }
 
   /**
-   * Every page, as it's made: which of its frames is navigating to which address, so a box's request is tied to
-   * its frame (a request's details don't name one). Kept until the frame commits.
+   * Every page, as it's made: each frame's navigation, from its start through its redirects to its commit or
+   * failure, so a box's request is tied to its frame's navigation (a request's details don't name one).
    */
   attachPage(contents: WebContents): void {
-    const frames = new Map<number, string>();
+    const frames = new Map<number, Navigation>();
     this.navigating.set(contents, frames);
-    const track = (details: NavigationDetails) => {
+    const frameOf = (processId: number, routingId: number) => this.deps?.frameOf?.(processId, routingId);
+    contents.on('did-start-navigation', ((details: NavigationDetails) => {
       const id = details.frame?.frameTreeNodeId;
       if (id === undefined || details.isSameDocument) return;
+      const navigation = { nav: this.nextNav++, url: details.url };
       frames.delete(id);
-      frames.set(id, details.url);
+      frames.set(id, navigation);
       if (frames.size > FRAMES_MAX) frames.delete(frames.keys().next().value!);
-    };
-    contents.on('did-start-navigation', track as never);
-    contents.on('did-redirect-navigation', track as never);
-    contents.on('did-frame-navigate', ((_event: unknown, _url: string, _code: number, _status: string, _main: boolean, processId: number, routingId: number) => {
-      const id = this.deps?.frameOf?.(processId, routingId);
-      if (id !== undefined) frames.delete(id);
+      // Whatever answered the frame's earlier navigation is gone.
+      this.navigationGone(contents, id, (nav) => nav === navigation.nav);
+    }) as never);
+    contents.on('did-redirect-navigation', ((details: NavigationDetails) => {
+      const id = details.frame?.frameTreeNodeId;
+      const navigation = id === undefined ? undefined : frames.get(id);
+      if (!navigation || details.isSameDocument) return;
+      navigation.url = details.url;
+      this.redirected(contents, id!, navigation);
+    }) as never);
+    contents.on('did-frame-navigate', ((_event: unknown, url: string, code: number, _status: string, _main: boolean, processId: number, routingId: number) => {
+      const id = frameOf(processId, routingId);
+      if (id === undefined) return;
+      const navigation = frames.get(id);
+      frames.delete(id);
+      this.committed(contents, id, navigation, url, code);
+    }) as never);
+    // A navigation that fails or is cancelled (before it commits): whatever answers it is gone too. Only the one it
+    // names: a cancelled navigation's failure can come after the next one's start, which goes on.
+    contents.on('did-fail-provisional-load', ((_event: unknown, _code: number, _description: string, url: string, _main: boolean, processId: number, routingId: number) => {
+      const id = frameOf(processId, routingId);
+      const navigation = id === undefined ? undefined : frames.get(id);
+      if (!navigation || navigation.url !== url) return;
+      frames.delete(id!);
+      this.navigationGone(contents, id!, (nav) => nav !== navigation.nav);
     }) as never);
   }
 
@@ -227,11 +267,65 @@ export class AuthBroker {
     (this.deps?.clearTimeout ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>)))(timer);
   }
 
-  /** The frames navigating to exactly this address in the page (usually one). */
-  private framesAsking(contents: WebContents, url: string): number[] {
+  /** The frames' navigations asking for exactly this address in the page now (usually one). */
+  private navigationsAsking(contents: WebContents, url: string): [number, Navigation][] {
     const frames = this.navigating.get(contents);
-    return frames ? [...frames].filter(([, asked]) => asked === url).map(([id]) => id) : [];
+    return frames ? [...frames].filter(([, n]) => n.url === url).map(([id, n]) => [id, { ...n }]) : [];
   }
+
+  /* ---------- following each navigation ---------- */
+
+  /** A frame's navigations ended, all but those `keep` names: what answers them goes. */
+  private navigationGone(contents: WebContents, frame: number, keep: (nav: number) => boolean): void {
+    let changed = false;
+    for (const prompt of [...this.pending]) {
+      const navigation = prompt.contents === contents ? prompt.frames.get(frame) : undefined;
+      if (!navigation || keep(navigation.nav)) continue;
+      prompt.frames.delete(frame);
+      // Every request this box answers is gone: it goes too, and an answer to it would reach nothing.
+      if (prompt.frames.size === 0 && prompt.followed) {
+        this.pending.splice(this.pending.indexOf(prompt), 1);
+        for (const answer of prompt.answers) answer();
+        changed = true;
+      }
+    }
+    for (const held of [...this.held.values()]) {
+      const navigation = held.contents === contents && held.waiting ? held.frames.get(frame) : undefined;
+      if (!navigation || keep(navigation.nav)) continue;
+      held.frames.delete(frame);
+      if (held.frames.size === 0) this.drop(held);
+    }
+    if (changed) this.deps?.onChange();
+  }
+
+  /** The answered navigation redirected: its frame should commit there now. Another navigation's redirect never counts. */
+  private redirected(contents: WebContents, frame: number, navigation: Navigation): void {
+    for (const prompt of this.pending) {
+      const answered = prompt.contents === contents ? prompt.frames.get(frame) : undefined;
+      if (answered?.nav === navigation.nav) answered.url = navigation.url;
+    }
+    for (const held of this.held.values()) {
+      const answered = held.contents === contents ? held.frames.get(frame) : undefined;
+      if (answered?.nav === navigation.nav) answered.url = navigation.url;
+    }
+  }
+
+  /**
+   * A frame committed. For a held sign-in, that's the server's answer only if it's the answered navigation (by
+   * its number) committing its address: then a 2xx saves it, anything else drops it. Any other frame says nothing.
+   */
+  private committed(contents: WebContents, frame: number, navigation: Navigation | undefined, url: string, code: number): void {
+    for (const held of [...this.held.values()]) {
+      const answered = held.contents === contents && held.waiting ? held.frames.get(frame) : undefined;
+      if (!answered) continue;
+      if (navigation?.nav === answered.nav && url === answered.url && code >= 200 && code < 300) void this.save(held);
+      else this.drop(held);
+    }
+    // A box whose navigation committed without it is answered by nothing now.
+    this.navigationGone(contents, frame, () => false);
+  }
+
+  /* ---------- the box ---------- */
 
   /**
    * The app's `login` event. Returns whether Chord will answer (the caller
@@ -247,7 +341,7 @@ export class AuthBroker {
     if (!info.isProxy && !details.isRequestForNavigation && origin !== top) return false;
     const realm = info.realm.replace(/\s+/g, ' ').trim().slice(0, REALM_MAX);
     const retry = !details.firstAuthAttempt;
-    const asking = !info.isProxy && details.isRequestForNavigation ? this.framesAsking(contents!, details.url) : [];
+    const asking = !info.isProxy && details.isRequestForNavigation ? this.navigationsAsking(contents!, details.url) : [];
     // Asked again for what was just answered: it didn't work, so nothing typed with *Remember* is saved.
     const held = this.held.get(nodeId);
     const failed = retry && !!held && !info.isProxy && held.origin === origin && held.realm === realm;
@@ -255,7 +349,7 @@ export class AuthBroker {
     const same = this.pending.find((p) => p.nodeId === nodeId && p.origin === origin && p.realm === realm && p.proxy === info.isProxy);
     if (same) {
       same.answers.push(answer);
-      for (const id of asking) same.frames.set(id, details.url);
+      for (const [id, navigation] of asking) same.frames.set(id, navigation);
       if (retry && !same.retry) {
         same.retry = true;
         if (same.ready) this.deps.onChange();
@@ -263,8 +357,8 @@ export class AuthBroker {
       return true;
     }
     const mainFrame = contents!.mainFrame?.frameTreeNodeId;
-    // A subframe navigating to another site than its page's: not filled, and it says whose page it's in.
-    const embedded = asking.some((id) => id !== mainFrame) && origin !== top;
+    // A subframe navigating to another origin than its page's: not filled, and it says whose page it's in.
+    const embedded = asking.some(([id]) => id !== mainFrame) && origin !== top;
     // A navigation main couldn't place, to another site than the page's, gets the same care.
     const placed = asking.length > 0 || !details.isRequestForNavigation || origin === top;
     const tab = info.isProxy || !this.deps.vault ? null : (this.deps.tabOf?.(nodeId) ?? null);
@@ -278,8 +372,9 @@ export class AuthBroker {
       insecure: !info.isProxy && isInsecure(details.url),
       retry,
       answers: [answer],
-      frames: new Map(asking.map((id) => [id, details.url])),
-      embeddedIn: embedded && top ? hostOf(top) : null,
+      frames: new Map(asking),
+      followed: asking.length > 0,
+      embedded: embedded ? { host: top ? hostOf(top) : null } : null,
       fill: !embedded && placed,
       tab,
       accounts: [],
@@ -315,8 +410,8 @@ export class AuthBroker {
     prompt.accounts = answer.state === 'open' ? answer.accounts : [];
     prompt.locked = answer.state === 'locked';
     // Off for the chord: as before passwords, no *Remember* and no fill. A private window fills, never saves. A
-    // request that isn't a frame's navigation has no answer main can read: nothing to remember.
-    if (answer.state === 'off' || tab.private || prompt.frames.size === 0) prompt.remember = null;
+    // request that isn't a frame's navigation has no answer main can follow: nothing to remember.
+    if (answer.state === 'off' || tab.private || !prompt.followed) prompt.remember = null;
     else prompt.remember = (prompt.fill && prompt.accounts.length > 0) || prompt.rememberAgain;
     if (answer.state === 'off') prompt.tab = null;
     prompt.ready = true;
@@ -327,8 +422,8 @@ export class AuthBroker {
   promptFor(nodeId: NodeId | null): AuthPrompt | null {
     const next = nodeId ? this.pending.find((p) => p.nodeId === nodeId) : undefined;
     if (!next?.ready) return null;
-    const { id, origin, realm, proxy, insecure, retry, locked, remember, fill, embeddedIn } = next;
-    return { id, origin, realm, proxy, insecure, retry, accounts: next.accounts.map((a) => a.username), locked, remember, fill, embeddedIn };
+    const { id, origin, realm, proxy, insecure, retry, locked, remember, fill, embedded } = next;
+    return { id, origin, realm, proxy, insecure, retry, accounts: next.accounts.map((a) => a.username), locked, remember, fill, embedded };
   }
 
   /** Whether an answer for a box came from the popover of the window its tab is shown in. */
@@ -361,7 +456,7 @@ export class AuthBroker {
       return this.finish(prompt, { username: account.username, password });
     }
     this.finish(prompt, answer);
-    if (answer && remember && prompt.remember !== null && prompt.tab && !prompt.tab.private && !prompt.proxy && prompt.frames.size > 0) this.hold(prompt, answer);
+    if (answer && remember && prompt.remember !== null && prompt.tab && !prompt.tab.private && !prompt.proxy && prompt.followed) this.hold(prompt, answer);
   }
 
   private finish(prompt: Pending, credentials: { username: string; password: string } | null): void {
@@ -393,53 +488,28 @@ export class AuthBroker {
   private hold(prompt: Pending, values: { username: string; password: string }): void {
     const before = this.held.get(prompt.nodeId);
     if (before) this.drop(before);
-    if (prompt.contents.isDestroyed()) return;
+    // Only navigations still under way, as they were when the box asked: another started meanwhile answers nothing.
+    const frames = new Map([...prompt.frames].filter(([id, n]) => sameNavigations(new Map([[id, n]]), this.navigating.get(prompt.contents))));
+    if (prompt.contents.isDestroyed() || frames.size === 0) return;
     const held: Held = {
       nodeId: prompt.nodeId,
       contents: prompt.contents,
       origin: prompt.origin,
       realm: prompt.realm,
       chordId: prompt.tab!.chordId,
-      frames: new Map(prompt.frames),
+      frames,
+      waiting: true,
       values: { username: values.username, password: values.password },
       until: this.now() + HOLD_MS,
       timer: null,
-      listeners: null,
     };
     held.timer = this.setTimer(() => this.drop(held), HOLD_MS);
-    held.listeners = {
-      // The answered request redirected: its frame should commit there now.
-      redirect: (details) => {
-        const id = details.frame?.frameTreeNodeId;
-        if (id !== undefined && held.frames.has(id)) held.frames.set(id, details.url);
-      },
-      // The server's answer to the request that was answered: that frame committing that address. Any other frame's
-      // commit (a sibling on the same site, say) says nothing about it.
-      commit: (...args: unknown[]) => {
-        const [, url, code, , , processId, routingId] = args as [unknown, string, number, string, boolean, number, number];
-        const id = this.deps?.frameOf?.(processId, routingId);
-        const expected = id === undefined ? undefined : held.frames.get(id);
-        if (expected === undefined) return;
-        if (url !== expected || code === 401) this.drop(held);
-        else if (code > 0) void this.save(held);
-      },
-    };
-    held.contents.on('did-redirect-navigation', held.listeners.redirect as never);
-    held.contents.on('did-frame-navigate', held.listeners.commit as never);
     this.held.set(prompt.nodeId, held);
-  }
-
-  private unlisten(held: Held): void {
-    if (held.listeners && !held.contents.isDestroyed()) {
-      held.contents.off('did-redirect-navigation', held.listeners.redirect as never);
-      held.contents.off('did-frame-navigate', held.listeners.commit as never);
-    }
-    held.listeners = null;
   }
 
   /** What was typed goes. */
   private drop(held: Held): void {
-    this.unlisten(held);
+    held.waiting = false;
     if (held.timer !== null) this.clearTimer(held.timer);
     held.timer = null;
     held.values = null;
@@ -451,7 +521,7 @@ export class AuthBroker {
    * navigation of the tab doesn't drop it (the sign-in worked), but the tab closing does, and so does the deadline.
    */
   private async save(held: Held): Promise<void> {
-    this.unlisten(held);
+    held.waiting = false;
     const { vault, windowOf, firstSave, updated } = this.deps ?? {};
     if (!vault) return this.drop(held);
     // Made each time it's sent, from what's held now: a deadline or the tab closing meanwhile leaves nothing to send.
@@ -474,7 +544,7 @@ export class AuthBroker {
     }
     // A new sign-in is saved quietly (you ticked Remember); a changed password says so, with Undo.
     const shownIn = windowOf?.(held.nodeId);
-    if (saved.ok && saved.kind === 'update' && shownIn) updated?.(shownIn, { id: saved.id, host: hostOf(held.origin) });
+    if (saved.ok && saved.kind === 'update' && saved.changedAt !== undefined && shownIn) updated?.(shownIn, { id: saved.id, host: hostOf(held.origin), changedAt: saved.changedAt });
     if (!saved.ok && saved.problem !== 'none' && saved.problem !== 'locked') console.warn('Passwords: a sign-in from the browser’s box wasn’t saved');
     this.drop(held);
   }
@@ -492,7 +562,7 @@ export class AuthBroker {
       changed = true;
     }
     const held = this.held.get(nodeId);
-    if (held && (held.listeners || closed)) this.drop(held);
+    if (held && (held.waiting || closed)) this.drop(held);
     if (changed) this.deps?.onChange();
   }
 }
