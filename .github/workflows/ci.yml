@@ -38,13 +38,11 @@ jobs:
   # The password detector on DuckDuckGo's corpus of real sites' forms, in Playwright's own headless Chromium
   # (apps/desktop/test/forms; S17 §13 layer 2), held to its baseline. The corpus is a pinned, hash-checked
   # download, kept in this job's cache and never in the repository or a release (decided 2026-11-15).
-  # The same job runs it on Bitwarden's test-the-web (GPL-3.0, tested against, never vendored): a pinned,
-  # hash-checked download built into the same cache (test/forms/ttw.ts). With no network it skips with a
-  # warning; it never fails the build for that.
+  # Bitwarden's test-the-web is the next job's, not this one's.
   forms:
     name: Password detector · corpus
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -58,26 +56,66 @@ jobs:
         with:
           path: apps/desktop/test/forms/.cache/ddg-*
           key: forms-corpus-${{ hashFiles('apps/desktop/test/forms/corpus.ts') }}
-      - name: Cache test-the-web's build
-        uses: actions/cache@v6
-        with:
-          path: apps/desktop/test/forms/.cache/ttw-*
-          key: forms-ttw-${{ hashFiles('apps/desktop/test/forms/ttw.ts') }}
       - name: Cache Playwright's Chromium
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
       - run: pnpm --filter @chord/desktop exec playwright install --only-shell chromium
-      - run: pnpm --filter @chord/desktop test:forms
+      - run: pnpm --filter @chord/desktop test:forms --project corpus
       - name: Upload the corpus score
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: forms-score
-          path: |
-            apps/desktop/test-results/forms/score.json
-            apps/desktop/test-results/forms/ttw-score.json
+          path: apps/desktop/test-results/forms/score.json
+          if-no-files-found: ignore
+
+  # The password detector on Bitwarden's test-the-web (GPL-3.0: tested against, never vendored), held to its
+  # own baseline (test/forms/ttw.spec.ts). Its site is a pinned, hash-checked download that's built here
+  # (test/forms/ttw.ts): `npm ci` of its locked packages, then `docusaurus build`. That runs a third party's
+  # code, so this job is kept apart from anything a release uses:
+  # - the checkout keeps no credentials (no GITHUB_TOKEN in .git/config);
+  # - no pnpm-store cache: setup-node's `cache: pnpm` is what release.yml restores, so this job installs
+  #   with a cold store and saves none (`package-manager-cache: false` too, so none is turned on for it);
+  # - Playwright's Chromium is restored, never saved;
+  # - the one cache it saves, `.cache/ttw-*` (the built site), is read by this job alone.
+  # If the site can't be fetched or built it skips with a warning on pull requests, and fails on a push to
+  # main or a run by hand (CHORD_TTW_REQUIRED), where a skip would hide a lasting breakage.
+  forms-ttw:
+    name: Password detector · test-the-web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - name: Cache test-the-web's build
+        uses: actions/cache@v6
+        with:
+          path: apps/desktop/test/forms/.cache/ttw-*
+          key: forms-ttw-${{ hashFiles('apps/desktop/test/forms/ttw.ts') }}
+      - name: Restore Playwright's Chromium
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
+      - run: pnpm --filter @chord/desktop exec playwright install --only-shell chromium
+      - run: pnpm --filter @chord/desktop test:forms --project ttw
+        env:
+          CHORD_TTW_REQUIRED: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
+      - name: Upload the test-the-web score
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: forms-ttw-score
+          path: apps/desktop/test-results/forms/ttw-score.json
           if-no-files-found: ignore
 
   # Chord Player (apps/player): packaged on castLabs ECS per OS and smoke-tested, with ECS's

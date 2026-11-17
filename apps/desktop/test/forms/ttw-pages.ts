@@ -10,27 +10,42 @@
  * A page is a list of steps, in the one document (a multi-step sign-in shows each in place).
  * Each step:
  * - `actions`: what a person does to get there (open a dialog, press Next), in Playwright's terms;
- * - `kind`: the kind the detector should give the form holding the step's fields, or null where
- *   no field should get a role at all (a one-time code is no password);
+ * - `kind`: the kind the detector should give the form holding the step's fields;
  * - `username`, `password`: the fields that should be the username and the current password.
  *   Every other field on the page should get no role.
  *
- * And the fill, where there's a username or password field: the suite focuses the field as a
- * person would, takes the agent's `focus` as the menu would, and sends main's fill for a fake
- * account. Both values must land and stay, and no other field may change.
+ * And the fill: the suite focuses the field as a person would, takes the agent's `focus` as the
+ * menu would, and sends main's fill for a fake account. Both values must land and stay, and no
+ * other field may change.
+ *
+ * A **negative** step (`kind: null`: a one-time code is no password) names the `field` it's
+ * about, which must be on the page and scanned, so a blank or broken page can't pass it. It and
+ * every other field must get no role, and clicking it must open no menu.
  */
 import type { PasswordFormKind } from '@chord/core';
 
 export type Action = { readonly click: string } | { readonly waitFor: string };
 
-export interface Step {
+interface BaseStep {
   /** What the step is, in a few words: the baseline names it so. */
   readonly name: string;
   readonly actions?: readonly Action[];
-  readonly kind: PasswordFormKind | null;
+}
+
+/** A step with a credential: at least one of the username and the password. */
+export interface SignInStep extends BaseStep {
+  readonly kind: PasswordFormKind;
   readonly username?: string;
   readonly password?: string;
 }
+
+/** A step where nothing should get a role, about the one field that's there. */
+export interface NegativeStep extends BaseStep {
+  readonly kind: null;
+  readonly field: string;
+}
+
+export type Step = SignInStep | NegativeStep;
 
 export interface SitePage {
   /** Under /forms/ on the site. */
@@ -43,7 +58,7 @@ export interface SitePage {
 }
 
 const NEXT: Action = { click: 'button[type=submit]' };
-const SIGN_IN = (username: string, password: string): Step => ({ name: 'sign in', kind: 'sign-in', username, password });
+const SIGN_IN = (username: string, password: string): SignInStep => ({ name: 'sign in', kind: 'sign-in', username, password });
 
 export const PAGES: readonly SitePage[] = [
   { path: 'login/simple', what: 'a labelled username and password in a <form>; the password says autocomplete="password", which is no token', steps: [SIGN_IN('#username', '#password')] },
@@ -55,7 +70,7 @@ export const PAGES: readonly SitePage[] = [
     what: 'two plain text boxes named u and p and a Go button: no form, no label, no password field',
     // Nothing a person could read says sign-in, and a saved password would show as plain text in `p`:
     // Chord should leave it alone.
-    steps: [{ name: 'two plain boxes', kind: null }],
+    steps: [{ name: 'two plain boxes', kind: null, field: 'input[name=p]' }],
   },
   {
     path: 'login/hidden-login',
@@ -99,10 +114,10 @@ export const PAGES: readonly SitePage[] = [
     steps: [{ name: 'password only', kind: 'sign-in', password: '#login-password' }],
   },
   // The second step of a sign-in: a code, which no saved password belongs in.
-  { path: 'login/security-code', what: 'one text box for an authenticator code', steps: [{ name: 'code', kind: null }] },
-  { path: 'login/security-code-signposted', what: 'one text box for a code, autocomplete="one-time-code"', steps: [{ name: 'code', kind: null }] },
-  { path: 'login/security-code-multi-input', what: 'six one-digit boxes for a code', steps: [{ name: 'code', kind: null }] },
-  { path: 'login/security-code-device', what: 'one type=password box a security key types its code into, with nothing that says password', steps: [{ name: 'code', kind: null }] },
+  { path: 'login/security-code', what: 'one text box for an authenticator code', steps: [{ name: 'code', kind: null, field: '#input-3' }] },
+  { path: 'login/security-code-signposted', what: 'one text box for a code, autocomplete="one-time-code"', steps: [{ name: 'code', kind: null, field: '#input-3' }] },
+  { path: 'login/security-code-multi-input', what: 'six one-digit boxes for a code', steps: [{ name: 'code', kind: null, field: 'input[name=otp-code-0]' }] },
+  { path: 'login/security-code-device', what: 'one type=password box a security key types its code into, with nothing that says password', steps: [{ name: 'code', kind: null, field: '#input-4' }] },
   // Sign-ins in steps, each shown in place of the last.
   {
     path: 'multi-step/email-username-login',
@@ -145,7 +160,7 @@ export const PAGES: readonly SitePage[] = [
       { name: 'email', kind: 'username-only', username: '#email' },
       { name: 'password', kind: 'sign-in', password: '#password', actions: [NEXT, { waitFor: '#password' }] },
       // An answer to a question is no password: the step should get no role.
-      { name: 'question', kind: null, actions: [NEXT, { waitFor: 'input:not([type=hidden])' }] },
+      { name: 'question', kind: null, field: '#security-question', actions: [NEXT, { waitFor: '#security-question' }] },
     ],
   },
   // Not scored: phase 1 reads the main frame's own tree only (S17 §15; scan.ts).

@@ -473,7 +473,7 @@ The maintainer asked for tests that catch real breakage. Five layers, the first 
 - **A baseline file** lists every form Chord gets wrong today, by name and field, as DuckDuckGo's `expectedFailures` and Chord's `perf-baseline.json` do. A form that was right and is now wrong fails CI. One that's newly right fails too, until the baseline is updated, so the number only ratchets up. The total is printed on every run.
 - DuckDuckGo's own run has expected failures on 176 of 563 ✅, so the first baseline will not be zero, and shouldn't pretend to be.
 - Chord's own fixtures (below) are also run here, and those must all pass.
-- **Bitwarden's test-the-web** (added 2026-11-16, §14): its sign-in pages, walked step by step, against Chord's own expectations, and filled through the real agent with a fake account. Its own baseline, ratcheting the same way; it skips, never fails, when the site can't be fetched.
+- **Bitwarden's test-the-web** (added 2026-11-16, §14): its sign-in pages, walked step by step, against Chord's own expectations, and filled through the real agent with a fake account. Its own baseline, ratcheting the same way. It runs as its own CI job, apart from any cache a release restores, since its build runs a third party's packages. When the site can't be fetched or built it skips locally and on pull requests, and fails on a push to main or a run by hand.
 
 **3. Journeys, in Chord** (`test/e2e/passwords.spec.ts` and `test/fixtures/passwords/`, served by a local server that records what each form posted).
 Each fixture is a page Chord wrote, one pattern each:

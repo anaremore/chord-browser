@@ -9,13 +9,19 @@
  * - **the fill:** the real agent, woken at load with a fake bridge, as the sentinel wakes it. The
  *   expected field is clicked, the agent's `focus` is read as the menu reads it, main's fill for a
  *   fake account is sent, and both values must land, still be there half a second later (a page
- *   that puts its own values back), and no other field may change.
+ *   that puts its own values back), and no other field may change;
+ * - **a negative step** (a code box, a security answer): its one field must be on the page and
+ *   scanned, so a blank page can't pass; no field may get a role; and clicking the field must
+ *   give the agent's `focus` no kind the menu opens on.
  *
  * **ttw-baseline.json** lists what's wrong today, by page and step. As with the corpus, something
  * right that goes wrong fails, and something newly right fails until the baseline is taken again
  * (`CHORD_FORMS_UPDATE=1 pnpm --filter @chord/desktop test:forms ttw`). The score prints every run.
  *
- * **It never blocks a build:** with no network to fetch and build the site, it skips and says why.
+ * **When the site can't be fetched or built**, it skips and says why: locally and on pull requests,
+ * so it never blocks a branch. With `CHORD_TTW_REQUIRED=1` it fails instead: CI sets that on a push
+ * to main and a run by hand, where on GitHub's runners a skip almost always means a lasting breakage
+ * (a Node change, a package gone) that a green job with a warning would hide.
  *
  * Writes test-results/forms/ttw-score.json.
  */
@@ -26,7 +32,7 @@ import { bundleAgent } from '../../src/passwords/build';
 import { compareBaseline } from './score';
 import { SITE_COMMIT, ensureSite } from './ttw';
 import type { CheckResult, Expected } from './ttw-entry';
-import { PAGES, type Action, type Step } from './ttw-pages';
+import { PAGES, type Action, type NegativeStep, type SignInStep } from './ttw-pages';
 import { SITE_ORIGIN, serveSite } from './ttw-serve';
 
 const here = import.meta.dirname;
@@ -69,7 +75,7 @@ async function act(page: Page, action: Action) {
 const values = (page: Page) => page.evaluate(() => [...document.querySelectorAll('input, textarea')].map((el) => (el as HTMLInputElement).value));
 
 /** The fill, as the menu and main do it: what's wrong with it, or nothing. */
-async function fillStep(page: Page, step: Step): Promise<string[]> {
+async function fillStep(page: Page, step: SignInStep): Promise<string[]> {
   const target = step.username ?? step.password;
   if (!target) return [];
   // A field focused as it appeared (autofocus) has its focus already; any other is clicked, as a person would.
@@ -106,10 +112,20 @@ async function fillStep(page: Page, step: Step): Promise<string[]> {
   return problems;
 }
 
+/** A negative step's field clicked, as a person would: the agent's `focus` must open no menu. */
+async function noMenu(page: Page, step: NegativeStep): Promise<string[]> {
+  await call(page, 'clear');
+  await page.click(step.field, { timeout: 5000 });
+  await settle(page);
+  const focus = await lastOf(page, 'focus');
+  return focus && MENU_KINDS.has(String(focus['kind'])) ? [`menu: clicking ${step.field} opens one (${String(focus['kind'])}, ${String(focus['role'])})`] : [];
+}
+
 test('test-the-web, held to its baseline', async ({ page, context }) => {
   test.setTimeout(10 * 60_000);
   const site = await ensureSite((line) => console.log(`[ttw] ${line}`));
   if (!site.ok) {
+    if (process.env['CHORD_TTW_REQUIRED'] === '1') throw new Error(`test-the-web couldn’t be fetched or built, and it’s required here (CHORD_TTW_REQUIRED=1): ${site.reason}`);
     const message = `test-the-web is unavailable, so its suite is skipped: ${site.reason}`;
     console.log(`[ttw] ${message}`);
     if (process.env['CI']) console.log(`::warning title=Password detector · test-the-web skipped::${message}`);
@@ -127,6 +143,8 @@ test('test-the-web, held to its baseline', async ({ page, context }) => {
   let rightPages = 0;
   let fills = 0;
   let rightFills = 0;
+  let negatives = 0;
+  let rightNegatives = 0;
   for (const p of PAGES) {
     if (p.skip) continue;
     pages++;
@@ -143,11 +161,17 @@ test('test-the-web, held to its baseline', async ({ page, context }) => {
       try {
         for (const action of step.actions ?? []) await act(page, action);
         await settle(page);
-        const result = await call(page, 'check', { username: step.username, password: step.password });
+        const result = await call(page, 'check', step.kind === null ? { field: step.field } : { username: step.username, password: step.password });
+        if (!result.scanned) wrong.push('the scan saw no fields (the page didn’t render?)');
         for (const sel of result.notFound) wrong.push(`no field matches ${sel}`);
         wrong.push(...result.wrong);
-        if (step.kind && result.kind !== step.kind) wrong.push(`kind ${result.kind ?? 'none'}, wanted ${step.kind}`);
-        if (step.username || step.password) {
+        if (step.kind === null) {
+          negatives++;
+          const menu = result.notFound.length ? [] : await noMenu(page, step);
+          if (!menu.length && !result.notFound.length) rightNegatives++;
+          wrong.push(...menu);
+        } else {
+          if (result.kind !== step.kind) wrong.push(`kind ${result.kind ?? 'none'}, wanted ${step.kind}`);
           fills++;
           const fill = await fillStep(page, step);
           if (!fill.length) rightFills++;
@@ -164,11 +188,11 @@ test('test-the-web, held to its baseline', async ({ page, context }) => {
     if (pageRight) rightPages++;
   }
 
-  const score = { site: `bitwarden/test-the-web@${SITE_COMMIT}`, pages, rightPages, steps, rightSteps, fills, rightFills, skipped: PAGES.filter((p) => p.skip).map((p) => `${p.path}: ${p.skip}`), failures };
+  const score = { site: `bitwarden/test-the-web@${SITE_COMMIT}`, pages, rightPages, steps, rightSteps, fills, rightFills, negatives, rightNegatives, skipped: PAGES.filter((p) => p.skip).map((p) => `${p.path}: ${p.skip}`), failures };
   mkdirSync(RESULTS, { recursive: true });
   writeFileSync(join(RESULTS, 'ttw-score.json'), JSON.stringify(score, null, 2));
   console.log(
-    `[ttw] ${rightPages} of ${pages} pages right; ${rightSteps} of ${steps} steps; ${rightFills} of ${fills} fills; ` +
+    `[ttw] ${rightPages} of ${pages} pages right; ${rightSteps} of ${steps} steps; ${rightFills} of ${fills} fills; ${rightNegatives} of ${negatives} no-menu checks; ` +
       `${Object.values(failures).flat().length} things wrong; ${score.skipped.length} pages not scored (a later phase's)`,
   );
   for (const [key, lines] of Object.entries(failures)) for (const line of lines) console.log(`[ttw]   ${key}: ${line}`);
