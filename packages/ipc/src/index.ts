@@ -62,7 +62,7 @@ import {
   type ProxySettings as CoreProxySettings,
   type State,
 } from '@chord/core';
-import type { LoginSummary } from '@chord/core';
+import type { LoginSummary, PasswordImportChoices, PasswordImportResult, PasswordImportSummary, PasswordImportUndone } from '@chord/core';
 import { z } from 'zod';
 
 export * from './passwords';
@@ -783,6 +783,36 @@ export type PasswordStepResult =
 /** *Show* and *Copy*: `passphrase`, it must be typed again first (more than 5 minutes since it was). */
 export type PasswordRevealResult = { ok: true; password?: string } | { ok: false; problem: 'passphrase' | 'wrong' | 'locked' | 'missing' | 'io' };
 
+/**
+ * Settings → Passwords → Import…: a CSV chosen and read, its sign-ins staged
+ * in chord-data by `stageId` (main keeps the path), and what it would do.
+ * `cancelled`: the dialog was closed; `busy`: another import is running.
+ */
+export type PasswordImportOpened = { ok: true; stageId: string; name: string; preview: PasswordImportSummary } | { ok: false; problem: 'cancelled' | 'busy' | 'unreadable' };
+
+/** What an import did, with its id for Undo; or why not (`none`: choose the passphrase first, `passphrase` the step's). */
+export type PasswordImportRun =
+  | { ok: true; importId: string | null; result: PasswordImportResult }
+  | { ok: false; problem: 'missing' | 'busy' | 'locked' | 'none' | 'invalid' | 'io' };
+
+/**
+ * How a password import is going, pushed to Settings (`passwords:importProgress`): `writing`, `done` of `total`
+ * written; `undone` after its Undo, from the card or the window's toast.
+ */
+export interface PasswordImportProgress {
+  stageId: string;
+  importId: string | null;
+  phase: 'writing' | 'undone';
+  done: number;
+  total: number;
+  undone?: PasswordImportUndone;
+}
+
+/** *Export passwords…*: saved (`name`, how many), or why not. `passphrase`: it must be typed again first, as for *Show*. */
+export type PasswordExportResult =
+  | { ok: true; exportId: string; name: string; count: number }
+  | { ok: false; problem: 'passphrase' | 'wrong' | 'locked' | 'none' | 'empty' | 'cancelled' | 'busy' | 'io' };
+
 /** The unlock card. `problem`: the last passphrase typed wasn't it. */
 export interface PasswordUnlockPrompt {
   id: number;
@@ -1293,10 +1323,12 @@ const importKey = z.string().regex(/^[0-9a-f]{16}$/);
 /* ---------- Your data: export (docs/decisions/S15-your-data.md §7–§8) ---------- */
 
 /** Why an export stopped: Chord couldn't write where you chose (`write`), or couldn't read its own data (`read`). */
-export type ExportProblem = 'write' | 'read';
+/** `locked`: the vault locked while its passwords were being written, so the file isn't kept. */
+export type ExportProblem = 'write' | 'read' | 'locked';
 
 /** `cancelled`: the save dialog was closed; `busy`: another export is still being written. */
-export type ExportRunResult = { ok: true; exportId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' };
+/** With passwords: `passphrase`, the vault's passphrase must be typed again first (as for *Show*); `wrong`; `locked`: unlock first. */
+export type ExportRunResult = { ok: true; exportId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' | 'passphrase' | 'wrong' | 'locked' };
 
 /** How an export is going, pushed to Settings (`export:progress`). */
 export interface ExportProgress {
@@ -1317,6 +1349,8 @@ export interface ExportProgress {
   bytes?: number;
   /** Things left out for being bigger than a file's line may be (32 MB): a huge image, say. */
   skipped?: number;
+  /** Passwords written (an encrypted file with *Passwords* on); absent when it has none (a plain file never does). */
+  passwords?: number;
   problem?: ExportProblem;
 }
 
@@ -1324,6 +1358,18 @@ export interface ExportProgress {
 export const ExportRequestSchema = z.strictObject({
   history: z.boolean(),
   assistant: z.boolean(),
+  /**
+   * Passwords too (S17 decision 6): only into an encrypted file, so with a `passphrase`; a plain file never has
+   * them. Asks for the vault's passphrase as *Show* does (`vaultPassphrase`, when it asks).
+   */
+  passwords: z.boolean().optional(),
+  /** Settings → Passwords → Export…'s *Chord file, encrypted*: the passwords alone, no setup. */
+  only: z.literal('passwords').optional(),
+  vaultPassphrase: z
+    .string()
+    .min(1)
+    .max(PASSPHRASE_MAX * 4)
+    .optional(),
   passphrase: z
     .string()
     .max(PASSPHRASE_MAX * 4)
@@ -1370,13 +1416,29 @@ export interface FileImportPreview {
   capped: MergeCapped;
   /** Part of the file is damaged or cut short: what's counted is what could be read. */
   damaged: boolean;
+  /**
+   * Passwords in the file (an encrypted one's only: a plain file's are passed over and counted in `skipped`), staged
+   * for their own preview: `passwords:importPreview` with `passwordStage`, which compares them once the vault is open.
+   */
+  passwords: number;
+  passwordStage: string | null;
 }
 
 export type FileChooseResult = { ok: true; fileId: string; name: string } | { ok: false; problem: 'cancelled' | 'busy' };
 export type FileOpenResult = { ok: true; preview: FileImportPreview } | { ok: false; problem: FileImportProblem };
 
 /** The preview's switches. Main checks the file again, and the reducer every part of it. */
-export const FileImportChoicesSchema = z.strictObject({ history: z.boolean(), assistant: z.boolean(), effects: z.boolean(), settings: z.boolean() });
+/** For a file's passwords that differ from yours: keep yours or take the file's, and those chosen the other way, by their place. */
+export const PasswordImportChoicesSchema = z.strictObject({ take: z.enum(['yours', 'file']), except: z.array(z.number().int().min(0).max(1_000_000)).max(100_000) });
+
+export const FileImportChoicesSchema = z.strictObject({
+  history: z.boolean(),
+  assistant: z.boolean(),
+  effects: z.boolean(),
+  settings: z.boolean(),
+  /** The file's passwords, as chosen; left out (or null): none come in. The vault must be open by then. */
+  passwords: PasswordImportChoicesSchema.nullable().optional(),
+});
 export type FileImportChoices = z.infer<typeof FileImportChoicesSchema>;
 export type FileRunResult = { ok: true; importId: string } | { ok: false; problem: 'missing' | 'busy' };
 
@@ -1463,6 +1525,24 @@ export const invokeChannels = {
   'passwords:forgetNever': { roles: ['internal'], request: z.strictObject({ site: z.string().min(1).max(300) }), response: z.custom<PasswordStepResult>() },
   /** A forgotten passphrase: every password goes. */
   'passwords:startOver': { roles: ['internal'], request: z.void(), response: z.custom<PasswordsView>() },
+  // Import and export (S17 §10). A file is named by its stage id, never a path; the preview carries no password.
+  /** *Import…*: the open dialog, then the CSV read in the import process and staged in chord-data. */
+  'passwords:importChoose': { roles: ['internal'], request: z.void(), response: z.custom<PasswordImportOpened>() },
+  /** The preview again (after an unlock, say): null when the file was let go. */
+  'passwords:importPreview': { roles: ['internal'], request: z.strictObject({ stageId: id }), response: z.custom<PasswordImportSummary | null>() },
+  /** *Import*: as chosen; `passphrase` makes the vault first when there's none (the passphrase step). */
+  'passwords:importRun': {
+    roles: ['internal'],
+    request: z.strictObject({ stageId: id, choices: PasswordImportChoicesSchema, passphrase: newPassphrase.optional() }),
+    response: z.custom<PasswordImportRun>(),
+  },
+  'passwords:importDrop': { roles: ['internal'], request: z.strictObject({ stageId: id }), response: z.void() },
+  /** An import's Undo, this session. */
+  'passwords:importUndo': { roles: ['internal'], request: z.strictObject({ importId: id }), response: z.custom<PasswordImportUndone | null>() },
+  /** *Export…*: asks for the passphrase as *Show* does, then the save dialog; a CSV in Chrome's shape. */
+  'passwords:export': { roles: ['internal'], request: z.strictObject({ passphrase: typedPassphrase.optional() }), response: z.custom<PasswordExportResult>() },
+  /** *Show in folder* for a CSV just saved: named by its id, never a path. */
+  'passwords:exportShow': { roles: ['internal'], request: z.strictObject({ exportId: id }), response: z.void() },
   /** The popover's unlock card: the passphrase (and whether to keep the vault unlocked here), or null to cancel. */
   'passwords:unlockCard': {
     roles: ['popover'],
@@ -1862,6 +1942,8 @@ export interface EventPayloads {
    * so a password Settings shows goes, without asking (with the key kept, asking would open it again).
    */
   'passwords:changed': { hide: true } | null;
+  /** A password import's bar, and its Undo from the window's toast. */
+  'passwords:importProgress': PasswordImportProgress;
   /** Tabs in the window's chords playing media (or paused a moment ago), newest first, when that changes. */
   'media:state': NowPlaying[];
   /** The frame of the tab that plays in Chord Player changed (docked, starting, its still picture), or no tab does (null). */
@@ -2129,6 +2211,16 @@ export interface PasswordsApi {
   undo(id: string): Promise<PasswordStepResult>;
   forgetNever(site: string): Promise<PasswordStepResult>;
   startOver(): Promise<PasswordsView>;
+  /** Import… (a CSV): the dialog, the file read and staged, and its preview. */
+  importChoose(): Promise<PasswordImportOpened>;
+  importPreview(stageId: string): Promise<PasswordImportSummary | null>;
+  importRun(stageId: string, choices: PasswordImportChoices, passphrase?: string): Promise<PasswordImportRun>;
+  importDrop(stageId: string): Promise<void>;
+  importUndo(importId: string): Promise<PasswordImportUndone | null>;
+  /** Export… as a CSV, after the passphrase check. */
+  exportCsv(passphrase?: string): Promise<PasswordExportResult>;
+  exportShow(exportId: string): Promise<void>;
+  onImportProgress(listener: (progress: PasswordImportProgress) => void): () => void;
   /** `hide`: the vault locked; hide any shown password, and don't ask for the view. */
   onChange(listener: (change: { hide: true } | null) => void): () => void;
 }

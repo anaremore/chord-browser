@@ -23,7 +23,7 @@ import type {
   State,
   WindowModel,
 } from '@chord/core';
-import type { ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
+import type { DataRecord, ExportCounts, FolderInspection, SyncApply, SyncStatus } from '@chord/core';
 import { localChordFields, localFavoriteFields, localNodeFields, localRouteFields, same, nodeIdsOfPatch, nodeList, nodeOf } from '@chord/core';
 import type { AssistantOp, AssistantResult } from './assistant';
 import type { PasswordOp, PasswordResult } from './passwords';
@@ -225,6 +225,18 @@ export type DataRequest =
    * never pass through main (ARCHITECTURE.md §9). Each batch is answered.
    */
   | { id: number; type: 'import.port'; importId: string }
+  /**
+   * A port (transferred with this request) on which the import process sends
+   * a file's passwords for `stageId` (`PasswordStageBatch`), never through
+   * main (docs/decisions/S17-passwords.md §10). Each batch is answered.
+   */
+  | { id: number; type: 'passwords.stage'; stageId: string }
+  /**
+   * A port on which the export process asks for the vault's `login` records,
+   * a page at a time (`PasswordExportAsk`), for an encrypted Chord file only;
+   * answered only while the vault stays open, unlocked since main made it.
+   */
+  | { id: number; type: 'passwords.exportPort' }
   /** Take back what an import added to history and the assistant: its Undo. The chats it took away come back (`assistant.removed`). */
   | { id: number; type: 'import.undo'; importId: string }
   /** This computer's id for Your data (made the first time it's asked for). */
@@ -313,6 +325,14 @@ export type DataPush =
   /** Chords that were to make way for the synced setup and are still here (the change that took them was lost): again, into `to`. */
   | { push: 'sync.makeWay'; chordIds: string[]; to: string };
 
+/** chord-data → main, unasked: how far a password import has written (S17 §10), at most ten times a second, for Settings' bar. */
+export interface PasswordPush {
+  push: 'passwords.import';
+  importId: string;
+  done: number;
+  total: number;
+}
+
 /**
  * The import process → chord-data, on an import's port: one batch of history,
  * or of a Chord file's assistant chats (S15 §5), written in one transaction.
@@ -321,6 +341,14 @@ export interface ImportBatch {
   pages?: ImportedPage[];
   assistant?: { threads: AssistantThread[]; messages: AssistantMessage[] };
 }
+
+/** The export process → chord-data, on a `passwords.exportPort`: the next page of `login` records after `after`. */
+export interface PasswordExportAsk {
+  after: string;
+  limit: number;
+}
+/** chord-data's answer: the records and where the next page starts (null: none), or `locked` (the vault locked since). */
+export type PasswordExportPage = { ok: true; records: DataRecord[]; last: string | null; unreadable: number } | { ok: false; error: 'locked' };
 
 /** chord-data's answer to each batch: the pages written (or messages, for chats) and the chats added, or why it couldn't. */
 export type ImportBatchReply = { ok: true; added: number; threads?: string[] } | { ok: false; error: string };
@@ -530,4 +558,5 @@ export function opsForState(state: State): WriteOp[] {
 
 export type { AssistantOp, AssistantResult } from './assistant';
 export type { Candidate, LoginPatch, NewLogin, PasswordOp, PasswordProblem, PasswordResult, VaultState, VaultStatus } from './passwords';
+export type { PasswordStageBatch, PasswordStageReply, TransferOp } from './password-transfer';
 export type { ExportPhase } from './export';

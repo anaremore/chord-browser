@@ -11,7 +11,7 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { uuidv7, type ExportCounts, type Platform } from '@chord/core';
 import type { ExportProblem, ExportProgress, ExportRequest, ExportRunResult } from '@chord/ipc';
-import { dialog, shell, utilityProcess, type BaseWindow, type SaveDialogOptions, type UtilityProcess } from 'electron';
+import { dialog, shell, utilityProcess, type BaseWindow, type MessagePortMain, type SaveDialogOptions, type UtilityProcess } from 'electron';
 import type { ExportJob, ExportMessage, ExportReply } from '../export/worker';
 
 /** An export that says nothing for this long has stopped. Every chunk of a megabyte, and every tenth of a second, it says how far it's got. */
@@ -28,13 +28,18 @@ export interface ExporterOptions {
   folder(): string;
   /** chord-data: what's pending written first, this computer's id, and what an export would hold. */
   data: { flush(): Promise<void>; device(): Promise<string>; counts(): Promise<ExportCounts> };
+  /**
+   * Passwords in an encrypted file (S17 decision 6): the vault's passphrase checked as *Show* checks it, then a port
+   * on which the export process reads them (main/passwords/transfer.ts).
+   */
+  passwords?(vaultPassphrase?: string): Promise<{ port: MessagePortMain } | { problem: 'passphrase' | 'wrong' | 'locked' }>;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** "Chord data 2026-11-30.jsonl", or `.chorddata` encrypted (S15 §2, *Extension and MIME type*). The date is this computer's. */
-export function exportName(now: Date, encrypted: boolean): string {
-  return `Chord data ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.${encrypted ? 'chorddata' : 'jsonl'}`;
+export function exportName(now: Date, encrypted: boolean, passwordsOnly = false): string {
+  return `Chord ${passwordsOnly ? 'passwords' : 'data'} ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.${encrypted ? 'chorddata' : 'jsonl'}`;
 }
 
 interface Running {
@@ -72,14 +77,28 @@ export class Exporter {
 
   private async start(parent: BaseWindow | null, request: ExportRequest, notify: (progress: ExportProgress) => void): Promise<ExportRunResult> {
     const encrypted = request.passphrase !== null;
+    // Passwords alone (Settings → Passwords → Export…): only ever encrypted, and only with them.
+    const passwordsOnly = request.only === 'passwords';
+    if (passwordsOnly && (!encrypted || !request.passwords)) return { ok: false, problem: 'cancelled' };
+    // Passwords only into an encrypted file, and only after the vault's own check, before the dialog asks where.
+    let passwords: MessagePortMain | null = null;
+    if (request.passwords && encrypted) {
+      const asked = await this.options.passwords?.(request.vaultPassphrase);
+      if (!asked) return { ok: false, problem: 'locked' };
+      if ('problem' in asked) return { ok: false, problem: asked.problem };
+      passwords = asked.port;
+    }
     const dialogOptions: SaveDialogOptions = {
-      title: 'Export your data',
-      defaultPath: join(this.folder ?? this.options.folder(), exportName(new Date(), encrypted)),
+      title: passwordsOnly ? 'Export passwords' : 'Export your data',
+      defaultPath: join(this.folder ?? this.options.folder(), exportName(new Date(), encrypted, passwordsOnly)),
       filters: [encrypted ? { name: 'Encrypted Chord data', extensions: ['chorddata'] } : { name: 'JSON Lines', extensions: ['jsonl'] }],
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     };
     const chosen = parent && !parent.isDestroyed() ? await dialog.showSaveDialog(parent, dialogOptions) : await dialog.showSaveDialog(dialogOptions);
-    if (chosen.canceled || !chosen.filePath) return { ok: false, problem: 'cancelled' };
+    if (chosen.canceled || !chosen.filePath) {
+      passwords?.close();
+      return { ok: false, problem: 'cancelled' };
+    }
     const target = chosen.filePath;
     this.folder = dirname(target);
     const name = basename(target);
@@ -94,15 +113,17 @@ export class Exporter {
       device,
       app: this.options.app,
       platform: this.options.platform,
-      history: request.history,
-      assistant: request.assistant,
+      history: !passwordsOnly && request.history,
+      assistant: !passwordsOnly && request.assistant,
+      passwords: passwords !== null,
+      passwordsOnly,
       passphrase: request.passphrase,
     };
     const child = utilityProcess.fork(this.options.workerPath, [], { serviceName: 'Chord Export', stdio: 'ignore' });
     const running: Running = { id, child, target, finished: Promise.resolve() };
     this.running = running;
     running.finished = this.follow(running, name, notify);
-    child.postMessage({ type: 'run', job } satisfies ExportMessage);
+    child.postMessage({ type: 'run', job } satisfies ExportMessage, passwords ? [passwords] : []);
     return { ok: true, exportId: id, name };
   }
 
@@ -114,7 +135,7 @@ export class Exporter {
       let stall: ReturnType<typeof setTimeout> | undefined;
       /** What the process is writing until the file's whole: `.part`, unless it says it writes the file itself. */
       let writing: string | null = `${target}.part`;
-      const end = (outcome: { bytes: number; skipped: number } | { problem: ExportProblem }) => {
+      const end = (outcome: { bytes: number; skipped: number; passwords?: number } | { problem: ExportProblem }) => {
         if (ended) return;
         ended = true;
         clearTimeout(stall);
@@ -122,7 +143,17 @@ export class Exporter {
         if (this.running === running) this.running = null;
         if ('bytes' in outcome) {
           this.saved.set(id, target);
-          notify({ exportId: id, phase: 'done', done: 0, total: 0, share: 1, name, bytes: outcome.bytes, ...(outcome.skipped ? { skipped: outcome.skipped } : {}) });
+          notify({
+            exportId: id,
+            phase: 'done',
+            done: 0,
+            total: 0,
+            share: 1,
+            name,
+            bytes: outcome.bytes,
+            ...(outcome.skipped ? { skipped: outcome.skipped } : {}),
+            ...(outcome.passwords !== undefined ? { passwords: outcome.passwords } : {}),
+          });
         } else {
           // A process that's gone can't take its unfinished file with it.
           if (writing) void rm(writing, { force: true, maxRetries: 3 }).catch(() => undefined);
@@ -139,7 +170,7 @@ export class Exporter {
         quiet();
         if (message.type === 'progress') notify({ exportId: id, phase: message.phase, done: message.done, total: message.total, share: message.share, name });
         else if (message.type === 'writing') writing = message.path === target || message.path === `${target}.part` ? message.path : null;
-        else if (message.type === 'done') end({ bytes: message.bytes, skipped: message.skipped });
+        else if (message.type === 'done') end({ bytes: message.bytes, skipped: message.skipped, ...(message.passwords !== undefined ? { passwords: message.passwords } : {}) });
         else end({ problem: message.problem });
       });
       child.once('exit', () => end({ problem: 'read' }));

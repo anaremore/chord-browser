@@ -7,11 +7,19 @@
  * writing), turns rows into records (@chord/data/export), and writes them
  * through core's file writer to `<name>.part`, renamed once it's whole. It
  * says how far it's got at most ten times a second; main ends it after.
+ *
+ * **Passwords** (docs/decisions/S17-passwords.md decision 6) only into an
+ * encrypted file: this process can't open the vault, so chord-data sends the
+ * `login` records a page at a time over a port main made after checking the
+ * vault's passphrase. They go into the encrypted frames and nowhere else; if
+ * the vault locks part way, the file isn't kept.
  */
+import type { MessagePortMain } from 'electron';
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { dataHeader, encryptedWriter, plainWriter, type DataFileWriter, type DataPart, type AssistantImage, type Platform } from '@chord/core';
+import { dataHeader, encryptedWriter, plainWriter, type DataFileWriter, type DataPart, type DataRecord, type AssistantImage, type Platform } from '@chord/core';
+import type { PasswordExportAsk, PasswordExportPage } from '@chord/data';
 import { nodeCrypto, sha256Hex } from '@chord/data/crypto';
 import { exportCounts, exportRecords, type ExportPhase } from '@chord/data/export';
 
@@ -28,6 +36,10 @@ export interface ExportJob {
   platform: Platform;
   history: boolean;
   assistant: boolean;
+  /** Passwords too: with an encrypted file only, read over the port that comes with the job. */
+  passwords: boolean;
+  /** Passwords alone, no setup (Settings → Passwords → Export…). */
+  passwordsOnly?: boolean;
   /** Null for a plain file. Kept only until the key is made. */
   passphrase: string | null;
 }
@@ -39,10 +51,10 @@ export type ExportReply =
   | { type: 'progress'; phase: 'key' | ExportPhase; done: number; total: number; share: number }
   /** The file being written until it's whole: `<name>.part`, or the file itself (openPart). Main removes it if the process goes. */
   | { type: 'writing'; path: string }
-  /** `skipped`: records longer than a reader takes, left out (a line is at most 32 MB). */
-  | { type: 'done'; bytes: number; skipped: number }
-  /** `write`: the file couldn't be written there; `read`: Chord's data couldn't be read. */
-  | { type: 'error'; problem: 'write' | 'read' };
+  /** `skipped`: records longer than a reader takes, left out (a line is at most 32 MB). `passwords`: how many went in. */
+  | { type: 'done'; bytes: number; skipped: number; passwords?: number }
+  /** `write`: the file couldn't be written there; `read`: Chord's data couldn't be read; `locked`: the vault locked while its passwords were read. */
+  | { type: 'error'; problem: 'write' | 'read' | 'locked' };
 
 const reply = (message: ExportReply) => process.parentPort.postMessage(message);
 const PROGRESS_MS = 100;
@@ -59,7 +71,36 @@ const readOrNull = (path: string): Uint8Array | null => {
 };
 
 /** SQLite's errors are Chord's data not reading; anything else (the folder, the disk) is the file not writing. */
-const problemOf = (error: unknown): 'write' | 'read' => ((error as { code?: unknown })?.code === 'ERR_SQLITE_ERROR' ? 'read' : 'write');
+const problemOf = (error: unknown): 'write' | 'read' | 'locked' =>
+  error instanceof LockedError ? 'locked' : (error as { code?: unknown })?.code === 'ERR_SQLITE_ERROR' ? 'read' : 'write';
+
+/** The vault locked (or chord-data went) while its passwords were read: a file with some of them isn't kept. */
+class LockedError extends Error {}
+
+/** Sign-ins per page asked of chord-data. */
+const LOGIN_PAGE = 100;
+
+/** chord-data's pages of `login` records, over the port main made: each asked for once the last is in. */
+async function* loginRecords(port: MessagePortMain): AsyncGenerator<DataRecord> {
+  const answers: ((page: PasswordExportPage) => void)[] = [];
+  port.on('message', ({ data }) => answers.shift()?.(data as PasswordExportPage));
+  port.on('close', () => {
+    for (const answer of answers.splice(0)) answer({ ok: false, error: 'locked' });
+  });
+  port.start();
+  const ask = (request: PasswordExportAsk) =>
+    new Promise<PasswordExportPage>((resolve) => {
+      answers.push(resolve);
+      port.postMessage(request);
+    });
+  for (let after = ''; ; ) {
+    const page = await ask({ after, limit: LOGIN_PAGE });
+    if (!page.ok) throw new LockedError('locked');
+    yield* page.records;
+    if (page.last === null) return;
+    after = page.last;
+  }
+}
 
 /**
  * Where the file is written until it's whole: `<name>.part` beside it, renamed
@@ -77,7 +118,10 @@ function openPart(target: string): { fd: number; path: string } {
   }
 }
 
-async function run(job: ExportJob): Promise<void> {
+async function run(job: ExportJob, port: MessagePortMain | null): Promise<void> {
+  // Passwords never go into a plain file, whatever asked.
+  const passwords = job.passwords && job.passphrase !== null ? port : null;
+  if (!passwords) port?.close();
   let part: string | null = null;
   let fd: number | null = null;
   const db = new DatabaseSync(job.database, { readOnly: true, timeout: 5000 });
@@ -89,7 +133,13 @@ async function run(job: ExportJob): Promise<void> {
     // The bar: records written of about how many there'll be. Setup is small beside history.
     const estimate =
       1 + counts.chords + counts.pinnedTabs + counts.folders + counts.todayTabs + counts.favorites + counts.themes + counts.routes + counts.effects + (job.history ? counts.pages : 0) + (job.assistant ? counts.chats + messages + counts.images : 0);
-    const includes: DataPart[] = ['setup', 'today', ...(job.history ? (['history'] as const) : []), ...(job.assistant ? (['assistant'] as const) : [])];
+    const only = job.passwordsOnly === true && passwords !== null;
+    const includes: DataPart[] = [
+      ...(only ? [] : (['setup', 'today'] as const)),
+      ...(job.history ? (['history'] as const) : []),
+      ...(job.assistant ? (['assistant'] as const) : []),
+      ...(passwords ? (['passwords'] as const) : []),
+    ];
     const header = dataHeader({ app: job.app, device: job.device, created: Date.now(), includes });
     let writer: DataFileWriter;
     if (job.passphrase === null) writer = plainWriter(header);
@@ -138,7 +188,7 @@ async function run(job: ExportJob): Promise<void> {
         return data ? { data, thumb: readOrNull(join(job.images, `${image.id}.thumb.jpg`)) } : null;
       },
     });
-    for (const item of records) {
+    for (const item of only ? [] : records) {
       append(writer.add(item.record));
       written++;
       if (item.phase !== phase) {
@@ -154,6 +204,16 @@ async function run(job: ExportJob): Promise<void> {
       const now = performance.now();
       if (now - lastReport >= PROGRESS_MS) report(now);
     }
+    // Passwords last, inside the encrypted frames only.
+    let logins = 0;
+    if (passwords) {
+      for await (const record of loginRecords(passwords)) {
+        append(writer.add(record));
+        logins++;
+        if (size >= CHUNK) flush();
+      }
+      passwords.close();
+    }
     append(writer.end());
     flush();
     fsyncSync(file);
@@ -162,13 +222,14 @@ async function run(job: ExportJob): Promise<void> {
     db.exec('COMMIT');
     if (part !== job.target) renameSync(part, job.target);
     if (writer.skipped > 0) console.error(`Export: left out ${writer.skipped} records longer than a file's lines may be`);
-    reply({ type: 'done', bytes: statSync(job.target).size, skipped: writer.skipped });
+    reply({ type: 'done', bytes: statSync(job.target).size, skipped: writer.skipped, ...(passwords ? { passwords: logins } : {}) });
   } catch (error) {
     console.error('Export failed:', error);
     if (fd !== null) closeSync(fd);
     if (part) rmSync(part, { force: true });
     reply({ type: 'error', problem: problemOf(error) });
   } finally {
+    passwords?.close();
     db.close();
   }
 }
@@ -176,7 +237,7 @@ async function run(job: ExportJob): Promise<void> {
 process.parentPort.on('message', (event) => {
   const message = event.data as ExportMessage;
   if (message.type === 'run') {
-    run(message.job).catch((error: unknown) => {
+    run(message.job, event.ports[0] ?? null).catch((error: unknown) => {
       console.error('Export failed:', error);
       reply({ type: 'error', problem: problemOf(error) });
     });

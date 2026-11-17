@@ -21,6 +21,13 @@
  *   chats' images, each checked to be the picture it says and each file
  *   named to main before it's written.
  *
+ * - **Passwords** (docs/decisions/S17-passwords.md §10): an encrypted file's
+ *   `login` records, and a password CSV from another browser or manager
+ *   (Settings → Passwords → Import…, read by `PasswordCsv`), go straight to
+ *   chord-data over a port of their own, a batch at a time, never through
+ *   main; chord-data compares them with the vault. A plain file's `login`
+ *   records are passed over: a plain file never carries passwords.
+ *
  * Main ends the process after, or when you let the file go.
  */
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
@@ -28,6 +35,12 @@ import { constants, setPriority } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import {
   DATA_HEAD,
+  LOGIN_RECORD,
+  loginFromRecord,
+  PASSWORD_IMPORT_LIMITS,
+  PasswordCsv,
+  type ImportedLogin,
+  type PasswordFileProblem,
   ASSISTANT_SCOPES,
   FRESH_PAGES,
   imageFromRecord,
@@ -52,7 +65,7 @@ import {
   type Platform,
   type SiteEffects,
 } from '@chord/core';
-import type { ImportBatch, ImportBatchReply } from '@chord/data';
+import type { ImportBatch, ImportBatchReply, PasswordStageBatch, PasswordStageReply } from '@chord/data';
 import { nodeCrypto, sha256Hex } from '@chord/data/crypto';
 import { amountsHere, chatsHere, localRecords, pagesHere } from '@chord/data/import-file';
 import type { FileImportChoices, FileImportCounts, FileImportPreview, FileImportProblem } from '@chord/ipc';
@@ -72,8 +85,10 @@ export interface FileJob {
 }
 
 export type FileRequest =
-  /** Open the file (with its passphrase, if it's encrypted) and count what it would bring. */
+  /** Open the file (with its passphrase, if it's encrypted) and count what it would bring; its passwords to chord-data on the port that comes with it. */
   | { type: 'open'; job: FileJob; passphrase: string | null }
+  /** A password CSV (Settings → Passwords → Import…), its sign-ins to chord-data on the port that comes with this request. */
+  | { type: 'passwords'; path: string }
   /** Plan the import against what's here now; `chordId` is the chord you're in, for chats whose chord isn't here; `scope`, what a new chat may read. */
   | { type: 'plan'; choices: FileImportChoices; chordId: string; scope: AssistantScope }
   /** The plan's next part. */
@@ -86,8 +101,10 @@ export type FileRequest =
 export type FileReply =
   /** Still reading a long file: main waits on. */
   | { type: 'reading' }
-  | { type: 'opened'; preview: Omit<FileImportPreview, 'fileId' | 'name'> }
+  | { type: 'opened'; preview: Omit<FileImportPreview, 'fileId' | 'name' | 'passwordStage'> }
   | { type: 'problem'; problem: FileImportProblem }
+  /** A password CSV read, and staged in chord-data; `problem` when it can't be imported at all. */
+  | { type: 'passwords'; problem: PasswordFileProblem | null }
   /** How many parts follow, and what the import brings, for the toast. */
   | { type: 'plan'; parts: number; counts: FileImportCounts; history: number }
   | { type: 'part'; part: MergePart }
@@ -207,6 +224,81 @@ async function withDatabase<T>(path: string, work: (sql: (text: string) => Retur
   }
 }
 
+/** Sign-ins per batch to chord-data: each batch is answered before the next goes. */
+const LOGINS_PER_BATCH = 500;
+
+type Stager = (batch: PasswordStageBatch) => Promise<PasswordStageReply>;
+
+/** A stage's port to chord-data: each batch sent, and its answer awaited. */
+function stager(port: MessagePortMain): Stager {
+  const answers: ((answer: PasswordStageReply) => void)[] = [];
+  port.on('message', ({ data }) => answers.shift()?.(data as PasswordStageReply));
+  port.on('close', () => {
+    for (const answer of answers.splice(0)) answer({ ok: false, error: 'chord-data closed' });
+  });
+  port.start();
+  return (batch) =>
+    new Promise((resolve) => {
+      answers.push(resolve);
+      port.postMessage(batch);
+    });
+}
+
+/**
+ * A password CSV, read a megabyte at a time through core's PasswordCsv, its
+ * sign-ins and the rows that won't come in staged in chord-data as they're
+ * read. Nothing of it is logged or sent to main.
+ */
+async function readPasswords(path: string, port: MessagePortMain): Promise<FileReply> {
+  const stage = stager(port);
+  const finish = async (problem: PasswordFileProblem | null, counts: PasswordStageBatch['counts'] = {}): Promise<FileReply> => {
+    const answer = await stage({ counts, done: { problem } });
+    return { type: 'passwords', problem: answer.ok ? problem : 'unreadable' };
+  };
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    try {
+      return await finish('unreadable');
+    } finally {
+      port.close();
+    }
+  }
+  try {
+    if (fstatSync(fd).size > PASSWORD_IMPORT_LIMITS.bytes) return await finish('unreadable');
+    const csv = new PasswordCsv();
+    const decoder = new TextDecoder('utf-8');
+    const buffer = Buffer.allocUnsafe(CHUNK);
+    const send = async ({ logins, issues }: { logins: ImportedLogin[]; issues: NonNullable<PasswordStageBatch['issues']> }) => {
+      for (let at = 0; at < logins.length; at += LOGINS_PER_BATCH) {
+        const answer = await stage({ logins: logins.slice(at, at + LOGINS_PER_BATCH) });
+        if (!answer.ok) throw new Error('chord-data refused the passwords');
+      }
+      if (issues.length > 0) await stage({ issues });
+    };
+    for (let position = 0; ; ) {
+      const n = readSync(fd, buffer, 0, CHUNK, position);
+      if (n === 0) break;
+      position += n;
+      await send(csv.push(decoder.decode(buffer.subarray(0, n), { stream: true })));
+      if (csv.problem) break;
+    }
+    await send(csv.push(decoder.decode()));
+    await send(csv.end());
+    const answer = await stage({ source: csv.source, counts: { rows: csv.counts.rows } });
+    if (!answer.ok) throw new Error('chord-data refused the passwords');
+    return await finish(csv.problem, { otp: csv.counts.otp, capped: csv.counts.capped, issuesMore: csv.counts.issuesMore });
+  } catch (error) {
+    // Never the error itself: it could quote what was read.
+    console.error('Password import failed:', error instanceof Error ? error.name : 'error');
+    return { type: 'passwords', problem: 'unreadable' };
+  } finally {
+    closeSync(fd);
+    port.close();
+  }
+}
+
 const PROBLEMS: Record<DataFileProblem, FileImportProblem> = {
   'not-chord': 'not-chord',
   newer: 'newer',
@@ -217,7 +309,16 @@ const PROBLEMS: Record<DataFileProblem, FileImportProblem> = {
   'cut-short': 'unreadable',
 };
 
-async function open(job: FileJob, passphrase: string | null): Promise<FileReply> {
+async function open(job: FileJob, passphrase: string | null, port: MessagePortMain | undefined): Promise<FileReply> {
+  const stage = port ? stager(port) : null;
+  try {
+    return await openFile(job, passphrase, stage);
+  } finally {
+    port?.close();
+  }
+}
+
+async function openFile(job: FileJob, passphrase: string | null, stage: Stager | null): Promise<FileReply> {
   opened?.file.close();
   opened = null;
   planned = null;
@@ -245,11 +346,28 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
   const assistant = { chats: 0, newChats: 0, images: 0 };
   let unknown = 0;
   let tooMuch = false;
+  // Passwords: an encrypted file's only (S17 decision 6), staged in chord-data a batch at a time.
+  const passwords = { staged: 0, skipped: 0 };
+  let logins: ImportedLogin[] = [];
+  const flushLogins = async () => {
+    if (logins.length === 0 || !stage) return;
+    const answer = await stage({ logins });
+    logins = [];
+    if (!answer.ok) throw new Error('chord-data refused the passwords');
+  };
   const problem = await withDatabase(job.database, (sql) => {
     const pageHere = pagesHere(sql);
     const chats = chatsHere(sql);
-    return readRecords(file, job.path, (records) => {
+    return readRecords(file, job.path, async (records) => {
       for (const r of records) {
+        if (r.type === LOGIN_RECORD) {
+          const login = file.encrypted && stage && passwords.staged < PASSWORD_IMPORT_LIMITS.rows ? loginFromRecord(r) : null;
+          if (login) {
+            logins.push(login);
+            passwords.staged++;
+          } else passwords.skipped++;
+          continue;
+        }
         if (r.type === 'page') {
           const page = pageFromRecord(r);
           if (!page) continue;
@@ -269,8 +387,14 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
           else tooMuch = true;
         } else if (!QUIET.has(r.type)) unknown++;
       }
+      if (logins.length >= LOGINS_PER_BATCH) await flushLogins();
     });
   });
+  await flushLogins();
+  if (stage) {
+    const answer = await stage({ counts: { rows: passwords.staged + passwords.skipped, skipped: passwords.skipped }, done: { problem: null } });
+    if (!answer.ok) throw new Error('chord-data refused the passwords');
+  }
   const damaged = problem !== null || tooMuch;
   const plan = await withDatabase(job.database, (sql) =>
     planMerge({
@@ -298,7 +422,9 @@ async function open(job: FileJob, passphrase: string | null): Promise<FileReply>
       assistant,
       effects: plan.effectsSites,
       settings: plan.changes,
-      skipped: unknown + plan.skipped,
+      // A plain file's passwords, or records that don't read as sign-ins, are passed over too.
+      skipped: unknown + plan.skipped + passwords.skipped,
+      passwords: passwords.staged,
       capped: plan.capped,
       damaged,
     },
@@ -458,8 +584,14 @@ async function rest(port: MessagePortMain): Promise<void> {
 process.parentPort.on('message', (event) => {
   const request = event.data as FileRequest;
   switch (request.type) {
+    case 'passwords': {
+      const port = event.ports[0];
+      if (!port) return reply({ type: 'passwords', problem: 'unreadable' });
+      readPasswords(request.path, port).then(reply, () => reply({ type: 'passwords', problem: 'unreadable' }));
+      return;
+    }
     case 'open':
-      open(request.job, request.passphrase).then(reply, (error: unknown) => {
+      open(request.job, request.passphrase, event.ports[0]).then(reply, (error: unknown) => {
         console.error('Import failed:', error);
         reply({ type: 'problem', problem: 'unreadable' });
       });

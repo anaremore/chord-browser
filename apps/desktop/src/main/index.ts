@@ -64,6 +64,7 @@ import { UpdateChecker } from './updates';
 import { PasskeyBroker } from './passkeys';
 import { osKeys, testKeys } from './passwords/keys';
 import { PasswordService } from './passwords/service';
+import { PasswordTransfers } from './passwords/transfer';
 import { createPasswordDetector } from './passwords/detector';
 import { proxies } from './proxy';
 import { Screenshots } from './screenshots/service';
@@ -104,6 +105,7 @@ let assistant: AssistantService | undefined;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
+let passwordTransfers: PasswordTransfers | undefined;
 let syncService: SyncService | undefined;
 const permissions = new PermissionBroker();
 const screenShare = new ScreenShareBroker(systemPickerFor(process.platform, process.getSystemVersion(), process.env, app.commandLine.getSwitchValue('ozone-platform')));
@@ -296,7 +298,10 @@ function registerIpc(): void {
   handle('cmd:dispatch', (command, sender) => {
     const w = senderWindow(sender);
     // An import's toast: its history goes too, and a running import stops first. A Chord file's takes back all it changed.
-    if (command.t === 'import.undo') return fileImporter?.owns(command.importId) ? fileImporter.undo(command.importId) : importer!.undo(command.importId);
+    if (command.t === 'import.undo') {
+      if (passwordTransfers?.owns(command.importId)) return void passwordTransfers.undo(command.importId);
+      return fileImporter?.owns(command.importId) ? fileImporter.undo(command.importId) : importer!.undo(command.importId);
+    }
     // A toast's Undo for Effects: they live in main, not in the store.
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
     // A toast's Undo for a form the assistant filled: the page puts back what it had (main/assistant).
@@ -506,6 +511,18 @@ function registerIpc(): void {
   handle('passwords:undelete', ({ id }) => passwords.undo(id));
   handle('passwords:forgetNever', ({ site }) => passwords.forgetNever(site));
   handle('passwords:startOver', () => passwords.startOver());
+  handle('passwords:importChoose', (_request, sender) => (passwordTransfers ? passwordTransfers.choose(browser!.settingsWindowOf(sender)) : { ok: false, problem: 'busy' }));
+  handle('passwords:importPreview', ({ stageId }) => passwordTransfers?.preview(stageId) ?? null);
+  handle('passwords:importRun', ({ stageId, choices, passphrase }, sender) => {
+    const w = importWindow(sender);
+    return (
+      passwordTransfers?.run(stageId, choices, passphrase, { windowId: w && !w.isPrivate ? w.id : null, notify: (progress) => send(sender, 'passwords:importProgress', progress) }) ?? { ok: false, problem: 'busy' }
+    );
+  });
+  handle('passwords:importDrop', ({ stageId }) => passwordTransfers?.drop(stageId));
+  handle('passwords:importUndo', ({ importId }) => passwordTransfers?.undo(importId) ?? null);
+  handle('passwords:exportShow', ({ exportId }) => passwordTransfers?.show(exportId));
+  handle('passwords:export', ({ passphrase }, sender) => (passwordTransfers ? passwordTransfers.exportCsv(browser!.settingsWindowOf(sender), passphrase) : { ok: false, problem: 'busy' }));
   handle('passwords:unlockCard', ({ id, passphrase, keep }) => passwords.answerUnlock(id, passphrase, keep));
   // The menu under a field and the save card (S17 §9): each answers only its own window's page, the menu's view or the
   // cards' popover, never the other.
@@ -1027,6 +1044,18 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Copies of another browser's files an import left when Chord was killed go, once launch is long over.
     setTimeout(() => void importer?.sweep(), 60_000).unref();
+    // Passwords in and out (S17 §10): the import process reads a CSV and stages it in chord-data, which alone compares and writes.
+    passwordTransfers = new PasswordTransfers({
+      workerPath: join(import.meta.dirname, 'import-file.js'),
+      data: (op) => store.passwords(op),
+      stagePort: (stageId) => store.passwordStagePort(stageId),
+      exportPort: () => store.passwordExportPort(),
+      vault: passwords,
+      gate: importGate,
+      folder: () => app.getPath('downloads'),
+      onProgress: (listener) => store.onPasswordProgress((push) => listener(push.importId, push.done, push.total)),
+      toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
+    });
     // Your data's export (docs/decisions/S15-your-data.md §7): a process of its own reads the database read-only.
     exporter = new Exporter({
       workerPath: join(import.meta.dirname, 'export.js'),
@@ -1036,6 +1065,7 @@ if (!app.requestSingleInstanceLock()) {
       platform,
       folder: () => app.getPath('documents'),
       data: { flush: () => store.flush(), device: () => store.device(), counts: () => store.exportCounts() },
+      passwords: (vaultPassphrase) => passwordTransfers!.exportPort(vaultPassphrase),
     });
     // The detector watches the sign-ins the vault's switch and extension rule say (S17 §11), from now on: told at once,
     // and after every change (onChange's stateChanged), only when that changes.
@@ -1054,6 +1084,7 @@ if (!app.requestSingleInstanceLock()) {
       assistant: () => assistant,
       toast: (windowId, toast) => browser!.window(windowId)?.toast(toast),
       gate: importGate,
+      passwords: passwordTransfers,
     });
     // Your data's sync (S15 §6–§8): chord-data's thread and its worker do the work; main keeps the key and applies what comes in.
     syncService = new SyncService({

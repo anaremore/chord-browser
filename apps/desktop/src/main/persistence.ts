@@ -19,6 +19,7 @@ import {
   type AssistantOp,
   type AssistantResult,
   type DataPush,
+  type PasswordPush,
   type DataResponse,
   type HistoryEvent,
   type NavState,
@@ -232,8 +233,8 @@ export class Persistence {
 
   private spawn(): void {
     this.child = utilityProcess.fork(join(import.meta.dirname, 'data.js'), [], { serviceName: 'Chord Data' });
-    this.child.on('message', (response: DataResponse | DataPush) => {
-      if ('push' in response) return void this.pushed(response);
+    this.child.on('message', (response: DataResponse | DataPush | PasswordPush) => {
+      if ('push' in response) return void (response.push === 'passwords.import' ? this.passwordProgress(response) : this.pushed(response));
       const waiter = this.waiting.get(response.id);
       this.waiting.delete(response.id);
       waiter?.resolve(response);
@@ -356,6 +357,13 @@ export class Persistence {
     return response.sync ?? {};
   }
 
+  private passwordProgress: (push: PasswordPush) => void = () => undefined;
+
+  /** How far a password import has written: main/passwords/transfer.ts passes it on to Settings. */
+  onPasswordProgress(listener: (push: PasswordPush) => void): void {
+    this.passwordProgress = listener;
+  }
+
   onPush(listener: (push: DataPush) => void): void {
     this.pushed = listener;
   }
@@ -419,6 +427,26 @@ export class Persistence {
     const { port1, port2 } = new MessageChannelMain();
     const response = await this.request({ type: 'import.port', importId }, [port1]);
     if (!response.ok) throw new Error(response.error);
+    return port2;
+  }
+
+  /**
+   * A port straight to chord-data for a file's passwords (S17 §10): the
+   * import process stages them there (`PasswordStageBatch`), never through
+   * main. Resolves once chord-data listens.
+   */
+  async passwordStagePort(stageId: string): Promise<MessagePortMain> {
+    const { port1, port2 } = new MessageChannelMain();
+    const response = await this.request({ type: 'passwords.stage', stageId }, [port1]);
+    if (!response.ok) throw new Error('chord-data: no stage port');
+    return port2;
+  }
+
+  /** A port on which the export process reads the vault's `login` records for an encrypted file, while the vault stays open. */
+  async passwordExportPort(): Promise<MessagePortMain> {
+    const { port1, port2 } = new MessageChannelMain();
+    const response = await this.request({ type: 'passwords.exportPort' }, [port1]);
+    if (!response.ok) throw new Error('chord-data: no export port');
     return port2;
   }
 

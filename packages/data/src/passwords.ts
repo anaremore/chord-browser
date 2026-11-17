@@ -25,6 +25,7 @@ import type { StatementSync } from 'node:sqlite';
 import { loginProblem, normalizePassphrase, passphraseProblem, SCRYPT, type LoginSecret, type LoginSummary, type ScryptParams } from '@chord/core';
 import type * as Sites from '@chord/core/password-sites';
 import { nodeCrypto } from './crypto';
+import { PasswordTransfer, type StoredLogin, type TransferOp, type TransferResult, type VaultAccess } from './password-transfer';
 
 type Row = Record<string, unknown>;
 type Sql = (text: string) => StatementSync;
@@ -123,12 +124,14 @@ export type PasswordOp =
   | { op: 'nevers' }
   | { op: 'forgetNever'; site: string }
   /** A lost passphrase: every sign-in, the never list and the key go. */
-  | { op: 'startOver' };
+  | { op: 'startOver' }
+  /** Import and export (password-transfer.ts). */
+  | TransferOp;
 
 /** `locked`: the op needs the key. `wrong`: not the passphrase (or not the key). `exists`/`none`: setup with a vault, or the other way round. */
 export type PasswordProblem = 'locked' | 'wrong' | 'none' | 'exists' | 'missing' | 'invalid' | 'refused';
 
-export interface PasswordResult {
+export interface PasswordResult extends Omit<TransferResult, 'problem'> {
   problem?: PasswordProblem;
   status?: VaultStatus;
   logins?: LoginSummary[];
@@ -259,6 +262,8 @@ export class PasswordStore {
   /** Counts up at each lock: an unlock that was typed before it doesn't open the vault after it. */
   private generation = 0;
   private readonly deleted = new Map<string, Deleted>();
+  /** Import and export (password-transfer.ts): staged files, imports' Undo, and what goes out. */
+  readonly transfer: PasswordTransfer;
 
   constructor(
     private readonly sql: Sql,
@@ -271,7 +276,59 @@ export class PasswordStore {
      * (ChordDatabase.scrubBackups), so no old copy stays readable there.
      */
     private readonly scrub: (meta: string | null) => void = () => undefined,
-  ) {}
+    /** chord-data's own transactions (which roll back as its writes do) and smaller checkpoints while an import writes; tests leave them out. */
+    private readonly hooks: { transaction?: (work: () => void) => void; importing?: (on: boolean) => void } = {},
+  ) {
+    this.transfer = new PasswordTransfer(this.access());
+  }
+
+  /** What password-transfer.ts may do with the vault: open rows, write them and put them back, never hold the key. */
+  private access(): VaultAccess {
+    const stored = (row: Row): StoredLogin => ({ id: str(row['id']), site_tag: bytes(row['site_tag']), sealed: bytes(row['sealed']), created_at: num(row['created_at']), updated_at: num(row['updated_at']) });
+    return {
+      state: () => this.status().state,
+      generation: () => this.generation,
+      ready: async () => void (await loadSites()),
+      page: (after, limit) => {
+        const rows = this.sql('SELECT id, sealed, created_at FROM login WHERE id > ? ORDER BY id LIMIT ?').all(after, limit) as Row[];
+        const logins: { id: string; created: number; secret: LoginSecret }[] = [];
+        let unreadable = 0;
+        for (const row of rows) {
+          const secret = this.openRow(row);
+          if (secret) logins.push({ id: str(row['id']), created: num(row['created_at']), secret });
+          else unreadable++;
+        }
+        return { logins, unreadable, last: rows.length === limit ? str(rows[rows.length - 1]!['id']) : null };
+      },
+      insert: (login, now) => {
+        const id = this.insert({ origin: login.origin, username: login.username, password: login.password, note: login.note, ...(login.realm !== null ? { realm: login.realm } : {}) }, null, now, login.changedAt ?? now);
+        return id === 'invalid' ? null : id;
+      },
+      replace: (id, login, now) => {
+        const row = this.rowById(id);
+        const secret = row ? this.openRow(row) : null;
+        if (!row || !secret) return null;
+        const before = stored(row);
+        return this.rewrite(row, secret, { password: login.password, ...(login.note ? { note: login.note } : {}) }, now) === null ? before : null;
+      },
+      stored: (id) => {
+        const row = this.sql('SELECT * FROM login WHERE id = ?').get(id) as Row | undefined;
+        return row ? stored(row) : null;
+      },
+      restore: (row) => {
+        this.sql('INSERT INTO login (id, site_tag, sealed, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET site_tag = excluded.site_tag, sealed = excluded.sealed, updated_at = excluded.updated_at').run(
+          row.id,
+          row.site_tag,
+          row.sealed,
+          row.created_at,
+          row.updated_at,
+        );
+      },
+      remove: (id) => void this.sql('DELETE FROM login WHERE id = ?').run(id),
+      transaction: (work) => (this.hooks.transaction ? this.hooks.transaction(work) : work()),
+      importing: (on) => this.hooks.importing?.(on),
+    };
+  }
 
   /* ---------- meta and the key ---------- */
 
@@ -441,12 +498,12 @@ export class PasswordStore {
     this.sql(`INSERT INTO login_use (login_id, chord_id, used_at) VALUES (?, ?, ?) ON CONFLICT(login_id, chord_id) DO UPDATE SET used_at = excluded.used_at`).run(id, chordId, at);
   }
 
-  private insert(login: NewLogin, chordId: string | null, now: number): string | PasswordProblem {
+  private insert(login: NewLogin, chordId: string | null, now: number, changedAt = now): string | PasswordProblem {
     const origin = loginOrigin(login.origin);
     const site = origin ? loginSite(origin) : null;
     if (!origin || !site || loginProblem({ ...login, origin }) !== null) return 'invalid';
     const id = randomUUID();
-    const secret: LoginSecret = { origin, username: login.username, password: login.password, realm: login.realm ?? null, note: login.note ?? '', changedAt: now, previous: null };
+    const secret: LoginSecret = { origin, username: login.username, password: login.password, realm: login.realm ?? null, note: login.note ?? '', changedAt, previous: null };
     this.sql('INSERT INTO login (id, site_tag, sealed, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, this.tag(site), this.sealSecret(id, secret), now, now);
     if (chordId) this.use(id, chordId, now);
     return id;
@@ -494,6 +551,12 @@ export class PasswordStore {
 
   async run(op: PasswordOp, now = Date.now()): Promise<PasswordResult> {
     switch (op.op) {
+      case 'importPreview':
+      case 'importRun':
+      case 'importDrop':
+      case 'importUndo':
+      case 'exportCsv':
+        return this.transfer.run(op, now);
       case 'status':
         return { status: this.status(), generation: this.generation, held: this.meta?.held === true };
       case 'setup': {
@@ -603,6 +666,7 @@ export class PasswordStore {
         this.generation++;
         this.wipe();
         this.deleted.clear();
+        this.transfer.clear();
         this.setKeyMeta(() => {
           this.sql('DELETE FROM login').run();
           this.sql('DELETE FROM login_never').run();
@@ -751,6 +815,7 @@ export class PasswordStore {
     this.generation++;
     this.wipe();
     this.deleted.clear();
+    this.transfer.clear();
     if (this.truncateTimer) clearTimeout(this.truncateTimer);
     this.truncateTimer = null;
     // The last try before the connection goes (closing checkpoints too, once no other connection reads).
