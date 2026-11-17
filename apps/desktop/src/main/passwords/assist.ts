@@ -154,6 +154,8 @@ interface Card {
   readonly tab: AssistTab;
   readonly contents: WebContents;
   readonly origin: string;
+  /** From the browser's own sign-in box (S17 §10): its realm. */
+  readonly realm?: string;
   readonly site: string | null;
   readonly host: string;
   kind: 'new' | 'update';
@@ -526,30 +528,31 @@ export class PasswordAssist {
     if (answer.kind !== 'new' && answer.kind !== 'update' && answer.kind !== 'locked') return;
     const site = await this.siteOf(e.origin).catch(() => null);
     if (!here() || until <= this.now()) return;
-    const before = this.cards.get(tab.nodeId);
+    this.showCard({ tab, contents: e.contents, origin: e.origin, site, kind: answer.kind === 'update' ? 'update' : 'new', locked: answer.kind === 'locked', setup: answer.kind === 'new' && answer.setup, values, until });
+  }
+
+  private showCard(made: Pick<Card, 'tab' | 'contents' | 'origin' | 'realm' | 'site' | 'kind' | 'locked' | 'setup' | 'values'> & { until: number }): void {
+    const { until, ...rest } = made;
+    const before = this.cards.get(made.tab.nodeId);
     if (before) this.dropCard(before, false);
-    const card: Card = {
-      id: this.nextId++,
-      tab,
-      contents: e.contents,
-      origin: e.origin,
-      site,
-      host: hostOf(e.origin),
-      kind: answer.kind === 'update' ? 'update' : 'new',
-      locked: answer.kind === 'locked',
-      setup: answer.kind === 'new' && answer.setup,
-      values,
-      busy: false,
-      problem: null,
-      held: false,
-      shown: true,
-      idle: null,
-      expiry: null,
-    };
+    const card: Card = { id: this.nextId++, ...rest, host: hostOf(made.origin), busy: false, problem: null, held: false, shown: true, idle: null, expiry: null };
     card.expiry = this.setTimer(() => this.dropCard(card), until - this.now());
-    this.cards.set(tab.nodeId, card);
+    this.cards.set(made.tab.nodeId, card);
     this.startTimer(card);
-    host.changed(tab.windowId);
+    this.options.host.changed(made.tab.windowId);
+  }
+
+  /**
+   * A sign-in typed in the browser's own box with *Remember* ticked worked, and there's no vault yet (S17 §10): the
+   * save card, whose first save chooses the passphrase, saves it with its realm. Never in a private window.
+   */
+  async offerFirstSave(contents: WebContents, signIn: { origin: string; realm: string; username: string; password: string; until: number }): Promise<void> {
+    const tab = this.options.host.tabOf(contents);
+    if (!tab || tab.private || signIn.until <= this.now()) return;
+    const values = { username: signIn.username, password: signIn.password } as CandidateValues;
+    const site = await this.siteOf(signIn.origin).catch(() => null);
+    if (contents.isDestroyed() || signIn.until <= this.now()) return;
+    this.showCard({ tab, contents, origin: signIn.origin, realm: signIn.realm, site, kind: 'new', locked: false, setup: true, values, until: signIn.until });
   }
 
   /** A minute unused, while it's shown and you're not in it: it hides (the key brings it back). */
@@ -679,7 +682,14 @@ export class PasswordAssist {
       if (!values) return null;
       // An update is for the username it was offered for; a new one takes the username as you left it.
       const username = card.kind === 'update' ? values.username : (details.username ?? values.username);
-      return { origin: card.origin, username, password: values.password, chordId: card.tab.chordId, ...(card.setup && details.passphrase !== undefined ? { passphrase: details.passphrase } : {}) };
+      return {
+        origin: card.origin,
+        username,
+        password: values.password,
+        chordId: card.tab.chordId,
+        ...(card.realm !== undefined ? { realm: card.realm } : {}),
+        ...(card.setup && details.passphrase !== undefined ? { passphrase: details.passphrase } : {}),
+      };
     };
     const send = (r: NonNullable<ReturnType<typeof request>>) => vault.saveCandidate(r).catch(() => ({ ok: false as const, problem: 'io' as const }));
     const setup = card.setup;

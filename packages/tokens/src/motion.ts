@@ -42,6 +42,8 @@ export const durations = {
   /** Between one archived row's flight and the next (DESIGN.md §6.1 rule 7: at most 12 ms, for at most 6). */
   stagger: 12,
   hoverIntent: 500,
+  /** A prompt that appears over a page ignores clicks and Enter this long, so a page can't time one under a click (as Chrome's permission prompts do). */
+  promptInputDelay: 500,
   tooltip: 600,
   springLoad: 600,
   toast: 6000,

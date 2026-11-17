@@ -254,6 +254,8 @@ test('a site that asks for a password gets Chord’s own box: a wrong answer say
     await popover.keyboard.type('me');
     await popover.keyboard.press('Tab');
     await popover.keyboard.type('wrong');
+    // Sign in waits a moment after the box appears (a page can't time it under a click or an Enter).
+    await expect(box.getByRole('button', { name: 'Sign in' })).toBeEnabled();
     await popover.keyboard.press('Enter');
     await expect(box).toContainText("That username and password didn't work.");
     await box.getByLabel('Username').fill('me');

@@ -42,6 +42,7 @@ function runAction(action: ToastAction | undefined): void {
   if (!action) return;
   if ('update' in action) void api.updates.restart();
   else if ('screenshot' in action) void api.screenshots.act(action.screenshot.id, action.screenshot.do);
+  else if ('passwordRevert' in action) void api.passwords.revert(action.passwordRevert);
   else void api.state.dispatch(action.command);
 }
 

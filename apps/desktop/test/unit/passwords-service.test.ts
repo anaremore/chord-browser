@@ -500,7 +500,7 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
     const first = await service.saveCandidate({ ...at, passphrase: PASSPHRASE });
     expect(first).toEqual({ ok: true, id: expect.any(String), kind: 'new' });
     const id = (first as { id: string }).id;
-    expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'update' });
+    expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'update', changedAt: clock.now });
     expect(await service.passwordFor(id, 'https://github.com', 'work')).toBe('two');
     expect(await service.saveCandidate({ ...at, password: 'two' })).toEqual({ ok: true, id, kind: 'same' });
     expect(await service.candidateFor({ ...at, username: 'grace' })).toEqual({ kind: 'new', setup: false });
@@ -698,5 +698,106 @@ describe('the API for the menu under the field and the save cards', () => {
     expect(await service.candidate({ ...page({ origin: 'https://example.com' }), username: 'a', password: 'b' }, extensions)).toEqual({ kind: 'never' });
     expect(await service.save({ ...page({ origin: 'https://example.com' }), username: 'a', password: 'b' }, extensions)).toEqual({ ok: false, problem: 'refused' });
     expect((await service.view()).nevers).toEqual(['example.com']);
+  });
+});
+
+describe('the browser’s own sign-in box (S17 §10)', () => {
+  const ROUTER = 'http://router.test:8080';
+  const signIn = { origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit', chordId: 'work' };
+
+  it('the first Remember sets the passphrase; then saved, updated, the same; never in a private window, an unknown chord or a proxy', async () => {
+    expect(await service.saveCandidate(signIn)).toEqual({ ok: false, problem: 'none' });
+    expect(await service.saveCandidate({ ...signIn, chordId: 'priv', passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'refused' });
+    expect(await service.saveCandidate({ ...signIn, proxy: true, passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'refused' });
+    expect(await service.saveCandidate({ ...signIn, chordId: 'gone', passphrase: PASSPHRASE })).toEqual({ ok: false, problem: 'off' });
+    const first = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
+    expect(first).toMatchObject({ ok: true, kind: 'new' });
+    const id = (first as { id: string }).id;
+    expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'update', changedAt: clock.now });
+    expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'same' });
+    // Updated with the one before it kept, as a form's.
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('two-Sekrit');
+    // A site you said Never for still remembers what you ticked Remember for: you asked.
+    await service.never({ origin: ROUTER, chord: { id: 'work', profileId: 'default' }, private: false });
+    expect(await service.saveCandidate({ ...signIn, username: 'grace@example.com' })).toMatchObject({ ok: true, kind: 'new' });
+  });
+
+  it('fills the box for its origin and realm only, with usernames in the answer; a private window fills, the box and a form stay apart', async () => {
+    const saved = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
+    const id = (saved as { id: string }).id;
+    expect(await service.httpAccountsFor(ROUTER, 'Router admin', 'work')).toEqual({ state: 'open', accounts: [{ id, username: 'ada@example.com' }] });
+    for (const [origin, realm] of [
+      ['http://router.test:8081', 'Router admin'],
+      ['https://router.test:8080', 'Router admin'],
+      [ROUTER, 'Other'],
+      [ROUTER, ''],
+    ] as const) {
+      expect(await service.httpAccountsFor(origin, realm, 'work')).toEqual({ state: 'open', accounts: [] });
+      expect(await service.httpPasswordFor(id, origin, realm, 'work')).toBeNull();
+    }
+    expect((await service.httpAccountsFor(ROUTER, 'Router admin', 'priv')).state).toBe('open');
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'priv')).toBe('box-Sekrit');
+    // A form on that origin isn't offered it, nor filled from it.
+    expect(await service.accountsFor(ROUTER, 'work')).toEqual({ state: 'open', insecure: true, offers: [] });
+    expect(await service.passwordFor(id, ROUTER, 'work')).toBeNull();
+  });
+
+  it('main refuses a box’s sign-in on the form side itself, whatever chord-data answers', async () => {
+    const boxLogin = { id: 'box', origin: ROUTER, username: 'ada@example.com', realm: 'Router admin', note: '', createdAt: 0, updatedAt: 0, lastUsed: null, chordUsed: null };
+    // A chord-data that forgot to keep the two apart.
+    const careless = new PasswordService({
+      ...{ chord: (chordId: string) => CHORDS[chordId] ?? null, extensions: () => extensions, settings: () => settings, keys, clipboard, changed: () => undefined },
+      data: async (op) => {
+        if (op.op === 'status') return { status: { state: 'open', kept: false, count: 1 }, generation: 0, held: false };
+        if (op.op === 'forSite') return { logins: [boxLogin], unreadable: 0 };
+        if (op.op === 'fill') return { password: 'box-Sekrit', loginOrigin: ROUTER, loginRealm: 'Router admin' };
+        return {};
+      },
+      now: () => clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    });
+    expect(await careless.accountsFor(ROUTER, 'work')).toEqual({ state: 'open', insecure: true, offers: [] });
+    expect(await careless.passwordFor('box', ROUTER, 'work')).toBeNull();
+    // And the box gets only its own realm's.
+    expect(await careless.httpPasswordFor('box', ROUTER, 'Other', 'work')).toBeNull();
+    expect(await careless.httpPasswordFor('box', ROUTER, 'Router admin', 'work')).toBe('box-Sekrit');
+  });
+
+  it('Undo of an update: the password before it back, only while it’s still what that update wrote; nothing when locked', async () => {
+    const first = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
+    const id = (first as { id: string }).id;
+    expect(await service.revertUpdate(id, clock.now)).toBe(false);
+    clock.now += 1000;
+    const update = await service.saveCandidate({ ...signIn, password: 'two-Sekrit' });
+    expect(update).toEqual({ ok: true, id, kind: 'update', changedAt: clock.now });
+    const changedAt = (update as { changedAt: number }).changedAt;
+    // Changed again since (in Settings, say): Undo of the earlier update would bring back the wrong one.
+    clock.now += 1000;
+    await service.edit(id, { password: 'three-Sekrit' });
+    expect(await service.revertUpdate(id, changedAt)).toBe(false);
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('three-Sekrit');
+    clock.now += 1000;
+    const again = await service.saveCandidate({ ...signIn, password: 'four-Sekrit' });
+    expect(await service.revertUpdate(id, (again as { changedAt: number }).changedAt)).toBe(true);
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('three-Sekrit');
+    await service.lock();
+    expect(await service.revertUpdate(id, clock.now)).toBe(false);
+  });
+
+  it('off where passwords are off, locked when locked, nothing for a chord main doesn’t know', async () => {
+    const saved = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
+    const id = (saved as { id: string }).id;
+    expect(await service.httpAccountsFor(ROUTER, 'Router admin', 'gone')).toEqual({ state: 'off' });
+    settings = { ...settings, offChords: ['work'] };
+    expect(await service.httpAccountsFor(ROUTER, 'Router admin', 'work')).toEqual({ state: 'off' });
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBeNull();
+    expect(await service.saveCandidate({ ...signIn, password: 'x' })).toEqual({ ok: false, problem: 'off' });
+    settings = { ...settings, offChords: [], enabled: false };
+    expect(await service.httpAccountsFor(ROUTER, 'Router admin', 'priv')).toEqual({ state: 'off' });
+    settings = { ...settings, enabled: true };
+    await service.lock();
+    expect(await service.httpAccountsFor(ROUTER, 'Router admin', 'work')).toEqual({ state: 'locked' });
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBeNull();
   });
 });

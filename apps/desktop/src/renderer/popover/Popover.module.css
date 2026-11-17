@@ -358,6 +358,50 @@
     0 0 0 var(--size-focus-ring) var(--color-accent);
 }
 
+/* The sign-in box holds the keyboard itself (Escape) while Sign in waits its moment: no ring for that. */
+.authBox:focus {
+  outline: none;
+}
+
+/* The sign-in box's saved sign-ins (S17 §10): a chooser of usernames, and *Unlock passwords* while locked. */
+.authChooser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-3) 0 0;
+  padding: 0 var(--space-3);
+}
+
+.authAccount,
+.authUnlock {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-fg);
+  font: var(--text-small);
+  text-align: start;
+}
+
+.authUnlock {
+  margin: var(--space-3) var(--space-3) 0;
+}
+
+.authAccount:hover,
+.authUnlock:hover,
+.authAccount[aria-selected='true'] {
+  background: var(--color-item-hover);
+}
+
+.authAccount:focus-visible,
+.authUnlock:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+}
+
 /* ---------- Unlock passwords ---------- */
 
 /* *Keep unlocked on this computer*: a switch, and what it gives up under its label. */

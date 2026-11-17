@@ -129,9 +129,9 @@ describe('the passphrase and the key', () => {
     expect((await run({ op: 'open', key: key! })).status!.state).toBe('open');
   });
 
-  it('a fill says which origin the sign-in was saved for, so main checks the match too', async () => {
+  it('a fill says which origin (and realm) the sign-in was saved for, so main checks the match too', async () => {
     const id = await withLogin('https://github.com');
-    expect(await run({ op: 'fill', id, origin: 'https://gist.github.com', chordId: null })).toEqual({ password: PASSWORD, loginOrigin: 'https://github.com' });
+    expect(await run({ op: 'fill', id, origin: 'https://gist.github.com', chordId: null })).toEqual({ password: PASSWORD, loginOrigin: 'https://github.com', loginRealm: null });
   });
 
   it('a stored check of the wrong length fails closed, and throws nothing', async () => {
@@ -335,9 +335,13 @@ describe('sealing', () => {
     backup.close();
   });
 
-  it('chord.db, its write-ahead log and its backups never hold a password, a username or a site in the clear', async () => {
+  it('chord.db, its write-ahead log and its backups never hold a password, a username, a site or a realm in the clear', async () => {
     const id = await withLogin('https://secret-site.example', 'ada.lovelace@acme.dev');
     await run({ op: 'edit', id, patch: { password: 'second-Password-Qx7', note: 'the note is sealed too' } });
+    // The browser's own sign-in box: its realm is sealed with the rest, never a column of its own (the row has its site's tag only).
+    await run({ op: 'save', origin: 'http://hidden-router.example:8080', realm: 'Secret Realm Name', username: 'box-user@acme.dev', password: 'box-Password-Qx7', chordId: null });
+    const columns = (raw().prepare('PRAGMA table_info(login)').all() as { name: string }[]).map((c) => c.name);
+    expect(columns).toEqual(['id', 'site_tag', 'sealed', 'created_at', 'updated_at']);
     await run({ op: 'never', origin: 'https://never-here.example' });
     db.close();
     db = new ChordDatabase(file, 'linux', KDF);
@@ -345,7 +349,7 @@ describe('sealing', () => {
     for (const path of [file, `${file}-wal`, `${file}-shm`, join(dir, 'chord.db.v24.bak')]) {
       if (!existsSync(path)) continue;
       const bytes = readFileSync(path);
-      for (const secret of [PASSWORD, 'second-Password-Qx7', 'ada.lovelace@acme.dev', 'secret-site', 'never-here', 'the note is sealed', PASSPHRASE]) {
+      for (const secret of [PASSWORD, 'second-Password-Qx7', 'ada.lovelace@acme.dev', 'secret-site', 'never-here', 'the note is sealed', PASSPHRASE, 'Secret Realm', 'hidden-router', 'box-user', 'box-Password']) {
         expect(bytes.includes(Buffer.from(secret, 'utf8')), `${secret} in ${path}`).toBe(false);
         expect(bytes.includes(Buffer.from(secret, 'utf16le')), `${secret} (UTF-16) in ${path}`).toBe(false);
       }
@@ -488,5 +492,67 @@ describe('the API the menu and the save card call', () => {
     expect((await run({ op: 'nevers' })).nevers).toEqual(['example.com']);
     await run({ op: 'forgetNever', site: 'example.com' });
     expect((await run({ op: 'nevers' })).nevers).toEqual([]);
+  });
+});
+
+describe('sign-ins from the browser’s own box (S17 §10): by origin and realm, apart from forms', () => {
+  const ROUTER = 'http://router.test:8080';
+
+  it('saves with the realm, matches only that origin and realm, and keeps forms and the box apart', async () => {
+    const form = await withLogin(ROUTER, 'ada@example.com', 'form-Sekrit');
+    const saved = await run({ op: 'save', origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit', chordId: 'work' });
+    expect(saved.id).toBeDefined();
+    expect(saved.id).not.toBe(form);
+
+    const box = (origin: string, realm: string) => run({ op: 'forSite', origin, realm, chordId: 'work' }).then((r) => r.logins!.map((l) => l.id));
+    expect(await box(ROUTER, 'Router admin')).toEqual([saved.id]);
+    // Another realm, port or scheme on the same host: nothing.
+    expect(await box(ROUTER, 'Other')).toEqual([]);
+    expect(await box('http://router.test:8081', 'Router admin')).toEqual([]);
+    expect(await box('https://router.test:8080', 'Router admin')).toEqual([]);
+    // A form on the same origin is offered its own only.
+    expect((await run({ op: 'forSite', origin: ROUTER, chordId: 'work' })).logins!.map((l) => l.id)).toEqual([form]);
+    // The list says which is which.
+    const listed = (await run({ op: 'list', chordId: null })).logins!;
+    expect(listed.find((l) => l.id === saved.id)!.realm).toBe('Router admin');
+    expect(listed.find((l) => l.id === form)!.realm).toBeNull();
+  });
+
+  it('fills the box only for its origin and realm, and never a form from it (nor the box from a form)', async () => {
+    const form = await withLogin(ROUTER, 'ada@example.com', 'form-Sekrit');
+    const { id } = await run({ op: 'save', origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit', chordId: null });
+    expect((await run({ op: 'fill', id: id!, origin: ROUTER, realm: 'Router admin', chordId: null })).password).toBe('box-Sekrit');
+    expect((await run({ op: 'fill', id: id!, origin: ROUTER, realm: 'Other', chordId: null })).problem).toBe('refused');
+    expect((await run({ op: 'fill', id: id!, origin: 'https://router.test:8080', realm: 'Router admin', chordId: null })).problem).toBe('refused');
+    expect((await run({ op: 'fill', id: id!, origin: ROUTER, chordId: null })).problem).toBe('refused');
+    expect((await run({ op: 'fill', id: form, origin: ROUTER, realm: 'Router admin', chordId: null })).problem).toBe('refused');
+  });
+
+  it('compares and updates within the realm, keeping the password before it', async () => {
+    await withLogin(ROUTER, 'ada@example.com', 'form-Sekrit');
+    const compare = (password: string, realm = 'Router admin') => run({ op: 'compare', origin: ROUTER, realm, username: 'ada@example.com', password }).then((r) => r.candidate!);
+    // The form's sign-in for the same username doesn't count.
+    expect(await compare('box-Sekrit')).toEqual({ kind: 'new' });
+    const { id } = await run({ op: 'save', origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit', chordId: null });
+    expect(await compare('box-Sekrit')).toEqual({ kind: 'same', id });
+    expect(await compare('new-Sekrit')).toEqual({ kind: 'update', id });
+    expect(await compare('box-Sekrit', 'Other')).toEqual({ kind: 'new' });
+    const updated = await run({ op: 'save', origin: ROUTER, realm: 'Router admin', username: 'ada@example.com', password: 'new-Sekrit', chordId: null, replace: id! }, 5000);
+    expect(updated).toEqual({ id, changedAt: 5000 });
+    expect((await run({ op: 'reveal', id: id! })).password).toBe('new-Sekrit');
+    // A form's save can't replace the box's, nor another realm's.
+    expect((await run({ op: 'save', origin: ROUTER, username: 'ada@example.com', password: 'x', chordId: null, replace: id! })).problem).toBe('refused');
+    expect((await run({ op: 'save', origin: ROUTER, realm: 'Other', username: 'ada@example.com', password: 'x', chordId: null, replace: id! })).problem).toBe('refused');
+    // Undo of that update: the one before it back, and the wrong one kept as the one before; only once, and never
+    // for an update that isn't the latest change.
+    expect((await run({ op: 'revert', id: id!, changedAt: 4999 })).problem).toBe('refused');
+    expect((await run({ op: 'revert', id: id!, changedAt: 5000 }, 6000)).id).toBe(id);
+    expect((await run({ op: 'reveal', id: id! })).password).toBe('box-Sekrit');
+    expect((await run({ op: 'revert', id: id!, changedAt: 5000 })).problem).toBe('refused');
+    expect((await run({ op: 'reveal', id: id! })).password).toBe('box-Sekrit');
+    expect((await run({ op: 'revert', id: 'gone', changedAt: 5000 })).problem).toBe('missing');
+    // Edited in Settings, it stays the box's.
+    await run({ op: 'edit', id: id!, patch: { note: 'the router' } });
+    expect((await run({ op: 'list', chordId: null })).logins!.find((l) => l.id === id)!.realm).toBe('Router admin');
   });
 });
