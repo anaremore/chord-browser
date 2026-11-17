@@ -1036,3 +1036,20 @@ Only what a real desktop can show; everything else above was measured.
 **What it can't tell:** a box answered for a page's own script request (not a navigation) has no commit to read the answer from, so it offers no *Remember*. And a server that answers a wrong password with a 2xx page saying *login failed* reads as accepted; a 403 doesn't.
 
 **Tests:** chord-data's matching, comparing and updating by realm in `packages/data/test/passwords.test.ts`; the service's gates in `unit/passwords-service.test.ts`; the box's fill, stale or foreign answers refused, a frame of another site's page, *Remember*'s default, saving only on the answered navigation's 2xx commit (a sibling frame's says nothing, nor the frame's next navigation redirecting to a router page), a box closing when its request goes (sent elsewhere, failed, a late failure leaving the next box alone), the drops, private windows, proxies, the switch, unlocking and the update's Undo, table-driven in `unit/http-auth.test.ts`; `auth:` requests refused without detail in `unit/ipc-secrets.test.ts`; the first save's card in `unit/passwords-assist.test.ts`; and `e2e/passwords-http-auth.spec.ts` on the Linux runner: a wrong password not saved, *Remember* and the first passphrase, a reload filled, another site's page framing the router (the frame sent elsewhere closes the box), a private window that fills and doesn't save, and a proxy's box without *Remember*, with axe and captures.
+
+## The sign-in sweep (2026-11-16)
+
+*Branch `test/passwords-top-sites`. A reusable tool, `scripts/dev/signin-sweep` (its README says how to run it), and what it found on the top of the Tranco list. The report names sites and stays outside the repo; this note describes patterns only.*
+
+**The tool:** the agent in world 4440 of an Electron window per site, in the Linux container: the page with no credentials, its *Sign in* link followed once, the scan and `classifyPasswordForm(…, 'filling')`, focus on each field a person would use, the agent's fill with a fake account as main sends it, and on a first step one press of Next (never on a page that would send a code or a link). Nothing is submitted beyond that. The S17 §13 weekly canary could be built on it.
+
+**Swept:** 570 sites (after taking out infrastructure, adult and gambling sites), about 255 sign-in pages reached; the rest blocked automated browsers, hid their sign-in behind a menu or another site's buttons, or didn't load.
+
+**Fixed** (each with a unit case or fixture in Chord's own markup; the corpus unchanged at 393 of 458 files):
+- A password step that carries the username from the step before, read-only or hidden and already filled (identity providers' hosted pages): the fill writes the password alone when the carried username is the account picked.
+- Sign-in and sign-up forms that reuse ids: a `label[for]` counts only from the field's own form or outside any form, so the sign-in password no longer reads as a new one.
+- *Log in or sign up* over one email field, its Continue outside the `<form>`: a first step.
+- A first step whose next password field is in the same form, focusable but transparent: a first step, not a sign-in the fill then refused.
+- A first step swapped into its password step in place, focus moved by the page with no blur: the password gets its menu (main's "not again in this form" holds while the form keeps its role or its kind (it reopens only when both change)).
+
+**Left as proposals:** phone-number first steps (mostly one-time codes: no password to fill); fields a page clears or re-renders after a fill; a step after an unknown email that reads both as sign-up and as a current password; and the later phases' patterns: open shadow roots and same-origin frames (phase 3), other sites' frames (phase 4).

@@ -7,12 +7,13 @@ import { ELECTRON_VOLUME, STALE_MS, STORE_VOLUME, containerName, dockerRunArgs, 
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
-    expect(parseArgs([])).toEqual({ display: 'x11', rebuild: false, help: false, cpus: null, playwright: [] });
+    expect(parseArgs([])).toEqual({ display: 'x11', rebuild: false, help: false, cpus: null, share: null, playwright: [] });
     expect(parseArgs(['launch.spec.ts', '-g', 'Peek', '--repeat-each', '3', '--workers=2'])).toEqual({
       display: 'x11',
       rebuild: false,
       help: false,
       cpus: null,
+      share: null,
       playwright: ['launch.spec.ts', '-g', 'Peek', '--repeat-each', '3', '--workers=2'],
     });
   });
@@ -24,6 +25,8 @@ describe('parseArgs', () => {
     expect(parseArgs(['perf.spec.ts', '--cpus', '4', '-g', 'memory'])).toMatchObject({ cpus: 4, playwright: ['perf.spec.ts', '-g', 'memory'] });
     expect(parseArgs(['--cpus=2'])).toMatchObject({ cpus: 2, playwright: [] });
     expect(parseArgs(['--cpus', 'four']).cpus).toBeNaN();
+    expect(parseArgs(['--share', 'Z:\\Temp\\x', '-c', 'a.ts'])).toMatchObject({ share: 'Z:\\Temp\\x', playwright: ['-c', 'a.ts'] });
+    expect(parseArgs(['--share=/tmp/x'])).toMatchObject({ share: '/tmp/x', playwright: [] });
   });
 
   it('drops the -- pnpm passes along', () => {
@@ -103,6 +106,14 @@ describe('dockerRunArgs', () => {
     expect(after('--volume')).toEqual([`${STORE_VOLUME}:/home/chord/.cache/pnpm-store`, `${ELECTRON_VOLUME}:/home/chord/.cache/electron`]);
     expect([STORE_VOLUME, ELECTRON_VOLUME].every((v) => v.startsWith('chord-e2e-'))).toBe(true);
     expect(after('--env')).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000']);
+  });
+
+  it('mounts a shared folder at /share only when one is given', () => {
+    const shared = dockerRunArgs({ ...base, share: '/mnt/z/Temp/sweep' });
+    const of = (flag: string) => shared.flatMap((a, i) => (a === flag ? [shared[i + 1]] : []));
+    expect(of('--volume')).toContain('/mnt/z/Temp/sweep:/share');
+    expect(of('--env')).toContain('CHORD_E2E_SHARE=/share');
+    expect(args.join(' ')).not.toContain('/share');
   });
 
   it('passes CHORD_NO_MINIFY, CHORD_PERF_ENFORCE and CHORD_E2E_SCREEN in when they’re set, and nothing else from the environment', () => {

@@ -180,6 +180,8 @@ const usablePassword = (f: PasswordField, vetoed: ReadonlySet<PasswordField>) =>
 
 /** A field you can neither see nor reach, and never typed in or had filled: a template, a decoy, a later step's. */
 const hidden = (f: PasswordField) => !f.visible && !f.focusable && !f.userTyped && !f.autofilled;
+/** A field not shown (hidden, or focusable but transparent), never typed in or filled. */
+const unseen = (f: PasswordField) => !f.visible && !f.userTyped && !f.autofilled;
 
 /** The `autocomplete` tokens that name a credential's role. */
 const ROLE_TOKENS: ReadonlySet<string> = new Set(['username', 'current-password', 'new-password']);
@@ -201,7 +203,16 @@ function withoutHiddenRivals(fields: readonly PasswordField[]): PasswordField[] 
  */
 function asFirstStep(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions): PasswordFormClassification | null {
   const passwords = form.fields.filter((f) => f.type === 'password');
-  if (!passwords.length || !passwords.every(hidden)) return null;
+  if (!passwords.length || !passwords.every(unseen)) return null;
+  // Focusable but not shown (a transparent pane) counts as hidden only where the form says it's a first step: its submit
+  // reads Next or Continue, or the password field has no name a person would read. A submit that reads Sign in always
+  // keeps such a form a sign-in: a real password field drawn over by a custom one (transparent, labelled or not) is the
+  // form's own, and withholding the password there is the failure this rule must never cause.
+  if (!passwords.every(hidden)) {
+    if (form.words.submits.some((b) => SIGN_IN.test(b))) return null;
+    const nextStep = form.words.submits.some((b) => NEXT.test(b));
+    if (!nextStep && !passwords.every((f) => !f.label.trim() && !f.placeholder.trim())) return null;
+  }
   const c = classifyPasswordForm({ ...form, fields: form.fields.filter((f) => f.type !== 'password') }, mode, options);
   return c?.kind === 'username-only' ? c : null;
 }
@@ -291,7 +302,10 @@ export function classifyPasswordForm(form: PasswordFormRecord, mode: ParseMode, 
   const looks = saysUsername(f) || isEmailish(f) || USERNAMEISH.test(fieldText(f)) || matchWords(DDG_USERNAME, f.label) === 'yes' || f.type === 'tel';
   const strong = saysUsername(f) || STRONG_USERNAME.test(f.id) || STRONG_USERNAME.test(f.name) || f.type === 'email' || /user|login|member|account|e-?mail/i.test(`${f.name} ${f.id}`);
   const nextButton = [...form.words.submits, ...form.words.buttons].some((b) => NEXT.test(b) || SIGN_IN.test(b));
-  if (!looks || !(kind === 'sign-in' || saysUsername(f) || (strong && nextButton))) return null;
+  // "Log in or sign up" over one email field: a first step that decides by the email which comes next (its Continue
+  // is often outside the <form>, so there's no button to read).
+  const either = form.words.headings.some((h) => SIGN_IN.test(spaced(h)) && SIGN_UP.test(spaced(h)));
+  if (!looks || !(kind === 'sign-in' || saysUsername(f) || (strong && (nextButton || either)))) return null;
   // A newsletter's email and its button ("Anmelden" is both sign in and subscribe) is no first step.
   if (!saysUsername(f) && NEWSLETTER.test(spaced(`${form.words.headings.join(' ')} ${form.words.attrs} ${form.words.submits.join(' ')} ${fieldText(f)}`))) return null;
   return { kind: 'username-only', roles: new Map([[f.key, 'username']]), username: f, password: null, newPassword: null, confirmation: null };

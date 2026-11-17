@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  A two-step identifier-then-password sign-in, in Chord's own markup (passwords-two-step.spec.ts).
+  Step 1: one email field, the next step's password field already in the form but hidden (neither
+  shown nor focusable), and Next. Next swaps the form's content in place, with no navigation.
+  Step 2: the email stays in the form as a hidden field with its value, and the visible field is
+  the password. Signing in posts the form to /session on the same origin.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Sign in</title>
+<style>body { margin: 40px; font: 16px system-ui, sans-serif; } label, input, button { display: block; margin: 8px 0; } [hidden] { display: none !important; }</style>
+</head><body>
+<h1 id="heading">Sign in</h1>
+<p id="lede">Use your account</p>
+<form id="f" action="/session" method="post">
+  <div id="step">
+    <label for="identifier">Email</label>
+    <input id="identifier" name="identifier" type="email" autocomplete="username">
+    <input id="later-password" name="hiddenPassword" type="password" tabindex="-1" aria-hidden="true" hidden>
+    <button id="next" type="button">Next</button>
+  </div>
+</form>
+<script>
+  const form = document.getElementById('f');
+  const next = () => {
+    const email = document.getElementById('identifier').value.trim();
+    if (!email) return;
+    document.getElementById('heading').textContent = 'Welcome';
+    document.getElementById('lede').textContent = email;
+    const step = document.createElement('div');
+    step.id = 'step';
+    const carried = Object.assign(document.createElement('input'), { id: 'carried', name: 'identifier', type: 'email', autocomplete: 'username', hidden: true, tabIndex: -1 });
+    carried.value = email;
+    const label = Object.assign(document.createElement('label'), { htmlFor: 'password', textContent: 'Enter your password' });
+    const password = Object.assign(document.createElement('input'), { id: 'password', name: 'password', type: 'password', autocomplete: 'current-password' });
+    const signIn = Object.assign(document.createElement('button'), { id: 'sign-in', type: 'submit', textContent: 'Sign in' });
+    step.append(carried, label, password, signIn);
+    document.getElementById('step').replaceWith(step);
+    password.focus();
+  };
+  document.getElementById('next').addEventListener('click', next);
+  // Enter in the email moves on rather than submitting the first step.
+  form.addEventListener('submit', (e) => { if (!document.getElementById('password')) { e.preventDefault(); next(); } });
+</script>
+</body></html>

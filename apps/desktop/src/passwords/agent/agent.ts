@@ -170,10 +170,10 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let timer = 0;
   let trailing = 0;
   let focusSentAt = Number.NEGATIVE_INFINITY;
-  /** Whether the last scan saw field `i` of `k` hidden (neither shown nor focusable): its form was classed without it. */
+  /** Whether the last scan saw field `i` of `k` not shown (hidden, or focusable but out of sight): its form may have been classed without it. */
   const hiddenAt = (k: KnownForm, i: number) => {
     const rec = k.scanned.record.fields[i];
-    return !!rec && !rec.visible && !rec.focusable;
+    return !!rec && !rec.visible;
   };
   const scannedHidden = (k: KnownForm, el: Element) => hiddenAt(k, k.scanned.elements.indexOf(el as HTMLElement));
   /**
@@ -460,8 +460,13 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const k = known.find((x) => x.id === p.formId);
     const c = k?.classified;
     if (!k || !c) return 'changed';
-    const user = elementOf(k, c.username);
+    const named = elementOf(k, c.username);
     const pass = elementOf(k, c.password);
+    // A password step that carries the username from the step before, read-only or hidden, already holding the
+    // account you picked: only the password goes in. Holding another account, the form isn't this account's.
+    const carried = !!named && !!pass && !usable(named) && (named as HTMLInputElement).value !== '' && ((named as HTMLInputElement).readOnly || !isShown(named));
+    if (carried && (named as HTMLInputElement).value.trim().toLowerCase() !== p.username.trim().toLowerCase()) return 'changed';
+    const user = carried ? null : named;
     // Never half a fill: a password field you could type in, with a role in this form, that the fill would leave
     // empty (main sent no password, as for a first step, or the field isn't the current password) gets nothing at all.
     const left = k.scanned.elements.filter((el, i) => controlType(el) === 'password' && c.roles.has(k.scanned.record.fields[i]!.key) && usable(el) && (el !== pass || !p.password));

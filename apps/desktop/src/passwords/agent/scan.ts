@@ -148,7 +148,12 @@ function labeller(): (el: HTMLElement) => string {
       }
       byTree.set(root, byFor);
     }
-    const labels = el.id ? [...(byFor.get(el.id) ?? [])] : [];
+    // A `label[for]` labels the first element with that id, as the browser has it, and only from outside any form or
+    // from the field's own: a page whose sign-in and sign-up forms reuse ids (`password` in both) mustn't give the
+    // sign-in field the sign-up's "Choose a password".
+    const owner = el.id ? (root instanceof Document ? documentProto.getElementById.call(root, el.id) : root.getElementById(el.id)) : null;
+    const ownForm = (el as HTMLInputElement).form ?? null;
+    const labels = owner === el ? (byFor.get(el.id) ?? []).filter((l) => (l.closest('form') ?? ownForm) === ownForm) : [];
     const around = el.parentElement?.closest('label');
     if (around && !around.htmlFor) labels.push(around);
     const byLabels = clip(labels.map((l) => words(l, 100)).filter(Boolean).join(' '), 100);

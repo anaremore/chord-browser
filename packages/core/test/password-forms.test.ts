@@ -229,7 +229,16 @@ describe('the username-only first step', () => {
     ['a read-only decoy password beside it doesn\'t stop it', form([f('email', { name: 'email', autocomplete: 'username' }), pw('hiddenPassword', { readOnly: true })], { submits: ['Continue'] }), true],
     ['a real password beside it makes it a sign-in form instead', form([f('email', { name: 'email', autocomplete: 'username' }), pw()], { submits: ['Continue'] }), false],
     ['a hidden password field beside it (a later step’s) doesn’t stop it', form([f('email', { name: 'email', autocomplete: 'username' }), pw('password', HIDDEN)], { submits: ['Next'], title: 'Sign in' }), true],
+    ['nor one kept focusable but out of sight (transparent)', form([f('email', { name: 'login', autocomplete: 'username webauthn' }), pw('passwd', { label: '', visible: false, focusable: true })], { submits: ['Next'], title: 'Sign in to your account' }), true],
+    ['a one-step sign-in whose real password field is transparent under a custom-drawn one, with its label and a Sign in button: still a sign-in', form([f('email', { name: 'email', autocomplete: 'username' }), pw('password', { label: 'Password', visible: false, focusable: true })], { submits: ['Sign in'] }), false],
+    ['…the same with no words on its button but a label: still a sign-in', form([f('email', { name: 'email', autocomplete: 'username' }), pw('password', { label: 'Password', visible: false, focusable: true })]), false],
+    ['a transparent password with no label or name a person reads, beside an email: a first step', form([f('email', { name: 'email', autocomplete: 'username' }), pw('passwd', { label: '', visible: false, focusable: true })], { headings: ['Sign in'] }), true],
+    ['…but the same unlabelled transparent password under a Sign in button: still a sign-in (the drawn field carries the label)', form([f('email', { name: 'email', autocomplete: 'username' }), pw('passwd', { label: '', visible: false, focusable: true })], { submits: ['Sign in'] }), false],
+    ['…and once it shows, the form is a sign-in', form([f('email', { name: 'login', autocomplete: 'username webauthn' }), pw('passwd', { label: '' })], { submits: ['Next'], title: 'Sign in to your account' }), false],
     ['nor two hidden ones', form([f('email', { name: 'email' }), pw('a', HIDDEN), pw('b', HIDDEN)], { submits: ['Next'] }), true],
+    ['"Log in or sign up" over one email field, its Continue outside the form', form([f('text', { id: 'email', name: 'email', label: 'Email address' })], { headings: ['Log in or sign up'] }), true],
+    ['…but not a field that only might be one, under the same heading', form([f('text', { name: 'q', label: 'Your city' })], { headings: ['Log in or sign up'] }), false],
+    ['a sign-up heading alone over an email field', form([f('email', { name: 'email', label: 'Email address' })], { headings: ['Sign up for our deals'] }), false],
     ['a hidden password you typed in is a password', form([f('email', { name: 'email', autocomplete: 'username' }), pw('p', { ...HIDDEN, userTyped: true })], { submits: ['Next'] }), false],
   ])('%s', (_name, record, onlyUsername) => {
     expect(classifyPasswordForm(record, 'filling')?.kind === 'username-only').toBe(onlyUsername);

@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- Sign-in and sign-up forms on one page that reuse the same ids: each label belongs to the first field with its id, so the sign-in password doesn't read the sign-up's "Choose a password". -->
+<html><head><meta charset="utf-8"><title>Account</title><meta name="chord-kind" content="sign-in"></head><body>
+<div class="panel"><h2>Log in</h2><form id="login" action="/session">
+  <label for="id_email">Email address</label><input id="id_email" name="email" type="email" data-chord-expect="username">
+  <label for="id_password">Password</label><input id="id_password" name="password" type="password" autocomplete="off" data-chord-expect="current-password">
+  <button type="submit">Log in</button></form></div>
+<div class="panel"><h2>Create an account</h2><form id="signup" action="/accounts">
+  <label for="id_username">Username</label><input id="id_username" name="username" type="text" data-chord-expect="username">
+  <label for="id_password">Choose a password</label><input id="id_password" name="password" type="password" autocomplete="off" data-chord-expect="new-password">
+  <label for="id_passwordconfirm">Repeat the password</label><input id="id_passwordconfirm" name="passwordconfirm" type="password" autocomplete="off" data-chord-expect="confirmation-password">
+  <button type="submit">Create account</button></form></div>
+</body></html>
