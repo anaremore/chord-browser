@@ -180,6 +180,8 @@ const usablePassword = (f: PasswordField, vetoed: ReadonlySet<PasswordField>) =>
 
 /** A field you can neither see nor reach, and never typed in or had filled: a template, a decoy, a later step's. */
 const hidden = (f: PasswordField) => !f.visible && !f.focusable && !f.userTyped && !f.autofilled;
+/** A field not shown (hidden, or focusable but transparent), never typed in or filled. */
+const unseen = (f: PasswordField) => !f.visible && !f.userTyped && !f.autofilled;
 
 /** The `autocomplete` tokens that name a credential's role. */
 const ROLE_TOKENS: ReadonlySet<string> = new Set(['username', 'current-password', 'new-password']);
@@ -201,7 +203,9 @@ function withoutHiddenRivals(fields: readonly PasswordField[]): PasswordField[] 
  */
 function asFirstStep(form: PasswordFormRecord, mode: ParseMode, options: ClassifyOptions): PasswordFormClassification | null {
   const passwords = form.fields.filter((f) => f.type === 'password');
-  if (!passwords.length || !passwords.every(hidden)) return null;
+  // Not shown is enough here: a first step can keep the next step's password field focusable but out of sight
+  // (a transparent pane). Only a username-only result is taken, so a sign-in form is unchanged.
+  if (!passwords.length || !passwords.every(unseen)) return null;
   const c = classifyPasswordForm({ ...form, fields: form.fields.filter((f) => f.type !== 'password') }, mode, options);
   return c?.kind === 'username-only' ? c : null;
 }

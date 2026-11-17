@@ -170,10 +170,10 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let timer = 0;
   let trailing = 0;
   let focusSentAt = Number.NEGATIVE_INFINITY;
-  /** Whether the last scan saw field `i` of `k` hidden (neither shown nor focusable): its form was classed without it. */
+  /** Whether the last scan saw field `i` of `k` not shown (hidden, or focusable but out of sight): its form may have been classed without it. */
   const hiddenAt = (k: KnownForm, i: number) => {
     const rec = k.scanned.record.fields[i];
-    return !!rec && !rec.visible && !rec.focusable;
+    return !!rec && !rec.visible;
   };
   const scannedHidden = (k: KnownForm, el: Element) => hiddenAt(k, k.scanned.elements.indexOf(el as HTMLElement));
   /**

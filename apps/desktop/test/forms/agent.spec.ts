@@ -371,6 +371,35 @@ test('a one-step sign-in that shows its password field when the email takes focu
   expect(await page.inputValue('#p')).toBe('secret pass');
 });
 
+test('a first step whose password field waits transparent in the same form: no password to it, then a sign-in once it shows', async ({ page }) => {
+  const { password: _password, ...noPassword } = FILL;
+  const a = await open(
+    page,
+    '<form id="f"><div id="one"><input id="u" type="email" name="login" autocomplete="username webauthn" aria-label="Email"><input type="submit" value="Next"></div>' +
+      '<div id="two" style="opacity:0"><input id="p" type="password" name="passwd" aria-label="Password"></div></form>',
+  );
+  await page.focus('#u');
+  await a.settle();
+  expect((await a.of('focus')).at(-1)).toMatchObject({ kind: 'username-only', role: 'username' });
+  await a.clear();
+  await fill(page, noPassword);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await page.inputValue('#u')).toBe('ada@example.com');
+  // Next, as the page does it: the first pane fades out, the password's in.
+  await page.evaluate(() => {
+    (document.getElementById('one') as HTMLElement).style.cssText = 'opacity:0';
+    (document.getElementById('two') as HTMLElement).style.cssText = '';
+  });
+  await a.clear();
+  await page.focus('#p');
+  await a.settle();
+  expect((await a.of('focus')).at(-1)).toMatchObject({ kind: 'sign-in', role: 'current-password' });
+  await a.clear();
+  await fill(page, FILL);
+  expect(await a.of('filled')).toEqual([{ formId: 'f1', ok: true }]);
+  expect(await page.inputValue('#p')).toBe('secret pass');
+});
+
 test('a password step carrying the username from the step before: the password alone goes in, for that account only', async ({ page }) => {
   // The username field as such steps carry it: read-only and shown, read-only and hidden, or only hidden.
   const steps: [string, string][] = [
