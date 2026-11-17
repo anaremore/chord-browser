@@ -6,7 +6,7 @@
  * while sync is on (sync.ts, docs/decisions/S15-your-data.md §7).
  */
 import type { AssistantThread } from '@chord/core';
-import type { DataPush, DataRequest, DataResponse, ImportBatch, ImportBatchReply, SyncRequest } from '@chord/data';
+import type { DataPush, PasswordPush, DataRequest, DataResponse, ImportBatch, ImportBatchReply, PasswordExportAsk, PasswordExportPage, PasswordStageBatch, SyncRequest } from '@chord/data';
 import { ChordDatabase } from '@chord/data/db';
 import { SyncController } from './sync';
 import { writeBatch } from './writes';
@@ -68,6 +68,7 @@ process.parentPort.on('message', (event) => {
         sync.close();
         db?.close();
         db = new ChordDatabase(request.file);
+        db.passwords.transfer.onProgress = (importId, done, total) => process.parentPort.postMessage({ push: 'passwords.import', importId, done, total } satisfies PasswordPush);
         const open = lap();
         if (request.prune) db.pruneProfiles();
         const prune = lap();
@@ -122,6 +123,48 @@ process.parentPort.on('message', (event) => {
           } catch (error) {
             port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies ImportBatchReply);
           }
+        });
+        port.start();
+        reply({ id: request.id, ok: true });
+        break;
+      }
+      case 'passwords.stage': {
+        const port = event.ports[0];
+        if (!db || !port) throw new Error('chord-data: passwords before open');
+        // A file's passwords, from the import process, staged in memory for its preview (password-transfer.ts). Never logged:
+        // a batch that fails is answered by what failed, never with what it held.
+        const transfer = db.passwords.transfer;
+        const { stageId } = request;
+        let done = false;
+        port.on('message', ({ data }) => {
+          // All of it inside the try: a batch that isn't one is refused, never a crash of chord-data.
+          try {
+            const batch = data as PasswordStageBatch;
+            const answer = transfer.staged(stageId, batch);
+            if (answer.ok && batch?.done) done = true;
+            port.postMessage(answer);
+          } catch (error) {
+            port.postMessage({ ok: false, error: error instanceof Error ? error.name : 'error' });
+          }
+        });
+        port.on('close', () => {
+          if (!done) transfer.portClosed(stageId);
+        });
+        port.start();
+        reply({ id: request.id, ok: true });
+        break;
+      }
+      case 'passwords.exportPort': {
+        const port = event.ports[0];
+        if (!db || !port) throw new Error('chord-data: passwords before open');
+        // The export process's pages of `login` records, for an encrypted file: only while the vault stays open, not
+        // locked since now (main checked the passphrase just before asking for this port).
+        const transfer = db.passwords.transfer;
+        const generation = transfer.generation();
+        port.on('message', ({ data }) => {
+          const ask = data as PasswordExportAsk;
+          const page = typeof ask?.after === 'string' && Number.isInteger(ask.limit) ? transfer.exportPage(ask.after, ask.limit, generation) : null;
+          port.postMessage((page ? { ok: true, ...page } : { ok: false, error: 'locked' }) satisfies PasswordExportPage);
         });
         port.start();
         reply({ id: request.id, ok: true });

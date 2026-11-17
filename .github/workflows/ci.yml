@@ -34,6 +34,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # 5,000 passwords into a vault of 500, alone so nothing else shares the CPUs: chord-data's longest task during
+      # the import is held to 100 ms (S17, Phase 2: import and export; measured 9.4 ms here, 10.6 ms on an SSD and 40 ms
+      # on a slower drive on Windows), so a tenfold regression fails.
+      - name: Password import's performance budget
+        run: pnpm exec vitest run packages/data/test/password-transfer.test.ts -t "rows"
+        env:
+          CHORD_PASSWORD_PERF: '1'
 
   # The password detector on DuckDuckGo's corpus of real sites' forms, in Playwright's own headless Chromium
   # (apps/desktop/test/forms; S17 §13 layer 2), held to its baseline. The corpus is a pinned, hash-checked

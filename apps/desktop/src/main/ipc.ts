@@ -53,7 +53,7 @@ export function handle<C extends InvokeChannel>(
     }
     // What a password channel was sent may hold a password or a passphrase: its problem is never described, so no zod
     // message (which can quote what it read) reaches a log or a crash report (S17 §7, Where the key lives).
-    if (channel.startsWith('passwords:') || channel.startsWith('auth:')) {
+    if (channel.startsWith('passwords:') || channel.startsWith('auth:') || channel.startsWith('export:') || channel.startsWith('importFile:')) {
       const parsed = invokeChannels[channel].request.safeParse(payload);
       if (!parsed.success) throw new IpcDenied(`${channel}: invalid request`);
       return handler(parsed.data as InvokeRequest<C>, event.sender);

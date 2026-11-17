@@ -960,6 +960,8 @@ export interface ImportedCounts {
   /** History pages that gained visits. */
   pages: number;
   chats: number;
+  /** Passwords added or updated (an encrypted file's, S17 §10). A count from before them has none. */
+  passwords?: number;
 }
 
 const numbers = new Intl.NumberFormat('en-US');
@@ -975,6 +977,7 @@ export function importedText(counts: ImportedCounts): string {
     counts.settings ? plural(counts.settings, 'setting') : '',
     counts.pages ? `${plural(counts.pages, 'page')} of history` : '',
     counts.chats ? plural(counts.chats, 'assistant chat') : '',
+    counts.passwords ? plural(counts.passwords, 'password') : '',
   ].filter(Boolean);
   if (parts.length === 0) return counts.other ? 'Imported your setup' : 'Everything in the file was here already';
   return `Imported ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`}`;

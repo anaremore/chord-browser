@@ -12,6 +12,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { api } from './api';
 import { Row, SectionHeader, Switch } from './controls';
+import { exportText } from './export-text';
+import { PassphraseAsk } from './Passwords';
 import { FromChordFile } from './ChordFile';
 import { FromAnotherBrowser } from './Import';
 import { SyncSection } from './Sync';
@@ -19,6 +21,8 @@ import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
 const numbers = new Intl.NumberFormat('en-US');
+
+export { exportText, fileSize } from './export-text';
 
 /** "6 chords · 214 pinned tabs in 18 folders · 31 Today tabs · … · your settings." */
 export function whatGoesIn(c: ExportCounts): string {
@@ -35,33 +39,6 @@ export function whatGoesIn(c: ExportCounts): string {
   return `${parts.join(' · ')}.`;
 }
 
-/** "3.8 MB", "640 KB". */
-export function fileSize(bytes: number): string {
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  if (bytes >= 1_000) return `${Math.round(bytes / 1_000)} KB`;
-  return plural(bytes, 'byte');
-}
-
-/** What the line under the bar says while Chord writes. */
-export function exportText(p: ExportProgress): string {
-  switch (p.phase) {
-    case 'key':
-      return 'Locking the file with your passphrase…';
-    case 'setup':
-      return 'Writing your setup…';
-    case 'today':
-      return 'Writing Today tabs…';
-    case 'history':
-      return `Writing history: ${numbers.format(p.done)} of ${plural(p.total, 'page')}`;
-    case 'assistant':
-      return `Writing assistant chats: ${numbers.format(p.done)} of ${plural(p.total, 'chat')}`;
-    case 'done':
-      return `Saved ${p.name}, ${fileSize(p.bytes ?? 0)}${p.skipped ? `. ${plural(p.skipped, 'thing')} too big for the file (over 32 MB) stayed out.` : ''}`;
-    case 'failed':
-      return p.problem === 'read' ? 'Chord couldn’t read your data to write the file. Choose where to save to try again.' : 'Chord couldn’t save there. Choose another place.';
-  }
-}
-
 /** The Export row, and the card under it once it's opened. */
 function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
   const ids = useId();
@@ -69,6 +46,11 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
   const [counts, setCounts] = useState<ExportCounts | null>(null);
   const [history, setHistory] = useState(true);
   const [assistant, setAssistant] = useState(true);
+  /** Passwords (S17 decision 6): only into an encrypted file, on to start with; how many there are, counted without the key. */
+  const [withPasswords, setWithPasswords] = useState(true);
+  const [passwordCount, setPasswordCount] = useState(0);
+  /** The vault's passphrase, asked for at the save when it wasn't typed in the last 5 minutes (as *Show* asks). */
+  const [vaultAsk, setVaultAsk] = useState<'ask' | 'wrong' | 'locked' | 'same' | null>(null);
   const encrypt = snapshot.settings.encryptExports;
   const [passphrase, setPassphrase] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -82,6 +64,8 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
 
   useEffect(() => {
     if (open) void api.exports.counts().then(setCounts);
+    // Counted without the key: opening the vault (with the key kept here) would restart *Lock after* just to count.
+    if (open) void api.passwords.count().then(setPasswordCount);
   }, [open]);
   useEffect(
     () =>
@@ -104,11 +88,19 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
   const lengthProblem = passphraseProblem(passphrase);
   const mismatch = repeat !== passphrase;
   const ready = !writing && (!encrypt || (!lengthProblem && !mismatch));
-  const save = async () => {
+  const bringPasswords = encrypt && withPasswords && passwordCount > 0;
+  const save = async (vaultPassphrase?: string) => {
     if (!ready) return setTouched(true);
     setBusy(false);
     started.current = '';
-    const result = await api.exports.run({ history, assistant, passphrase: encrypt ? passphrase : null }).catch(() => ({ ok: false, problem: 'cancelled' }) as const);
+    const result = await api.exports
+      .run({ history, assistant, passphrase: encrypt ? passphrase : null, ...(bringPasswords ? { passwords: true } : {}), ...(bringPasswords && vaultPassphrase !== undefined ? { vaultPassphrase } : {}) })
+      .catch(() => ({ ok: false, problem: 'cancelled' }) as const);
+    setVaultAsk(null);
+    if (!result.ok && (result.problem === 'passphrase' || result.problem === 'wrong' || result.problem === 'locked' || result.problem === 'vault-passphrase')) {
+      started.current = null;
+      return setVaultAsk(result.problem === 'passphrase' ? 'ask' : result.problem === 'vault-passphrase' ? 'same' : result.problem);
+    }
     if (result.ok) {
       started.current = result.exportId;
       setProgress((p) => (p?.exportId === result.exportId ? p : { exportId: result.exportId, phase: encrypt ? 'key' : 'setup', done: 0, total: 0, share: 0, name: result.name }));
@@ -154,6 +146,13 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
             control={<Switch label="Include history" checked={history} onChange={setHistory} />}
           />
           <Row label="Assistant chats" description={chats} control={<Switch label="Include assistant chats" checked={assistant} onChange={setAssistant} />} />
+          {passwordCount > 0 && (
+            <Row
+              label="Passwords"
+              description={encrypt ? `${plural(passwordCount, 'password')}, locked in the file with its passphrase.` : `A plain file leaves passwords out. Encrypt it with a passphrase to bring your ${numbers.format(passwordCount)}.`}
+              control={<Switch label="Include passwords" checked={encrypt && withPasswords} disabled={!encrypt} onChange={setWithPasswords} />}
+            />
+          )}
           <Row
             label="Encrypt with a passphrase"
             description={encrypt ? 'Chord can’t open the file without it, and can’t get it back for you.' : history || assistant ? 'Anyone with the file can read it.' : undefined}
@@ -205,6 +204,23 @@ function Export({ snapshot }: { snapshot: SettingsSnapshot }) {
                 </button>
                 {shown && <span className={styles.rowDescription}>Five words at random. Write them down, or keep them in your password manager.</span>}
               </div>
+            </div>
+          )}
+          {vaultAsk && (
+            <div className={local.actions}>
+              {vaultAsk === 'same' ? (
+                <ProblemCard text="Use a different passphrase from the one your passwords are locked with." />
+              ) : vaultAsk === 'locked' ? (
+                <ProblemCard text="Your passwords are locked. Unlock them in Settings → Passwords, or turn Passwords off here." />
+              ) : (
+                <PassphraseAsk
+                  text="Enter the passphrase your passwords are locked with, to put them in the file."
+                  button="Export"
+                  problem={vaultAsk === 'wrong' ? 'That isn’t the passphrase.' : null}
+                  onSubmit={(typed) => void save(typed)}
+                  onCancel={() => setVaultAsk(null)}
+                />
+              )}
             </div>
           )}
           <div className={local.actions}>

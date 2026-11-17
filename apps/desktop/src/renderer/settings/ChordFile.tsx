@@ -7,12 +7,15 @@
  * one Undo takes it all back. Main reads the file in a process of its own;
  * this page only says how it's going.
  */
-import { IMPORT_LIMITS, importedText, type MergeCapped, type MergeCounts } from '@chord/core';
+import { IMPORT_LIMITS, importedText, type MergeCapped, type MergeCounts, type PasswordImportSummary } from '@chord/core';
 import type { FileImportChoices, FileImportPreview, FileImportProblem, FileImportProgress } from '@chord/ipc';
 import { useEffect, useId, useRef, useState } from 'react';
 import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { api } from './api';
 import { Row, Switch } from './controls';
+import { comesInText } from './PasswordTransfer';
+import { PassphraseAsk } from './Passwords';
+import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
@@ -144,7 +147,14 @@ export function FromChordFile({ onUpdates }: { onUpdates(): void }) {
     if (n !== reads.current) return;
     if (result.ok) {
       const { preview } = result;
-      setChoices({ history: preview.history.pages > 0, assistant: preview.assistant.chats > 0, effects: preview.effects.length > 0, settings: preview.newProfile });
+      setChoices({
+        history: preview.history.pages > 0,
+        assistant: preview.assistant.chats > 0,
+        effects: preview.effects.length > 0,
+        settings: preview.newProfile,
+        // An encrypted file's passwords come in, yours kept where they differ (S17 §10).
+        passwords: preview.passwordStage ? { take: 'yours', except: [] } : null,
+      });
       setStep({ at: 'preview', preview });
     } else if (result.problem === 'needs-passphrase') setStep({ at: 'locked', fileId, name });
     else setStep({ at: 'problem', fileId, name, problem: result.problem });
@@ -275,6 +285,9 @@ function Preview({
           control={<Switch label="Import Effects" checked={choices.effects} onChange={set('effects')} />}
         />
       )}
+      {preview.passwordStage && preview.passwords > 0 && (
+        <FilePasswords stageId={preview.passwordStage} count={preview.passwords} on={Boolean(choices.passwords)} locked={locked} onChange={(on) => !locked && onChoose({ ...choices, passwords: on ? { take: 'yours', except: [] } : null })} />
+      )}
       {preview.settings.length > 0 && (
         <>
           <Row
@@ -324,4 +337,64 @@ function sum(a: MergeCounts, b: MergeCounts): MergeCounts {
   const out = { ...a };
   for (const key of Object.keys(out) as (keyof MergeCounts)[]) out[key] += b[key];
   return out;
+}
+
+/**
+ * An encrypted file's passwords (S17 decision 6): what they'd do against the vault, compared once it's open (unlock
+ * here, or choose the first passphrase here), and a switch. Where one differs from yours, yours is kept.
+ */
+function FilePasswords({ stageId, count, on, locked, onChange }: { stageId: string; count: number; on: boolean; locked: boolean; onChange(on: boolean): void }) {
+  const [summary, setSummary] = useState<PasswordImportSummary | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [first, setFirst] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
+  const look = () => void api.passwords.importPreview(stageId).then(setSummary);
+  useEffect(look, [stageId]);
+  const state = summary?.state ?? 'locked';
+  const description = !summary
+    ? plural(count, 'password')
+    : state === 'none'
+      ? `${plural(count, 'password')}. Choose a passphrase to lock them with here.`
+      : `${comesInText(summary)}${summary.different ? ' Yours are kept where they differ.' : ''}`;
+  return (
+    <>
+      <Row label="Passwords" description={description} control={<Switch label="Import passwords" checked={on && state === 'open'} disabled={locked || state !== 'open'} onChange={onChange} />} />
+      {summary && state === 'locked' && (
+        <div className={local.actions}>
+          <PassphraseAsk
+            text="Enter your passphrase to bring the file’s passwords in."
+            button="Unlock"
+            problem={problem}
+            onSubmit={(passphrase) =>
+              void api.passwords.unlock(passphrase).then((r) => {
+                setProblem(r.ok ? null : 'That isn’t the passphrase.');
+                if (r.ok) look();
+              })
+            }
+          />
+        </div>
+      )}
+      {summary && state === 'none' && (
+        <form
+          className={local.actions}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!passphraseReady(first)) return setFirst({ ...first, touched: true });
+            void api.passwords.setup(first.passphrase).then((r) => {
+              setFirst(EMPTY_PASSPHRASE);
+              if (r.ok) look();
+              else setProblem('Chord couldn’t use that passphrase.');
+            });
+          }}
+        >
+          <PassphraseStep value={first} onChange={setFirst} />
+          {problem && <p className={local.small}>{problem}</p>}
+          <div className={local.buttons}>
+            <button type="submit" className={styles.linkButton}>
+              Use it
+            </button>
+          </div>
+        </form>
+      )}
+    </>
+  );
 }

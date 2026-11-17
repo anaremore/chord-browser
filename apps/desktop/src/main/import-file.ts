@@ -12,10 +12,13 @@
  * it's got. One import of either kind runs at a time (`ImportGate`), and one
  * Undo, from the window's toast or Settings, takes all of it back: the chats'
  * image files too, exactly the ones it wrote, each named here before it was.
+ * An encrypted file's passwords (S17 decision 6) are staged in chord-data as
+ * the file is read (main/passwords/transfer.ts), and come in last, as chosen,
+ * into an open vault; the same Undo takes them back.
  */
 import { rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { importedText, sortedChords, uuidv7, type Command, type AssistantThread, type MergePart, type Platform, type SiteEffects, type State, type WindowId } from '@chord/core';
+import { importedText, sortedChords, uuidv7, type Command, type AssistantThread, type MergePart, type PasswordImportChoices, type Platform, type SiteEffects, type State, type WindowId } from '@chord/core';
 import { ImportedSettings, type FileChooseResult, type FileImportChoices, type FileImportCounts, type FileImportProgress, type FileOpenResult, type FileRunResult, type Toast } from '@chord/ipc';
 import { dialog, type BaseWindow, type MessagePortMain, type OpenDialogOptions } from 'electron';
 import { IMAGE_FILE } from '../import-file/images';
@@ -53,6 +56,13 @@ export interface FileImporterOptions {
   toast(windowId: WindowId, toast: Toast): void;
   /** Shared with another browser's importer: one import at a time. */
   gate: ImportGate;
+  /** An encrypted file's passwords: staged while it's read, imported with it, undone with it (main/passwords/transfer.ts). */
+  passwords?: {
+    stageForFile(): Promise<{ stageId: string; port: MessagePortMain }>;
+    runForFile(stageId: string, choices: PasswordImportChoices): Promise<{ ok: true; importId: string | null; result: { added: number; updated: number } } | { ok: false; problem: string }>;
+    undo(importId: string): Promise<unknown>;
+    drop(stageId: string): Promise<void>;
+  };
 }
 
 type FileProcess = ImportProcess<FileRequest, FileReply>;
@@ -65,6 +75,8 @@ interface Session {
   process: FileProcess;
   ready: boolean;
   idle: ReturnType<typeof setTimeout> | undefined;
+  /** The file's passwords, staged in chord-data, while there are any. */
+  passwordStage: string | null;
 }
 
 interface Running {
@@ -80,7 +92,7 @@ export class FileImporter {
   private choosing = false;
   private readonly processes = new Set<FileProcess>();
   /** Each import this session, for its Undo: where it reports, and the image files it writes (names in the assistant's images folder). */
-  private readonly imports = new Map<string, { notify(progress: FileImportProgress): void; files: Set<string> }>();
+  private readonly imports = new Map<string, { notify(progress: FileImportProgress): void; files: Set<string>; passwords?: string }>();
   /** The last folder a file came from: the dialog opens there next time. */
   private folder: string | null = null;
 
@@ -95,7 +107,15 @@ export class FileImporter {
     if (!this.session) return;
     clearTimeout(this.session.idle);
     this.session.process.end();
+    this.dropPasswords(this.session);
     this.session = null;
+  }
+
+  /** The file's staged passwords leave chord-data's memory. */
+  private dropPasswords(session: Session): void {
+    const stageId = session.passwordStage;
+    session.passwordStage = null;
+    if (stageId) void this.options.passwords?.drop(stageId);
   }
 
   /** The system's open dialog; the file is then the one this session reads. */
@@ -120,7 +140,7 @@ export class FileImporter {
       const process = await ImportProcess.start<FileRequest, FileReply>(this.options.workerPath, { temp: false });
       this.processes.add(process);
       void process.closed.then(() => this.processes.delete(process));
-      this.session = { fileId: uuidv7(), path, name: basename(path), process, ready: false, idle: undefined };
+      this.session = { fileId: uuidv7(), path, name: basename(path), process, ready: false, idle: undefined, passwordStage: null };
       return { ok: true, fileId: this.session.fileId, name: this.session.name };
     } finally {
       this.choosing = false;
@@ -137,7 +157,11 @@ export class FileImporter {
     // What's waiting to be written goes first, so what's here is counted as it is.
     await this.options.data.flush();
     const job: FileJob = { path: session.path, database: this.options.database, images: this.options.images, device: await this.options.data.device(), platform: this.options.platform };
-    session.process.send({ type: 'open', job, passphrase });
+    // A file opened again (its passphrase typed again) stages its passwords afresh.
+    this.dropPasswords(session);
+    const stage = await this.options.passwords?.stageForFile().catch(() => null);
+    session.passwordStage = stage?.stageId ?? null;
+    session.process.send({ type: 'open', job, passphrase }, stage ? [stage.port] : []);
     let reply = await session.process.next(READ_STALL_MS);
     while (reply?.type === 'reading') reply = await session.process.next(READ_STALL_MS);
     // Another file was chosen meanwhile, and this one let go.
@@ -149,8 +173,10 @@ export class FileImporter {
     session.idle = setTimeout(() => this.session === session && this.letGo(), IDLE_MS);
     if (reply.type === 'opened') {
       session.ready = true;
-      return { ok: true, preview: { fileId, name: session.name, ...reply.preview } };
+      if (reply.preview.passwords === 0) this.dropPasswords(session);
+      return { ok: true, preview: { fileId, name: session.name, ...reply.preview, passwordStage: session.passwordStage } };
     }
+    this.dropPasswords(session);
     return { ok: false, problem: reply.type === 'problem' ? reply.problem : 'unreadable' };
   }
 
@@ -165,7 +191,7 @@ export class FileImporter {
     // The run owns the process from here.
     clearTimeout(session.idle);
     this.session = null;
-    const record = { notify, files: new Set<string>() };
+    const record: { notify(progress: FileImportProgress): void; files: Set<string>; passwords?: string } = { notify, files: new Set<string>() };
     this.imports.set(importId, record);
     const running: Running = { importId, process: session.process, cancelled: false, finished: Promise.resolve() };
     // Image files are named before they're written: kept here as they arrive, whatever the import is doing (even
@@ -182,10 +208,15 @@ export class FileImporter {
       }
       return false;
     };
-    running.finished = this.work(running, session.name, choices, windowId)
+    // The file's passwords are this run's now: they come in at its end, or go with it.
+    const passwordStage = session.passwordStage;
+    session.passwordStage = null;
+    running.finished = this.work(running, session.name, choices, windowId, passwordStage)
       .catch((error: unknown) => console.error('Import failed:', error))
       .finally(() => {
         session.process.end();
+        // Not brought in (not chosen, stopped, failed): the file's passwords leave chord-data's memory.
+        if (passwordStage && !record.passwords) void this.options.passwords?.drop(passwordStage);
         if (this.running === running) this.running = null;
         this.options.gate.letGo(importId);
       });
@@ -205,7 +236,7 @@ export class FileImporter {
     return { ...rest, ...(settings?.success ? { settings: settings.data } : {}), ...(proxies ? { proxies } : {}) };
   }
 
-  private async work(running: Running, name: string, choices: FileImportChoices, windowId: WindowId): Promise<void> {
+  private async work(running: Running, name: string, choices: FileImportChoices, windowId: WindowId, passwordStage: string | null): Promise<void> {
     const { importId, process } = running;
     const record = this.imports.get(importId)!;
     const counts: FileImportCounts = { ...NONE };
@@ -256,6 +287,15 @@ export class FileImporter {
         }
         if (choices.assistant) await this.options.assistant()?.importChanged();
       }
+      // The file's passwords last, as chosen, into the vault if it's open (Settings unlocked it first; this never asks).
+      if (!running.cancelled && !failed && passwordStage && choices.passwords && this.options.passwords) {
+        const brought = await this.options.passwords.runForFile(passwordStage, choices.passwords);
+        if (brought.ok) {
+          counts.passwords = brought.result.added + brought.result.updated;
+          if (brought.importId) record.passwords = brought.importId;
+        } else if (brought.problem !== 'locked' && brought.problem !== 'none') failed = true;
+        // Locked, or no vault: the switch was off in the preview (it can't be on then), so they stay out quietly.
+      }
     } catch (error) {
       if (running.cancelled) return;
       console.error('Import failed:', error);
@@ -264,7 +304,7 @@ export class FileImporter {
     if (running.cancelled) return;
     report(failed ? 'failed' : 'done');
     // Whatever landed, even from an import that stopped part way, gets its Undo.
-    const landed = Boolean(this.options.state().imports[importId]) || counts.pages > 0 || counts.chats > 0 || counts.effects > 0;
+    const landed = Boolean(this.options.state().imports[importId]) || counts.pages > 0 || counts.chats > 0 || counts.effects > 0 || Boolean(record.passwords);
     const message = !failed ? importedText(counts) : landed ? `${importedText(counts)}. Chord couldn’t import all of it.` : `Chord couldn’t import ${name}`;
     this.options.toast(windowId, { id: `import:${importId}`, message, ...(landed ? { action: { label: 'Undo', command: { t: 'import.undo', importId } } } : {}) });
   }
@@ -290,6 +330,7 @@ export class FileImporter {
     const removed = await within(this.options.data.undo(importId), STEP_TIMEOUT_MS).catch(() => [] as AssistantThread[]);
     await this.options.assistant()?.importChanged(removed);
     await this.options.effects.undoImport(importId);
+    if (record.passwords) await this.options.passwords?.undo(record.passwords).catch(() => undefined);
     // The image files it wrote, each checked again to be one (a name, never a path), and nothing else.
     await Promise.all([...record.files].filter((name) => IMAGE_FILE.test(name)).map((name) => rm(join(this.options.images, name), { force: true }))).catch(() => undefined);
     record.notify({ importId, phase: 'undone', done: 0, total: 0, counts: { ...NONE } });
@@ -300,6 +341,7 @@ export class FileImporter {
   async quit(): Promise<void> {
     if (this.running) this.running.cancelled = true;
     clearTimeout(this.session?.idle);
+    if (this.session) this.dropPasswords(this.session);
     const all = [...this.processes];
     for (const process of all) process.end();
     await Promise.all(all.map((process) => process.closed));

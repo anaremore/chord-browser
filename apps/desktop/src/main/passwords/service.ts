@@ -491,6 +491,24 @@ export class PasswordService {
     return this.view();
   }
 
+  /* ---------- import and export (main/passwords/transfer.ts) ---------- */
+
+  /** The vault's state for an import or export: opened unasked if it can be (the key kept here, unless you locked it). */
+  vaultState(): Promise<VaultState> {
+    return this.ensureOpen();
+  }
+
+  /** *Export*'s check, as *Show*'s (S17 §7): the vault open, and the passphrase typed in the last 5 minutes or now. Null: go ahead. */
+  confirm(passphrase?: string): Promise<Exclude<PasswordRevealResult, { ok: true }> | null> {
+    return this.gate(passphrase);
+  }
+
+  /** An import wrote (or its Undo did), or an export read: *Lock after* counts from now, and what shows the list looks again. */
+  transferred(changed: boolean): void {
+    this.touch();
+    if (changed) this.options.changed();
+  }
+
   /* ---------- the unlock card ---------- */
 
   /**

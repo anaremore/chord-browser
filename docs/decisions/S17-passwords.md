@@ -1,6 +1,6 @@
 # S17: Passwords, built in
 
-*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · phase 1 is built: [the vault](#phase-1-the-vault-as-built-2026-11-15), [the detector](#phase-1-the-detector-built-2026-11-15), and [the menu, fill and the save cards](#phase-1-the-menu-fill-and-the-save-cards-built-2026-11-16).*
+*2026-11-15 · replaces D12 (ARCHITECTURE.md §16) and re-rates risk R2 (§17) · phase 1 is built: [the vault](#phase-1-the-vault-as-built-2026-11-15), [the detector](#phase-1-the-detector-built-2026-11-15), and [the menu, fill and the save cards](#phase-1-the-menu-fill-and-the-save-cards-built-2026-11-16). Phase 2's import and export: [built 2026-11-17](#phase-2-import-and-export-built-2026-11-17).*
 
 **Decided 2026-11-15 by the maintainer:**
 1. **D12 is reversed: option B.** Chord builds its own password manager, with its own detector (§2–§4). Extensions stay supported.
@@ -16,6 +16,14 @@
 9. **Off by default in a chord with a password-manager extension,** with one switch to turn it on there (Q9).
 10. **The corpus reaches CI as a hash-checked download,** pinned and cached, never in the repository (Q10).
 11. **Proxy passwords are still never saved** (Q11, DESIGN.md §9).
+
+**Decided 2026-11-17 by the maintainer** (phase 2):
+12. **Two halves built at once:** import and export on one branch, the generator with the sign-up and change-password forms on another. They meet only in Settings → Passwords and `main/passwords/service.ts`.
+13. **The generator's default:** 20 characters from letters and digits without look-alikes, at least one of each, with `-` as the only symbol; a site's own rules (Apple's list, the field's `passwordrules`) come first.
+14. **Passwords go in Chord's encrypted file in phase 2** (decision 6 made concrete): a `login` record, in the encrypted `.chorddata` only, never a plain file; sync still never carries them (phase 5).
+15. **The file's passphrase is its own.** An encrypted export keeps Your data's file passphrase, with *Suggest one*; Chord never offers to use the vault's passphrase for the file. Exporting passwords asks for the vault's passphrase as *Show* does, at the save.
+16. **The interface,** from the owner's mock (`passwords-phase2.html`): the import preview is option 1C, *sentences and a switch, as Your data's import*: *From*, *What comes in* and *Left out*, the switch *Take the file's where they differ* (off: keeping yours is the default) with a checkbox per one that differs, a long list folded behind *Review all* (a search over a virtual list); the result with Undo, in the card and as the window's toast, and no confirm dialog. Export is option 2A, *two radio rows*: *Chord file, encrypted* and *CSV*, the CSV's row with *Anyone with the file can read your passwords.*; in Your data's export card, a *Passwords* row, off and disabled while the file isn't encrypted.
+17. **Phase 2 ships as one release, 0.12.0.**
 
 Where the text below still recommends otherwise, these win. M0's findings (at the end) confirm option B and change phase 1 as listed there.
 
@@ -1053,6 +1061,52 @@ Only what a real desktop can show; everything else above was measured.
 - A first step swapped into its password step in place, focus moved by the page with no blur: the password gets its menu (main's "not again in this form" holds while the form keeps its role or its kind (it reopens only when both change)).
 
 **Left as proposals:** phone-number first steps (mostly one-time codes: no password to fill); fields a page clears or re-renders after a fill; a step after an unknown email that reads both as sign-up and as a current password; and the later phases' patterns: open shadow roots and same-origin frames (phase 3), other sites' frames (phase 4).
+
+## Phase 2: import and export (built 2026-11-17)
+
+*Branch `feat/passwords-import-export`, the half of phase 2 beside the generator and its forms (`feat/passwords-generator`), for 0.12.0. Where this differs from §10, this is what was built.*
+
+**Built**, as §10 planned:
+- **CSV import** (Settings → Passwords → *Import…*). Main shows the open dialog and keeps the path; the import-file process reads the file a megabyte at a time (`core/password-import.ts`'s `PasswordCsv`: RFC 4180, a byte-order mark, `\r\n`, `\n` or `\r`, quotes and line breaks in notes, lenient where exporters are) and sends its sign-ins **straight to chord-data over a port**, never through main. They're staged there, in memory, by an id main made, until imported, let go, or 10 minutes pass. Only chord-data, which alone holds the vault key, compares and writes (`data/password-transfer.ts`).
+- **Columns by name**, compared without case, spaces, `_` or `-`, with each manager's names: Chrome, Edge and Brave; Firefox (`httpRealm` makes a sign-in box's sign-in); Safari and Apple Passwords; Bitwarden (`login_uri`…; its notes, cards and identities are listed as *not a sign-in*); 1Password 8's and the older header; and the common names (`website`, `login`, `email`, `notes`…), so an unknown manager's file mostly works. A file without an address or a password column is refused, saying which. Whose export it is shows in *From*, read from the header.
+- **The preview, before anything is written:** new, the same, and different. A file's sign-in is yours when its origin, username and realm are the same: exactly, not the rest of its site, so `login.example.com` is never folded into `example.com`. It's the same when the password is (and the file's note is empty or yours); different when the password or the note isn't, and the preview says which. Settings gets addresses and usernames, never a password.
+- **Rows left out are listed** with their row (the header being row 1) and why: no address, an app's (`android://`, `ios-app://`), not a web page's (`chrome://`, `file:`, `javascript:`), no password, too long (S17 §8's limits: refused, never cut), not a sign-in. A field may hold several addresses: the first that works.
+- **One-time-code secrets** (`OTPAuth`, `login_totp`, *One-time password*) are never kept, and counted (decision 7).
+- **The vault must be open**, or made: with none, the preview shows everything as new and *Import* asks for the first passphrase (`PassphraseStep`); locked, the file is read but nothing is compared until it's unlocked, in the card.
+- **Never another browser's store:** Chord reads only the file you chose.
+- **CSV export** in Chrome's shape (`name,url,username,password,note`), written by chord-data to the file the save dialog chose (`<name>.part`, then renamed), after the passphrase as *Show* asks for it, and with §9's warning on the CSV's row.
+- **Chord's encrypted file** (decision 6, docs/data-format.md *Passwords*): a `login` record per sign-in, after everything else, in the encrypted frames only; `includes` names `passwords`. The export process can't open the vault, so chord-data sends the records a page at a time over a port main makes only after the passphrase check, and only while the vault stays open: one that locks part way stops the file, which isn't kept. A plain export never has them, and Your data's card says so. Settings → Passwords → *Export…*'s *Chord file, encrypted* writes the passwords alone.
+- **Importing a Chord file** stages its `login` records the same way while Your data's import reads it, with the same preview (its *Passwords* row, which unlocks or chooses the passphrase in place), and brings them in last, keeping yours where they differ; one Undo takes them back with the rest. A plain file's `login` records are passed over and counted.
+- **Undo** for the session, from the card and from the window's toast (the shell's `import.undo`, routed to the passwords): what came in goes, and what was replaced comes back as it was, sealed (no key needed). One you've changed since stays as you left it, and Undo says so.
+
+**After a security review** (a subagent's, of this half): it found no way for a password to reach a renderer or main, no export without the passphrase check, and no password in a plain file. What it found, each fixed: an import that failed part way (a full disk) left its rows without Undo, so now it says it stopped and keeps its Undo; chord-data took what the import process sent on a stage's port into a handler that could throw, and passed its listed rows on unchecked, so now every batch is checked whole (rows, kinds, text cut, the problem one Chord knows, a change time within the year 9999) and never crashes it; a file's sign-ins in memory are capped at 64 M characters (a Chord file had no cap, as a CSV's size is one); *Lock now* or idle lets a staged file go; a CSV export chord-data didn't finish has its `.part` removed by main; the export port is closed if the export fails before its process takes it; and `export:` and `importFile:` requests, which can carry a passphrase, are refused without detail as `passwords:` ones are.
+
+**After review round 1** (the planning thread's):
+- **Several addresses in one field** (Bitwarden joins them with a comma or a line break, no space) are read as pieces first, the first that works; the whole field only when it has no separator, and a host with `,` or `;` is never one. Before, `https://a.com,https://b.com` came in as the origin `https://a.com,https`, which could never fill.
+- **Never the vault's passphrase for a file** is enforced, not only promised: before an export with passwords, chord-data checks the file's passphrase against the vault's (`verify`, which leaves the vault as it is) and refuses it: *Use a different passphrase from the one your passwords are locked with.*
+- **Never in a plain file** is held at each place, table-tested (`unit/passwords-plain-file.test.ts`): main asks for the passwords' port only for an encrypted file; the export process closes any port it's given unless the file is encrypted and asked for them (`export/passwords.ts`); the import reads a `login` record only from an encrypted file (core's `loginFromFile`); and a reader that doesn't know them passes over the record and the `passwords` part. A file saved without them (plain, or *Passwords* off) says how many were left out.
+- **A budget:** CI runs the 5,000-row import alone (`CHORD_PASSWORD_PERF=1`, its own step) and fails it when chord-data's longest task passes 100 ms: measured 9.4 ms there (Linux, CI's runner), and 10.6 ms on an SSD and 40 ms on a slower drive on Windows.
+- **Unlisted conflicts** (past 10,000) take the file's only with the switch itself on, never because many rows were ticked by hand (core's `importChoices`).
+- **Smaller ones:** the key comparing sign-ins is JSON, not parts joined by NUL; a username with a control character is left out (*a username with characters a page can't hold*); a too-long field counts only in a column an import reads (Bitwarden's `fields` no longer refuses its row); a CSV must be a file and is read no further than the size limit, whatever its size said; a stage's 10 minutes start again when its import starts; an Undo that fails part way keeps the rest to be tried again, taking nothing back twice; Your data's export card counts passwords without opening the vault (which would restart *Lock after*).
+
+**After review round 2:** an Undo that fails part way is kept by main too, not only chord-data: pressing Undo again (in the card, which says *Chord couldn't undo all of the import. Try Undo again.*, or the toast's *Try again*) takes back the rest, and two at once (the card's and the toast's) run one at a time. The check that a file's passphrase isn't the vault's fails closed: when it can't be made, the export doesn't go ahead. With the switch on, its line and the bar count the conflicts past the list too.
+
+**Decided here** (not the owner's):
+- **The same file again** imports nothing: everything reads as the same.
+- **A sign-in twice in one file** is one, the later row's, and the preview counts it.
+- **A conflict's choice** is by its place in the file; Settings sends whichever list is shorter (*keep yours except* or *take the file's except*). More than 10,000 that differ are listed to 10,000; the rest follow the switch.
+- **A sign-in box's realm goes out as its address** in a CSV (CSV has no realm), so a CSV brought back makes it a form's. Chord's file keeps the realm.
+- **A CSV's values are never changed:** no spreadsheet-formula escaping (`=`, `+`, `-`, `@`), which would change a password. Opened in a spreadsheet, such a field is the spreadsheet's to interpret.
+- **What a `login` record leaves out:** the password before the last change, which chords used it, and the never list.
+- **Limits:** 64 MB of CSV, 50,000 rows (the rest counted), 64 KB a field, 200 columns, 1,000 listed rows, 10,000 listed conflicts, 64 M characters of sign-ins held from one file.
+
+**Measured:**
+- **In the app** (`e2e/passwords-transfer.spec.ts`, the Linux container, X11): the 6,240-row Bitwarden file into a vault of 329, from *Import* to its result line, **414 ms**.
+- **chord-data's side, 5,000 rows** against a vault of 500 (`data/test/password-transfer.test.ts` with `CHORD_PASSWORD_PERF=1`, Windows 11, Node 24): the preview 22–24 ms; the import 0.7–1.0 s; its Undo 80–245 ms. A row is a seal, a tag and an insert, 100–250 µs (Node's cipher and HMAC objects are most of it), so the import writes for 4 ms, then lets chord-data answer anything else (the command bar's searches), and SQLite's checkpoints come smaller meanwhile, as for history's imports. chord-data's longest task during the import: **9.4 ms** on CI's Linux runner, **10.6 ms** on an SSD and **40 ms** on a slower drive on Windows (there, a commit carrying a checkpoint, as S15 §12 found for history). CI holds it to 100 ms. Main does nothing but route, and the renderer draws only the lines in view.
+
+**Tests:** the reader, each manager's header, CSV's corners, which rows come in, the diff and the `login` record, table-driven in `core/test/password-import.test.ts`; staging, the preview (open, locked, none), the import as chosen, a lock part way, the same file again, Undo, the CSV export read back and the records' pages in `data/test/password-transfer.test.ts`; main's gates (busy, no vault, locked, the passphrase), the toast and its Undo in `unit/passwords-transfer.test.ts`; and three journeys in `e2e/passwords-transfer.spec.ts` on the Linux runner: a Chrome CSV with its preview, ticked, Undo, the same file again, both exports (light and dark, axe, captures); an encrypted file's passwords through Your data into a new profile; and the 6,240-row Bitwarden file with *Review all*.
+
+**Left for later:** Settings → Passwords → *Import…* takes CSVs only (a Chord file goes through Your data); the FIDO Credential Exchange Format (§10); sync (phase 5).
 
 ## Phase 2: the generator, sign-up and change (built 2026-11-17)
 

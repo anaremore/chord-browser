@@ -201,7 +201,10 @@ export class ChordDatabase {
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
     this.migrate();
     this.sync = new SyncStore((text) => this.sql(text), () => this.device(), platform);
-    this.passwords = new PasswordStore((text) => this.sql(text), passwordKdf, (meta) => this.scrubBackups(meta));
+    this.passwords = new PasswordStore((text) => this.sql(text), passwordKdf, (meta) => this.scrubBackups(meta), {
+      transaction: (work) => this.transaction(work),
+      importing: (on) => this.importing(on),
+    });
     // Archived tabs past their keep-by date, icons nothing uses any more, and picks unused for their lifetime.
     this.db.prepare('DELETE FROM archive_item WHERE archived_at < ?').run(Date.now() - ARCHIVE_KEEP_MS);
     this.db.exec(
