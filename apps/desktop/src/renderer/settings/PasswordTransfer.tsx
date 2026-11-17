@@ -94,6 +94,7 @@ export function undoneText(u: PasswordImportUndone): string {
 
 /** Undo stopped part way: the rest is still the import's, and its button stays. */
 export const UNDO_FAILED = 'Chord couldn’t undo all of the import. Try Undo again.';
+export const UNDO_GONE = 'Chord can’t undo this import any more.';
 
 /* ---------- Import ---------- */
 
@@ -122,6 +123,9 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
     setStep({ at: 'reading' });
     setTake(new Set());
     setProblem(null);
+    // A failed Undo's line belongs to the import it was for, not the next one.
+    setUndoProblem(null);
+    setUndoing(false);
     const opened = await api.passwords.importChoose().catch(() => ({ ok: false, problem: 'unreadable' }) as const);
     if (!opened.ok) {
       if (opened.problem === 'cancelled') return onClose();
@@ -243,6 +247,8 @@ export function ImportCard({ view, onClose }: { view: PasswordsView; onClose(): 
                       if (u.ok) setStep({ at: 'undone', text: undoneText(u.undone) });
                       // Taken back already (the window's toast): the card hears it through the progress, and says so.
                       else if (u.problem === 'failed') setUndoProblem(UNDO_FAILED);
+                      // Not taken back, and chord-data no longer has it (it started again): nothing to try again.
+                      else if (u.problem === 'missing') setUndoProblem(UNDO_GONE);
                     });
                 }}
               >

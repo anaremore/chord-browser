@@ -268,6 +268,12 @@ export class PasswordTransfers {
     } finally {
       record.undoing = false;
     }
+    if (result.problem === 'missing') {
+      // chord-data no longer has it (it started again): nothing left to try, so don't offer Try again for ever.
+      this.imports.delete(importId);
+      if (record.windowId !== null) this.options.toast?.(record.windowId, { id: `import:${importId}`, message: 'Chord can’t undo that import any more' });
+      return { ok: false, problem: 'missing' };
+    }
     if (!result.undone) {
       // Still this import's to undo: the toast keeps its Undo, and says so; Settings' card shows its own problem line.
       if (record.windowId !== null)

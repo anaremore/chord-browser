@@ -200,6 +200,19 @@ describe('Import…', () => {
     expect((await db.passwords.run({ op: 'status' })).status!.count).toBe(0);
   });
 
+  it('an Undo chord-data no longer knows (it started again) is forgotten, not offered for ever', async () => {
+    await db.passwords.run({ op: 'setup', passphrase: PASSPHRASE });
+    openPaths = [csv('a.csv', CHROME)];
+    const t = transfers(async (op) => (op.op === 'importUndo' ? { problem: 'missing' } : db.passwords.run(op)));
+    const opened = await t.choose(null);
+    if (!opened.ok) throw new Error('not opened');
+    const run = await t.run(opened.stageId, { take: 'yours', except: [] }, undefined, { windowId: 4 as never, notify: null });
+    if (!run.ok || !run.importId) throw new Error('not imported');
+    expect(await t.undo(run.importId)).toEqual({ ok: false, problem: 'missing' });
+    expect(t.owns(run.importId)).toBe(false);
+    expect(toasts.at(-1)!.toast).toEqual({ id: `import:${run.importId}`, message: 'Chord can’t undo that import any more' });
+  });
+
   it('nothing new: no toast, no Undo', async () => {
     await db.passwords.run({ op: 'setup', passphrase: PASSPHRASE });
     for (const [origin, password] of [['https://example.com', 'Sekrit-1'], ['https://shop.example', 'Sekrit-2']]) await db.passwords.run({ op: 'add', login: { origin: origin!, username: 'ada', password: password! }, chordId: null });
