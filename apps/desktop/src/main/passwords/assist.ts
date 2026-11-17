@@ -183,6 +183,8 @@ interface Presave {
   readonly site: string | null;
   readonly doc: number;
   readonly formId: string;
+  /** The form's kind when it was filled: another document's form takes this entry only if it's of the same kind. */
+  readonly kind: string;
   password: string;
   /** Its rules in words, and whether it's strong, for the row that offers it again. */
   readonly rule: string | null;
@@ -226,8 +228,11 @@ interface Card {
   presaved?: string;
   /** A generated password with no vault yet: Save chooses the passphrase, saves it, then fills it as the menu would have. */
   generated?: { readonly menu: Menu };
-  /** A change's card made while locked: the form's current password, to find the account once unlocked. */
-  change?: { readonly current: string | null };
+  /**
+   * A change's card made while locked: the form's current password, to find the account once unlocked, and the
+   * username the form showed. Held only as long as the card (`dropCard` clears it), as what was typed is.
+   */
+  change?: { current: string | null; readonly shown: string };
   /** The vault was locked when it was offered: Save asks to unlock first, and the vault decides new or update then. */
   locked: boolean;
   setup: boolean;
@@ -321,7 +326,9 @@ export class PasswordAssist {
       // The site didn't take it: the tab's presave there is as if never submitted, so ↻ changes it rather than making
       // another (review round 1 of #53).
       const kept = this.presaveFor(e.contents, e.origin);
-      if (kept) kept.submitted = false;
+      // Only the form it was filled into (review round 2 of #53): a sign-in that failed elsewhere on the site says
+      // nothing about it.
+      if (kept && e.formId === kept.formId) kept.submitted = false;
     });
     events.on('forms', (e) => {
       const kinds = new Map(e.forms.map((f) => [f.formId, f.kind] as const));
@@ -706,7 +713,9 @@ export class PasswordAssist {
       // The same form, or the site's page loaded again, and no submit since: that entry takes the new one (the one
       // before is kept as `previous`), rather than another being made (review round 1 of #53). Another form on the
       // same page is another entry.
-      const sameForm = kept && !kept.submitted && (kept.doc !== menu.doc || kept.formId === menu.formId);
+      // Across documents, only a form of the same kind: a change form's never takes a sign-up's entry, nor the other
+      // way round (review round 2 of #53).
+      const sameForm = kept && !kept.submitted && (kept.doc !== menu.doc ? kept.kind === menu.kind : kept.formId === menu.formId);
       let id: string;
       let setup = false;
       if (kept && sameForm && (await vault.presaved('pending', kept.id, menu.origin, menu.tab.chordId, { password }).catch(() => false))) id = kept.id;
@@ -730,7 +739,7 @@ export class PasswordAssist {
       }
       if (contents.isDestroyed()) return;
       const site = await this.siteOf(menu.origin).catch(() => null);
-      this.keepPresave(contents, { id, origin: menu.origin, site, doc: menu.doc, formId: menu.formId, password, rule: menu.generate?.rule ?? null, strong: menu.generate?.strong ?? true, submitted: false });
+      this.keepPresave(contents, { id, origin: menu.origin, site, doc: menu.doc, formId: menu.formId, kind: menu.kind, password, rule: menu.generate?.rule ?? null, strong: menu.generate?.strong ?? true, submitted: false });
       if (setup) host.toast(menu.tab.windowId, 'passwords:saved', 'Saved. It’s in Settings → Passwords.');
     }
     const frame = this.frameFor(menu);
@@ -906,7 +915,8 @@ export class PasswordAssist {
     const base = { tab, contents: e.contents, origin: e.origin, site, setup: false, until, ...(generated ? { presaved: generated.id } : {}) };
     if (found.state === 'locked') {
       // The update card, whose **Update** unlocks first and then finds the account (as phase 1's locked save does).
-      return this.showCard({ ...base, kind: 'update', locked: true, values: { username: values.username, password: values.password }, change: { current: values.current ?? null } });
+      // Titled by the site, not the form's username: which account it is waits for the unlock (review round 2 of #53).
+      return this.showCard({ ...base, kind: 'update', locked: true, values: { username: values.username, password: values.password }, change: { current: values.current ?? null, shown: values.username } });
     }
     if (found.state === 'open') this.showCard({ ...base, locked: false, ...changeCard(found, values, generated?.id) });
   }
@@ -981,6 +991,9 @@ export class PasswordAssist {
     for (const timer of [card.idle, card.expiry]) if (timer !== null) this.clearTimer(timer);
     card.idle = card.expiry = null;
     card.values = null;
+    // A locked change's current password goes with it (review round 2 of #53).
+    if (card.change) card.change.current = null;
+    delete card.change;
     if (this.cards.get(card.tab.nodeId) !== card) return;
     this.cards.delete(card.tab.nodeId);
     if (!card.shown) this.options.host.offer(card.tab.nodeId, false);
@@ -1034,6 +1047,8 @@ export class PasswordAssist {
       busy: card.busy,
       problem: card.problem,
       ...(card.kind === 'change' && card.accounts ? { accounts: card.accounts.map((a) => a.username) } : {}),
+      // A locked change's card names no account yet: its title is the site's.
+      ...(card.change && card.locked ? { username: '' } : {}),
       ...(card.generated ? { generated: true } : {}),
       ...(card.signUp ? { signUp: true } : {}),
     };
@@ -1105,8 +1120,9 @@ export class PasswordAssist {
     if (!card.values) return;
     if (card.setup && details.passphrase === undefined) return;
     if (card.generated) return this.saveGenerated(card, card.generated.menu, details.passphrase!);
-    if (card.change && card.locked) return this.saveLockedChange(card, card.change.current);
-    if (card.kind === 'change' || card.presaved) return this.saveChange(card, details, false);
+    if (card.change && card.locked) return this.saveLockedChange(card);
+    // A change's cards (the chooser, or the update card for the account it found) update that account by its id.
+    if (card.kind === 'change' || card.presaved || (card.kind === 'update' && card.accounts)) return this.saveChange(card, details, false);
     card.busy = true;
     card.problem = null;
     host.changed(this.windowOf(card));
@@ -1209,27 +1225,35 @@ export class PasswordAssist {
     host.changed(this.windowOf(card));
   }
 
-  /** A change's update card, offered while locked: **Update** unlocks, then the account is found as for any change. */
-  private async saveLockedChange(card: Card, current: string | null): Promise<void> {
+  /**
+   * A change's update card, offered while locked (titled by its site): **Update** unlocks, then the account is found
+   * as for any change. It's updated at once only when that's the one account the form could have meant: the only match,
+   * under the username the form showed, or the form showed none. Otherwise the card shows the account it found, or the
+   * chooser, and waits for another **Update** (review round 2 of #53). What it needs is read from the card each time,
+   * so a card that goes during the unlock leaves nothing behind.
+   */
+  private async saveLockedChange(card: Card): Promise<void> {
     const { host, vault } = this.options;
     card.busy = true;
     card.problem = null;
     host.changed(this.windowOf(card));
     const open = await vault.askUnlock(this.windowOf(card));
-    const values = this.cards.get(card.tab.nodeId) === card ? card.values : null;
-    if (!values) return;
-    const found = open ? await vault.changeAccounts(card.origin, card.tab.chordId, current).catch(() => ({ state: 'off' as const })) : null;
-    if (this.cards.get(card.tab.nodeId) !== card) return;
+    const live = () => this.cards.get(card.tab.nodeId) === card && card.values && card.change;
+    if (!live()) return;
+    const found = open ? await vault.changeAccounts(card.origin, card.tab.chordId, card.change!.current).catch(() => ({ state: 'off' as const })) : null;
+    if (!live()) return;
     card.busy = false;
     if (!found) return host.changed(this.windowOf(card));
     if (found.state !== 'open') {
       card.problem = 'io';
       return host.changed(this.windowOf(card));
     }
-    const next = changeCard(found, values, card.presaved);
+    const shown = card.change!.shown;
+    const next = changeCard(found, card.values!, card.presaved);
+    card.change!.current = null;
+    delete card.change;
     Object.assign(card, { locked: false, kind: next.kind, values: next.values, accounts: next.accounts });
-    // One account: updated now, as the Update you pressed asked. Otherwise the card asks which.
-    if (next.kind === 'update') return this.saveChange(card, {}, false);
+    if (next.kind === 'update' && (shown === '' || shown === next.values.username)) return this.saveChange(card, {}, false);
     host.changed(this.windowOf(card));
   }
 

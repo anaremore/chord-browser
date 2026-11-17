@@ -815,7 +815,15 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
         <p id={`${ids}-title`} className={styles.permissionTitle}>
           {update ? (
             <>
-              Update the password for <span className={styles.host}>{card.username || card.host}</span>?
+              {card.username ? (
+                <>
+                  Update the password for <span className={styles.host}>{card.username}</span>?
+                </>
+              ) : (
+                <>
+                  Update a password for <span className={styles.host}>{card.host}</span>?
+                </>
+              )}
             </>
           ) : saved ? (
             <>

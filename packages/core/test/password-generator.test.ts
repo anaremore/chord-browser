@@ -14,7 +14,6 @@ import {
   GENERATED_LENGTH,
   isStrongPassword,
   passwordBits,
-  STRONG_PASSWORD,
   GENERATOR_CLASSES,
   generatePassword,
   passwordRulesFor,
@@ -115,8 +114,12 @@ describe('which rules count (S17 §6: the field, then the site, then minlength a
       const p = generatePassword(passwordRulesFor({}, 'required: lower; required: upper; required: digit; required: [!#$];').rules, random)!;
       expect(p).toMatch(/[!#$]/);
       expect(p.replace(/[!#$]/g, '')).toMatch(/^[A-Za-z2-9-]+$/);
+      // Six digits are under the floor: drawn from all ten, the strongest the rules allow (review round 2 of #53).
       const digits = generatePassword(passwordRulesFor({}, 'allowed: digit; minlength: 6; maxlength: 6;').rules, random)!;
-      expect(digits).toMatch(/^[2-9]{6}$/);
+      expect(digits).toMatch(/^[0-9]{6}$/);
+      // Fourteen are over it: drawn from 2–9, as the default's alphabet is.
+      const more = generatePassword(passwordRulesFor({}, 'allowed: digit; minlength: 14; maxlength: 14;').rules, random)!;
+      expect(more).toMatch(/^[2-9]{14}$/);
     }
   });
 });
@@ -305,7 +308,9 @@ describe('the floor under “strong” (review round 1 of #53)', () => {
     ['maxlength=4 alone', { maxLength: 4 }, null, false, /^Only 4 letters, digits and symbols, as this site asks$/],
     ['seven characters, however varied', { maxLength: 7 }, null, false, /^Only 7 /],
     ['eight letters and digits: strong enough (about 46 bits)', {}, 'maxlength: 8; allowed: lower, upper, digit;', true, null],
-    ['ten digits: long enough, too few bits (about 30)', {}, 'minlength: 10; maxlength: 10; allowed: digit;', false, /^Only 10 digits, as this site asks$/],
+    ['ten digits: long enough, too few bits (about 33)', {}, 'minlength: 10; maxlength: 10; allowed: digit;', false, /^Only 10 digits, as this site asks$/],
+    // In Apple's language what's required is allowed too: 0–9 and `-`, 11 to draw from, 12 places: about 41.5 bits.
+    ['twelve of digits and a required dash: drawn from all eleven', {}, 'allowed: digit; required: [-]; maxlength: 12;', true, null],
   ])('%s', (_name, field, site, strong, words) => {
     const { rules } = passwordRulesFor(field, site);
     const p = generatePassword(rules, seeded(12))!;
@@ -313,19 +318,55 @@ describe('the floor under “strong” (review round 1 of #53)', () => {
     if (words) expect(describeWeakPassword(p, rules)).toMatch(words);
   });
 
-  it('as a property: a password is called strong exactly when it has 8 characters and about 40 bits, and is still the longest the rules allow', () => {
+  /**
+   * The pools written out, apart from the code (review round 2 of #53): each alphabet's characters without
+   * look-alikes, and all of them, which a password under the floor is drawn from instead.
+   */
+  const POOLS: Record<string, { lean: number; full: number; chars: RegExp }> = {
+    digit: { lean: 8, full: 10, chars: /^[0-9]+$/ },
+    lower: { lean: 24, full: 26, chars: /^[a-z]+$/ },
+    'lower, digit': { lean: 32, full: 36, chars: /^[a-z0-9]+$/ },
+    'lower, upper, digit': { lean: 56, full: 62, chars: /^[A-Za-z0-9]+$/ },
+    '[ab]': { lean: 2, full: 2, chars: /^[ab]+$/ },
+    'ascii-printable': { lean: 57, full: 94, chars: /^[!-~]+$/ },
+  };
+  it('as a property: strong exactly at 8 characters and 40 bits, counted from the pool written out, and the longest the rules allow', () => {
     const r = seeded(13);
     for (let i = 0; i < 2000; i++) {
       const max = 1 + r(30);
-      const allowed = ['digit', 'lower', 'lower, digit', 'lower, upper, digit', '[ab]', 'ascii-printable'][r(6)]!;
+      const allowed = Object.keys(POOLS)[r(6)]!;
+      const { lean, full, chars } = POOLS[allowed]!;
       const { rules } = passwordRulesFor({ maxLength: max }, `allowed: ${allowed};`);
       const p = generatePassword(rules, r);
       if (p === null) continue;
-      expect(p.length).toBe(Math.min(GENERATED_LENGTH, max));
-      const strong = p.length >= STRONG_PASSWORD.length && passwordBits(p, rules) >= STRONG_PASSWORD.bits;
-      expect(isStrongPassword(p, rules)).toBe(strong);
-      if (!strong) expect(describeWeakPassword(p, rules)).toMatch(new RegExp(`^Only ${p.length} .+, as this site asks$`));
+      const length = Math.min(GENERATED_LENGTH, max);
+      expect(p.length).toBe(length);
+      expect(p).toMatch(chars);
+      // Lean where that's strong enough; otherwise everything allowed.
+      const pool = length * Math.log2(lean) >= 40 || lean === full ? lean : full;
+      const bits = length * Math.log2(pool);
+      expect(passwordBits(p, rules)).toBeCloseTo(bits, 6);
+      const strong = length >= 8 && bits >= 40;
+      expect(isStrongPassword(p, rules), `${allowed} × ${length}`).toBe(strong);
+      if (!strong) expect(describeWeakPassword(p, rules)).toMatch(new RegExp(`^Only ${length} .+, as this site asks$`));
     }
+  });
+  it('counts the drawn pool only: a required class outside it adds nothing (review round 2 of #53)', () => {
+    const digits = { ...DEFAULT_RULE_SET, allowed: '0123456789', required: ['-'], maxLength: 12 };
+    expect(passwordBits('123456789012', digits)).toBeCloseTo(12 * Math.log2(10), 6);
+    expect(isStrongPassword('123456789012', digits)).toBe(false);
+    // Such rules can't be met: nothing is made.
+    expect(generatePassword(digits, seeded(15))).toBeNull();
+  });
+  it.each<[string, string, number]>([
+    ['8 letters and digits', 'allowed: lower, upper, digit; maxlength: 8;', 8 * Math.log2(56)],
+    ['6 letters and digits, under the floor: all 62', 'allowed: lower, upper, digit; maxlength: 6;', 6 * Math.log2(62)],
+    ['4 digits: all 10', 'allowed: digit; maxlength: 4;', 4 * Math.log2(10)],
+    ['16 digits: 2–9', 'allowed: digit; maxlength: 16;', 16 * Math.log2(8)],
+    ['the default', '', 20 * Math.log2(57)],
+  ])('bits: %s', (_name, site, bits) => {
+    const { rules } = passwordRulesFor({}, site);
+    expect(passwordBits(generatePassword(rules, seeded(14))!, rules)).toBeCloseTo(bits, 6);
   });
 });
 

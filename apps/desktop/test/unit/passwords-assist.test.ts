@@ -1662,3 +1662,121 @@ describe('a change that worked while the vault was locked (review round 1 of #53
     expect(t.vault.changePassword).not.toHaveBeenCalled();
   });
 });
+
+/* ---------- review round 2 of #53 ---------- */
+
+describe('a change that worked while locked: never one account named and another updated (review round 2 of #53)', () => {
+  const ADA = { id: 'a1', username: 'ada@example.com' };
+  const BOB = { id: 'a2', username: 'bob' };
+  const lockedChange = async (username: string, unlocked: Awaited<ReturnType<AssistVault['changeAccounts']>>) => {
+    const t = setup({ change: { state: 'locked' } });
+    await t.signedIn({ kind: 'change', values: { username, password: 'new-Pw', current: 'old-Pw' } });
+    await settle(2);
+    const card = t.assist.cardFor('n1')!;
+    t.vault.changeAccounts.mockResolvedValueOnce(unlocked);
+    return { t, card };
+  };
+
+  it.each<[string, string]>([
+    ['with a username on the form', 'bob'],
+    ['with none', ''],
+  ])('locked, %s: titled by the site, no username', async (_name, username) => {
+    const { card } = await lockedChange(username, { state: 'open', matches: [ADA], accounts: [ADA, BOB] });
+    expect(card).toMatchObject({ kind: 'update', username: '', host: 'github.com' });
+  });
+
+  it.each<[string, string, Awaited<ReturnType<AssistVault['changeAccounts']>>, { updated: string | null; card?: Partial<NonNullable<ReturnType<PasswordAssist['cardFor']>>> }]>([
+    ['the form showed bob, the current password is Ada’s: Ada’s card, waiting for Update', 'bob', { state: 'open', matches: [ADA], accounts: [ADA, BOB] }, { updated: null, card: { kind: 'update', username: ADA.username } }],
+    ['the form showed Ada, Ada matched: updated at once', ADA.username, { state: 'open', matches: [ADA], accounts: [ADA, BOB] }, { updated: 'a1' }],
+    ['the form showed none, one matched: updated at once', '', { state: 'open', matches: [ADA], accounts: [ADA, BOB] }, { updated: 'a1' }],
+    ['several matched: the chooser', 'cy', { state: 'open', matches: [ADA, BOB], accounts: [ADA, BOB] }, { updated: null, card: { kind: 'change' } }],
+    ['none matched: the chooser, among the site’s', 'bob', { state: 'open', matches: [], accounts: [ADA, BOB] }, { updated: null, card: { kind: 'change' } }],
+  ])('%s', async (_name, username, unlocked, want) => {
+    const { t, card } = await lockedChange(username, unlocked);
+    await t.assist.answer('w1', card.id, 'save');
+    await settle(2);
+    if (want.updated) {
+      expect(t.vault.changePassword).toHaveBeenCalledWith(expect.objectContaining({ account: want.updated }));
+      expect(t.assist.cardFor('n1')).toBeNull();
+      return;
+    }
+    expect(t.vault.changePassword).not.toHaveBeenCalled();
+    const shown = t.assist.cardFor('n1')!;
+    expect(shown).toMatchObject(want.card!);
+    // A second Update applies what the card now names (or, in the chooser, the account you pick).
+    await t.assist.answer('w1', shown.id, 'save', shown.kind === 'change' ? { account: 0 } : {});
+    expect(t.vault.changePassword).toHaveBeenCalledWith(expect.objectContaining({ account: 'a1' }));
+  });
+
+  it('the card going takes the form’s current password with it', async () => {
+    const { t, card } = await lockedChange('bob', { state: 'open', matches: [ADA], accounts: [ADA] });
+    const held = (t.assist as unknown as { cards: Map<string, { change?: { current: string | null } }> }).cards.get('n1')!;
+    expect(held.change?.current).toBe('old-Pw');
+    await t.assist.answer('w1', card.id, 'close');
+    // Hidden, the candidate lasts; gone at its deadline, nothing of it stays.
+    t.timers.advance(HOLD_MS);
+    expect(held.change).toBeUndefined();
+  });
+
+  it('…and so does the unlock: read from the card, then let go', async () => {
+    const { t, card } = await lockedChange('bob', { state: 'open', matches: [ADA], accounts: [ADA] });
+    const held = (t.assist as unknown as { cards: Map<string, { change?: { current: string | null } }> }).cards.get('n1')!;
+    await t.assist.answer('w1', card.id, 'save');
+    await settle(2);
+    expect(t.vault.changeAccounts).toHaveBeenLastCalledWith(ORIGIN, 'c1', 'old-Pw');
+    expect(held.change).toBeUndefined();
+  });
+});
+
+describe('the presave’s form, kept to its own (review round 2 of #53)', () => {
+  const generateAndChoose = async (t: ReturnType<typeof setup>, focus: Record<string, unknown> = NEW) => {
+    await t.focus(focus);
+    await settle(2);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+  };
+  const regenerateAndChoose = async (t: ReturnType<typeof setup>, focus: Record<string, unknown> = NEW) => {
+    await t.focus(focus);
+    await settle(2);
+    await t.assist.regenerate('w1', t.assist.menuFor('w1')!.id);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+  };
+
+  it.each<[string, Record<string, unknown>, number]>([
+    ['its own form failed: ↻ changes the same entry', { formId: 'f1', kind: 'sign-up' }, 1],
+    ['another form on the site failed (a sign-in): the presave stays submitted, another entry', { formId: 'f7', kind: 'sign-in' }, 2],
+  ])('%s', async (_name, failed, entries) => {
+    const t = setup();
+    await generateAndChoose(t);
+    await t.submitted({ values: { username: 'ada' } });
+    t.events.emit('failed', { contents: t.contents, origin: ORIGIN, why: 'still-shown', ...failed } as never);
+    await regenerateAndChoose(t);
+    expect(t.vault.presave).toHaveBeenCalledTimes(entries);
+  });
+
+  it.each<[string, Record<string, unknown>, number]>([
+    ['a sign-up, reloaded: the same entry', NEW, 1],
+    ['a change form on the next page: its own entry', { kind: 'change', role: 'new-password' }, 2],
+    ['a reset form on the next page: its own entry', { kind: 'reset', role: 'new-password' }, 2],
+  ])('the site’s next page, before any submit: %s', async (_name, next, entries) => {
+    const t = setup();
+    await generateAndChoose(t);
+    t.page.emit('did-navigate', {}, 'https://github.com/next', 200);
+    await settle(2);
+    await regenerateAndChoose(t, next);
+    expect(t.vault.presave).toHaveBeenCalledTimes(entries);
+  });
+
+  it('…and a change form’s entry never goes to a sign-up', async () => {
+    const t = setup();
+    await generateAndChoose(t, { kind: 'change', role: 'new-password' });
+    t.page.emit('did-navigate', {}, 'https://github.com/signup', 200);
+    await settle(2);
+    await regenerateAndChoose(t);
+    expect(t.vault.presave).toHaveBeenCalledTimes(2);
+  });
+});

@@ -174,15 +174,25 @@ const SYMBOLS = NAMED['special']!.replace(' ', '');
  */
 export const STRONG_PASSWORD = { length: 8, bits: 40 } as const;
 
-/** The characters a password for these rules is drawn from (as `generatePassword` draws them). */
-const poolOf = (rules: PasswordRuleSet): string => {
+/**
+ * The characters a password of `length` for these rules is drawn from (as `generatePassword` draws them): the
+ * default's alphabet where the rules allow it, unless that would leave the password under the floor and the rules
+ * allow more, when it's everything they allow (the strongest password they allow: four digits from 0–9, not 2–9).
+ */
+function poolFor(rules: PasswordRuleSet, length: number): string {
   const allowed = rules.allowed.replace(/ /g, '');
-  return intersect(DEFAULT_ALPHABET, allowed) || allowed;
-};
+  const preferred = intersect(DEFAULT_ALPHABET, allowed);
+  if (!preferred) return allowed;
+  return length * Math.log2(preferred.length) < STRONG_PASSWORD.bits && allowed.length > preferred.length ? allowed : preferred;
+}
 
-/** A password's strength as it was made for these rules: its length times the bits of each character drawn, a little under. */
+/**
+ * A password's strength as it was made for these rules: its length times the bits of the pool its characters were
+ * drawn from. Only that pool: a required character from outside it (`required: [-]` beside `allowed: digit`) is one
+ * place, not a wider alphabet for every place (review round 2 of #53).
+ */
 export function passwordBits(password: string, rules: PasswordRuleSet): number {
-  const pool = new Set([...poolOf(rules), ...rules.required.join('')]).size;
+  const pool = new Set(poolFor(rules, password.length)).size;
   return pool > 1 ? password.length * Math.log2(pool) : 0;
 }
 
@@ -199,7 +209,7 @@ function kindsOf(chars: string): string | null {
 
 /** Why a password isn't strong, in words, for the row's second line: `Only 4 digits, as this site asks`. */
 export function describeWeakPassword(password: string, rules: PasswordRuleSet): string {
-  return `Only ${password.length} ${kindsOf(poolOf(rules)) ?? 'characters'}, as this site asks`;
+  return `Only ${password.length} ${kindsOf(poolFor(rules, password.length)) ?? 'characters'}, as this site asks`;
 }
 
 /**
@@ -284,20 +294,22 @@ export function generatePassword(rules: PasswordRuleSet, randomInt: RandomInt): 
   // Never a space: a site that allows one may still trim it, and it can't be seen.
   const allowed = rules.allowed.replace(/ /g, '');
   if (!allowed) return null;
-  // The default's alphabet where the rules allow it; else whatever they allow.
-  const preferred = intersect(DEFAULT_ALPHABET, allowed);
-  const pool = preferred || allowed;
+  // The default's alphabet where the rules allow it; else whatever they allow (and under the floor, all they allow).
+  const pool = poolFor(rules, length);
+  // Drawn from everything allowed (under the floor): the required classes and the default's take their own whole.
+  const wide = pool === allowed;
   // The rules' classes, each from the default's alphabet where it can be.
   const required: string[] = [];
   for (const cls of rules.required) {
     const own = intersect(cls, allowed);
     if (!own) return null;
-    required.push(intersect(own, DEFAULT_ALPHABET) || own);
+    required.push(wide ? own : intersect(own, DEFAULT_ALPHABET) || own);
   }
   if (required.length > length) return null;
   // Then the default's classes, as far as the rules allow them and the length leaves room: a site that only bounds the
   // length gets the default's style.
-  for (const cls of Object.values(GENERATOR_CLASSES)) {
+  const classes = wide ? [NAMED['lower']!, NAMED['upper']!, NAMED['digit']!, GENERATOR_CLASSES.symbol] : Object.values(GENERATOR_CLASSES);
+  for (const cls of classes) {
     const own = intersect(cls, pool);
     if (own && required.length < length && !required.some((r) => [...r].every((c) => own.includes(c)))) required.push(own);
   }
