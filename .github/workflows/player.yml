@@ -51,7 +51,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
+          # Release builds restore no cache: a cache saved by another job (one that ran third-party code) could
+          # poison what a signed build installs. Slower, from the lockfile only.
+          package-manager-cache: false
       - run: pnpm install --frozen-lockfile
 
       # ECS's zip, as checked against apps/player/ecs.json (scripts/fetch-ecs.mjs checks it again from the cache).

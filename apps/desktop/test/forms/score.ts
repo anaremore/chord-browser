@@ -129,8 +129,11 @@ export interface CorpusBaseline {
   readonly failures: Readonly<Record<string, readonly string[]>>;
 }
 
-/** The ratchet: a field that was right and is now wrong, and one that's newly right (the baseline must be taken again). */
-export function compareBaseline(score: CorpusScore, baseline: CorpusBaseline): { regressed: string[]; fixed: string[] } {
+/** The ratchet (both suites'): a field that was right and is now wrong, and one that's newly right (the baseline must be taken again). */
+export function compareBaseline(
+  score: { readonly failures: Readonly<Record<string, readonly string[]>> },
+  baseline: { readonly failures: Readonly<Record<string, readonly string[]>> },
+): { regressed: string[]; fixed: string[] } {
   const regressed: string[] = [];
   const fixed: string[] = [];
   const files = new Set([...Object.keys(score.failures), ...Object.keys(baseline.failures)]);

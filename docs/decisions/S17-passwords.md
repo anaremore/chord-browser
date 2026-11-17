@@ -473,6 +473,7 @@ The maintainer asked for tests that catch real breakage. Five layers, the first 
 - **A baseline file** lists every form Chord gets wrong today, by name and field, as DuckDuckGo's `expectedFailures` and Chord's `perf-baseline.json` do. A form that was right and is now wrong fails CI. One that's newly right fails too, until the baseline is updated, so the number only ratchets up. The total is printed on every run.
 - DuckDuckGo's own run has expected failures on 176 of 563 ✅, so the first baseline will not be zero, and shouldn't pretend to be.
 - Chord's own fixtures (below) are also run here, and those must all pass.
+- **Bitwarden's test-the-web** (added 2026-11-16, §14): its sign-in pages, walked step by step, against Chord's own expectations, and filled through the real agent with a fake account. Its own baseline, ratcheting the same way. It runs as its own CI job, apart from any cache a release restores, since its build runs a third party's packages. When the site can't be fetched or built it skips locally and on pull requests, and fails on a push to main or a run by hand.
 
 **3. Journeys, in Chord** (`test/e2e/passwords.spec.ts` and `test/fixtures/passwords/`, served by a local server that records what each form posted).
 Each fixture is a page Chord wrote, one pattern each:
@@ -522,7 +523,7 @@ Also here:
 - **Chromium's and Firefox's test tables** are source code under their licenses: fine to port, Firefox's in an MPL file.
 - **DuckDuckGo's snapshots** are the only real-site corpus I found under a permissive license. The Fathom training sets Firefox's model was built on (`mozilla-services/fathom-login-forms`, `fathom-form-autofill`) now return 404 ✅.
 - **Academic sets:** `oeschsec/pwmsecurity-usenix2020` exists but has no license ✅, so it can be read, not copied. A Zenodo artifact for a 2024 autofill-leak paper surfaced in search and wasn't checked ⚠.
-- **Bitwarden's `test-the-web`** is GPL-3.0 ✅: a good by-hand target, never a fixture source.
+- **Bitwarden's `test-the-web`** is GPL-3.0 ✅: never a fixture source. Since 2026-11-16 it's also the corpus suite's second target (`test/forms/ttw.spec.ts`), tested against and never vendored: nothing from its repository is in Chord's tree, and Chord's expectations for its pages are Chord's own, written by looking at each page. It isn't hosted anywhere (no Pages site; its README builds and runs it), so a pinned, hash-checked download is built at test time into the git-ignored cache, as DuckDuckGo's corpus is fetched into it.
 
 ---
 

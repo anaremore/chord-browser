@@ -1,0 +1,11 @@
+{
+  "site": "bitwarden/test-the-web@9f78cc52f29c445f1ba768622dab2a3ae31b694a",
+  "rightSteps": 32,
+  "steps": 33,
+  "failures": {
+    "login/input-event-trust-login › sign in": [
+      "fill: the username didn’t land",
+      "fill: the password didn’t land"
+    ]
+  }
+}
