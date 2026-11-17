@@ -742,6 +742,39 @@ describe('the browser’s own sign-in box (S17 §10)', () => {
     expect(await service.passwordFor(id, ROUTER, 'work')).toBeNull();
   });
 
+  it('main refuses a box’s sign-in on the form side itself, whatever chord-data answers', async () => {
+    const boxLogin = { id: 'box', origin: ROUTER, username: 'ada@example.com', realm: 'Router admin', note: '', createdAt: 0, updatedAt: 0, lastUsed: null, chordUsed: null };
+    // A chord-data that forgot to keep the two apart.
+    const careless = new PasswordService({
+      ...{ chord: (chordId: string) => CHORDS[chordId] ?? null, extensions: () => extensions, settings: () => settings, keys, clipboard, changed: () => undefined },
+      data: async (op) => {
+        if (op.op === 'status') return { status: { state: 'open', kept: false, count: 1 }, generation: 0, held: false };
+        if (op.op === 'forSite') return { logins: [boxLogin], unreadable: 0 };
+        if (op.op === 'fill') return { password: 'box-Sekrit', loginOrigin: ROUTER, loginRealm: 'Router admin' };
+        return {};
+      },
+      now: () => clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    });
+    expect(await careless.accountsFor(ROUTER, 'work')).toEqual({ state: 'open', insecure: true, offers: [] });
+    expect(await careless.passwordFor('box', ROUTER, 'work')).toBeNull();
+    // And the box gets only its own realm's.
+    expect(await careless.httpPasswordFor('box', ROUTER, 'Other', 'work')).toBeNull();
+    expect(await careless.httpPasswordFor('box', ROUTER, 'Router admin', 'work')).toBe('box-Sekrit');
+  });
+
+  it('Undo of an update: the password before it back; nothing when locked or with nothing before it', async () => {
+    const first = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
+    const id = (first as { id: string }).id;
+    expect(await service.revertUpdate(id)).toBe(false);
+    expect(await service.saveCandidate({ ...signIn, password: 'two-Sekrit' })).toEqual({ ok: true, id, kind: 'update' });
+    expect(await service.revertUpdate(id)).toBe(true);
+    expect(await service.httpPasswordFor(id, ROUTER, 'Router admin', 'work')).toBe('box-Sekrit');
+    await service.lock();
+    expect(await service.revertUpdate(id)).toBe(false);
+  });
+
   it('off where passwords are off, locked when locked, nothing for a chord main doesn’t know', async () => {
     const saved = await service.saveCandidate({ ...signIn, passphrase: PASSPHRASE });
     const id = (saved as { id: string }).id;

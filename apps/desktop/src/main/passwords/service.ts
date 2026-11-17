@@ -577,7 +577,9 @@ export class PasswordService {
     if (result.problem === 'locked') return { state: 'locked' };
     this.touch();
     const { insecureOrigin, offersFor } = await sites();
-    return { state: 'open', offers: offersFor(page.origin, result.logins ?? []), insecure: insecureOrigin(page.origin) };
+    // A form is never offered what the browser's own sign-in box saved (S17 §10): checked here as well as in chord-data.
+    const forms = (result.logins ?? []).filter((l) => l.realm === null);
+    return { state: 'open', offers: offersFor(page.origin, forms), insecure: insecureOrigin(page.origin) };
   }
 
   /**
@@ -592,8 +594,9 @@ export class PasswordService {
     const chordId = page.private ? null : (page.chord?.id ?? null);
     const result = await this.data({ op: 'fill', id, origin: page.origin, chordId }).catch(() => ({}) as PasswordResult);
     this.touch();
-    // Main checks the match itself too (S17 §5), on the sign-in's own origin as chord-data opened it.
-    if (result.password === undefined || result.loginOrigin === undefined) return null;
+    // Main checks the match itself too (S17 §5), on the sign-in's own origin as chord-data opened it, and that it's a
+    // form's, never the sign-in box's (S17 §10).
+    if (result.password === undefined || result.loginOrigin === undefined || result.loginRealm !== null) return null;
     if ((await sites()).matchLogin(page.origin, result.loginOrigin) === null) return null;
     return result.password;
   }
@@ -772,9 +775,19 @@ export class PasswordService {
     if ((await this.ensureOpen()) !== 'open') return null;
     const result = await this.data({ op: 'fill', id, origin, realm, chordId: page.chord?.id ?? null }).catch(() => ({}) as PasswordResult);
     this.touch();
-    if (result.password === undefined || result.loginOrigin === undefined) return null;
+    if (result.password === undefined || result.loginOrigin === undefined || result.loginRealm !== realm) return null;
     if (result.loginOrigin !== (await sites()).loginOrigin(origin)) return null;
     return result.password;
+  }
+
+  /** Undo of an update *Remember* made: the password before it back. False when it can't (locked, gone, nothing before it). */
+  async revertUpdate(id: string): Promise<boolean> {
+    if ((await this.ensureOpen()) !== 'open') return false;
+    const result = await this.data({ op: 'revert', id }).catch(() => ({}) as PasswordResult);
+    if (!result.id) return false;
+    this.touch();
+    this.options.changed();
+    return true;
   }
 
   /** The save card's *Never for this site*, for that frame's origin and the tab's chord: false while locked (ask first) or in a private window. */

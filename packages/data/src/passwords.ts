@@ -107,6 +107,8 @@ export type PasswordOp =
   | { op: 'used'; id: string; chordId: string }
   | { op: 'add'; login: NewLogin; chordId: string | null }
   | { op: 'edit'; id: string; patch: LoginPatch }
+  /** Undo of an update: the password before it back (the one it replaces becomes the one before). */
+  | { op: 'revert'; id: string }
   /** Deleted, and kept sealed in memory for its Undo until chord-data quits. */
   | { op: 'delete'; id: string }
   | { op: 'undelete'; id: string }
@@ -142,6 +144,8 @@ export interface PasswordResult {
   held?: boolean;
   /** From `fill`: the sign-in's own origin, so main checks the match too. */
   loginOrigin?: string;
+  /** From `fill`: the sign-in's realm (null for a form's), so main checks that too. */
+  loginRealm?: string | null;
 }
 
 /** What `meta` keeps under `passwords`. */
@@ -634,7 +638,7 @@ export class PasswordStore {
         // Never for a page whose origin it doesn't match, whoever asks (S17 §5), nor across a form and the sign-in box: main checks too.
         if (!this.fits(secret, op.origin, op.realm)) return { problem: 'refused' };
         if (op.chordId) this.use(op.id, op.chordId, now);
-        return { password: secret.password, loginOrigin: secret.origin };
+        return { password: secret.password, loginOrigin: secret.origin, loginRealm: secret.realm };
       }
       case 'used':
         if (!this.rowById(op.id)) return { problem: 'missing' };
@@ -649,6 +653,13 @@ export class PasswordStore {
         const secret = row ? this.openRow(row) : null;
         if (!row || !secret) return { problem: 'missing' };
         const problem = this.rewrite(row, secret, op.patch, now);
+        return problem ? { problem } : { id: op.id };
+      }
+      case 'revert': {
+        const row = this.rowById(op.id);
+        const secret = row ? this.openRow(row) : null;
+        if (!row || !secret?.previous) return { problem: 'missing' };
+        const problem = this.rewrite(row, secret, { password: secret.previous.password }, now);
         return problem ? { problem } : { id: op.id };
       }
       case 'delete': {

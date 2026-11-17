@@ -24,7 +24,7 @@ describe('AuthBroker', () => {
     expect(broker.login(page('https://example.com/'), details('http://router.local/'), info(), answer)).toBe(true);
     expect(onChange).toHaveBeenCalledOnce();
     const prompt = broker.promptFor('tab-1' as never)!;
-    expect(prompt).toEqual({ id: prompt.id, origin: 'http://router.local', realm: 'Admin', proxy: false, insecure: true, retry: false, accounts: [], locked: false, remember: null });
+    expect(prompt).toEqual({ id: prompt.id, origin: 'http://router.local', realm: 'Admin', proxy: false, insecure: true, retry: false, accounts: [], locked: false, remember: null, fill: false, embeddedIn: null });
     expect(broker.promptFor('tab-2' as never)).toBeNull();
 
     void broker.respond(prompt.id, { username: 'me', password: 'secret' });
@@ -85,14 +85,23 @@ describe('AuthBroker', () => {
 
 /**
  * The box with Chord's passwords (S17 §10): filled from the vault for the request's own origin and realm, the
- * password never leaving main before Sign in; *Remember* saving only once the server takes it; and the gates.
+ * password never leaving main before Sign in; *Remember* saving only once the server answers the request that was
+ * answered; a frame of another site's page never filled; and the gates.
  */
 describe('AuthBroker with the vault', () => {
   const ORIGIN = 'http://router.test:8080';
   const ADDRESS = `${ORIGIN}/admin`;
+  /** Frame tree node ids: the page's main frame, and two of its subframes. */
+  const MAIN = 1;
+  const FRAME = 2;
+  const SIBLING = 3;
 
-  /** A tab's page: its address, and the frames it commits (what the server answered). */
+  /**
+   * A tab's page: its address, its frames' navigations (main tracks them, `attachPage`), and the frames it commits
+   * (the server's answer). Committed frames are named by tree node id as their process and routing ids.
+   */
   class Page extends EventEmitter {
+    mainFrame = { frameTreeNodeId: MAIN };
     constructor(
       public url: string,
       public nodeId = 'tab-1',
@@ -101,28 +110,36 @@ describe('AuthBroker with the vault', () => {
     }
     getURL = () => this.url;
     isDestroyed = () => false;
-    /** The server answered `code` for `url`. */
-    commit(url: string, code: number, isMainFrame = true) {
-      this.emit('did-frame-navigate', {}, url, code, '', isMainFrame, 1, 1);
+    /** A frame starts navigating to `url`. */
+    navigate(url: string, frame = MAIN) {
+      this.emit('did-start-navigation', { url, isSameDocument: false, isMainFrame: frame === MAIN, frame: { frameTreeNodeId: frame } });
+    }
+    redirect(url: string, frame = MAIN) {
+      this.emit('did-redirect-navigation', { url, isSameDocument: false, isMainFrame: frame === MAIN, frame: { frameTreeNodeId: frame } });
+    }
+    /** The server answered `code` and the frame committed `url`. */
+    commit(url: string, code: number, frame = MAIN) {
+      this.emit('did-frame-navigate', {}, url, code, '', frame === MAIN, frame, frame);
     }
   }
 
   type State = 'open' | 'locked' | 'none' | 'off';
   type Account = { id: string; username: string };
 
-  function setUp(options: { state?: State; accounts?: Account[]; private?: boolean } = {}) {
+  function setUp(options: { state?: State; accounts?: Account[]; private?: boolean; saved?: 'new' | 'update' } = {}) {
     let state: State = options.state ?? 'open';
     let accounts: Account[] = options.accounts ?? [];
     const vault = {
       accounts: vi.fn(async (..._args: unknown[]): Promise<unknown> => (state === 'open' ? { state, accounts } : { state })),
       password: vi.fn(async (id: string, ..._rest: unknown[]) => (state === 'open' && accounts.some((a) => a.id === id) ? `pw-of-${id}` : null)),
-      remember: vi.fn(async (..._args: unknown[]) => (state === 'open' ? { ok: true, id: 'new', kind: 'new' } : { ok: false, problem: state })),
+      remember: vi.fn(async (..._args: unknown[]) => (state === 'open' ? { ok: true, id: 'saved-1', kind: options.saved ?? 'new' } : { ok: false, problem: state })),
       askUnlock: vi.fn(async (..._args: unknown[]) => {
         state = 'open';
         return true;
       }),
     };
     const firstSave = vi.fn();
+    const updated = vi.fn();
     let timers: { run: () => void; at: number }[] = [];
     let now = 0;
     const broker = new AuthBroker();
@@ -131,8 +148,10 @@ describe('AuthBroker with the vault', () => {
       onChange: vi.fn(),
       tabOf: () => ({ chordId: options.private ? 'priv' : 'work', private: options.private ?? false }),
       windowOf: () => 'w1' as never,
+      frameOf: (processId) => processId,
       vault: vault as never,
       firstSave,
+      updated,
       now: () => now,
       setTimeout: (run, ms) => timers.push({ run, at: now + ms }),
       clearTimeout: () => undefined,
@@ -147,44 +166,109 @@ describe('AuthBroker with the vault', () => {
       state = next.state ?? state;
       accounts = next.accounts ?? accounts;
     };
-    return { broker, vault, firstSave, advance, set };
+    /** A tab's page, tracked as main tracks every page. */
+    const page = (url = ADDRESS, nodeId = 'tab-1') => {
+      const p = new Page(url, nodeId);
+      broker.attachPage(p as never);
+      return p;
+    };
+    return { broker, vault, firstSave, updated, advance, set, page };
   }
 
   const settle = async () => {
     for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
   };
 
-  /** A box asked for, and shown once the vault answered. */
-  async function ask(broker: AuthBroker, page: Page, more: Partial<AuthenticationResponseDetails> = {}) {
+  /** A frame navigates to the router (unless it already is), the router asks, and the box is shown once the vault answered. */
+  async function ask(broker: AuthBroker, page: Page, more: Partial<AuthenticationResponseDetails> & { frame?: number; navigate?: boolean } = {}) {
+    const { frame = MAIN, navigate = true, ...rest } = more;
+    if (navigate && rest.isRequestForNavigation !== false) page.navigate(rest.url ?? ADDRESS, frame);
     const answer = vi.fn();
-    broker.login(page as never, details(ADDRESS, more), info({ host: 'router.test', port: 8080, realm: 'Router admin' }), answer);
+    broker.login(page as never, details(rest.url ?? ADDRESS, rest), info({ host: 'router.test', port: 8080, realm: 'Router admin' }), answer);
     await settle();
     return { answer, prompt: broker.promptFor(page.nodeId as never) };
   }
 
   it('fills from the vault by origin and realm: usernames only to the popover, the password from main on Sign in', async () => {
-    const { broker, vault } = setUp({ accounts: [{ id: 'a', username: 'ada@example.com' }, { id: 'b', username: 'grace@example.com' }] });
-    const page = new Page(ADDRESS);
-    const { answer, prompt } = await ask(broker, page);
+    const { broker, vault, page } = setUp({ accounts: [{ id: 'a', username: 'ada@example.com' }, { id: 'b', username: 'grace@example.com' }] });
+    const tab = page();
+    const { answer, prompt } = await ask(broker, tab);
     expect(vault.accounts).toHaveBeenCalledWith(ORIGIN, 'Router admin', 'work');
-    expect(prompt).toMatchObject({ accounts: ['ada@example.com', 'grace@example.com'], locked: false, remember: true });
+    expect(prompt).toMatchObject({ accounts: ['ada@example.com', 'grace@example.com'], locked: false, remember: true, fill: true, embeddedIn: null });
     expect(JSON.stringify(prompt)).not.toContain('pw-of');
     // Nothing is sent until Sign in.
     expect(answer).not.toHaveBeenCalled();
-    await broker.respond(prompt!.id, { account: 1 }, true);
+    await broker.respond(prompt!.id, { account: 1, username: 'grace@example.com' }, true, 'w1' as never);
     expect(vault.password).toHaveBeenCalledWith('b', ORIGIN, 'Router admin', 'work');
     expect(answer).toHaveBeenCalledWith('grace@example.com', 'pw-of-b');
     // The saved one: nothing to save again.
-    page.commit(ADDRESS, 200);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['out of range', { account: 2, username: 'ada' }, 'w1'],
+    ['for another username than the list has there', { account: 0, username: 'grace' }, 'w1'],
+    ['from another window’s popover', { account: 0, username: 'ada' }, 'w2'],
+  ])('refuses a saved sign-in %s', async (_name, choice, windowId) => {
+    const { broker, vault, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }, { id: 'b', username: 'bob' }] });
+    const { prompt, answer } = await ask(broker, page());
+    await broker.respond(prompt!.id, choice, false, windowId as never);
+    expect(vault.password).not.toHaveBeenCalled();
+    expect(answer).not.toHaveBeenCalled();
+    // The box is still there, for the right answer.
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id });
+  });
+
+  it('refuses an index the list no longer means: locked and opened again with other sign-ins', async () => {
+    const { broker, vault, set, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }, { id: 'b', username: 'bob' }] });
+    const { prompt, answer } = await ask(broker, page());
+    // The popover drew [ada, bob]; the vault locks, opens, and now holds [carol, ada].
+    set({ state: 'locked' });
+    await broker.respond(prompt!.id, { account: 0, username: 'ada' });
+    await settle();
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ locked: true, accounts: [] });
+    set({ state: 'open', accounts: [{ id: 'c', username: 'carol' }, { id: 'a', username: 'ada' }] });
+    await broker.unlock(prompt!.id);
+    await settle();
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ accounts: ['carol', 'ada'] });
+    vault.password.mockClear();
+    // Index 1 was bob when it was drawn: refused, never carol's nor ada's password.
+    await broker.respond(prompt!.id, { account: 1, username: 'bob' });
+    expect(vault.password).not.toHaveBeenCalled();
+    expect(answer).not.toHaveBeenCalled();
+    await broker.respond(prompt!.id, { account: 1, username: 'ada' });
+    expect(answer).toHaveBeenCalledWith('ada', 'pw-of-a');
+  });
+
+  it('a frame of another site’s page: says whose page, isn’t filled, and signs in only with a username chosen', async () => {
+    const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada@example.com' }] });
+    const tab = page('https://evil.example/');
+    const { prompt, answer } = await ask(broker, tab, { frame: FRAME });
+    expect(prompt).toMatchObject({ origin: ORIGIN, embeddedIn: 'evil.example', fill: false, accounts: ['ada@example.com'], remember: false });
+    expect(answer).not.toHaveBeenCalled();
+    await broker.respond(prompt!.id, { account: 0, username: 'ada@example.com' });
+    expect(answer).toHaveBeenCalledWith('ada@example.com', 'pw-of-a');
+  });
+
+  it('a top-level navigation from another site, and a frame of the same site, are filled as before', async () => {
+    const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    // Leaving evil.example for the router: the main frame, so the box is filled.
+    const top = await ask(broker, page('https://evil.example/'));
+    expect(top.prompt).toMatchObject({ fill: true, embeddedIn: null });
+    const other = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    const own = await ask(other.broker, other.page(`${ORIGIN}/`), { frame: FRAME });
+    expect(own.prompt).toMatchObject({ fill: true, embeddedIn: null });
+  });
+
   it('waits a moment for the vault, then shows the box anyway, and fills it when the answer comes', async () => {
-    const { broker, vault, advance } = setUp();
+    const { broker, vault, advance, page } = setUp();
     let release: (value: unknown) => void = () => undefined;
     vault.accounts.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
-    broker.login(new Page(ADDRESS) as never, details(ADDRESS), info({ host: 'router.test', port: 8080, realm: 'Router admin' }), vi.fn());
+    const tab = page();
+    tab.navigate(ADDRESS);
+    broker.login(tab as never, details(ADDRESS), info({ host: 'router.test', port: 8080, realm: 'Router admin' }), vi.fn());
     expect(broker.promptFor('tab-1' as never)).toBeNull();
     advance(AUTH_FILL_WAIT_MS);
     expect(broker.promptFor('tab-1' as never)).toMatchObject({ accounts: [], remember: null });
@@ -201,126 +285,157 @@ describe('AuthBroker with the vault', () => {
     ['passwords off for the chord', { state: 'off' as const }, null],
     ['a private window', { state: 'open' as const, accounts: [{ id: 'a', username: 'ada' }], private: true }, null],
   ])('Remember’s default with %s', async (_name, options, remember) => {
-    const { broker } = setUp(options);
-    const { prompt } = await ask(broker, new Page(ADDRESS));
+    const { broker, page } = setUp(options);
+    const { prompt } = await ask(broker, page());
     expect(prompt!.remember).toBe(remember);
     expect(prompt!.locked).toBe(options.state === 'locked');
     // A private window still fills.
     if ('private' in options) expect(prompt!.accounts).toEqual(['ada']);
   });
 
-  it('a proxy’s box never asks the vault, never fills, and never offers Remember', async () => {
-    const { broker, vault } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
-    const page = new Page('https://a.test/');
-    const answer = vi.fn();
-    broker.login(page as never, details('https://a.test/'), info({ isProxy: true, host: 'proxy.corp', port: 3128 }), answer);
-    const prompt = broker.promptFor('tab-1' as never)!;
-    expect(prompt).toMatchObject({ proxy: true, accounts: [], remember: null, locked: false });
-    expect(vault.accounts).not.toHaveBeenCalled();
-    // Even when asked to remember, or to use a saved account.
-    await broker.respond(prompt.id, { account: 0 });
-    expect(answer).not.toHaveBeenCalled();
-    await broker.respond(prompt.id, { username: 'me', password: 'secret' }, true);
-    expect(answer).toHaveBeenCalledWith('me', 'secret');
-    page.commit('https://a.test/', 200);
+  it('a page’s own script request (not a navigation) has no answer to read: no Remember, nothing held', async () => {
+    const { broker, vault, page } = setUp();
+    const tab = page(`${ORIGIN}/`);
+    const { prompt } = await ask(broker, tab, { url: `${ORIGIN}/api`, isRequestForNavigation: false });
+    expect(prompt!.remember).toBeNull();
+    await broker.respond(prompt!.id, { username: 'ada', password: 'pw' }, true);
+    tab.commit(`${ORIGIN}/api`, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
   });
 
-  it('Remember saves once the server takes it, not on the 401 retry', async () => {
-    const { broker, vault } = setUp();
-    const page = new Page(ADDRESS);
-    const first = await ask(broker, page);
+  it('a proxy’s box never asks the vault, never fills, and never offers Remember', async () => {
+    const { broker, vault, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    const tab = page('https://a.test/');
+    tab.navigate('https://a.test/');
+    const answer = vi.fn();
+    broker.login(tab as never, details('https://a.test/'), info({ isProxy: true, host: 'proxy.corp', port: 3128 }), answer);
+    const prompt = broker.promptFor('tab-1' as never)!;
+    expect(prompt).toMatchObject({ proxy: true, accounts: [], remember: null, locked: false });
+    expect(vault.accounts).not.toHaveBeenCalled();
+    // Even when asked to remember, or to use a saved account.
+    await broker.respond(prompt.id, { account: 0, username: 'ada' });
+    expect(answer).not.toHaveBeenCalled();
+    await broker.respond(prompt.id, { username: 'me', password: 'secret' }, true);
+    expect(answer).toHaveBeenCalledWith('me', 'secret');
+    tab.commit('https://a.test/', 200);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+  });
+
+  it('Remember saves once the answered request’s frame commits it, not on the 401 retry, and follows its redirects', async () => {
+    const { broker, vault, page } = setUp();
+    const tab = page();
+    const first = await ask(broker, tab);
     await broker.respond(first.prompt!.id, { username: 'ada@example.com', password: 'wrong' }, true);
-    // Chromium asks again: it didn't work, and the wrong one goes.
-    const retry = await ask(broker, page, { firstAuthAttempt: false });
-    // The box again, with Remember still ticked.
+    // Chromium asks again for the same navigation: it didn't work, and the wrong one goes.
+    const retry = await ask(broker, tab, { firstAuthAttempt: false, navigate: false });
     expect(retry.prompt).toMatchObject({ retry: true, remember: true });
-    page.commit(ADDRESS, 200);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
-    await broker.respond(retry.prompt!.id, { username: 'ada@example.com', password: 'right' }, true);
-    // Another origin's frame says nothing; the page's own commit does.
-    page.commit('https://ads.test/', 200, false);
-    await settle();
-    expect(vault.remember).not.toHaveBeenCalled();
-    page.commit(ADDRESS, 200);
+    // The right one: the server redirects, and the frame commits where it was sent.
+    tab.navigate(ADDRESS);
+    const again = await ask(broker, tab, { navigate: false });
+    await broker.respond(again.prompt!.id, { username: 'ada@example.com', password: 'right' }, true);
+    tab.redirect(`${ORIGIN}/admin/home`);
+    tab.commit(`${ORIGIN}/admin/home`, 200);
     await settle();
     expect(vault.remember).toHaveBeenCalledExactlyOnceWith({ origin: ORIGIN, realm: 'Router admin', chordId: 'work', username: 'ada@example.com', password: 'right' });
-    expect(page.listenerCount('did-frame-navigate')).toBe(0);
+    expect(tab.listenerCount('did-frame-navigate')).toBe(1);
+  });
+
+  it('a sibling frame of the same site committing first says nothing: a wrong password isn’t saved', async () => {
+    const { broker, vault, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    // evil.example frames the router's admin page, and keeps reloading a public router page beside it.
+    const tab = page('https://evil.example/');
+    tab.navigate(`${ORIGIN}/public`, SIBLING);
+    const { prompt } = await ask(broker, tab, { frame: FRAME });
+    await broker.respond(prompt!.id, { username: 'ada', password: 'wrong' }, true);
+    tab.commit(`${ORIGIN}/public`, 200, SIBLING);
+    tab.commit(ADDRESS, 200, MAIN);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+    // Then the retry: the wrong one goes.
+    await ask(broker, tab, { frame: FRAME, firstAuthAttempt: false, navigate: false });
+    tab.commit(ADDRESS, 200, FRAME);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
   });
 
   it.each([
     ['Remember unticked', (_b: AuthBroker, _p: Page) => undefined, false],
     ['a 401 page', (_b: AuthBroker, p: Page) => p.commit(ADDRESS, 401), true],
     ['the tab navigating', (b: AuthBroker) => b.forgetTab('tab-1' as never), true],
-    ['leaving the origin', (_b: AuthBroker, p: Page) => p.commit('https://elsewhere.test/', 200), true],
+    ['the frame committing somewhere else', (_b: AuthBroker, p: Page) => p.commit('https://elsewhere.test/', 200), true],
   ])('saves nothing after %s', async (_name, before, remember) => {
-    const { broker, vault } = setUp();
-    const page = new Page(ADDRESS);
-    const { prompt } = await ask(broker, page);
+    const { broker, vault, page } = setUp();
+    const tab = page();
+    const { prompt } = await ask(broker, tab);
     await broker.respond(prompt!.id, { username: 'ada', password: 'pw' }, remember);
-    before(broker, page);
-    page.commit(ADDRESS, 200);
+    before(broker, tab);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
   });
 
   it('what was typed goes after five minutes unanswered', async () => {
-    const { broker, vault, advance } = setUp();
-    const page = new Page(ADDRESS);
-    const { prompt } = await ask(broker, page);
+    const { broker, vault, advance, page } = setUp();
+    const tab = page();
+    const { prompt } = await ask(broker, tab);
     await broker.respond(prompt!.id, { username: 'ada', password: 'pw' }, true);
     advance(5 * 60_000);
-    expect(page.listenerCount('did-frame-navigate')).toBe(0);
-    page.commit(ADDRESS, 200);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
   });
 
   it('Cancel on the box that comes back drops what was typed before it', async () => {
-    const { broker, vault } = setUp();
-    const page = new Page(ADDRESS);
-    const first = await ask(broker, page);
+    const { broker, vault, page } = setUp();
+    const tab = page();
+    const first = await ask(broker, tab);
     await broker.respond(first.prompt!.id, { username: 'ada', password: 'pw' }, true);
-    const again = await ask(broker, page);
+    const again = await ask(broker, tab, { navigate: false });
     await broker.respond(again.prompt!.id, null);
-    page.commit(ADDRESS, 200);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
   });
 
   it('a private window fills and never saves', async () => {
-    const { broker, vault } = setUp({ private: true, accounts: [{ id: 'a', username: 'ada' }] });
-    const page = new Page(ADDRESS);
-    const { prompt, answer } = await ask(broker, page);
-    await broker.respond(prompt!.id, { account: 0 });
+    const { broker, vault, page } = setUp({ private: true, accounts: [{ id: 'a', username: 'ada' }] });
+    const tab = page();
+    const { prompt, answer } = await ask(broker, tab);
+    await broker.respond(prompt!.id, { account: 0, username: 'ada' });
     expect(answer).toHaveBeenCalledWith('ada', 'pw-of-a');
-    const next = await ask(broker, page);
+    const next = await ask(broker, tab);
     await broker.respond(next.prompt!.id, { username: 'grace', password: 'typed' }, true);
-    page.commit(ADDRESS, 200);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(vault.remember).not.toHaveBeenCalled();
   });
 
   it('off for the chord: no fill, no Remember, and a saved account can’t be asked for', async () => {
-    const { broker, vault } = setUp({ state: 'off' });
-    const { prompt, answer } = await ask(broker, new Page(ADDRESS));
+    const { broker, vault, page } = setUp({ state: 'off' });
+    const { prompt, answer } = await ask(broker, page());
     expect(prompt).toMatchObject({ accounts: [], remember: null });
-    await broker.respond(prompt!.id, { account: 0 });
+    await broker.respond(prompt!.id, { account: 0, username: 'ada' });
     expect(answer).not.toHaveBeenCalled();
     expect(vault.password).not.toHaveBeenCalled();
   });
 
   it('locked: Unlock passwords opens the unlock card, then the box fills; locked again, nothing is sent', async () => {
-    const { broker, vault, set } = setUp({ state: 'locked', accounts: [{ id: 'a', username: 'ada' }] });
-    const { prompt, answer } = await ask(broker, new Page(ADDRESS));
+    const { broker, vault, set, page } = setUp({ state: 'locked', accounts: [{ id: 'a', username: 'ada' }] });
+    const { prompt, answer } = await ask(broker, page());
     expect(prompt).toMatchObject({ locked: true, accounts: [] });
-    await broker.unlock(prompt!.id);
+    // Not from another window's popover.
+    await broker.unlock(prompt!.id, 'w2' as never);
+    expect(vault.askUnlock).not.toHaveBeenCalled();
+    await broker.unlock(prompt!.id, 'w1' as never);
     expect(vault.askUnlock).toHaveBeenCalledWith('w1');
     expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id, locked: false, accounts: ['ada'], remember: true });
     set({ state: 'locked' });
-    await broker.respond(prompt!.id, { account: 0 });
+    await broker.respond(prompt!.id, { account: 0, username: 'ada' });
     await settle();
     expect(answer).not.toHaveBeenCalled();
     expect(broker.promptFor('tab-1' as never)).toMatchObject({ locked: true, accounts: [] });
@@ -328,20 +443,59 @@ describe('AuthBroker with the vault', () => {
 
   it('a locked vault at the save asks to unlock first; with no vault yet, the save card chooses the passphrase', async () => {
     const locked = setUp({ state: 'locked' });
-    const page = new Page(ADDRESS);
-    const a = await ask(locked.broker, page);
+    const tab = locked.page();
+    const a = await ask(locked.broker, tab);
     await locked.broker.respond(a.prompt!.id, { username: 'ada', password: 'pw' }, true);
-    page.commit(ADDRESS, 200);
+    tab.commit(ADDRESS, 200);
     await settle();
     expect(locked.vault.askUnlock).toHaveBeenCalledOnce();
     expect(locked.vault.remember).toHaveBeenCalledTimes(2);
 
     const none = setUp({ state: 'none' });
-    const other = new Page(ADDRESS);
+    const other = none.page();
     const b = await ask(none.broker, other);
     await none.broker.respond(b.prompt!.id, { username: 'ada', password: 'pw' }, true);
     other.commit(ADDRESS, 200);
     await settle();
     expect(none.firstSave).toHaveBeenCalledExactlyOnceWith(other, { origin: ORIGIN, realm: 'Router admin', username: 'ada', password: 'pw', until: 5 * 60_000 });
+  });
+
+  it('accepted while the vault is locked: closing the tab during the unlock card drops it; a navigation doesn’t', async () => {
+    for (const [leave, saves] of [
+      [(b: AuthBroker) => b.forgetTab('tab-1' as never, true), 1],
+      [(b: AuthBroker) => b.forgetTab('tab-1' as never), 2],
+    ] as const) {
+      const t = setUp({ state: 'locked' });
+      let unlock: (open: boolean) => void = () => undefined;
+      t.vault.askUnlock.mockImplementationOnce(() => new Promise<boolean>((resolve) => (unlock = resolve)));
+      const tab = t.page();
+      const { prompt } = await ask(t.broker, tab);
+      await t.broker.respond(prompt!.id, { username: 'ada', password: 'pw' }, true);
+      tab.commit(ADDRESS, 200);
+      await settle();
+      leave(t.broker);
+      t.set({ state: 'open' });
+      unlock(true);
+      await settle();
+      expect(t.vault.remember).toHaveBeenCalledTimes(saves);
+    }
+  });
+
+  it('a new sign-in is saved quietly; an updated password says so, with Undo', async () => {
+    const fresh = setUp({ saved: 'new' });
+    const a = fresh.page();
+    const one = await ask(fresh.broker, a);
+    await fresh.broker.respond(one.prompt!.id, { username: 'ada', password: 'pw' }, true);
+    a.commit(ADDRESS, 200);
+    await settle();
+    expect(fresh.updated).not.toHaveBeenCalled();
+
+    const changed = setUp({ saved: 'update' });
+    const b = changed.page();
+    const two = await ask(changed.broker, b);
+    await changed.broker.respond(two.prompt!.id, { username: 'ada', password: 'new' }, true);
+    b.commit(ADDRESS, 200);
+    await settle();
+    expect(changed.updated).toHaveBeenCalledExactlyOnceWith('w1', { id: 'saved-1', host: 'router.test:8080' });
   });
 });

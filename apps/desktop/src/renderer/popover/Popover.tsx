@@ -277,7 +277,9 @@ const FILLED_MASK = '•'.repeat(10);
  * With Chord's passwords on here (S17 §10): a sign-in saved from this box for
  * this origin and realm fills it, its password masked (this page never has
  * it: Sign in sends which account, and main answers from the vault); several
- * get a chooser of usernames; a locked vault gets *Unlock passwords*. And
+ * get a chooser of usernames; a locked vault gets *Unlock passwords*. A
+ * frame of another site's page says whose page it's in, and isn't filled:
+ * its usernames are the chooser, so signing in takes a click on one. And
  * *Remember* saves what you typed once the site takes it. Never for a proxy,
  * and a private window fills without *Remember*.
  */
@@ -286,18 +288,18 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const signIn = useRef<HTMLButtonElement>(null);
   const [sent, setSent] = useState(false);
   /** The saved sign-in the box is filled with, by its place in `prompt.accounts`; null once you type over it. */
-  const [filled, setFilled] = useState<number | null>(prompt.accounts.length > 0 ? 0 : null);
-  const [username, setUsername] = useState(prompt.accounts[0] ?? '');
+  const [filled, setFilled] = useState<number | null>(prompt.fill && prompt.accounts.length > 0 ? 0 : null);
+  const [username, setUsername] = useState(prompt.fill ? (prompt.accounts[0] ?? '') : '');
   const [password, setPassword] = useState('');
   const [typed, setTyped] = useState(false);
   const [remember, setRemember] = useState(prompt.remember ?? false);
   const ids = useId();
   // The username field has the keyboard when the box appears (main focuses the popover too); Sign in when it's filled.
-  useEffect(() => (prompt.accounts.length > 0 ? signIn.current : usernameField.current)?.focus(), []);
+  useEffect(() => (prompt.fill && prompt.accounts.length > 0 ? signIn.current : usernameField.current)?.focus(), []);
   // Filled after the box appeared (the vault answered late, or was just unlocked): unless you've typed already.
   const accounts = prompt.accounts.join('\n');
   useEffect(() => {
-    if (typed || prompt.accounts.length === 0 || filled !== null) return;
+    if (typed || !prompt.fill || prompt.accounts.length === 0 || filled !== null) return;
     setFilled(0);
     setUsername(prompt.accounts[0]!);
     setPassword('');
@@ -306,7 +308,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   }, [accounts]);
   // Main didn't answer with a saved sign-in (the vault locked meanwhile): the box is yours again.
   useEffect(() => setSent(false), [prompt.locked, accounts]);
-  const respond = (credentials: { username: string; password: string } | { account: number } | null) => {
+  const respond = (credentials: { username: string; password: string } | { account: number; username: string } | null) => {
     setSent(true);
     void api.auth.respond(prompt.id, credentials, prompt.remember !== null && remember);
   };
@@ -315,6 +317,8 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
     setUsername(prompt.accounts[index]!);
     setPassword('');
     setTyped(false);
+    // Filled from the vault: Remember keeps it so, as when the box opened filled.
+    if (prompt.remember !== null) setRemember(true);
   };
   const title = prompt.proxy ? 'The proxy' : 'Sign in to';
   return (
@@ -325,7 +329,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
       aria-describedby={`${ids}-notes`}
       onSubmit={(e) => {
         e.preventDefault();
-        respond(filled !== null ? { account: filled } : { username, password });
+        respond(filled !== null ? { account: filled, username: prompt.accounts[filled]! } : { username, password });
       }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
@@ -345,6 +349,11 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         </button>
       </div>
       <div id={`${ids}-notes`} className={styles.authNotes}>
+        {prompt.embeddedIn && (
+          <p className={styles.offerNotice}>
+            Asked by <span className={styles.host}>{new URL(prompt.origin).host}</span>, inside <span className={styles.host}>{prompt.embeddedIn}</span>.
+          </p>
+        )}
         {prompt.retry && <p className={styles.authRetry}>That username and password didn't work.</p>}
         {prompt.realm && (
           <p className={styles.offerNotice}>
@@ -366,7 +375,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
           Unlock passwords
         </button>
       )}
-      {prompt.accounts.length > 1 && (
+      {(prompt.accounts.length > 1 || (!prompt.fill && prompt.accounts.length > 0)) && (
         <div className={styles.authChooser} role="listbox" aria-label="Saved sign-ins">
           {prompt.accounts.map((name, i) => (
             <button key={i} type="button" role="option" aria-selected={filled === i} className={styles.authAccount} onClick={() => choose(i)}>

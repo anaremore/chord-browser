@@ -64,7 +64,7 @@ import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
 import { createChordTheme, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, type Session, type WebContents, type WebContentsView } from 'electron';
+import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, webFrameMain, type Session, type WebContents, type WebContentsView } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
@@ -148,7 +148,7 @@ export interface BrowserOptions {
   /** Chooses a passkey when an authenticator holds several for a site; connected here once the store exists. */
   passkeys: PasskeyBroker;
   /** Chord's own passwords: the unlock card each window's popover may show, and what the menu under a field and the save cards ask. */
-  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed' | 'httpAccountsFor' | 'httpPasswordFor'> & AssistVault;
+  passwords: Pick<PasswordService, 'unlockPromptFor' | 'windowClosed' | 'httpAccountsFor' | 'httpPasswordFor' | 'revertUpdate'> & AssistVault;
   /** The password detector (S17): a tab's page is the only one its agent's channels answer. */
   passwordDetector: PasswordDetector;
   /** Persistence hook: every change, after it's applied. */
@@ -452,7 +452,7 @@ export class Browser {
         contents.once('destroyed', () => {
           options.permissions.forgetTab(nodeId);
           options.screenShare.forgetTab(nodeId);
-          options.httpAuth.forgetTab(nodeId);
+          options.httpAuth.forgetTab(nodeId, true);
         });
         // Clicking into a split's pane focuses it: the address, buttons and keys act on it from then on.
         contents.on('focus', () => this.paneFocused(nodeId));
@@ -765,7 +765,13 @@ export class Browser {
         remember: (signIn) => options.passwords.saveCandidate(signIn),
         askUnlock: (windowId) => options.passwords.askUnlock(windowId),
       },
-      firstSave: (contents, signIn) => this.passwordAssist.offerFirstSave(contents, signIn),
+      firstSave: (contents, signIn) => void this.passwordAssist.offerFirstSave(contents, signIn),
+      frameOf: (processId, routingId) => webFrameMain.fromId(processId, routingId)?.frameTreeNodeId,
+      // A changed password says so, with Undo: the one before it back.
+      updated: (windowId, { id, host }) => {
+        this.passwordReverts.set(id, windowId);
+        this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: `Password updated for ${host}`, action: { label: 'Undo', passwordRevert: id } });
+      },
     });
     // Choosing a passkey, over the same tab or Peek a sign-in box would show over.
     options.passkeys.connect({
@@ -1414,6 +1420,16 @@ export class Browser {
       this.store.dispatch({ t: 'tab.activate', windowId: w.id, nodeId });
       return;
     }
+  }
+
+  /** Passwords *Remember* just changed, by id: the window whose toast may undo each, once. */
+  private readonly passwordReverts = new Map<string, WindowId>();
+
+  /** *Password updated*'s Undo, from that window's toast only: the password before it back. */
+  async revertPasswordUpdate(windowId: WindowId, id: string): Promise<void> {
+    if (this.passwordReverts.get(id) !== windowId) return;
+    this.passwordReverts.delete(id);
+    if (!(await this.options.passwords.revertUpdate(id))) this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: 'Chord couldn’t undo that. The password is in Settings → Passwords.' });
   }
 
   /** What a window's popover shows: the find bar for its page, and the active tab's permission prompt. */

@@ -8,7 +8,9 @@
  *    chooses the first passphrase. Settings → Passwords lists it with its realm.
  * 3. **Reload, and the box opens filled**: the username, the password masked (the popover never has it), *Remember*
  *    ticked. Sign in, and the site takes the saved password.
- * 4. **A private window fills but doesn't save**: filled there too, no *Remember*, and a sign-in typed there
+ * 4. **A frame of another site's page** (the router inside `site.test`): the box says whose page it's in and
+ *    isn't filled; a click on the saved username fills it.
+ * 5. **A private window fills but doesn't save**: filled there too, no *Remember*, and a sign-in typed there
  *    leaves Settings as it was.
  *
  * And apart: a **proxy's** box has no *Remember*, and isn't filled.
@@ -21,7 +23,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { audit, capturesDir, closeSettings, expectClean, isOverlay, isPopover, isSettings, isShell, launch, newPage, pageWhere, runAction, type Finding } from './a11y-kit';
+import { audit, capturesDir, closeSettings, expectClean, isOverlay, isPopover, isSettings, isShell, launch, newPage, pageWhere, runAction, settle, type Finding } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -54,6 +56,13 @@ function startRouter(): Promise<Router> {
   const tried: string[] = [];
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
+    // Another site's page (site.test) that frames the router's admin page.
+    if (path === '/frame') {
+      const port = (req.headers.host ?? '').split(':')[1];
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`<title>Framing page</title><iframe id="router" src="http://router.test:${port}/admin" width="400" height="200"></iframe>`);
+      return;
+    }
     const area = path === '/staff' ? { realm: 'Staff', expected: `${OTHER_USER}:${OTHER_PASSWORD}`, title: 'Staff page' } : { realm: REALM, expected: `${USER}:${PASSWORD}`, title: 'Router admin page' };
     const sent = basic(req);
     if (sent !== null) tried.push(sent);
@@ -120,6 +129,7 @@ test('the sign-in box: a wrong password isn’t saved, Remember saves the right 
     await box.getByLabel('Username').fill(USER);
     await box.getByLabel('Password').fill('not-the-password');
     await remember.check();
+    await settle(popover);
     await popover.screenshot({ path: resolve(capturesDir, 'passwords-http-remember-light.png'), omitBackground: true });
     await box.getByRole('button', { name: 'Sign in' }).click();
     await expect(box).toContainText("That username and password didn't work.");
@@ -162,13 +172,39 @@ test('the sign-in box: a wrong password isn’t saved, Remember saves the right 
     await popover.waitForTimeout(500);
     expect(router.tried.length).toBe(triedBefore);
     findings.push(...(await audit(popover, 'the filled sign-in box', { appearance: 'light' })));
+    await settle(popover);
     await popover.screenshot({ path: resolve(capturesDir, 'passwords-http-filled-light.png'), omitBackground: true });
     await box.getByRole('button', { name: 'Sign in' }).click();
     await expect.poll(() => tab.title()).toBe('Router admin page');
     expect(router.tried.at(-1)).toBe(`${USER}:${PASSWORD}`);
     await expect(box).toBeHidden();
 
-    // 4. A private window: filled from the vault, no Remember; a sign-in typed there isn't saved.
+    // 4. Another site's page framing the router: the box says so, isn't filled, and a click on the username fills it.
+    await forgetSignIns(app);
+    const framing = `${router.origin.replace('router.test', 'site.test')}/frame`;
+    await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
+    await expect(overlay.getByRole('combobox')).toBeFocused();
+    await overlay.keyboard.type(framing);
+    await overlay.keyboard.press('Enter');
+    await expect(box).toBeVisible();
+    await expect(box).toContainText(`Asked by ${router.host}, inside ${router.host.replace('router.test', 'site.test')}.`);
+    await expect(box.getByLabel('Username')).toHaveValue('');
+    await expect(box.getByLabel('Password')).toHaveValue('');
+    await expect(box.getByLabel('Username')).toBeFocused();
+    const chooser = box.getByRole('listbox', { name: 'Saved sign-ins' });
+    await expect(chooser.getByRole('option', { name: USER })).toHaveAttribute('aria-selected', 'false');
+    await settle(popover);
+    await popover.screenshot({ path: resolve(capturesDir, 'passwords-http-framed-light.png'), omitBackground: true });
+    const sentBefore = router.tried.length;
+    await popover.waitForTimeout(500);
+    expect(router.tried.length).toBe(sentBefore);
+    await chooser.getByRole('option', { name: USER }).click();
+    await expect(box.getByLabel('Username')).toHaveValue(USER);
+    await box.getByRole('button', { name: 'Sign in' }).click();
+    await expect.poll(() => router.tried.at(-1)).toBe(`${USER}:${PASSWORD}`);
+    await expect(box).toBeHidden();
+
+    // 5. A private window: filled from the vault, no Remember; a sign-in typed there isn't saved.
     const before = app.windows();
     await runAction(shell, 'window.newPrivate');
     const privateShell = await newPage(app, isShell, before);

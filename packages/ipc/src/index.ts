@@ -594,6 +594,10 @@ export interface AuthPrompt {
   locked: boolean;
   /** *Remember*: null when it isn't offered (a proxy, a private window, passwords off here); else whether it starts ticked. */
   remember: boolean | null;
+  /** Whether the box opens filled with the first account; false for a frame of another site's page: the chooser, a click. */
+  fill: boolean;
+  /** A frame of another site's page asked: that page's host (*Asked by router.test, inside evil.example*). */
+  embeddedIn: string | null;
 }
 
 /** Choosing which passkey signs you in, when the authenticator holds several for the site. */
@@ -993,7 +997,12 @@ export interface ArchiveSnapshot {
 export type GesturePhase = 'begin' | 'end' | 'fling';
 
 /** What a toast's button does: a command in the shell's store (Undo), "Restart to update", or a screenshot's Save or Ask about it. */
-export type ToastAction = { label: string; command: RendererCommand } | { label: string; update: 'restart' } | { label: string; screenshot: { id: string; do: 'save' | 'assistant' } };
+export type ToastAction =
+  | { label: string; command: RendererCommand }
+  | { label: string; update: 'restart' }
+  | { label: string; screenshot: { id: string; do: 'save' | 'assistant' } }
+  /** Undo a password *Remember* just changed: the one before it back (main allows it once, for that window's toast). */
+  | { label: string; passwordRevert: string };
 
 export interface Toast {
   id: string;
@@ -1579,6 +1588,8 @@ export const invokeChannels = {
   'screenshots:list': { roles: ['overlay'], request: z.void(), response: z.custom<ScreenshotItem[]>() },
   'screenshots:do': { roles: ['overlay', 'shell'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{24}$/), do: z.enum(['copy', 'save', 'delete', 'assistant']) }), response: z.void() },
   'screenshots:clear': { roles: ['overlay'], request: z.void(), response: z.void() },
+  /** *Password updated for …*'s Undo: the password before *Remember* changed it, back. Only for an update that window was told of. */
+  'passwords:revert': { roles: ['shell'], request: z.strictObject({ id: z.string().max(100) }), response: z.void() },
   /** The command bar's history and learned picks for what was typed (in the window's chord). */
   'history:search': { roles: ['overlay'], request: z.object({ query: z.string().max(1000) }), response: z.custom<HistorySearch>() },
   /** Search suggestions while typing, from the chosen engine (or a keyword's engine); empty when they're off. */
@@ -1757,7 +1768,10 @@ export const invokeChannels = {
     request: z.strictObject({
       id: z.number().int().min(1),
       credentials: z
-        .union([z.strictObject({ username: z.string().max(1000), password: z.string().max(1000) }), z.strictObject({ account: z.number().int().min(0).max(1000) })])
+        .union([
+          z.strictObject({ username: z.string().max(1000), password: z.string().max(1000) }),
+          z.strictObject({ account: z.number().int().min(0).max(1000), username: z.string().max(1000) }),
+        ])
         .nullable(),
       remember: z.boolean().optional(),
     }),
@@ -1966,8 +1980,8 @@ export interface ShellApi {
   share: { stop(nodeId: string): Promise<void> };
   /** Reload a tab's page from its sidebar row. */
   tab: { reload(nodeId: string): Promise<void> };
-  /** The key beside the address: a closed save card, back. */
-  passwords: { reopen(nodeId: string): Promise<void> };
+  /** The key beside the address: a closed save card, back; and *Password updated*'s Undo. */
+  passwords: { reopen(nodeId: string): Promise<void>; revert(id: string): Promise<void> };
   /** A tab that plays in Chord Player: back to the player, or show its page here instead; and what its frame shows. */
   player: { act(nodeId: string, action: 'show' | 'release'): Promise<void>; view(): Promise<PlayerFrame | null>; onState(listener: (frame: PlayerFrame | null) => void): () => void };
   /** The Now playing card: the window's media as main pushes it, and the card's own buttons. */
@@ -2257,7 +2271,7 @@ export interface PopoverApi {
   /** A sign-in box: a username and password, or null to cancel. */
   auth: {
     /** What was typed, or a saved sign-in by its place in the box's `accounts`, or null to cancel; `remember` saves what was typed once it works. */
-    respond(id: number, credentials: { username: string; password: string } | { account: number } | null, remember?: boolean): Promise<void>;
+    respond(id: number, credentials: { username: string; password: string } | { account: number; username: string } | null, remember?: boolean): Promise<void>;
     unlock(id: number): Promise<void>;
   };
   /** Choosing a passkey: one the prompt offered, or null to decline. */
