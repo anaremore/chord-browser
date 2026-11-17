@@ -2,6 +2,23 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.11.1 · preview · 2026-11-17
+
+- **Passwords in the browser's own sign-in box.** The box a site or router shows before its page (HTTP sign-in), not there yet in 0.11.0, now works with your vault.
+  - **Filling.** The box opens filled with the account you saved for that address, its password hidden, and nothing is sent until you press Sign in. With several, pick one from its list. While the vault is locked, the box offers *Unlock passwords*.
+  - **Saving.** Tick *Remember* and sign in: once the page opens, the password is saved, or updated, with Undo on the toast. A wrong password isn't saved. The first password you save chooses the passphrase, as in a page's form.
+  - A password saved from the box fills only the box for that exact address and its realm, never a page's form, and a form's never fills the box. Settings → Passwords shows the realm under the site.
+  - **A box for a frame inside another site's page** says so, and isn't filled: pick the account to sign in.
+  - Its buttons wait half a second after the box shows, so a page can't slip it under your click.
+  - A proxy's box never uses the vault. Private windows fill the box, and never save.
+- **More sign-in pages fill.**
+  - A password step that shows the email from the step before fills the password, instead of filling nothing.
+  - A sign-in that swaps its password step in where the email was, with no new page, gets the menu on the password.
+  - A first step whose password field is on the page but not shown yet fills your email, instead of nothing.
+  - A sign-in form beside a sign-up form on the same page fills, instead of being taken for the sign-up.
+  - A "Log in or sign up" page with one email field is read as a sign-in's first step, so the menu fills your email there.
+- **Peek opens right after Chord starts.** A link from a pinned tab, clicked in Chord's first moments, loaded out of sight and no Peek showed. It's been so since Peek came.
+
 ## 0.11.0 · preview · 2026-11-16
 
 0.10.2 was never published: its update comes in this release.

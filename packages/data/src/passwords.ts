@@ -119,6 +119,20 @@ export type PasswordOp =
   | { op: 'compare'; origin: string; username: string; password: string; realm?: string }
   /** A page's sign-in saved (or, with `realm`, the sign-in box's): new, or in place of `replace`'s password. */
   | { op: 'save'; origin: string; username: string; password: string; chordId: string | null; replace?: string; realm?: string }
+  /**
+   * A generated password, saved the moment it's filled (S17 §6, *Generating*): a new form sign-in for `origin` with
+   * no username yet, *Not confirmed*. Saved whatever the never list says: generating is asking.
+   */
+  | { op: 'presave'; origin: string; password: string; chordId: string | null }
+  /**
+   * A *Not confirmed* sign-in, before a submit worked: the username it was submitted with, or the password it holds
+   * now (a new one generated in the same form; the one before is kept as `previous`). Refused once it's confirmed.
+   */
+  | { op: 'pending'; id: string; origin: string; username?: string; password?: string }
+  /** A submit worked: the *Not confirmed* sign-in is confirmed, with the username and password it was submitted with. */
+  | { op: 'confirm'; id: string; origin: string; username?: string; password?: string }
+  /** A change-password form's account (S17 §6): the form sign-ins for `origin` whose password is `current`. */
+  | { op: 'matchCurrent'; origin: string; current: string }
   | { op: 'never'; origin: string }
   | { op: 'isNever'; origin: string }
   | { op: 'nevers' }
@@ -245,10 +259,25 @@ function secretOf(plain: Buffer | null): LoginSecret | null {
     const s = JSON.parse(plain.toString('utf8')) as Partial<LoginSecret>;
     if (typeof s.origin !== 'string' || typeof s.username !== 'string' || typeof s.password !== 'string') return null;
     const previous = s.previous && typeof s.previous.password === 'string' ? { password: s.previous.password, changedAt: num(s.previous.changedAt) } : null;
-    return { origin: s.origin, username: s.username, password: s.password, realm: typeof s.realm === 'string' ? s.realm : null, note: str(s.note), changedAt: num(s.changedAt), previous };
+    return {
+      origin: s.origin,
+      username: s.username,
+      password: s.password,
+      realm: typeof s.realm === 'string' ? s.realm : null,
+      note: str(s.note),
+      changedAt: num(s.changedAt),
+      previous,
+      ...(s.unconfirmed === true ? { unconfirmed: true as const } : {}),
+    };
   } catch {
     return null;
   }
+}
+
+/** A sign-in without its *Not confirmed* mark. */
+function confirmed(secret: LoginSecret): LoginSecret {
+  const { unconfirmed: _unconfirmed, ...rest } = secret;
+  return rest;
 }
 
 /** A deleted sign-in, sealed as it was, for its Undo. */
@@ -301,7 +330,7 @@ export class PasswordStore {
         return { logins, unreadable, last: rows.length === limit ? str(rows[rows.length - 1]!['id']) : null };
       },
       insert: (login, now) => {
-        const id = this.insert({ origin: login.origin, username: login.username, password: login.password, note: login.note, ...(login.realm !== null ? { realm: login.realm } : {}) }, null, now, login.changedAt ?? now);
+        const id = this.insert({ origin: login.origin, username: login.username, password: login.password, note: login.note, ...(login.realm !== null ? { realm: login.realm } : {}) }, null, now, { changedAt: login.changedAt ?? now });
         return id === 'invalid' ? null : id;
       },
       replace: (id, login, now) => {
@@ -472,6 +501,7 @@ export class PasswordStore {
       updatedAt: num(row['updated_at']),
       lastUsed: numOrNull(row['last_used']),
       chordUsed: chordId === null ? null : numOrNull(row['chord_used']),
+      ...(secret.unconfirmed ? { unconfirmed: true as const } : {}),
     };
   }
 
@@ -498,12 +528,22 @@ export class PasswordStore {
     this.sql(`INSERT INTO login_use (login_id, chord_id, used_at) VALUES (?, ?, ?) ON CONFLICT(login_id, chord_id) DO UPDATE SET used_at = excluded.used_at`).run(id, chordId, at);
   }
 
-  private insert(login: NewLogin, chordId: string | null, now: number, changedAt = now): string | PasswordProblem {
+  /** `changedAt`: when its password last changed (an import keeps the file's); `unconfirmed`: a generated password's presave. */
+  private insert(login: NewLogin, chordId: string | null, now: number, { changedAt = now, unconfirmed = false }: { changedAt?: number; unconfirmed?: boolean } = {}): string | PasswordProblem {
     const origin = loginOrigin(login.origin);
     const site = origin ? loginSite(origin) : null;
     if (!origin || !site || loginProblem({ ...login, origin }) !== null) return 'invalid';
     const id = randomUUID();
-    const secret: LoginSecret = { origin, username: login.username, password: login.password, realm: login.realm ?? null, note: login.note ?? '', changedAt, previous: null };
+    const secret: LoginSecret = {
+      origin,
+      username: login.username,
+      password: login.password,
+      realm: login.realm ?? null,
+      note: login.note ?? '',
+      changedAt,
+      previous: null,
+      ...(unconfirmed ? { unconfirmed: true as const } : {}),
+    };
     this.sql('INSERT INTO login (id, site_tag, sealed, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, this.tag(site), this.sealSecret(id, secret), now, now);
     if (chordId) this.use(id, chordId, now);
     return id;
@@ -776,13 +816,37 @@ export class PasswordStore {
           if (!this.fits(secret, op.origin, op.realm)) return { problem: 'refused' };
           // Saved on http and now signed in on https: it moves to https (S17 §5). A sign-in box's never moves.
           const upgrade = op.realm === undefined && matchLogin(op.origin, secret.origin) === 'upgrade' ? { origin: op.origin } : {};
-          const problem = this.rewrite(row, secret, { ...upgrade, username: op.username, password: op.password }, now);
+          // Saved after a sign-in that worked, or from a card you answered: a *Not confirmed* one is confirmed by it.
+          const problem = this.rewrite(row, confirmed(secret), { ...upgrade, username: op.username, password: op.password }, now);
           if (problem) return { problem };
           if (op.chordId) this.use(op.replace, op.chordId, now);
           return { id: op.replace, changedAt: secret.password === op.password ? secret.changedAt : now };
         }
         const id = this.insert({ origin: op.origin, username: op.username, password: op.password, ...(op.realm !== undefined ? { realm: op.realm } : {}) }, op.chordId, now);
         return id === 'invalid' ? { problem: 'invalid' } : { id };
+      }
+      case 'presave': {
+        const id = this.insert({ origin: op.origin, username: '', password: op.password }, op.chordId, now, { unconfirmed: true });
+        return id === 'invalid' ? { problem: 'invalid' } : { id };
+      }
+      case 'pending':
+      case 'confirm': {
+        const row = this.rowById(op.id);
+        const secret = row ? this.openRow(row) : null;
+        if (!row || !secret) return { problem: 'missing' };
+        // Only a page's form sign-in for this page, still *Not confirmed*: a confirmed one is changed by Save or Settings.
+        if (!secret.unconfirmed || !this.fits(secret, op.origin, undefined)) return { problem: 'refused' };
+        const patch: LoginPatch = { ...(op.username !== undefined ? { username: op.username } : {}), ...(op.password !== undefined ? { password: op.password } : {}) };
+        const problem = this.rewrite(row, op.op === 'confirm' ? confirmed(secret) : secret, patch, now);
+        return problem ? { problem } : { id: op.id };
+      }
+      case 'matchCurrent': {
+        const logins: LoginSummary[] = [];
+        for (const row of this.siteRows(op.origin, null)) {
+          const secret = this.openRow(row);
+          if (secret && secret.password === op.current && this.fits(secret, op.origin, undefined)) logins.push(this.summary(row, secret, null));
+        }
+        return { logins };
       }
       case 'never': {
         const site = loginSite(op.origin);

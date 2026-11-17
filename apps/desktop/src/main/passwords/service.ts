@@ -101,12 +101,19 @@ export type HttpAccountsAnswer =
   | { state: 'locked' }
   | { state: 'open'; accounts: { id: string; username: string }[] };
 
-/** What the menu under the field gets: usernames and hosts, never a password. */
+/**
+ * How long a generated password no sign-in has confirmed stays in the menu under the field (S17 §6; the owner's
+ * design 4A shows it there, *Not confirmed · made today*, on coming back to a sign-up that failed). After that it's in
+ * Settings → Passwords only, so an abandoned one doesn't clutter the menu.
+ */
+export const UNCONFIRMED_IN_MENU_MS = 24 * 60 * 60_000;
+
+/** What the menu under the field gets: usernames and hosts, never a password. `madeAt`: one *Not confirmed*, and when it was made. */
 export type AccountsAnswer =
   | { state: 'off' }
   | { state: 'none' }
   | { state: 'locked' }
-  | { state: 'open'; offers: LoginOffer[]; insecure: boolean };
+  | { state: 'open'; offers: (LoginOffer & { madeAt?: number })[]; insecure: boolean };
 
 /** What a sign-in that worked is to the save card (S17 §6 step 5), or why there's no card. */
 export type CandidateAnswer =
@@ -597,8 +604,15 @@ export class PasswordService {
     this.touch();
     const { insecureOrigin, offersFor } = await sites();
     // A form is never offered what the browser's own sign-in box saved (S17 §10): checked here as well as in chord-data.
-    const forms = (result.logins ?? []).filter((l) => l.realm === null);
-    return { state: 'open', offers: offersFor(page.origin, forms), insecure: insecureOrigin(page.origin) };
+    // A generated password no sign-in has confirmed is offered for a day after it was made, after the confirmed ones;
+    // then it's in Settings only, *Not confirmed* (S17 §6, phase 2).
+    const now = this.now();
+    const forms = (result.logins ?? []).filter((l) => l.realm === null && !(l.unconfirmed && now - l.createdAt > UNCONFIRMED_IN_MENU_MS));
+    const made = new Map(forms.filter((l) => l.unconfirmed).map((l) => [l.id, l.createdAt] as const));
+    const offers = offersFor(page.origin, forms);
+    const confirmed = offers.filter((o) => !made.has(o.id));
+    const pending = offers.filter((o) => made.has(o.id)).map((o) => ({ ...o, madeAt: made.get(o.id)! }));
+    return { state: 'open', offers: [...confirmed, ...pending], insecure: insecureOrigin(page.origin) };
   }
 
   /**
@@ -634,6 +648,8 @@ export class PasswordService {
     if (!candidate) return { kind: 'locked' };
     // Exactly what's saved: no card, and its last use moves (S17 §6).
     if (candidate.kind === 'same' && page.chord) await this.data({ op: 'used', id: candidate.id, chordId: page.chord.id }).catch(() => undefined);
+    // A generated one *Not confirmed*: this sign-in that worked confirms it (refused, and nothing changes, when it is).
+    if (candidate.kind === 'same' && page.realm === undefined) await this.data({ op: 'confirm', id: candidate.id, origin: page.origin }).catch(() => undefined);
     this.touch();
     return candidate.kind === 'new' ? { kind: 'new', setup: false } : candidate;
   }
@@ -761,6 +777,127 @@ export class PasswordService {
         return saved.ok ? { ok: true, id: saved.id, kind: 'new' } : saved;
       }
     }
+  }
+
+  /* ---------- generated passwords, sign-up and change forms (S17 §6, phase 2) ---------- */
+
+  /** What the generator's row asks first, for a page: nothing (open), the passphrase (locked), the first one (none); or no row at all (off, a private window). */
+  async generatorFor(origin: string, chordId: string | null): Promise<'open' | 'locked' | 'none' | 'off'> {
+    const page = this.pageOf(origin, chordId);
+    if (!page || page.private || !(await this.onFor(page, this.installed()))) return 'off';
+    return this.ensureOpen();
+  }
+
+  /**
+   * A generated password, saved the moment it's filled (S17 §6): a new sign-in for the frame's origin, no username
+   * yet, *Not confirmed*. The first one sets the passphrase (`passphrase`, from the save card's step). Never in a
+   * private window (there's no generator there), and whatever the never list says (generating is asking).
+   */
+  async presave(request: { origin: string; password: string; chordId: string | null; passphrase?: string }): Promise<{ ok: true; id: string; setup: boolean } | { ok: false; problem: PasswordProblem | 'off' | 'io' }> {
+    const page = this.pageOf(request.origin, request.chordId);
+    if (!page || page.private || loginProblem({ origin: request.origin, username: '', password: request.password }) !== null) return { ok: false, problem: 'refused' };
+    if (!(await this.onFor(page, this.installed()))) return { ok: false, problem: 'off' };
+    try {
+      let state = await this.ensureOpen();
+      let setup = false;
+      if (state === 'none') {
+        if (request.passphrase === undefined) return { ok: false, problem: 'none' };
+        const made = await this.data({ op: 'setup', passphrase: request.passphrase });
+        if (made.problem) return { ok: false, problem: made.problem };
+        this.typed();
+        state = 'open';
+        setup = true;
+      }
+      if (state !== 'open') return { ok: false, problem: 'locked' };
+      const saved = await this.data({ op: 'presave', origin: request.origin, password: request.password, chordId: page.chord?.id ?? null });
+      if (!saved.id) return { ok: false, problem: saved.problem ?? 'invalid' };
+      this.touch();
+      this.options.changed();
+      return { ok: true, id: saved.id, setup };
+    } catch {
+      return { ok: false, problem: 'io' };
+    }
+  }
+
+  /**
+   * A *Not confirmed* sign-in, before a submit worked: `pending` gives it the username it was submitted with (or the
+   * password it holds now); `confirm` marks it confirmed, as a submit that worked does. False when it can't (locked,
+   * confirmed already, another site's). For the frame's origin only, never in a private window.
+   */
+  async presaved(action: 'pending' | 'confirm', id: string, origin: string, chordId: string | null, values: { username?: string; password?: string }): Promise<boolean> {
+    const page = this.pageOf(origin, chordId);
+    if (!page || page.private || (await this.ensureOpen()) !== 'open') return false;
+    if (values.username !== undefined && values.username.length > 500) return false;
+    if (values.password !== undefined && loginProblem({ origin, username: '', password: values.password }) !== null) return false;
+    const result = await this.data({ op: action, id, origin, ...values }).catch(() => ({}) as PasswordResult);
+    if (!result.id) return false;
+    this.touch();
+    this.options.changed();
+    return true;
+  }
+
+  /**
+   * A change-password form's account (S17 §6): the saved sign-ins the page is offered whose password is the form's
+   * current one (`matches`), and every one it's offered (`accounts`, best first) for the card to ask from when that's
+   * none or several. Usernames only.
+   */
+  async changeAccounts(
+    origin: string,
+    chordId: string | null,
+    current: string | null,
+  ): Promise<{ state: 'open'; matches: { id: string; username: string }[]; accounts: { id: string; username: string }[] } | { state: 'off' | 'none' | 'locked' }> {
+    const offered = await this.accountsFor(origin, chordId);
+    if (offered.state !== 'open') return { state: offered.state };
+    const accounts = offered.offers.map((o) => ({ id: o.id, username: o.username }));
+    if (!current) return { state: 'open', matches: [], accounts };
+    const { logins } = await this.data({ op: 'matchCurrent', origin, current }).catch(() => ({}) as PasswordResult);
+    const ids = new Set((logins ?? []).map((l) => l.id));
+    return { state: 'open', matches: accounts.filter((a) => ids.has(a.id)), accounts };
+  }
+
+  /**
+   * A changed password, for the account it's for (S17 §6): its password replaced (the one before it kept); and a
+   * generated one saved for the change, *Not confirmed* (`presaved`), deleted, since the account has it now.
+   */
+  async changePassword(request: { origin: string; chordId: string | null; account: string; password: string; presaved?: string }): Promise<SaveAnswer> {
+    const page = this.pageOf(request.origin, request.chordId);
+    if (!page || page.private) return { ok: false, problem: 'off' };
+    if ((await this.ensureOpen()) !== 'open') return { ok: false, problem: 'locked' };
+    const { logins } = await this.data({ op: 'forSite', origin: request.origin, chordId: null }).catch(() => ({}) as PasswordResult);
+    const account = (logins ?? []).find((l) => l.id === request.account && l.realm === null);
+    if (!account) return { ok: false, problem: 'missing' };
+    const saved = await this.save({ ...page, username: account.username, password: request.password, replace: account.id }, this.installed());
+    if (!saved.ok) return saved;
+    if (request.presaved && request.presaved !== account.id) await this.data({ op: 'delete', id: request.presaved }).catch(() => undefined);
+    this.options.changed();
+    return { ok: true, id: saved.id, kind: 'update', ...(saved.changedAt !== undefined ? { changedAt: saved.changedAt } : {}) };
+  }
+
+  /**
+   * The saved card's *Delete it* (the owner's design 5A): the sign-in a generated password was saved as, gone (with
+   * chord-data's Undo for the session). Only a page's form sign-in for the frame's origin.
+   */
+  async deleteSaved(id: string, origin: string, chordId: string | null): Promise<boolean> {
+    const page = this.pageOf(origin, chordId);
+    if (!page || page.private || (await this.ensureOpen()) !== 'open') return false;
+    const { logins } = await this.data({ op: 'forSite', origin, chordId: null }).catch(() => ({}) as PasswordResult);
+    if (!(logins ?? []).some((l) => l.id === id)) return false;
+    const done = await this.data({ op: 'delete', id }).catch(() => ({}) as PasswordResult);
+    if (!done.id) return false;
+    this.touch();
+    this.options.changed();
+    return true;
+  }
+
+  /**
+   * *Change password on the site* (S17 §9): Apple's address for the sign-in's site, else its
+   * `/.well-known/change-password`. Only for a sign-in Settings was shown (the vault open), never another address.
+   */
+  async changePasswordUrl(id: string): Promise<string | null> {
+    const shown = this.shown.get(id);
+    if (!shown) return null;
+    const { changePasswordUrlFor } = await import('@chord/core/password-quirks');
+    return changePasswordUrlFor(shown.origin);
   }
 
   /* ---------- the browser's own sign-in box (S17 §10) ---------- */

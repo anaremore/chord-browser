@@ -6,7 +6,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./password-sites": "./src/password-sites.ts"
+    "./password-sites": "./src/password-sites.ts",
+    "./password-generator": "./src/password-generator.ts",
+    "./password-quirks": "./src/password-quirks.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

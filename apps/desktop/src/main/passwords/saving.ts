@@ -21,7 +21,8 @@
  *
  * **Values.** A candidate sent at a submit signal carries what was typed (`values`: the
  * username and the password to save). They're held here with the form, in memory only, and
- * leave in one place: the `signedIn` that the save card is offered from. A sign-in that
+ * leave in one place: the `signedIn` that the save card is offered from (`submitted` carries the username alone, for a
+ * generated password saved before the submit to take, S17 §6, phase 2). A sign-in that
  * failed drops them (a corrected retry sends its own), and so does everything that forgets
  * the form: a navigation of your own, the page going, passwords turned off there (`reset`).
  * The 5 minutes are a timer of their own, started as values arrive: when it runs, they go from
@@ -42,7 +43,11 @@ export type CandidateValues = NonNullable<PasswordsCandidate['values']>;
 export type ResponseHint = 'response-ok' | 'response-error' | null;
 
 export type SavingOutcome =
-  | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal }
+  /**
+   * `values`: the username submitted, for a generated password saved before it (S17 §6) to take; never the password,
+   * which leaves only with a sign-in that worked.
+   */
+  | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal; readonly values: { readonly username: string } | null }
   | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null }
   | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' };
 
@@ -205,7 +210,7 @@ export class SubmissionTracker {
     // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
     // save card's phase decides what a resubmit means.
     if (candidate.signal === 'blur' || already) return [];
-    return [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal }];
+    return [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal, values: candidate.values ? { username: candidate.values.username } : null }];
   }
 
   hint(formId: string, status: number): void {

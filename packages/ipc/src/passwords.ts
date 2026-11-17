@@ -45,6 +45,18 @@ export const PasswordsFocus = z.strictObject({
   role,
   /** The field's box in the page's CSS pixels, from the top frame's viewport. */
   rect: z.strictObject({ x: coordinate, y: coordinate, width: size, height: size }),
+  /**
+   * A new password's field (`new-password`, `confirmation-password`): what it says of the passwords it takes, for the
+   * generator (S17 §6). Its `passwordrules` attribute as written (cut to 2,000), and its `minlength` and `maxlength`
+   * (-1 for none). Never its value.
+   */
+  rules: z
+    .strictObject({
+      passwordrules: z.string().max(2000),
+      minLength: z.number().int().min(-1).max(1_000_000),
+      maxLength: z.number().int().min(-1).max(1_000_000),
+    })
+    .optional(),
 });
 export type PasswordsFocus = z.infer<typeof PasswordsFocus>;
 
@@ -89,6 +101,8 @@ export const PasswordsCandidate = z.strictObject({
     .strictObject({
       username: z.string().max(PASSWORD_LIMITS.username),
       password: z.string().min(1).max(PASSWORD_LIMITS.password),
+      /** A change-password form's current password, beside its new one: how main finds the account it's for (S17 §6). */
+      current: z.string().min(1).max(PASSWORD_LIMITS.password).optional(),
     })
     .optional(),
 })
@@ -113,16 +127,29 @@ export type PasswordsHint = z.infer<typeof PasswordsHint>;
 export const PasswordsFilled = z.strictObject({ formId, ok: z.boolean(), reason: z.enum(['changed', 'password']).optional() });
 export type PasswordsFilled = z.infer<typeof PasswordsFilled>;
 
-/** Main to the agent, the only way: fill the account you picked into the form the menu was shown for. */
+/**
+ * Main to the agent, the only way: fill the account you picked into the form the menu was shown for; or a generated
+ * password (`generated`, S17 §6) into its new password's field and the confirmation's, and nothing else.
+ */
 export const PASSWORDS_FILL = 'passwords:fill';
-export interface PasswordsFill {
+export type PasswordsFill = {
   formId: string;
-  username: string;
-  /** Left out for a first step (`username-only`), which has no password field. */
-  password?: string;
   /** The outline that shows where the values went (as the assistant's fill: no change to the page's DOM). */
   highlight: { color: string; ms: number; stagger: number; easing: string };
-}
+} & (
+  | {
+      username: string;
+      /** Left out for a first step (`username-only`), which has no password field. */
+      password?: string;
+      /**
+       * Picked in the menu of a new password's field (S17 §9): a form with no current password's field takes the
+       * password in its new one and the confirmation. Anywhere else such a form gets nothing.
+       */
+      intoNew?: true;
+      generated?: never;
+    }
+  | { generated: string; username?: never; password?: never; intoNew?: never }
+);
 
 export const passwordsAgentSchemas = {
   focus: PasswordsFocus,

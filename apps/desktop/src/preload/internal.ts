@@ -107,6 +107,7 @@ const api: SettingsApi = {
     exportShow: (exportId) => invoke('passwords:exportShow', { exportId }),
     count: () => invoke('passwords:count'),
     onImportProgress: (listener) => subscribe('passwords:importProgress', listener),
+    changeOnSite: (id) => invoke('passwords:changeOnSite', { id }),
     onChange: (listener) => subscribe('passwords:changed', listener),
   },
 };
