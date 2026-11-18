@@ -314,6 +314,10 @@ describe('the floor under “strong” (review round 1 of #53)', () => {
     // In Apple's language what's required is allowed too: 2–9 and `-`, the dash one place at no bits and a digit one at
     // 3, ten at log2(9): about 34.7 bits.
     ['twelve of digits and a required dash: under the floor', {}, 'allowed: digit; required: [-]; maxlength: 12;', false, /^Only 12 digits and symbols, as this site asks$/],
+    // A forced look-alike's kind is named too, though the free places never draw it (review round 4 of #56).
+    ['eight capitals and a required 0', {}, 'allowed: upper; maxlength: 8; required: [0];', false, /^Only 8 letters and digits, as this site asks$/],
+    ['ten of two letters and a required 0', {}, 'allowed: [ab]; required: [0]; maxlength: 10;', false, /^Only 10 letters and digits, as this site asks$/],
+    ['eight lower case and a required |', {}, 'allowed: lower; maxlength: 8; required: [|];', false, /^Only 8 letters and symbols, as this site asks$/],
   ])('%s', (_name, field, site, strong, words) => {
     const { rules } = passwordRulesFor(field, site);
     const p = generatePassword(rules, seeded(12))!;

@@ -320,7 +320,10 @@ function kindsOf(chars: string): string | null {
 
 /** Why a password isn't strong, in words, for the row's second line: `Only 4 digits, as this site asks`. */
 export function describeWeakPassword(password: string, rules: PasswordRuleSet): string {
-  return `Only ${password.length} ${kindsOf(planFor(rules)?.pool ?? '') ?? 'characters'}, as this site asks`;
+  // The pool and the forced places' classes: a required 0 beside capitals is a digit too (review round 4 of #56).
+  const plan = planFor(rules);
+  const chars = plan ? plan.pool + plan.forced.join('') : '';
+  return `Only ${password.length} ${kindsOf(chars) ?? 'characters'}, as this site asks`;
 }
 
 /**
