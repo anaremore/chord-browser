@@ -164,8 +164,14 @@ export const PAGES: readonly SitePage[] = [
     ],
   },
   // Not scored: phase 1 reads the main frame's own tree only (S17 §15; scan.ts).
-  { path: 'login/shadow-root-inputs', what: 'a sign-in form of web components, its fields in open shadow roots', steps: [], skip: 'shadow roots: a later phase' },
-  { path: 'login/shadow-root-inputs-closed', what: 'a sign-in form whose fields are in closed shadow roots', steps: [], skip: 'shadow roots: a later phase (a closed one is out of any page script’s reach)' },
+  // Material Web's text fields: each one's <input> in the component's open root, the form in the page's tree (S17 phase 3B).
+  {
+    path: 'login/shadow-root-inputs',
+    what: 'a sign-in form of web components, its fields in open shadow roots',
+    steps: [SIGN_IN('#username >>> input', '#password >>> input')],
+    skip: 'shadow roots: phase 3B, with the agent’s walk of open roots',
+  },
+  { path: 'login/shadow-root-inputs-closed', what: 'a sign-in form in an open root whose fields are in closed shadow roots', steps: [], skip: 'closed shadow roots are out of any page script’s reach, the agent’s too (S17 §4)' },
   { path: 'login/iframe-login', what: 'a sign-in form in a frame', steps: [], skip: 'frames: phase 1 is the main frame only' },
   { path: 'login/iframe-sandboxed-login', what: 'a sign-in form in a sandboxed frame', steps: [], skip: 'frames: phase 1 is the main frame only' },
   { path: 'login/nested-iframe-login', what: 'two sign-in forms in frames within frames', steps: [], skip: 'frames: phase 1 is the main frame only' },

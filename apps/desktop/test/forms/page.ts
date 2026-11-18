@@ -26,6 +26,19 @@ export interface PageResult {
   readonly kinds: (PasswordFormKind | null)[];
   /** The scan's records, with each field's label: for tuning the classifier in Node. */
   readonly records: (PasswordFormRecord & { labels: (string | null)[] })[];
+  /** Chord's fixtures' fields with an expectation the scan never took (`name#id: expected`), in open shadow roots too. */
+  readonly unscanned: string[];
+}
+
+/** Every element matching `selector` in the document and its open shadow roots, roots inside roots too. */
+export function deepAll(selector: string, root: Document | ShadowRoot = document): Element[] {
+  const out = [...root.querySelectorAll(selector)];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const inner = (n as Element).shadowRoot;
+    if (inner) out.push(...deepAll(selector, inner));
+  }
+  return out;
 }
 
 function scan(): PageResult {
@@ -52,7 +65,10 @@ function scan(): PageResult {
     records.push({ ...form.record, labels: form.elements.map((el) => el.getAttribute('data-manual-scoring')) });
   }
   const missing = labelled.flatMap((el, index) => (seen.has(el) ? [] : [{ index, label: el.getAttribute('data-manual-scoring') ?? '' }]));
-  return { fields, missing, kinds, records };
+  const unscanned = deepAll('[data-chord-expect]')
+    .filter((el) => !seen.has(el))
+    .map((el) => `${el.getAttribute('name') ?? ''}#${el.id}: ${el.getAttribute('data-chord-expect')}`);
+  return { fields, missing, kinds, records, unscanned };
 }
 
 (globalThis as unknown as { chordFormsScan: typeof scan }).chordFormsScan = scan;

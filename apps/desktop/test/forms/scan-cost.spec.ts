@@ -1,0 +1,68 @@
+/**
+ * What the passwords agent's scan costs on a heavy page, with and without open shadow roots (S17
+ * phase 3B; frames come with 3C): measured in Playwright's own headless Chromium, as the corpus
+ * is, and reported in test-results/forms/scan-cost.json. The sign-in form sits in the roots of
+ * web components, as a design system's text fields put it, under 600 news cards.
+ *
+ * Reported, not held: headless timings on shared runners vary too much for a budget here.
+ * perf.spec.ts (Electron, reference hardware) holds the budgets. Each number is the median of
+ * 15 measures, each the mean of 5 runs.
+ */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+import { bundleAgent } from '../../src/passwords/build';
+import type { ScanCost } from './scan-cost-entry';
+
+const here = import.meta.dirname;
+const RESULTS = resolve(here, '..', '..', 'test-results', 'forms');
+const ORIGIN = 'http://cost.test';
+
+/** About 4,200 elements of news cards: links, words, buttons. */
+const cards = () => {
+  let out = '';
+  for (let i = 0; i < 600; i++) out += `<div class="card"><a href="/a${i}"><span>Story ${i}</span></a><p>Some words <b>here</b> and <i>there</i></p><div class="share">Share</div></div>`;
+  return out;
+};
+/** A web component's text field: its input and label in an open root, declared (the page runs no script). */
+const field = (id: string, type: string, label: string) =>
+  `<x-text-field id="${id}"><template shadowrootmode="open"><label for="i">${label}</label><input id="i" name="${id}" type="${type}"><slot></slot></template></x-text-field>`;
+/** 300 components of the page's own (cards' buttons), each with a small open root. */
+const components = () => {
+  let out = '';
+  for (let i = 0; i < 300; i++) out += `<x-chip><template shadowrootmode="open"><span class="chip"><slot></slot></span></template>Tag ${i}</x-chip>`;
+  return out;
+};
+
+const PAGES: Record<string, string> = {
+  'no roots, the form in the main tree': `${cards()}<form><label>Username <input name="username"></label><label>Password <input name="password" type="password"></label><button>Sign in</button></form>`,
+  'the form’s fields in roots, 300 other components': `${cards()}${components()}<form>${field('username', 'text', 'Username')}${field('password', 'password', 'Password')}<button>Sign in</button></form>`,
+  'no sign-in, 300 components (what every page would pay)': `${cards()}${components()}`,
+};
+
+test('the scan, and walking open shadow roots, on a heavy page', async ({ page }) => {
+  test.setTimeout(120_000);
+  const script = await bundleAgent({ entry: join(here, 'scan-cost-entry.ts'), minify: true });
+  let body = '';
+  await page.route('**/*', (route) =>
+    route.request().url().startsWith(ORIGIN) ? route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', headers: { 'content-security-policy': "script-src 'none'" }, body }) : route.abort(),
+  );
+  const report: Record<string, Record<string, number>> = {};
+  for (const [name, html] of Object.entries(PAGES)) {
+    body = `<!doctype html><html><head><meta charset="utf-8"><title>News</title></head><body>${html}</body></html>`;
+    await page.goto(`${ORIGIN}/`);
+    const runs: ScanCost[] = [];
+    for (let i = 0; i < 15; i++) runs.push((await page.evaluate(`${script}\n;globalThis.chordScanCost()`)) as ScanCost);
+    const median = (key: keyof ScanCost) => {
+      const xs = runs.map((r) => r[key]).sort((a, b) => a - b);
+      return Math.round(xs[Math.floor(xs.length / 2)]! * 1000) / 1000;
+    };
+    report[name] = Object.fromEntries((['elements', 'roots', 'scanMs', 'lookMs', 'walkAllMs', 'walkTreeMs', 'deepLookMs'] as const).map((k) => [k, median(k)]));
+    console.log(`[scan-cost] ${name}: ${JSON.stringify(report[name])}`);
+  }
+  mkdirSync(RESULTS, { recursive: true });
+  writeFileSync(join(RESULTS, 'scan-cost.json'), JSON.stringify(report, null, 2));
+  // The pages are what they say: roots where there should be.
+  expect(report['no roots, the form in the main tree']!['roots']).toBe(0);
+  expect(report['the form’s fields in roots, 300 other components']!['roots']).toBe(302);
+});
