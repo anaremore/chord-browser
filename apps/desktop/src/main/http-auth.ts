@@ -244,8 +244,11 @@ export class AuthBroker {
   attachPage(contents: WebContents): void {
     const frames = new Map<number, Navigation>();
     /**
-     * By frame: navigations a newer one replaced before they ended. Each still ends with a failure (Chromium
-     * cancels it), which can come after the newer one's start, for the same address: that one is passed over.
+     * By frame: navigations a newer one replaced before they ended, whose failure may still come (after the newer
+     * one's start, for the same address): that one is passed over. Not every replaced navigation reports one:
+     * Electron 45 reports no failure at all for a navigation stopped, or a removed iframe's (the E2E in
+     * passwords-http-auth.spec.ts), so a count can be owed nothing. It goes when the page stops loading, when no
+     * failure can be on its way any more.
      */
     const superseded = new Map<number, number>();
     this.navigating.set(contents, frames);
@@ -286,6 +289,7 @@ export class AuthBroker {
         end(id);
         this.navigationGone(contents, id, () => false);
       }
+      superseded.clear();
       this.settled(contents);
     });
     contents.on('did-start-navigation', ((details: NavigationDetails) => {
@@ -331,8 +335,10 @@ export class AuthBroker {
       }
       const navigation = frames.get(id);
       const replaced = superseded.get(id) ?? 0;
-      // A replaced navigation's failure, whichever address it had: the frame's own navigation goes on. Two to the
-      // same address can't be told apart, but either order ends the right one: the second failure to come does.
+      // Maybe a replaced navigation's failure, whichever address it had: the frame's own navigation goes on. Two to
+      // the same address can't be told apart, but either order ends the right one: the second failure to come does.
+      // A replaced one that never reports (see `superseded`) leaves its count to the page's stopping loading, which
+      // ends this navigation's box too.
       if (replaced > 0) {
         if (replaced === 1) superseded.delete(id);
         else superseded.set(id, replaced - 1);

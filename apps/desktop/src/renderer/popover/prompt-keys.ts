@@ -5,7 +5,9 @@
  * that's past: Enter (which presses on its keydown, and repeats while held) and Space (which presses
  * on its keyup). A key held through the delay would otherwise press whatever has the focus then (Sign
  * in, once the box is armed and filled). A press from before the box appeared never reaches it as a
- * fresh one, only its repeats and its release. Space typed into a text field is only typing.
+ * fresh one, only its repeats and its release. Space typed into a text field is only typing, and Cancel
+ * always works. When the box moves the focus to Sign in itself (`refocused`), a key held on what had it
+ * before must be pressed afresh too.
  */
 const PRESSING = new Set(['Enter', ' ']);
 
@@ -14,6 +16,8 @@ export interface PromptKey {
   repeat: boolean;
   /** It's in a text field (the username or password): Space there types, it presses nothing. */
   field?: boolean;
+  /** It's on Cancel: that always works, before the delay too, as Escape does. */
+  cancel?: boolean;
 }
 
 export class PromptKeys {
@@ -23,6 +27,15 @@ export class PromptKeys {
 
   arm(): void {
     this.armed = true;
+    this.fresh.clear();
+  }
+
+  /**
+   * The box moved the focus to Sign in by itself (filled late, after *Unlock passwords*): a key held on what had it
+   * before presses nothing there, on its repeats or its release.
+   */
+  refocused(): void {
+    this.fresh.clear();
   }
 
   /** Whether the box may be answered now (Sign in, the chooser, Unlock; Cancel and Escape always may). */
@@ -46,6 +59,6 @@ export class PromptKeys {
   }
 
   private guards(event: PromptKey): boolean {
-    return PRESSING.has(event.key) && !(event.key === ' ' && event.field);
+    return PRESSING.has(event.key) && !event.cancel && !(event.key === ' ' && event.field);
   }
 }

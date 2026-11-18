@@ -293,6 +293,8 @@ function ShareCard({ prompt, appearance, platform }: { prompt: SharePrompt; appe
 
 /** A field you type into (the box's username and password), where Space types rather than presses. */
 const isTextField = (target: EventTarget) => target instanceof HTMLInputElement && target.type !== 'checkbox';
+/** The box's Cancel buttons (`data-cancel`): they always work, as Escape does. */
+const isCancel = (target: EventTarget) => target instanceof HTMLElement && target.hasAttribute('data-cancel');
 
 /** What a filled password field holds: a mask, never the password, which stays in main. */
 const FILLED_MASK = '•'.repeat(10);
@@ -309,7 +311,7 @@ const FILLED_MASK = '•'.repeat(10);
  * *Remember* saves what you typed once the site takes it. Never for a proxy,
  * and a private window fills without *Remember*.
  */
-function AuthCard({ prompt }: { prompt: AuthPrompt }) {
+export function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const form = useRef<HTMLFormElement>(null);
   const usernameField = useRef<HTMLInputElement>(null);
   const signIn = useRef<HTMLButtonElement>(null);
@@ -347,6 +349,8 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
     setUsername(prompt.accounts[0]!);
     setPassword('');
     if (prompt.remember !== null) setRemember(true);
+    // An Enter held on *Unlock passwords* doesn't repeat into Sign in.
+    keys.refocused();
     signIn.current?.focus();
   }, [accounts]);
   // Main didn't answer with a saved sign-in (the vault locked meanwhile): the box is yours again.
@@ -373,10 +377,10 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
       aria-labelledby={`${ids}-title`}
       aria-describedby={`${ids}-notes`}
       onKeyDownCapture={(e) => {
-        if (!keys.keydown({ key: e.key, repeat: e.repeat, field: isTextField(e.target) })) e.preventDefault();
+        if (!keys.keydown({ key: e.key, repeat: e.repeat, field: isTextField(e.target), cancel: isCancel(e.target) })) e.preventDefault();
       }}
       onKeyUpCapture={(e) => {
-        if (!keys.keyup({ key: e.key, field: isTextField(e.target) })) e.preventDefault();
+        if (!keys.keyup({ key: e.key, field: isTextField(e.target), cancel: isCancel(e.target) })) e.preventDefault();
       }}
       onSubmit={(e) => {
         e.preventDefault();
@@ -396,7 +400,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
           {title} <span className={styles.host}>{prompt.origin}</span>
           {prompt.proxy && ' needs you to sign in'}
         </p>
-        <button type="button" className={styles.iconButton} aria-label="Cancel" title="Cancel" onClick={() => respond(null)}>
+        <button type="button" className={styles.iconButton} aria-label="Cancel" title="Cancel" data-cancel onClick={() => respond(null)}>
           <X {...ICON} />
         </button>
       </div>
@@ -491,7 +495,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         </label>
       )}
       <div className={styles.actions}>
-        <button type="button" className={styles.secondary} onClick={() => respond(null)}>
+        <button type="button" className={styles.secondary} data-cancel onClick={() => respond(null)}>
           Cancel
         </button>
         <button ref={signIn} type="submit" className={styles.primary} disabled={sent || !armed}>
