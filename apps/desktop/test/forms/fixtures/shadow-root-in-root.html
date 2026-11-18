@@ -1,0 +1,14 @@
+<!doctype html>
+<!--
+  Phase 3B: a root inside a root, beside a <form> of the page's own. The form's fields are text
+  fields whose inputs sit two roots down (the text field's root holds an input box's root), and
+  belong to the form through the host in it.
+-->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<h1>Log in</h1>
+<form action="/session" method="post">
+  <x-text-field><template shadowrootmode="open"><label>Username</label><x-input-box><template shadowrootmode="open"><input name="username" autocomplete="username" data-chord-expect="username"></template></x-input-box></template></x-text-field>
+  <x-text-field><template shadowrootmode="open"><label>Password</label><x-input-box><template shadowrootmode="open"><input name="password" type="password" data-chord-expect="current-password"></template></x-input-box></template></x-text-field>
+  <button>Log in</button>
+</form>
+</body></html>

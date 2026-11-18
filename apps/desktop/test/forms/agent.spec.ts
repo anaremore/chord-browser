@@ -765,4 +765,63 @@ test("a plain div's submit made by the page's script (an untrusted click or Ente
   await page.click('#next');
   await a.settle();
   expect((await a.of('step')).map((m) => m['username'])).toEqual(['ada@example.com']);
+/* ---------- Phase 3B: open shadow roots (S17 §4) ---------- */
+
+/** A page whose sign-in fields are a component's: each input in an open root of its host, built by the page's script. */
+const COMPONENT_FIELDS = `<h1>Sign in</h1><form id="f" action="/session"><x-field id="user"></x-field><x-field id="pass"></x-field><button id="go">Sign in</button></form>
+<script>
+  for (const [id, type, label] of [['user', 'email', 'Email'], ['pass', 'password', 'Password']]) {
+    const root = document.getElementById(id).attachShadow({ mode: 'open' });
+    root.innerHTML = '<label for="i">' + label + '</label><input id="i" name="' + id + '" type="' + type + '">';
+  }
+</script>`;
+const inRoot = (host: string) => `#${host} >> input`;
+
+test('a field in an open shadow root: focus says its role, as in the page’s own tree', async ({ page }) => {
+  const a = await open(page, COMPONENT_FIELDS);
+  await a.clear();
+  await page.click(inRoot('pass'));
+  await a.settle();
+  expect(await a.of('focus')).toEqual([expect.objectContaining({ role: 'current-password', kind: 'sign-in' })]);
+});
+
+test('a field in an open shadow root with focus before the agent starts (autofocus in a component): its focus is sent', async ({ page }) => {
+  body = `<!doctype html><html><head><meta charset="utf-8"><title>Test</title></head><body>${COMPONENT_FIELDS}</body></html>`;
+  await page.goto(`${ORIGIN}/page`);
+  await page.focus(inRoot('user'));
+  // The page's document only knows the host has focus; the field is its root's active element.
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe('user');
+  await page.addScriptTag({ content: script });
+  await page.evaluate(() => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.start());
+  const a = api(page);
+  await a.settle();
+  expect(await a.of('focus')).toEqual([expect.objectContaining({ role: 'username', kind: 'sign-in' })]);
+});
+
+test('a sign-in in open shadow roots: one submit is one candidate, with what was typed, and a fill goes in through the roots', async ({ page }) => {
+  const a = await open(page, COMPONENT_FIELDS);
+  await page.evaluate(() => document.getElementById('f')!.addEventListener('submit', (e) => e.preventDefault()));
+  await page.fill(inRoot('user'), 'ada@example.com');
+  await page.fill(inRoot('pass'), 'secret pass');
+  await a.clear();
+  await page.press(inRoot('pass'), 'Enter');
+  await a.settle();
+  const submits = (await a.of('candidate')).filter((c) => c['signal'] !== 'blur');
+  expect(submits).toHaveLength(1);
+  expect(submits[0]!['values']).toEqual({ username: 'ada@example.com', password: 'secret pass' });
+
+  // The fill, as main sends it for the form the menu was shown for.
+  await page.fill(inRoot('user'), '');
+  await page.fill(inRoot('pass'), '');
+  await page.click(inRoot('user'));
+  await a.settle();
+  const focus = (await a.of('focus')).at(-1)!;
+  await page.evaluate(
+    (p) => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.fill(p),
+    { formId: focus['formId'], username: 'ada@example.com', password: 'pw-one', highlight: { color: 'red', ms: 10, stagger: 0, easing: 'linear' } },
+  );
+  await a.settle();
+  expect((await a.of('filled')).at(-1)).toMatchObject({ ok: true });
+  expect(await page.inputValue(inRoot('user'))).toBe('ada@example.com');
+  expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
 });

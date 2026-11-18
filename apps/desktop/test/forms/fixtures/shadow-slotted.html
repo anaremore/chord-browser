@@ -1,0 +1,14 @@
+<!doctype html>
+<!--
+  Phase 3B: light-DOM inputs slotted into components. Each input stays in the page's own tree, a
+  child of its host, and is rendered through the host's open root, where its label is (no label
+  the input can own, so its name and placeholder say what it is). The form is the page's.
+-->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<h1>Sign in to Example</h1>
+<form action="/session" method="post">
+  <x-field><template shadowrootmode="open"><span class="label">Email</span><slot></slot></template><input type="email" name="email" placeholder="Email" data-chord-expect="username"></x-field>
+  <x-field><template shadowrootmode="open"><span class="label">Password</span><slot></slot></template><input type="password" name="password" placeholder="Password" data-chord-expect="current-password"></x-field>
+  <button>Sign in</button>
+</form>
+</body></html>
