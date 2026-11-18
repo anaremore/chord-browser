@@ -14,18 +14,19 @@
  *   against @chord/ipc's strict schemas and a size limit.
  * - **Values:** only a candidate sent at a submit signal carries what was typed (the username
  *   and the password to save). The tracker holds them with the form, and they leave only on
- *   `signedIn`, for the save card. Nothing here logs, echoes or stores them.
+ *   `signedIn`, for the save card. A first step's submit carries its username (`step`), passed
+ *   on as `firstStep` for the assist to keep. Nothing here logs, echoes or stores them.
  * - **Private windows** fill and never save (S17 §7): `signedIn` and `failed` never fire there,
  *   and a candidate's values are dropped as it arrives.
  * - **A page can't flood main:** each page's messages pass a token bucket (`MESSAGE_RATE`) before
  *   anything is parsed; the excess is dropped without a word. Focus and blur have one bucket and
- *   the rest (`candidate`, `forms`, `gone`, `still`, `hint`) another, so a page busy with focus
- *   can't crowd out a sign-in's messages; both start afresh with each new document. The agent
+ *   the rest (`candidate`, `step`, `forms`, `gone`, `still`, `hint`) another, so a page busy
+ *   with focus can't crowd out a sign-in's messages; both start afresh with each new document. The agent
  *   sends far fewer: focus, blur and forms at most once a frame, one candidate per submit.
  *
- * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`, and `filled` (the
- * agent's answer to a fill the menu sent). Nothing here logs a
- * payload: a refused message is dropped without a word.
+ * Events (`events`): `focus`, `blur`, `submitted`, `signedIn`, `failed`, `firstStep` (a first
+ * step's username, never from a private window), and `filled` (the agent's answer to a fill the
+ * menu sent). Nothing here logs a payload: a refused message is dropped without a word.
  */
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
@@ -92,6 +93,16 @@ export interface PasswordsFilledEvent {
   /** Why nothing was written (PasswordsFilled). */
   readonly reason?: 'changed' | 'password';
 }
+/**
+ * A first step was submitted with this username (`step`, S17 §4, phase 3): the assist keeps it for the tab and site, for a
+ * password step with no username of its own. Never from a private window.
+ */
+export interface PasswordsFirstStepEvent {
+  readonly contents: WebContents;
+  readonly origin: string;
+  readonly formId: string;
+  readonly username: string;
+}
 type Outcome<T extends SavingOutcome['type']> = Omit<Extract<SavingOutcome, { type: T }>, 'type'> & { readonly contents: WebContents };
 
 export interface PasswordDetectorEvents {
@@ -102,6 +113,7 @@ export interface PasswordDetectorEvents {
   failed: [Outcome<'failed'>];
   filled: [PasswordsFilledEvent];
   forms: [PasswordsFormsEvent];
+  firstStep: [PasswordsFirstStepEvent];
 }
 
 export interface PasswordDetectorOptions {
@@ -245,6 +257,11 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         return emit(tracker.candidate(rest, origin));
       }
       emit(tracker.candidate(m, origin));
+    });
+    // A first step's username: never held from a private window, which never saves.
+    on('step', (m, origin) => {
+      if (entryOf()?.isPrivate ?? true) return;
+      events.emit('firstStep', { contents, origin, formId: m.formId, username: m.username });
     });
     on('forms', (m) => {
       emit(tracker.forms(m));

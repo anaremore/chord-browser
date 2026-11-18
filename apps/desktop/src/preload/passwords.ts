@@ -24,7 +24,7 @@ import type { PasswordsAgentChannel } from '@chord/ipc';
 /** The agent's world: its own, so neither the page nor the assistant's (4400) can see it (S17 §8). */
 const WORLD = 4440;
 /** The channels the bridge forwards, each as `passwords:<name>`; anything else is dropped here. */
-const CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'gone', 'still', 'hint', 'filled'] as const satisfies readonly PasswordsAgentChannel[];
+const CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'step', 'gone', 'still', 'hint', 'filled'] as const satisfies readonly PasswordsAgentChannel[];
 // Every channel of the contract is here (a type error otherwise).
 const _every: Exclude<PasswordsAgentChannel, (typeof CHANNELS)[number]> extends never ? true : never = true;
 void _every;

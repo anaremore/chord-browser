@@ -602,3 +602,143 @@ test('a change form’s submit carries its current password beside the new one, 
   expect(candidate).toMatchObject({ kind: 'sign-up', values: { username: 'ada@example.com', password: 'new-Password-2' } });
   expect(candidate['values']).not.toHaveProperty('current');
 });
+
+/* ---------- Phase 3A: a first step's username, and formless submits (S17 §4, §6) ---------- */
+
+const FIRST_STEP =
+  '<h1>Sign in</h1><form id="f"><input id="u" name="identifier" type="email" autocomplete="username" aria-label="Email"><button id="next">Next</button></form>';
+
+const stepPages: { name: string; html: string; type: string; press: 'Enter' | 'click'; step: boolean }[] = [
+  { name: 'a first step, Next in its form', html: FIRST_STEP, type: 'ada@example.com', press: 'click', step: true },
+  { name: 'a first step, Enter', html: FIRST_STEP, type: 'ada@example.com', press: 'Enter', step: true },
+  {
+    name: 'a formless first step, its Continue a plain div',
+    html: '<h1>Log in</h1><div><input id="u" name="email" type="email" aria-label="Email"><div id="next" tabindex="0">Continue</div></div>',
+    type: 'ada@example.com',
+    press: 'click',
+    step: true,
+  },
+  {
+    name: 'one or two digits: never a username',
+    html: '<h1>Sign in</h1><form id="f"><input id="u" name="username" autocomplete="username" aria-label="Username"><button id="next">Next</button></form>',
+    type: '42',
+    press: 'click',
+    step: false,
+  },
+  {
+    name: 'a search box',
+    html: '<form id="f" role="search"><input id="u" name="q" type="search" aria-label="Search"><button id="next">Search</button></form>',
+    type: 'ada@example.com',
+    press: 'click',
+    step: false,
+  },
+  {
+    name: 'a newsletter email',
+    html: '<h2>Subscribe to our newsletter</h2><form id="f" class="newsletter"><input id="u" name="email" type="email" aria-label="Email"><button id="next">Subscribe</button></form>',
+    type: 'ada@example.com',
+    press: 'click',
+    step: false,
+  },
+  {
+    name: 'a sign-up first step',
+    html: '<h1>Create your account</h1><form id="f"><input id="u" name="email" type="email" aria-label="Email"><button id="next">Create account</button></form>',
+    type: 'ada@example.com',
+    press: 'click',
+    step: false,
+  },
+];
+
+for (const c of stepPages) {
+  test(`a first step's username: ${c.name}`, async ({ page }) => {
+    const a = await open(page, c.html);
+    await page.evaluate(() => document.querySelector('form')?.addEventListener('submit', (e) => e.preventDefault()));
+    await page.fill('#u', c.type);
+    await a.clear();
+    if (c.press === 'Enter') await page.press('#u', 'Enter');
+    else await page.click('#next');
+    await a.settle();
+    const steps = await a.of('step');
+    if (c.step) {
+      expect(steps).toHaveLength(1);
+      expect(steps[0]).toMatchObject({ username: c.type });
+      expect(steps[0]!['signal']).toMatch(c.press === 'Enter' ? /^enter$/ : /^(button|submit)$/);
+    } else expect(steps).toEqual([]);
+    // No other message carries what was typed.
+    expect(JSON.stringify((await a.messages()).filter(([ch]) => ch !== 'step'))).not.toContain(`"${c.type}"`);
+  });
+}
+
+test("a first step's username: once per submit; an email the site put there counts, at your submit only", async ({ page }) => {
+  const a = await open(page, FIRST_STEP);
+  await page.evaluate(() => document.getElementById('f')!.addEventListener('submit', (e) => e.preventDefault()));
+  // The site remembered the email: not typed, still yours, and sent only at your click.
+  await page.evaluate(() => void ((document.getElementById('u') as HTMLInputElement).value = 'remembered@example.com'));
+  await a.settle();
+  expect(await a.of('step')).toEqual([]);
+  // A submit the page's script makes (untrusted) is no signal.
+  await page.evaluate(() => document.getElementById('next')!.click());
+  await a.settle();
+  expect(await a.of('step')).toEqual([]);
+  await page.click('#next');
+  await a.settle();
+  expect((await a.of('step')).map((s) => s['username'])).toEqual(['remembered@example.com']);
+  await page.waitForTimeout(1100);
+  await page.fill('#u', 'ada@example.com');
+  await a.clear();
+  // Enter, then the click: one submit within a second.
+  await page.press('#u', 'Enter');
+  await page.click('#next');
+  await a.settle();
+  expect(await a.of('step')).toHaveLength(1);
+});
+
+const FIELDS = '<input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password">';
+const plainClicks: { name: string; html: string; signal: boolean }[] = [
+  { name: 'a formless sign-in whose button is a div with the pointer', html: `<div>${FIELDS}<div id="go" style="cursor:pointer">Sign in</div></div>`, signal: true },
+  { name: 'a span inside such a div', html: `<div>${FIELDS}<div style="cursor:pointer"><span id="go">Log in</span></div></div>`, signal: true },
+  { name: 'Continue, with a tabindex', html: `<div>${FIELDS}<div id="go" tabindex="0">Continue</div></div>`, signal: true },
+  { name: 'a div that shows no sign it can be pressed', html: `<div>${FIELDS}<div id="go">Sign in</div></div>`, signal: false },
+  {
+    name: 'a "Sign up" div on a sign-in form',
+    html: '<h1>Sign in</h1><div><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" autocomplete="current-password" aria-label="Password"><div id="go" style="cursor:pointer">Sign up</div><button>Sign in</button></div>',
+    signal: false,
+  },
+  { name: 'a question', html: `<div>${FIELDS}<div id="go" style="cursor:pointer">New here? Sign in</div></div>`, signal: false },
+  { name: 'a heading', html: `<div><h1 id="go" style="cursor:pointer">Sign in</h1>${FIELDS}<button>Go</button></div>`, signal: false },
+  { name: 'a link that reads "Log in"', html: `<div>${FIELDS}<a id="go" href="#">Log in</a></div>`, signal: false },
+  { name: 'a show-password toggle drawn as a div', html: `<div>${FIELDS}<div id="go" style="cursor:pointer">Show</div></div>`, signal: false },
+  {
+    name: 'a "Sign in" div far from the fields',
+    html: `<div><div><div><div><div><div><div><div>${FIELDS}</div></div></div></div></div></div></div></div><div id="go" style="cursor:pointer">Sign in</div>`,
+    signal: false,
+  },
+];
+
+for (const c of plainClicks) {
+  test(`a click as a submit signal: ${c.name}`, async ({ page }) => {
+    const a = await open(page, c.html);
+    await page.fill('#u', 'ada@example.com');
+    await page.fill('#p', 'secret pass');
+    await a.clear();
+    await page.click('#go');
+    await a.settle();
+    const submits = (await a.of('candidate')).filter((x) => x['signal'] !== 'blur');
+    expect(submits.map((x) => x['signal'])).toEqual(c.signal ? ['button'] : []);
+  });
+}
+
+test('a first step whose password field the last scan saw hidden, but typed in: its submit is a sign-in candidate, not a first step', async ({ page }) => {
+  // A transparent password field in a form whose submit says Next: a first step to the scan, until it's typed in.
+  const a = await open(page, '<h1>Sign in</h1><form id="f"><input id="u" name="email" type="email" autocomplete="username" aria-label="Email"><input id="p" name="passwd" type="password" style="opacity:0"><button id="next">Next</button></form>');
+  await page.evaluate(() => document.getElementById('f')!.addEventListener('submit', (e) => e.preventDefault()));
+  expect((await a.of('forms')).at(-1)?.['forms']).toEqual([expect.objectContaining({ kind: 'username-only' })]);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'secret pass');
+  await a.clear();
+  await page.press('#p', 'Enter');
+  await a.settle();
+  expect(await a.of('step')).toEqual([]);
+  const submits = (await a.of('candidate')).filter((x) => x['signal'] !== 'blur');
+  expect(submits).toHaveLength(1);
+  expect(submits[0]!['values']).toMatchObject({ username: 'ada@example.com', password: 'secret pass' });
+});

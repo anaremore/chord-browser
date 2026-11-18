@@ -1780,3 +1780,203 @@ describe('the presave’s form, kept to its own (review round 2 of #53)', () => 
     expect(t.vault.presave).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("a first step's username (phase 3: S17 §4, Chromium's possible_usernames_)", () => {
+  /** A first step submitted on the tab, then a password step whose form has no username (`username: ''`). */
+  const step = async (t: ReturnType<typeof setup>, over: Record<string, unknown> = {}) => {
+    t.events.emit('firstStep', { contents: t.contents, origin: ORIGIN, formId: 'f1', username: 'ada@acme.dev', ...over } as never);
+    await flush();
+  };
+  const noUsername = { values: { username: '', password: VALUES.password } };
+
+  it.each<[string, Parameters<typeof setup>[0], (t: ReturnType<typeof setup>) => Promise<void>, Record<string, unknown>, string]>([
+    ['the password step on the same page takes it', {}, async () => {}, noUsername, 'ada@acme.dev'],
+    ['…on another host of the same site (accounts.x then login.x)', {}, async () => {}, { ...noUsername, origin: 'https://login.github.com' }, 'ada@acme.dev'],
+    ['…on another site: not taken', {}, async () => {}, { ...noUsername, origin: 'https://gitlab.com' }, ''],
+    ['a password step with a username of its own keeps it', {}, async () => {}, { values: { username: 'other@acme.dev', password: VALUES.password } }, 'other@acme.dev'],
+    ['after FIRST_STEP_MS: gone', {}, async (t) => t.timers.advance(HOLD_MS + 1), noUsername, ''],
+    ['passwords turned off there since: gone', {}, async (t) => {
+      t.host.passwordsOn.mockReturnValue(false);
+      t.assist.switched();
+      t.host.passwordsOn.mockReturnValue(true);
+    }, noUsername, ''],
+    ['a change form never takes it (its account is found by its current password)', { change: { state: 'none' } as never }, async () => {}, { ...noUsername, kind: 'change' }, ''],
+  ])('%s', async (_name, options, between, signIn, username) => {
+    const t = setup(options);
+    await step(t);
+    await between(t);
+    await t.signedIn(signIn);
+    const asked = t.vault.candidateFor.mock.calls as unknown as [{ username: string }][];
+    expect(asked.at(-1)?.[0].username ?? '').toBe(username);
+  });
+
+  it('a private window keeps none (it never saves)', async () => {
+    const t = setup({ tab: { private: true } });
+    await step(t);
+    t.host.tabOf.mockReturnValue({ nodeId: 'n1', windowId: 'w1', chordId: 'c1', private: false });
+    await t.signedIn(noUsername);
+    expect((t.vault.candidateFor.mock.calls.at(-1) as unknown as [{ username: string }])[0].username).toBe('');
+  });
+
+  it('a save uses it once: the next password step on the tab has none', async () => {
+    const t = setup();
+    await step(t);
+    await t.signedIn(noUsername);
+    const card = t.assist.cardFor('n1')!;
+    await t.assist.answer('w1', card.id, 'save', {});
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith({ origin: ORIGIN, username: 'ada@acme.dev', password: VALUES.password, chordId: 'c1' });
+    await t.signedIn(noUsername);
+    expect((t.vault.candidateFor.mock.calls.at(-1) as unknown as [{ username: string }])[0].username).toBe('');
+  });
+
+  it('the tab closing forgets it', async () => {
+    const t = setup();
+    await step(t);
+    t.page.destroyed = true;
+    t.page.emit('destroyed');
+    t.page.destroyed = false;
+    await t.signedIn(noUsername);
+    expect((t.vault.candidateFor.mock.calls.at(-1) as unknown as [{ username: string }])[0].username).toBe('');
+  });
+
+  it('a newer first step replaces it', async () => {
+    const t = setup();
+    await step(t);
+    await step(t, { username: 'ada.lovelace' });
+    await t.signedIn(noUsername);
+    expect((t.vault.candidateFor.mock.calls.at(-1) as unknown as [{ username: string }])[0].username).toBe('ada.lovelace');
+  });
+
+  it.each<[string, string, Record<string, unknown>, string[]]>([
+    ['the password step’s menu lists that account first', 'ada.lovelace', { role: 'current-password' }, ['ada.lovelace', 'ada@acme.dev']],
+    ['…matched ignoring case', 'ADA.Lovelace', { role: 'current-password' }, ['ada.lovelace', 'ada@acme.dev']],
+    ['an account not saved: the order as the vault gave it', 'someone@else.dev', { role: 'current-password' }, ['ada@acme.dev', 'ada.lovelace']],
+    ['the username field’s menu: as the vault gave it', 'ada.lovelace', { role: 'username' }, ['ada@acme.dev', 'ada.lovelace']],
+  ])('%s', async (_name, username, focus, order) => {
+    const t = setup();
+    await step(t, { username });
+    await t.focus(focus);
+    expect(t.assist.menuFor('w1')?.accounts.map((a) => a.username)).toEqual(order);
+  });
+
+  it('a generated password saved before a password step with no username takes it at the submit', async () => {
+    const t = setup();
+    await step(t);
+    await t.focus(NEW);
+    await settle(2);
+    // The generator's row takes no click for its first 500 ms.
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+    await t.submitted({ values: { username: '' } });
+    await settle();
+    expect(t.vault.presaved).toHaveBeenCalledWith('pending', 'g1', ORIGIN, 'c1', { username: 'ada@acme.dev' });
+  });
+});
+
+describe("a first step's username while main waits (review round 1 of #59)", () => {
+  /** A site lookup the test holds open: what changes meanwhile is what's checked again after it. */
+  function held() {
+    let release: () => void = () => {};
+    let gate: Promise<void> | null = null;
+    return {
+      siteOf: async (origin: string) => {
+        if (gate) await gate;
+        return naiveSite(origin);
+      },
+      hold: () => void (gate = new Promise<void>((done) => (release = done))),
+      release: async () => {
+        const go = release;
+        gate = null;
+        go();
+        await flush();
+        await flush();
+      },
+    };
+  }
+  const step = (t: ReturnType<typeof setup>) => t.events.emit('firstStep', { contents: t.contents, origin: ORIGIN, formId: 'f1', username: 'ada@acme.dev' } as never);
+  const noUsername = { values: { username: '', password: VALUES.password } };
+  const lastUsername = (t: ReturnType<typeof setup>) => (t.vault.candidateFor.mock.calls.at(-1) as unknown as [{ username: string }] | undefined)?.[0].username;
+
+  it.each<[string, (t: ReturnType<typeof setup>) => void, (t: ReturnType<typeof setup>) => void]>([
+    [
+      'the tab closes while the site is looked up: nothing kept',
+      (t) => {
+        t.page.destroyed = true;
+        t.page.emit('destroyed');
+      },
+      (t) => void (t.page.destroyed = false),
+    ],
+    ['passwords turned off there while the site is looked up: nothing kept', (t) => t.host.passwordsOn.mockReturnValue(false), (t) => t.host.passwordsOn.mockReturnValue(true)],
+    ['the tab leaves the window (no tab any more) meanwhile: nothing kept', (t) => t.host.tabOf.mockReturnValue(null), (t) => t.host.tabOf.mockReturnValue({ nodeId: 'n1', windowId: 'w1', chordId: 'c1', private: false })],
+  ])('%s', async (_name, meanwhile, after) => {
+    const site = held();
+    const t = setup({ siteOf: site.siteOf });
+    site.hold();
+    step(t);
+    await flush();
+    meanwhile(t);
+    await site.release();
+    after(t);
+    await t.signedIn(noUsername);
+    expect(lastUsername(t)).toBe('');
+  });
+
+  it('a presave that goes while the first step is looked up at its submit gets no username', async () => {
+    const site = held();
+    const t = setup({ siteOf: site.siteOf });
+    step(t);
+    await flush();
+    await t.focus(NEW);
+    await settle(2);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+    t.vault.presaved.mockClear();
+    site.hold();
+    t.events.emit('submitted', { contents: t.contents, formId: 'f1', kind: 'sign-up', origin: ORIGIN, signal: 'submit', values: { username: '' } } as never);
+    await flush();
+    // Another document meanwhile: the presave there isn't this submit's.
+    t.page.emit('did-navigate', {}, 'https://github.com/elsewhere', 200);
+    await site.release();
+    await settle();
+    expect(t.vault.presaved).not.toHaveBeenCalledWith('pending', expect.anything(), expect.anything(), expect.anything(), { username: 'ada@acme.dev' });
+  });
+
+  it('…and one that stays gets it, as before', async () => {
+    const site = held();
+    const t = setup({ siteOf: site.siteOf });
+    step(t);
+    await flush();
+    await t.focus(NEW);
+    await settle(2);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+    site.hold();
+    t.events.emit('submitted', { contents: t.contents, formId: 'f1', kind: 'sign-up', origin: ORIGIN, signal: 'submit', values: { username: '' } } as never);
+    await flush();
+    await site.release();
+    await settle();
+    expect(t.vault.presaved).toHaveBeenCalledWith('pending', 'g1', ORIGIN, 'c1', { username: 'ada@acme.dev' });
+  });
+
+  it('to another site and back within FIRST_STEP_MS: the first step is still the tab’s for the site (by design)', async () => {
+    const t = setup();
+    step(t);
+    await flush();
+    t.page.emit('did-navigate', {}, 'https://gitlab.com/explore', 200);
+    t.timers.advance(60_000);
+    t.page.emit('did-navigate', {}, 'https://github.com/login', 200);
+    await flush();
+    // On the other site, a password step there doesn't take it.
+    await t.signedIn({ ...noUsername, origin: 'https://gitlab.com' });
+    expect(lastUsername(t)).toBe('');
+    // Back on the first site's password step: it does.
+    await t.signedIn(noUsername);
+    expect(lastUsername(t)).toBe('ada@acme.dev');
+  });
+});

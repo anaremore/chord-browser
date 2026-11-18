@@ -8,7 +8,7 @@
  * at most 2,000 controls and 250 ms. Values are read only when `values` is set, and
  * they never leave the page's renderer.
  */
-import { ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS, PASSWORDS_MAX_FORMS, readsAsSubmit, type FormWords, type PasswordField, type PasswordFormRecord } from '@chord/core';
+import { ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS, PASSWORDS_MAX_FORMS, readsAsSubmit, submitWords, type FormWords, type PasswordField, type PasswordFormRecord } from '@chord/core';
 
 /** The most credential forms the agent reports in one `forms` message (the schema's limit, which keeps it under the message limit). */
 export const MAX_REPORTED_FORMS = PASSWORDS_MAX_FORMS;
@@ -196,33 +196,101 @@ export const isSubmit = (b: Element) => (tagOf(b) === 'BUTTON' ? ((b as HTMLButt
 /** Words on a button that isn't the form's submit: a password's show or hide toggle, help and recovery links, cancel, and signing in with another site. */
 const NOT_SUBMIT = /\b(show|hide|reveal|toggle|view|forgot|forgotten|cancel|close|back|help)\b|\beye\b|\bwith (google|apple|facebook|microsoft|github|twitter|x|linkedin)\b/i;
 
+/** The most characters, and words, a plain element may say to count as a button: a label, not a sentence. */
+const PLAIN_WORDS_MAX = 40;
+const PLAIN_WORD_COUNT_MAX = 4;
+/** Text that's never a button however it reads: headings, labels, paragraphs. */
+const NOT_PLAIN = /^(H[1-6]|LABEL|LEGEND|P|LI|TD|TH|OPTION)$/;
+
+/** Something a person is shown they can press: a `tabindex`, an `onclick`, or the pointer cursor. */
+const pressable = (el: Element) =>
+  elementProto.hasAttribute.call(el, 'tabindex') || elementProto.hasAttribute.call(el, 'onclick') || getComputedStyle(el).cursor === 'pointer';
+
+/**
+ * An element with no button's role that a script signs in with (S17 §6 step 2, phase 3): a `div` or a `span`, at or
+ * just above the click, that shows it can be pressed and whose own few words read as the form's submit:
+ * Next or Continue, sign in on any form but a sign-up, sign up on a sign-up only (a "Sign up" link on a sign-in page
+ * isn't its submit). Never a heading, label or paragraph, a question ("New here? Sign up"), a toggle, help or recovery,
+ * an element holding a field, or a link or anything in one: on the corpus, links that read "Log in" are another way to
+ * sign in far more often than a form's submit (submit-baseline.json).
+ */
+function plainSubmit(target: Element, kind: string | null): Element | null {
+  if (target.closest('a')) return null;
+  let el: Element | null = target;
+  for (let depth = 0; depth < 3 && el; depth++, el = parentOf(el)) {
+    const tag = tagOf(el);
+    if (tag === 'BODY' || tag === 'FORM' || tag === 'HTML' || NOT_PLAIN.test(tag)) return null;
+    if (allIn(el, 'input, select, textarea, h1, h2, h3, h4, h5, h6, label, p').length) return null;
+    const text = words(el, PLAIN_WORDS_MAX + 1);
+    if (!text) continue;
+    if (text.length > PLAIN_WORDS_MAX || text.split(' ').length > PLAIN_WORD_COUNT_MAX || text.includes('?')) return null;
+    if (NOT_SUBMIT.test(`${text} ${attrOf(el, 'aria-label') ?? ''}`) || !pressable(el)) return null;
+    const says = submitWords(text);
+    const fits = says === 'next' || (says === 'sign-in' && kind !== 'sign-up') || (says === 'sign-up' && kind === 'sign-up');
+    return fits ? el : null;
+  }
+  return null;
+}
+
+/** Whether `el` is within `levels` ancestors of `field`: the fields' own neighbourhood, for a formless form. */
+function near(field: Element, el: Element, levels: number): boolean {
+  let node = parentOf(field);
+  for (let depth = 0; depth < levels && node && tagOf(node) !== 'BODY'; depth++, node = parentOf(node)) if (contains(node, el)) return true;
+  return false;
+}
+
 /**
  * The button a click on `target` submits a credential form with, or null (S17 §6, step 2). In a
  * `<form>`, only its submit buttons count; outside one, any button in the fields' scope. Never a
  * button that reads as a show-password toggle, help or recovery (by its words, `aria-pressed`, or
  * `aria-controls` naming the password field), nor one inside the password field's own wrapper.
+ * `anchor` is the form's password field, or its username's for a first step; `kind`, the form's kind.
+ *
+ * An element with no button's role counts too when its words read as a submit (`plainSubmit`): SPAs sign in with a
+ * `div`. Outside a `<form>`, it must be near the fields (within the scope's six levels).
  */
-export function submitButtonFor(target: Element, password: Element | null, form: HTMLFormElement | null): Element | null {
+export function submitButtonFor(target: Element, anchor: Element | null, form: HTMLFormElement | null, kind: string | null = null): Element | null {
   const button = target.closest(ANY_BUTTON);
-  if (!button) return null;
+  if (!button) {
+    const plain = plainSubmit(target, kind);
+    if (!plain || !anchor || contains(plain, anchor)) return null;
+    if (!form && !near(anchor, plain, 6)) return null;
+    return plain;
+  }
   const words = `${buttonText(button)} ${attrOf(button, 'aria-label') ?? ''} ${attrOf(button, 'title') ?? ''}`;
   if (NOT_SUBMIT.test(words) || button.hasAttribute('aria-pressed')) return null;
   // In a <form>: its submit buttons, and a plain button that a script signs in with (React apps, banks):
   // one whose words say sign in, sign up, Next or Continue, or the form's only button.
   if (form && !isSubmit(button) && !readsAsSubmit(words) && allIn(form, ANY_BUTTON).length !== 1) return null;
-  if (password) {
-    if (contains(button, password)) return null;
+  if (anchor) {
+    if (contains(button, anchor)) return null;
     const controls = (attrOf(button, 'aria-controls') ?? '').split(/\s+/);
-    if (password.id && controls.includes(password.id)) return null;
-    // The field's own wrapper (a box holding only it and its eye): a button there toggles it.
-    const wrapper = parentOf(password);
+    if (anchor.id && controls.includes(anchor.id)) return null;
+    // The password field's own wrapper (a box holding only it and its eye): a button there toggles it. A first step's
+    // username and its Next often share one.
+    const wrapper = controlType(anchor) === 'password' ? parentOf(anchor) : null;
     if (wrapper && tagOf(wrapper) !== 'FORM' && contains(wrapper, button) && allIn(wrapper, 'input, select, textarea').length === 1) return null;
     if (!form) {
-      const scope = formlessScope(password);
+      const scope = formlessScope(anchor);
       if (!scope || !contains(scope, button)) return null;
     }
   }
   return button;
+}
+
+/**
+ * The form a click on `target` submits, or null (S17 §6, step 2): its `<form>`'s, or the formless fields' whose scope
+ * holds the button. `anchorOf` gives each form's password field, or its username's for a first step. The agent's
+ * click listener and the corpus's measure of false submit signals both use this.
+ */
+export function submittedBy<T extends { readonly scanned: ScannedForm; readonly classified: { readonly kind: string } | null }>(target: Element, forms: readonly T[], anchorOf: (form: T) => Element | null): T | null {
+  const form = target.closest('form');
+  const k = form ? forms.find((x) => x.scanned.form === form) : forms.find((x) => x.scanned.form === null);
+  if (!k) return null;
+  const button = submitButtonFor(target, anchorOf(k), k.scanned.form, k.classified?.kind ?? null);
+  if (!button) return null;
+  const owner = (button as HTMLButtonElement).form ?? button.closest('form');
+  return (owner ? forms.find((x) => x.scanned.form === owner) : forms.find((x) => x.scanned.form === null)) === k ? k : null;
 }
 
 /** Any button a person can press to submit: a `<button>`, an input button, or an element with `role=button`. */

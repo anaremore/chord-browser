@@ -5,7 +5,7 @@
  * password-parser.test.ts, and real sites' forms in apps/desktop/test/forms.
  */
 import { describe, expect, it } from 'vitest';
-import { classifyPasswordForm, type FormWords, type PasswordField, type PasswordFieldRole, type PasswordFormKind, type PasswordFormRecord } from '../src/index';
+import { classifyPasswordForm, submitWords, type FormWords, type PasswordField, type PasswordFieldRole, type PasswordFormKind, type PasswordFormRecord } from '../src/index';
 
 let nextKey = 1;
 /** A field as the agent's scan reports it; `f('password', { name: 'pw' })`. */
@@ -242,6 +242,38 @@ describe('the username-only first step', () => {
     ['a hidden password you typed in is a password', form([f('email', { name: 'email', autocomplete: 'username' }), pw('p', { ...HIDDEN, userTyped: true })], { submits: ['Next'] }), false],
   ])('%s', (_name, record, onlyUsername) => {
     expect(classifyPasswordForm(record, 'filling')?.kind === 'username-only').toBe(onlyUsername);
+  });
+});
+
+describe('a first step, for saving its username (phase 3: only a username-only form sends one)', () => {
+  const typed = (o: Parameters<typeof f>[1] = {}) => ({ value: 'ada@example.com', userTyped: true, ...o });
+  it.each<[string, PasswordFormRecord, boolean]>([
+    ['an email and Next, typed', form([f('email', typed({ name: 'identifier', label: 'Email or phone' }))], { submits: ['Next'] }), true],
+    ['autocomplete=username, typed', form([f('text', typed({ name: 'x', autocomplete: 'username', value: 'ada' }))]), true],
+    ['an empty field', form([f('email', { name: 'identifier', label: 'Email or phone', value: '', userTyped: true })], { submits: ['Next'] }), false],
+    ['a search box', form([f('search', typed({ name: 'q' }))], { submits: ['Search'] }), false],
+    ['a search box that says email', form([f('search', typed({ name: 'email', label: 'Search' }))], { submits: ['Go'] }), false],
+    ['a newsletter email and Subscribe', form([f('email', typed({ name: 'newsletter', placeholder: 'Your email' }))], { submits: ['Subscribe'] }), false],
+    ['a newsletter email under a newsletter heading, its button Sign up', form([f('email', typed({ name: 'email', label: 'Email' }))], { submits: ['Sign up'], headings: ['Get our newsletter'] }), false],
+    ['a sign-up first step: Create account', form([f('email', typed({ name: 'email', label: 'Email' }))], { submits: ['Create account'], headings: ['Create your account'] }), false],
+    ['a sign-up first step: Sign up', form([f('email', typed({ name: 'email', label: 'Email address' }))], { submits: ['Sign up'], headings: ['Join us'] }), false],
+  ])('%s', (_name, record, step) => {
+    expect(classifyPasswordForm(record, 'saving')?.kind === 'username-only').toBe(step);
+  });
+});
+
+describe('submitWords (a plain element as a submit, phase 3)', () => {
+  it.each<[string, ReturnType<typeof submitWords>]>([
+    ['Sign in', 'sign-in'],
+    ['Log in', 'sign-in'],
+    ['Continue', 'next'],
+    ['Next', 'next'],
+    ['Create account', 'sign-up'],
+    ['Sign up', 'sign-up'],
+    ['Subscribe', null],
+    ['Show', null],
+  ])('%s', (words, says) => {
+    expect(submitWords(words)).toBe(says);
   });
 });
 

@@ -11,6 +11,7 @@
  * - `focus` / `blur`: a sign-in field took or lost focus, with its box (the menu, later);
  * - `candidate`: a form you typed a password in, once per submit signal, or as you left the
  *   field after typing in it (at most once a second);
+ * - `step`: a first step's submit, with its username (S17 §4, phase 3), for a password step with none;
  *
  * `forms`, `focus` and `blur` go out together, at most once an animation frame (or 100 ms, where
  * frames don't come: a background tab), with the last state only and nothing that's unchanged: a
@@ -37,7 +38,7 @@
  */
 import { classifyPasswordForm, PASSWORD_LIMITS, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature, PasswordsFill } from '@chord/ipc';
-import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submitButtonFor, type ScannedForm } from './scan';
+import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submittedBy, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
 export interface PasswordsBridge {
@@ -310,12 +311,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   };
 
   // ----- Submit signals (S17 §6, step 2) -----
-  /** The known form a submit button belongs to: its `<form>`, or the formless fields whose scope holds it. */
-  const formOf = (button: Element): KnownForm | undefined => {
-    const form = (button as HTMLButtonElement).form ?? button.closest('form');
-    return form ? known.find((k) => k.scanned.form === form) : known.find((k) => k.scanned.form === null);
-  };
   const passwordOf = (k: KnownForm) => k.scanned.elements.find((e) => controlType(e) === 'password') ?? null;
+  /** Where a submit button must be, for a form: near its password field, or a first step's username. */
+  const anchorOf = (k: KnownForm) => passwordOf(k) ?? (k.classified?.kind === 'username-only' ? elementOf(k, k.classified.username) : null);
   const hasTypedPassword = (k: KnownForm) => k.scanned.elements.some((e) => controlType(e) === 'password' && (typed.has(e) || filled.has(e)));
   const onSubmit = (event: Event) => {
     if (!event.isTrusted) return;
@@ -336,12 +334,11 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!event.isTrusted) return;
     const target = event.composedPath()[0];
     if (!(target instanceof Element)) return;
-    // A button that submits: in a <form>, its submit buttons; outside one, a button beside the fields.
-    // Never a show-password toggle, a "Forgot password?" or one that wraps the field (submitButtonFor).
-    const form = target.closest('form');
-    const k = form ? known.find((x) => x.scanned.form === form) : known.find((x) => x.scanned.form === null);
-    const button = k && submitButtonFor(target, passwordOf(k), k.scanned.form);
-    if (k && button && formOf(button) === k) candidate(k, 'button');
+    // A button that submits: in a <form>, its submit buttons; outside one, a button beside the fields; and an element
+    // whose words say so (a script's `div`). Never a show-password toggle, a "Forgot password?" or one that wraps the
+    // field (submitButtonFor).
+    const k = submittedBy(target, known, anchorOf);
+    if (k) candidate(k, 'button');
   };
 
   /** Forms whose password you typed in since their last candidate as you left it. */
@@ -349,6 +346,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   /** When each form's last candidate was sent, by kind of signal: one submit, however many events it makes, is one candidate. */
   const sentAt = new Map<string, number>();
   function candidate(k: KnownForm, signal: PasswordsAgentMessage<'candidate'>['signal']): void {
+    // A first step, unless a password was typed in it: a form whose password field is still hidden to the last scan (a
+    // transparent one), but typed in, is a sign-in, and its candidate goes as one (review round 1 of #59).
+    if (signal !== 'blur' && k.classified?.kind === 'username-only' && !hasTypedPassword(k)) return firstStep(k, signal);
     if (!hasTypedPassword(k)) return;
     const key = `${k.id} ${signal === 'blur' ? 'blur' : 'submit'}`;
     const now = performance.now();
@@ -384,6 +384,31 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       ...(values ? { values } : {}),
     });
     if (signal !== 'blur') watch(k, fresh);
+  }
+
+  /**
+   * A first step's submit (S17 §4, phase 3): its username goes to main (`step`), for the password step after it, which
+   * may have no username of its own. Only at a trusted submit signal, from a form the classifier reads as
+   * `username-only` for saving too (so it holds a value), never one or two digits (Chromium's rule), and once per
+   * submit. Typed or not, at your own Enter or click: an email the site remembered is yours too, and a person often
+   * types before the agent has woken (the sentinel wakes it on that focus). A form's `submit` alone can be a script's
+   * (`button.click()` makes a trusted one), so then only a username typed or filled counts. It goes only to the save
+   * card, for the same site, where you can edit it.
+   */
+  function firstStep(k: KnownForm, signal: PasswordsAgentMessage<'step'>['signal']): void {
+    const field = elementOf(k, k.classified?.username ?? null);
+    if (!field || (signal === 'submit' && !typed.has(field) && !filled.has(field))) return;
+    const key = `${k.id} step`;
+    const now = performance.now();
+    const last = sentAt.get(key);
+    if (last !== undefined && now - last < ONE_SUBMIT_MS) return;
+    const fresh = scanDocument(doc, { values: true, typed, filled, keys, nextKey, only: k.scanned.elements })[0];
+    const saving = fresh ? classifyPasswordForm(fresh.record, 'saving') : null;
+    if (saving?.kind !== 'username-only' || !saving.username) return;
+    const username = (fresh!.record.fields.find((f) => f.key === saving.username!.key)?.value ?? '').trim();
+    if (!username || /^\d{1,2}$/.test(username) || username.length > PASSWORD_LIMITS.username) return;
+    sentAt.set(key, now);
+    bridge.send('step', { formId: k.id, signal, username });
   }
 
   // ----- After a submit signal: did the form go? (S17 §6, step 3) -----

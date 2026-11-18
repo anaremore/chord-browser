@@ -326,3 +326,14 @@ export const readsAsSubmit = (words: string): boolean => {
   const text = spaced(words);
   return SIGN_IN.test(text) || SIGN_UP.test(text) || NEXT.test(text.trim());
 };
+
+/**
+ * What a submit's words say (S17 §6 step 2): sign in, sign up, or Next/Continue, or null. For an element with no
+ * button's role (phase 3), whose words must fit the form: a "Sign up" link on a sign-in form isn't its submit.
+ */
+export const submitWords = (words: string): 'sign-in' | 'sign-up' | 'next' | null => {
+  const text = spaced(words);
+  if (NEXT.test(text.trim())) return 'next';
+  if (SIGN_IN.test(text)) return 'sign-in';
+  return SIGN_UP.test(text) ? 'sign-up' : null;
+};

@@ -13,6 +13,11 @@
  * - **Chord's own fixtures** (fixtures/*.html): one pattern each, every field marked with the
  *   role it must get (`data-chord-expect`), the form's kind in `<meta name="chord-kind">`.
  *   All must pass.
+ * - **Submit signals** on the corpus: every element a person could click (buttons, links,
+ *   short-worded elements) is run through the agent's click rule (`submittedBy`) and checked
+ *   against DuckDuckGo's `data-manual-submit` labels. **submit-baseline.json** holds the number
+ *   of false signals (a click counted as a sign-in's submit on something that isn't one) and of
+ *   labelled submits found: the first may not rise, the second may not fall.
  *
  * Writes test-results/forms/ (the score, and the scan's records for tuning in Node).
  */
@@ -21,11 +26,13 @@ import { join, resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { bundleAgent } from '../../src/passwords/build';
 import { CORPUS_COMMIT, ensureCorpus } from './corpus';
-import type { PageResult } from './page';
+import type { PageResult, SubmitSignals } from './page';
 import { compareBaseline, scoreCorpus, type CorpusBaseline, type ScoredFile } from './score';
 
 const here = import.meta.dirname;
 const BASELINE = join(here, 'baseline.json');
+/** The click listener's submit signals on the corpus, against DuckDuckGo's `data-manual-submit`: false ones may not rise, found ones may not fall. */
+const SUBMIT_BASELINE = join(here, 'submit-baseline.json');
 const RESULTS = resolve(here, '..', '..', 'test-results', 'forms');
 const ORIGIN = 'http://forms.test';
 /** At least this share of files must be wholly right, whatever the baseline says (M0: about 81%). */
@@ -59,11 +66,20 @@ test("DuckDuckGo's corpus, held to the baseline", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   const { formsDir, index } = await ensureCorpus((line) => console.log(`[forms] ${line}`));
   const files: ScoredFile[] = [];
+  const signals = { candidates: 0, labelled: 0, found: 0, falseSignals: 0, examples: [] as string[], foundIn: {} as Record<string, number> };
   const records: Record<string, PageResult['records']> = {};
   for (const entry of index) {
     const body = readFileSync(join(formsDir, entry.html), 'utf8');
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escape(entry.title ?? '__test__')}</title></head><body>${entry.hasExtraWrappers === false ? body : `<div>${body}</div>`}</body></html>`;
     const result = await scanPage(page, html, entry.html);
+    const s = (await page.evaluate(`${script}
+;globalThis.chordSubmitSignals()`)) as SubmitSignals;
+    signals.candidates += s.candidates;
+    signals.labelled += s.labelled;
+    signals.found += s.found;
+    if (s.found) signals.foundIn[entry.html] = s.found;
+    signals.falseSignals += s.falseSignals;
+    signals.examples.push(...s.examples.map((x) => `${entry.html}: ${x}`));
     files.push({
       html: entry.html,
       fields: result.fields.filter((f) => f.index >= 0).map((f) => ({ index: f.index, label: f.label!, field: f.field, role: f.role })),
@@ -75,6 +91,11 @@ test("DuckDuckGo's corpus, held to the baseline", async ({ page }) => {
   mkdirSync(RESULTS, { recursive: true });
   writeFileSync(join(RESULTS, 'score.json'), JSON.stringify(score, null, 2));
   writeFileSync(join(RESULTS, 'records.json'), JSON.stringify(records));
+  writeFileSync(join(RESULTS, 'submit-signals.json'), JSON.stringify(signals, null, 2));
+  console.log(
+    `[forms] submit signals: ${signals.found} of ${signals.labelled} labelled submits found; ` +
+      `${signals.falseSignals} false of ${signals.candidates} clickable elements (${((100 * signals.falseSignals) / Math.max(1, signals.candidates)).toFixed(2)}%)`,
+  );
   const pct = (n: number) => `${((100 * n) / score.scoredFiles).toFixed(1)}%`;
   console.log(
     `[forms] ${score.rightFiles} of ${score.scoredFiles} files right (${pct(score.rightFiles)}); ` +
@@ -85,7 +106,12 @@ test("DuckDuckGo's corpus, held to the baseline", async ({ page }) => {
     const baseline: CorpusBaseline = { corpus: `duckduckgo/duckduckgo-autofill@${CORPUS_COMMIT}`, rightFiles: score.rightFiles, scoredFiles: score.scoredFiles, failures: score.failures };
     writeFileSync(BASELINE, `${JSON.stringify(baseline, null, 2)}\n`);
     console.log(`[forms] baseline written: ${BASELINE}`);
+    writeFileSync(SUBMIT_BASELINE, `${JSON.stringify({ candidates: signals.candidates, found: signals.found, falseSignals: signals.falseSignals }, null, 2)}
+`);
   }
+  const held = JSON.parse(readFileSync(SUBMIT_BASELINE, 'utf8')) as { found: number; falseSignals: number };
+  expect(signals.falseSignals, 'false submit signals (submit-signals.json lists some)').toBeLessThanOrEqual(held.falseSignals);
+  expect(signals.found, 'labelled submits found').toBeGreaterThanOrEqual(held.found);
   const baseline = JSON.parse(readFileSync(BASELINE, 'utf8')) as CorpusBaseline;
   const { regressed, fixed } = compareBaseline(score, baseline);
   expect(regressed, 'fields that were right and are now wrong').toEqual([]);
