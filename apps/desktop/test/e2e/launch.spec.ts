@@ -1522,25 +1522,28 @@ test('Chord’s own views come back when their renderer crashes: the sidebar, an
   try {
     await expect((await pageWhere(app, isShell)).getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     // Asked from main: a page whose renderer crashed is gone for Playwright, even once Chord has loaded it again.
-    const view = (name: string, script: string) =>
+    // `open`: the command bar renders nothing while closed (only a 400 ms warm-up, which a slow runner's polls can
+    // miss), so each try sends it an opening, as main does, until its reloaded page is listening and shows the field.
+    const view = (name: string, script: string, open: boolean) =>
       app.evaluate(
-        async ({ webContents }, [n, code]) => {
+        async ({ webContents }, [n, code, o]) => {
           const contents = webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`));
           if (!contents || contents.isCrashed() || contents.isLoading()) return null;
-          return (await contents.executeJavaScript(code!).catch(() => null)) as string | null;
+          if (o) contents.send('overlay:open', { mode: 'new', anchor: null, url: '', seq: 1_000_000, requestedAt: Date.now() });
+          return (await contents.executeJavaScript(code as string).catch(() => null)) as string | null;
         },
-        [name, script],
+        [name, script, open] as const,
       );
     const crash = (name: string) =>
       app.evaluate(({ webContents }, n) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`))!.forcefullyCrashRenderer(), name);
 
-    for (const [name, script, expected] of [
-      ['shell', `document.querySelector('[role="tree"][aria-label="Unpinned tabs"]')?.textContent ?? ''`, 'First page'],
-      ['overlay', `document.querySelector('[role="combobox"]') ? 'ready' : ''`, 'ready'],
-      ['popover', `document.getElementById('root')?.childElementCount > 0 ? 'ready' : ''`, 'ready'],
+    for (const [name, script, expected, open] of [
+      ['shell', `document.querySelector('[role="tree"][aria-label="Unpinned tabs"]')?.textContent ?? ''`, 'First page', false],
+      ['overlay', `document.querySelector('[role="combobox"]') ? 'ready' : ''`, 'ready', true],
+      ['popover', `document.getElementById('root')?.childElementCount > 0 ? 'ready' : ''`, 'ready', false],
     ] as const) {
       await crash(name);
-      await expect.poll(() => view(name, script), { timeout: 15_000 }).toContain(expected);
+      await expect.poll(() => view(name, script, open), { timeout: 15_000 }).toContain(expected);
     }
   } finally {
     await app.close();
