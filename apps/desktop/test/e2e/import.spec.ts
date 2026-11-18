@@ -166,6 +166,8 @@ test('Settings: Firefox’s folders, open tabs and history land in the window be
 });
 
 test('a big import comes in parts while history streams, and the toast’s Undo takes it back', async () => {
+  // Two waits that follow the app's own 60 s step limit (the import, then its Undo): room for both.
+  test.setTimeout(150_000);
   const big = mkdtempSync(join(tmpdir(), 'chord-e2e-browsers-'));
   makeBrowserFixtures(big, undefined, { extraBookmarks: 3000, extraPages: 6000 });
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_IMPORT_ROOT: big });
@@ -185,7 +187,10 @@ test('a big import comes in parts while history streams, and the toast’s Undo 
     expect(inside(s, bigChord.id, 'pinned', null)).toHaveLength(3000);
 
     await shell.getByRole('group', { name: 'Imported 3,005 bookmarks and 6,002 pages of history from Chrome' }).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(async () => chordNamed(await snapshot(shell), 'Big')).toBeUndefined();
+    // Settings says so once all of it has gone, history included (main/import.ts `undo`), however long a slow
+    // runner takes over 6,000 pages: up to its own 60 s step limit, as the import's wait above.
+    await expect(settings.getByText('Import undone.')).toBeVisible({ timeout: 60_000 });
+    expect(chordNamed(await snapshot(shell), 'Big')).toBeUndefined();
     const overlay = await pageWhere(app, isOverlay);
     await expect.poll(async () => (await historyFor(overlay, 'many')).history.length).toBe(0);
   } finally {
