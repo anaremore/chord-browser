@@ -17,8 +17,8 @@
  *   a required class's own characters, and the wider pool a password under the 40-bit floor is drawn from. Where that
  *   leaves too few bits, the password is made longer, within the rules' maximum and its run limits; under the floor
  *   whatever's done, it's offered as it is, weak, never with look-alikes for strength. Look-alikes come back only where
- *   the rules can't be met without them: a required class of look-alikes alone (`required: [0O]`) gets one of them,
- *   and rules allowing fewer than two other characters (`allowed: [0O]`) are drawn from what they allow (`planFor`).
+ *   the rules can't be met without them: a required class of look-alikes alone (`required: [0O]`) gets one of them, in
+ *   one place, and rules allowing only look-alikes (`allowed: [0O]`) are drawn from what they allow (`planFor`).
  * - **Every password made is checked** against its rules (`passwordSatisfies`) before it's returned; one that can't
  *   be made (a `maxlength` shorter than the classes it requires, a required class with nothing allowed in it) is null,
  *   and nothing is offered.
@@ -203,7 +203,8 @@ interface Plan {
 /**
  * A lower bound on a plan's bits at `length` (never more than it has): each forced place at log2 of its own class,
  * whether or not its characters are in the pool too (review round 2 of #56), and every other place at log2(pool).
- * Shuffling the forced places in only adds to it.
+ * Shuffling the forced places in only adds to it. Run limits are the known exception: a password that breaks them is
+ * drawn again, which takes a little from this and isn't subtracted yet (#60).
  */
 function planBits(plan: Pick<Plan, 'pool' | 'forced'>, length: number): number {
   let bits = 0;
@@ -236,9 +237,9 @@ const MAX_RUN_RISK = 0.5;
  * (`planBits`):
  * 1. the default's alphabet where the rules allow it, at the default's length (within the rules');
  * 2. everything the rules allow but look-alikes (`LOOK_ALIKES`), at that length, else made longer to reach the floor;
- * 3. only where that can't meet the rules at all, everything they allow, look-alikes too, the same way: rules that
- *    allow fewer than two characters but look-alikes (`allowed: [0O]`, from 40 of them), or require a class of
- *    look-alikes alone (`required: [0O]`, which in 2 gets one place of its own).
+ * 3. only where the rules allow nothing but look-alikes (`allowed: [0O]`), everything they allow, the same way.
+ * A required class of look-alikes alone (`required: [0O]`) gets one forced place of its own in 1 and 2, and every free
+ * place stays clean (review round 3 of #56); one clean character allowed (`allowed: [a0O]`) is `aaaa…`, weak.
  * Made longer only within the rules' maximum (and the vault's), and only while the run limits are still met easily
  * (`MAX_RUN_RISK`). When none reaches the floor, it's the last of them the rules allow, as long as the maximum and the
  * run limits let it be, and weak: never look-alikes for strength alone, under the floor too (the owner's decision of
@@ -257,7 +258,8 @@ function planFor(rules: PasswordRuleSet): Plan | null {
   const clean = withoutLookAlikes(allowed);
   // A class with nothing allowed is left to `generatePassword`, which offers nothing.
   const owns = rules.required.map((cls) => intersect(cls, allowed)).filter((own) => own);
-  const lookAlikesNeeded = clean.length < 2 || owns.some((own) => !withoutLookAlikes(own));
+  // Look-alikes in the free places only when the rules allow nothing else (review round 3 of #56).
+  const onlyLookAlikes = !clean;
   const planOf = (pool: string, full: boolean): Plan => {
     // Drawn from more than the default's alphabet (preferred ⊆ clean ⊆ allowed): the default's classes take their own whole.
     const wide = pool.length !== preferred.length;
@@ -287,12 +289,12 @@ function planFor(rules: PasswordRuleSet): Plan | null {
     const needed = length + Math.ceil((floor - planBits(plan, length)) / Math.log2(pool.length) - 1e-9);
     return needed <= longest(pool) ? { ...plan, length: needed } : null;
   };
-  const strong = reaching(preferred, false, false) ?? reaching(clean, false, true) ?? (lookAlikesNeeded ? reaching(allowed, true, true) : null);
+  const strong = reaching(preferred, false, false) ?? reaching(clean, false, true) ?? (onlyLookAlikes ? reaching(allowed, true, true) : null);
   if (strong) return strong;
-  // Under the floor whatever's done: the last pool the rules allow, as long as it can be. A pool of one character is
-  // no longer for being longer.
-  const [pool, full] = lookAlikesNeeded ? [preferred.length === allowed.length ? preferred : allowed, preferred.length !== allowed.length] : [clean, false];
-  const plan = planOf(pool, full);
+  // Under the floor whatever's done: the clean pool (or only look-alikes, when that's all the rules allow), as long as
+  // it can be. A pool of one character is no stronger for being longer.
+  const pool = onlyLookAlikes ? allowed : clean;
+  const plan = planOf(pool, onlyLookAlikes);
   return pool.length > 1 ? { ...plan, length: longest(pool) } : plan;
 }
 

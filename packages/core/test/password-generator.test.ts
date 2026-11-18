@@ -466,6 +466,8 @@ describe('never a look-alike where the rules allow anything else', () => {
     { name: 'two letters and look-alikes, at most 2 in a row: not lengthened, no look-alikes', site: 'allowed: [ab01lI]; max-consecutive: 2;', length: 20, pool: 2, forced: [2] },
     { name: 'three letters and look-alikes, at most 2 repeated: not lengthened, no look-alikes', site: 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', length: 20, pool: 3, forced: [3] },
     { name: 'two letters, one short of the length that reaches it: as long as allowed', site: 'allowed: [xy]; maxlength: 39;', length: 39, pool: 2, forced: [2] },
+    // The owner's decision (round 3 of #56): one clean character is still clean. No bits, and weak.
+    { name: 'one letter and two look-alikes: the letter alone', site: 'allowed: [a0O];', length: 20, pool: 1, forced: [1] },
   ])('$name', ({ site, length, pool, forced }) => {
     const { rules } = passwordRulesFor({}, site);
     const random = seeded(28);
@@ -488,13 +490,20 @@ describe('never a look-alike where the rules allow anything else', () => {
    * A required class of look-alikes alone: one of them, one place at its own bits, not the pool's (review rounds 1 and 2
    * of #56); the password made longer to make up for it, within the maximum.
    */
-  it.each<[string, string, number, number, number[]]>([
+  it.each<[string, string, number, number, number[], boolean]>([
     // 16 letters: the `0` at no bits, a letter forced (4), nine more at 4: exactly the floor.
-    ['at exactly the floor', 'allowed: [abcdefghijkmnpqr]; required: [0]; maxlength: 11;', 11, 16, [1, 16]],
-    ['two letters and a required 0: one longer than 40', 'allowed: [ab]; required: [0];', 41, 2, [1, 2]],
-    ['the same, the maximum exactly what it needs', 'allowed: [ab]; required: [0]; maxlength: 41;', 41, 2, [1, 2]],
-    ['a class of two look-alikes', 'required: lower; required: [lI]; maxlength: 10;', 10, 24, [24, 2]],
-  ])('%s', (_name, site, length, pool, forced) => {
+    ['at exactly the floor', 'allowed: [abcdefghijkmnpqr]; required: [0]; maxlength: 11;', 11, 16, [1, 16], true],
+    ['two letters and a required 0: one longer than 40', 'allowed: [ab]; required: [0];', 41, 2, [1, 2], true],
+    ['the same, the maximum exactly what it needs', 'allowed: [ab]; required: [0]; maxlength: 41;', 41, 2, [1, 2], true],
+    ['a class of two look-alikes', 'required: lower; required: [lI]; maxlength: 10;', 10, 24, [24, 2], true],
+    ['capitals and digits, a required 0 or O, any length: 20', 'allowed: upper, digit; required: [0O];', 20, 32, [2, 24, 8], true],
+    // The review's inputs (round 3 of #56): the free places stay clean, and under the floor it's weak, not flooded.
+    ['capitals and digits, 9, a required 0 or O: about 38.6, weak', 'allowed: upper, digit; maxlength: 9; required: [0O];', 9, 32, [2, 24, 8], false],
+    ['capitals and digits, 8, a required 0 or O', 'allowed: upper, digit; maxlength: 8; required: [0O];', 8, 32, [2, 24, 8], false],
+    ['capitals and digits, 7, a required 0 or O', 'allowed: upper, digit; maxlength: 7; required: [0O];', 7, 32, [2, 24, 8], false],
+    ['lower case, 8, a required l or o', 'allowed: lower; maxlength: 8; required: [lo];', 8, 24, [2, 24], false],
+    ['digits, 11, a required 0 or 1', 'allowed: digit; maxlength: 11; required: [01];', 11, 8, [2, 8], false],
+  ])('%s', (_name, site, length, pool, forced, strong) => {
     const { rules } = passwordRulesFor({}, site);
     const random = seeded(25);
     for (let i = 0; i < N; i++) {
@@ -503,9 +512,15 @@ describe('never a look-alike where the rules allow anything else', () => {
       expect(passwordSatisfies(p, rules)).toBe(true);
       expect(p.match(lookAlike)).toHaveLength(1);
       expect(passwordBits(p, rules)).toBeCloseTo(planned(forced, pool, length), 6);
-      expect(planned(forced, pool, length)).toBeGreaterThanOrEqual(40);
-      expect(isStrongPassword(p, rules)).toBe(true);
+      expect(planned(forced, pool, length) >= 40).toBe(strong);
+      expect(isStrongPassword(p, rules)).toBe(strong);
     }
+  });
+
+  it('a required class of look-alikes alone, under run limits the clean pool can’t meet: nothing, not look-alikes', () => {
+    // a and b can't stand side by side (in order) or twice (repeated), and one 0 or 1 can't keep 19 of them apart.
+    const { rules } = passwordRulesFor({}, 'allowed: [ab01]; required: [01]; max-consecutive: 1;');
+    expect(generatePassword(rules, seeded(29))).toBeNull();
   });
 
   it('a required class of look-alikes alone gets one of them, for that class only', () => {
@@ -521,17 +536,13 @@ describe('never a look-alike where the rules allow anything else', () => {
   });
 
   /**
-   * Look-alikes throughout only where the rules can't be met without them (review round 2 of #56): fewer than two
-   * characters allowed but look-alikes, or a required class of look-alikes alone that the clean pool can't make strong.
-   * Made longer to reach the floor where the maximum lets it (round 1), else as long as it allows, and weak.
+   * Look-alikes throughout only where the rules allow nothing else (review round 3 of #56). Made longer to reach the
+   * floor where the maximum lets it (round 1), else as long as it allows, and weak.
    */
   it.each<[string, string, number, number, number[], boolean]>([
     // A capital (the O) and a digit (the 0) are forced, at no bits each.
     ['only look-alikes allowed: 42 of them', 'allowed: [0O];', 42, 2, [1, 1], true],
-    ['one letter and two look-alikes: 29', 'allowed: [a0O];', 29, 3, [1, 1, 1], true],
     ['only look-alikes, at most 30: as long as allowed, and weak', 'allowed: [0O]; maxlength: 30;', 30, 2, [1, 1], false],
-    // The review's case: the 0 or O (1 bit), a capital and a digit forced, five at log2(36): about 34.9, weak.
-    ['capitals and digits, 8, a required 0 or O', 'allowed: upper, digit; maxlength: 8; required: [0O];', 8, 36, [2, 26, 10], false],
   ])('%s', (_name, site, length, pool, forced, strong) => {
     const { rules } = passwordRulesFor({}, site);
     const random = seeded(23);
@@ -583,7 +594,7 @@ describe('never a look-alike where the rules allow anything else', () => {
     expect(isStrongPassword(p, short)).toBe(false);
   });
 
-  it('as a property over random rules, run limits too: a look-alike only where the clean pool can’t meet the rules', () => {
+  it('as a property over random rules, run limits too: one look-alike per class of look-alikes alone, none elsewhere', () => {
     const r = seeded(24);
     const shapes = ['lower', 'upper', 'digit', 'special', 'ascii-printable', '[ab0O]', '[xyz1l]', '[!|-]', '[0O]', '[ab]', '[abc]'];
     let made = 0;
@@ -601,11 +612,12 @@ describe('never a look-alike where the rules allow anything else', () => {
       expect(passwordSatisfies(p, rules), site).toBe(true);
       const chars = [...new Set(rules.allowed.replace(/ /g, ''))];
       const clean = chars.filter((c) => !LOOK_ALIKES.includes(c));
-      const onlyLookAlikes = rules.required.some((cls) => {
+      const forcedLookAlikes = rules.required.filter((cls) => {
         const own = [...cls].filter((c) => chars.includes(c));
         return own.length > 0 && own.every((c) => LOOK_ALIKES.includes(c));
-      });
-      if (p.match(lookAlike)) expect(clean.length < 2 || onlyLookAlikes, site).toBe(true);
+      }).length;
+      // Look-alikes throughout only when the rules allow nothing else.
+      if (clean.length > 0) expect((p.match(lookAlike) ?? []).length, site).toBeLessThanOrEqual(forcedLookAlikes);
     }
     expect(made).toBeGreaterThan(1000);
     expect(limited).toBeGreaterThan(500);
