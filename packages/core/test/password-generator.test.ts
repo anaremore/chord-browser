@@ -116,9 +116,9 @@ describe('which rules count (S17 §6: the field, then the site, then minlength a
       const p = generatePassword(passwordRulesFor({}, 'required: lower; required: upper; required: digit; required: [!#$];').rules, random)!;
       expect(p).toMatch(/[!#$]/);
       expect(p.replace(/[!#$]/g, '')).toMatch(/^[A-Za-z2-9-]+$/);
-      // Six digits are under the floor: drawn from all ten, the strongest the rules allow (review round 2 of #53).
+      // Six digits are under the floor, and still from 2–9: never look-alikes for strength (review round 2 of #56).
       const digits = generatePassword(passwordRulesFor({}, 'allowed: digit; minlength: 6; maxlength: 6;').rules, random)!;
-      expect(digits).toMatch(/^[0-9]{6}$/);
+      expect(digits).toMatch(/^[2-9]{6}$/);
       // Fourteen are over it: drawn from 2–9, as the default's alphabet is.
       const more = generatePassword(passwordRulesFor({}, 'allowed: digit; minlength: 14; maxlength: 14;').rules, random)!;
       expect(more).toMatch(/^[2-9]{14}$/);
@@ -309,10 +309,11 @@ describe('the floor under “strong” (review round 1 of #53)', () => {
     ['four digits, by the field', { passwordrules: 'maxlength: 4; allowed: digit;' }, null, false, /^Only 4 digits, as this site asks$/],
     ['maxlength=4 alone', { maxLength: 4 }, null, false, /^Only 4 letters, digits and symbols, as this site asks$/],
     ['seven characters, however varied', { maxLength: 7 }, null, false, /^Only 7 /],
-    ['eight letters and digits: strong enough (about 46 bits)', {}, 'maxlength: 8; allowed: lower, upper, digit;', true, null],
+    ['eight letters and digits: strong enough (about 41 bits)', {}, 'maxlength: 8; allowed: lower, upper, digit;', true, null],
     ['ten digits: long enough, too few bits (about 33)', {}, 'minlength: 10; maxlength: 10; allowed: digit;', false, /^Only 10 digits, as this site asks$/],
-    // In Apple's language what's required is allowed too: 0–9 and `-`, 11 to draw from, 12 places: about 41.5 bits.
-    ['twelve of digits and a required dash: drawn from all eleven', {}, 'allowed: digit; required: [-]; maxlength: 12;', true, null],
+    // In Apple's language what's required is allowed too: 2–9 and `-`, the dash one place at no bits and a digit one at
+    // 3, ten at log2(9): about 34.7 bits.
+    ['twelve of digits and a required dash: under the floor', {}, 'allowed: digit; required: [-]; maxlength: 12;', false, /^Only 12 digits and symbols, as this site asks$/],
   ])('%s', (_name, field, site, strong, words) => {
     const { rules } = passwordRulesFor(field, site);
     const p = generatePassword(rules, seeded(12))!;
@@ -321,51 +322,62 @@ describe('the floor under “strong” (review round 1 of #53)', () => {
   });
 
   /**
-   * The pools written out, apart from the code (review round 2 of #53): each alphabet's characters without
-   * look-alikes, and all of them, which a password under the floor is drawn from instead.
+   * The pools written out, apart from the code (review rounds 2 of #53 and 2 of #56): the default's alphabet within
+   * each (`lean`), everything but look-alikes (`clean`), and the forced places' classes, in the order they're taken
+   * (as far as the length leaves room). Never look-alikes, under the floor too.
    */
-  const POOLS: Record<string, { lean: number; full: number; chars: RegExp }> = {
-    digit: { lean: 8, full: 10, chars: /^[0-9]+$/ },
-    lower: { lean: 24, full: 26, chars: /^[a-z]+$/ },
-    'lower, digit': { lean: 32, full: 36, chars: /^[a-z0-9]+$/ },
-    'lower, upper, digit': { lean: 56, full: 62, chars: /^[A-Za-z0-9]+$/ },
-    '[ab]': { lean: 2, full: 2, chars: /^[ab]+$/ },
-    'ascii-printable': { lean: 57, full: 94, chars: /^[!-~]+$/ },
+  const POOLS: Record<string, { lean: number; clean: number; forced: number[]; chars: RegExp }> = {
+    digit: { lean: 8, clean: 8, forced: [8], chars: /^[2-9]+$/ },
+    lower: { lean: 24, clean: 24, forced: [24], chars: /^[a-km-np-z]+$/ },
+    'lower, digit': { lean: 32, clean: 32, forced: [24, 8], chars: /^[a-km-np-z2-9]+$/ },
+    'lower, upper, digit': { lean: 56, clean: 56, forced: [24, 24, 8], chars: /^[a-km-np-zA-HJ-NP-Z2-9]+$/ },
+    '[ab]': { lean: 2, clean: 2, forced: [2], chars: /^[ab]+$/ },
+    'ascii-printable': { lean: 57, clean: 87, forced: [24, 24, 8, 1], chars: /^[!-~]+$/ },
+  };
+  const bitsOf = (forced: number[], pool: number, length: number) => {
+    const taken = forced.slice(0, length);
+    return taken.reduce((sum, n) => sum + Math.log2(n), 0) + (length - taken.length) * Math.log2(pool);
   };
   it('as a property: strong exactly at 8 characters and 40 bits, counted from the pool written out, and the longest the rules allow', () => {
     const r = seeded(13);
     for (let i = 0; i < 2000; i++) {
       const max = 1 + r(30);
       const allowed = Object.keys(POOLS)[r(6)]!;
-      const { lean, full, chars } = POOLS[allowed]!;
+      const { lean, clean, forced, chars } = POOLS[allowed]!;
       const { rules } = passwordRulesFor({ maxLength: max }, `allowed: ${allowed};`);
       const p = generatePassword(rules, r);
       if (p === null) continue;
-      const length = Math.min(GENERATED_LENGTH, max);
-      expect(p.length).toBe(length);
       expect(p).toMatch(chars);
-      // Lean where that's strong enough; otherwise everything allowed.
-      const pool = length * Math.log2(lean) >= 40 || lean === full ? lean : full;
-      const bits = length * Math.log2(pool);
+      expect(p).not.toMatch(/[01IOlo|]/);
+      const base = Math.min(GENERATED_LENGTH, max);
+      // The default's alphabet where that reaches the floor; else everything but look-alikes. Under the floor whatever
+      // the pool (none of these reach it by being longer, within 30), as long as the maximum allows.
+      const pool = bitsOf(forced, lean, base) >= 40 ? lean : clean;
+      const reaches = bitsOf(forced, pool, base) >= 40;
+      const length = reaches ? base : max;
+      expect(p.length).toBe(length);
+      const bits = bitsOf(forced, pool, length);
       expect(passwordBits(p, rules)).toBeCloseTo(bits, 6);
       const strong = length >= 8 && bits >= 40;
       expect(isStrongPassword(p, rules), `${allowed} × ${length}`).toBe(strong);
       if (!strong) expect(describeWeakPassword(p, rules)).toMatch(new RegExp(`^Only ${length} .+, as this site asks$`));
     }
   });
-  it('counts the drawn pool only: a required class outside it adds nothing (review round 2 of #53)', () => {
+  it('counts what can be drawn only: a required class with nothing allowed adds nothing (review round 2 of #53)', () => {
     const digits = { ...DEFAULT_RULE_SET, allowed: '0123456789', required: ['-'], maxLength: 12 };
-    expect(passwordBits('123456789012', digits)).toBeCloseTo(12 * Math.log2(10), 6);
-    expect(isStrongPassword('123456789012', digits)).toBe(false);
+    // 2–9: one place forced to a digit (3 bits), eleven at 3.
+    expect(passwordBits('234567892345', digits)).toBeCloseTo(12 * 3, 6);
+    expect(isStrongPassword('234567892345', digits)).toBe(false);
     // Such rules can't be met: nothing is made.
     expect(generatePassword(digits, seeded(15))).toBeNull();
   });
   it.each<[string, string, number]>([
-    ['8 letters and digits', 'allowed: lower, upper, digit; maxlength: 8;', 8 * Math.log2(56)],
-    ['6 letters and digits, under the floor: all 62', 'allowed: lower, upper, digit; maxlength: 6;', 6 * Math.log2(62)],
-    ['4 digits: all 10', 'allowed: digit; maxlength: 4;', 4 * Math.log2(10)],
-    ['16 digits: 2–9', 'allowed: digit; maxlength: 16;', 16 * Math.log2(8)],
-    ['the default', '', 20 * Math.log2(57)],
+    ['8 letters and digits', 'allowed: lower, upper, digit; maxlength: 8;', 2 * Math.log2(24) + 3 + 5 * Math.log2(56)],
+    ['6 letters and digits, under the floor: still without look-alikes', 'allowed: lower, upper, digit; maxlength: 6;', 2 * Math.log2(24) + 3 + 3 * Math.log2(56)],
+    ['4 digits: 2–9', 'allowed: digit; maxlength: 4;', 4 * 3],
+    ['16 digits: 2–9', 'allowed: digit; maxlength: 16;', 16 * 3],
+    // One place each for a lower case letter, a capital, a digit and the dash (no bits), sixteen at log2(57).
+    ['the default', '', 2 * Math.log2(24) + 3 + 16 * Math.log2(57)],
   ])('bits: %s', (_name, site, bits) => {
     const { rules } = passwordRulesFor({}, site);
     expect(passwordBits(generatePassword(rules, seeded(14))!, rules)).toBeCloseTo(bits, 6);
@@ -394,31 +406,35 @@ describe('never a look-alike where the rules allow anything else', () => {
     expect(Object.values(GENERATOR_CLASSES).join('')).not.toMatch(lookAlike);
   });
 
+  /** A forced place's bits, and the free places' at log2(pool). */
+  const planned = (forced: number[], pool: number, length: number) => forced.reduce((sum, n) => sum + Math.log2(n), 0) + (length - forced.length) * Math.log2(pool);
+
   /**
    * Rule shapes, with the pool and length written out apart from the code: the alphabet the password's drawn from
-   * (look-alikes left out) and how long it is, and the sizes of required classes drawn wholly from outside it (one
-   * place each, at their own bits). Every one reaches the floor without a look-alike.
+   * (look-alikes left out), how long it is, and the size of each forced place's class (the rules' required classes, then
+   * the default's: one place each, at that class's own bits; review round 2 of #56). Every one reaches the floor
+   * without a look-alike.
    */
-  it.each<{ name: string; field?: Parameters<typeof passwordRulesFor>[0]; site: string | null; length: number; pool: number; outside?: number[] }>([
-    { name: 'the default', site: null, length: 20, pool: 57 },
-    { name: 'the default, a field’s maxlength', field: { maxLength: 10 }, site: null, length: 10, pool: 57 },
-    { name: 'letters and digits, 12–16, each required', site: 'minlength: 12; maxlength: 16; required: lower; required: upper; required: digit;', length: 16, pool: 56 },
-    { name: 'a required symbol class with a look-alike in it', site: 'required: lower; required: upper; required: digit; required: [!#$|];', length: 20, pool: 56, outside: [3] },
-    { name: 'symbols only: all but |', site: 'allowed: special;', length: 20, pool: 31 },
-    { name: 'digits only: 2–9', site: 'allowed: digit;', length: 20, pool: 8 },
-    { name: 'fourteen digits: 2–9 reach the floor', site: 'allowed: digit; minlength: 14; maxlength: 14;', length: 14, pool: 8 },
-    { name: 'eight capitals and digits: 40 bits exactly', site: 'allowed: upper, digit; maxlength: 8;', length: 8, pool: 32 },
-    { name: 'digits and a required dash', site: 'allowed: digit; required: [-]; maxlength: 16;', length: 16, pool: 9 },
-    // 8 from the default's lower case and -, 25, are under the floor: drawn from all lower case and symbols but l, o, |.
-    { name: 'eight of letters and symbols: the wider pool, look-alikes left out', site: 'allowed: lower, special; maxlength: 8;', length: 8, pool: 55 },
+  it.each<{ name: string; field?: Parameters<typeof passwordRulesFor>[0]; site: string | null; length: number; pool: number; forced: number[] }>([
+    { name: 'the default', site: null, length: 20, pool: 57, forced: [24, 24, 8, 1] },
+    { name: 'the default, a field’s maxlength', field: { maxLength: 10 }, site: null, length: 10, pool: 57, forced: [24, 24, 8, 1] },
+    { name: 'letters and digits, 12–16, each required', site: 'minlength: 12; maxlength: 16; required: lower; required: upper; required: digit;', length: 16, pool: 56, forced: [24, 24, 8] },
+    { name: 'a required symbol class with a look-alike in it', site: 'required: lower; required: upper; required: digit; required: [!#$|];', length: 20, pool: 56, forced: [24, 24, 8, 3] },
+    { name: 'symbols only: all but |', site: 'allowed: special;', length: 20, pool: 31, forced: [1] },
+    { name: 'digits only: 2–9', site: 'allowed: digit;', length: 20, pool: 8, forced: [8] },
+    { name: 'fourteen digits: 2–9 reach the floor', site: 'allowed: digit; minlength: 14; maxlength: 14;', length: 14, pool: 8, forced: [8] },
+    { name: 'digits and a required dash', site: 'allowed: digit; required: [-]; maxlength: 16;', length: 16, pool: 9, forced: [1, 8] },
+    // 9 from the default's lower case and -, 25, are under the floor (37 bits): drawn from all lower case and symbols
+    // but l, o and |.
+    { name: 'nine of letters and symbols: the wider pool, look-alikes left out', site: 'allowed: lower, special; maxlength: 9;', length: 9, pool: 55, forced: [24, 1] },
     // Too few bits without look-alikes at 20: made longer, within the maximum.
-    { name: 'two letters and look-alikes: 40 long', site: 'allowed: [ab01lI];', length: 40, pool: 2 },
-    { name: 'three letters and look-alikes, at most 30: 26 long', site: 'allowed: [abc01O]; maxlength: 30;', length: 26, pool: 3 },
-    { name: 'a field’s maxlength leaves room to lengthen', field: { maxLength: 50 }, site: 'allowed: [xy];', length: 40, pool: 2 },
-    { name: 'lengthened to exactly the maximum', site: 'allowed: [xy]; maxlength: 40;', length: 40, pool: 2 },
+    { name: 'two letters and look-alikes: 40 long', site: 'allowed: [ab01lI];', length: 40, pool: 2, forced: [2] },
+    { name: 'three letters and look-alikes, at most 30: 26 long', site: 'allowed: [abc01O]; maxlength: 30;', length: 26, pool: 3, forced: [3] },
+    { name: 'a field’s maxlength leaves room to lengthen', field: { maxLength: 50 }, site: 'allowed: [xy];', length: 40, pool: 2, forced: [2] },
+    { name: 'lengthened to exactly the maximum', site: 'allowed: [xy]; maxlength: 40;', length: 40, pool: 2, forced: [2] },
     // Run limits that a longer password still meets easily (review round 1 of #56).
-    { name: 'three letters, lengthened under loose run limits', site: 'allowed: [abc01]; max-repeating: 5; max-sequential: 6;', length: 26, pool: 3 },
-  ])('$name', ({ field, site, length, pool, outside = [] }) => {
+    { name: 'three letters, lengthened under loose run limits', site: 'allowed: [abc01]; max-repeating: 5; max-sequential: 6;', length: 26, pool: 3, forced: [3] },
+  ])('$name', ({ field, site, length, pool, forced }) => {
     const { rules } = passwordRulesFor(field ?? {}, site);
     const random = seeded(21);
     for (let i = 0; i < N; i++) {
@@ -429,24 +445,55 @@ describe('never a look-alike where the rules allow anything else', () => {
       // Every required class is there, and the rest of the rules are met.
       expect(passwordSatisfies(p, rules)).toBe(true);
       for (const cls of rules.required) expect([...p].some((c) => cls.includes(c))).toBe(true);
-      // The bits, from the actual alphabet: at least the floor.
-      const bits = (length - outside.length) * Math.log2(pool) + outside.reduce((sum, n) => sum + Math.log2(n), 0);
-      expect(passwordBits(p, rules)).toBeCloseTo(bits, 6);
+      // The bits, from the actual alphabet and each forced place's own class: at least the floor.
+      expect(passwordBits(p, rules)).toBeCloseTo(planned(forced, pool, length), 6);
       expect(passwordBits(p, rules)).toBeGreaterThanOrEqual(40);
       expect(isStrongPassword(p, rules)).toBe(true);
     }
   });
 
   /**
-   * A required class of look-alikes alone: one of them, one place at its own bits, not the pool's (review round 1 of
-   * #56); the password made longer to make up for it, within the maximum.
+   * Under the floor without look-alikes (review round 2 of #56): the clean password, as long as the maximum and the run
+   * limits let it be, and weak. Never look-alikes for strength, whatever they'd add.
    */
-  it.each<[string, string, number, number, number]>([
-    // 16 letters: 10 places at 4 bits, and the `0` at none: exactly the floor.
-    ['at exactly the floor', 'allowed: [abcdefghijkmnpqr]; required: [0]; maxlength: 11;', 11, 16, 1],
-    ['two letters and a required 0: one longer than 40', 'allowed: [ab]; required: [0];', 41, 2, 1],
-    ['the same, the maximum exactly what it needs', 'allowed: [ab]; required: [0]; maxlength: 41;', 41, 2, 1],
-    ['a class of two look-alikes', 'required: lower; required: [lI]; maxlength: 10;', 10, 24, 2],
+  it.each<{ name: string; site: string; length: number; pool: number; forced: number[] }>([
+    { name: 'six digits: 2–9', site: 'allowed: digit; minlength: 6; maxlength: 6;', length: 6, pool: 8, forced: [8] },
+    { name: 'thirteen digits: 2–9 fall short, and 0–9 aren’t taken to reach it', site: 'allowed: digit; maxlength: 13;', length: 13, pool: 8, forced: [8] },
+    { name: 'anything printable, 6: the wider pool', site: 'allowed: ascii-printable; maxlength: 6;', length: 6, pool: 87, forced: [24, 24, 8, 1] },
+    // The review's three (round 2 of #56): the forced places at their own bits, not the pool's.
+    { name: 'eight capitals and digits: a capital and a digit forced, about 37.6, not 40', site: 'allowed: upper, digit; maxlength: 8;', length: 8, pool: 32, forced: [24, 8] },
+    { name: 'a required [A!]: A or !, one bit, not 5', site: 'allowed: upper, digit, [!]; maxlength: 8; required: [A!];', length: 8, pool: 33, forced: [2, 24, 8] },
+    { name: 'two letters and look-alikes, at most 2 in a row: not lengthened, no look-alikes', site: 'allowed: [ab01lI]; max-consecutive: 2;', length: 20, pool: 2, forced: [2] },
+    { name: 'three letters and look-alikes, at most 2 repeated: not lengthened, no look-alikes', site: 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', length: 20, pool: 3, forced: [3] },
+    { name: 'two letters, one short of the length that reaches it: as long as allowed', site: 'allowed: [xy]; maxlength: 39;', length: 39, pool: 2, forced: [2] },
+  ])('$name', ({ site, length, pool, forced }) => {
+    const { rules } = passwordRulesFor({}, site);
+    const random = seeded(28);
+    let made = 0;
+    for (let i = 0; i < N; i++) {
+      const p = generatePassword(rules, random);
+      // Two letters, at most two in a row: about one try in 50 meets it, so a focus in 500 gets nothing, as before #56.
+      if (p === null) continue;
+      made++;
+      expect(p).not.toMatch(lookAlike);
+      expect(p).toHaveLength(length);
+      expect(passwordSatisfies(p, rules)).toBe(true);
+      expect(passwordBits(p, rules)).toBeCloseTo(planned(forced, pool, length), 6);
+      expect(isStrongPassword(p, rules)).toBe(false);
+    }
+    expect(made / N, site).toBeGreaterThanOrEqual(0.99);
+  });
+
+  /**
+   * A required class of look-alikes alone: one of them, one place at its own bits, not the pool's (review rounds 1 and 2
+   * of #56); the password made longer to make up for it, within the maximum.
+   */
+  it.each<[string, string, number, number, number[]]>([
+    // 16 letters: the `0` at no bits, a letter forced (4), nine more at 4: exactly the floor.
+    ['at exactly the floor', 'allowed: [abcdefghijkmnpqr]; required: [0]; maxlength: 11;', 11, 16, [1, 16]],
+    ['two letters and a required 0: one longer than 40', 'allowed: [ab]; required: [0];', 41, 2, [1, 2]],
+    ['the same, the maximum exactly what it needs', 'allowed: [ab]; required: [0]; maxlength: 41;', 41, 2, [1, 2]],
+    ['a class of two look-alikes', 'required: lower; required: [lI]; maxlength: 10;', 10, 24, [24, 2]],
   ])('%s', (_name, site, length, pool, forced) => {
     const { rules } = passwordRulesFor({}, site);
     const random = seeded(25);
@@ -455,9 +502,8 @@ describe('never a look-alike where the rules allow anything else', () => {
       expect(p).toHaveLength(length);
       expect(passwordSatisfies(p, rules)).toBe(true);
       expect(p.match(lookAlike)).toHaveLength(1);
-      const bits = (length - 1) * Math.log2(pool) + Math.log2(forced);
-      expect(passwordBits(p, rules)).toBeCloseTo(bits, 6);
-      expect(bits).toBeGreaterThanOrEqual(40);
+      expect(passwordBits(p, rules)).toBeCloseTo(planned(forced, pool, length), 6);
+      expect(planned(forced, pool, length)).toBeGreaterThanOrEqual(40);
       expect(isStrongPassword(p, rules)).toBe(true);
     }
   });
@@ -475,27 +521,25 @@ describe('never a look-alike where the rules allow anything else', () => {
   });
 
   /**
-   * Rules that can't reach the floor without look-alikes at any length they allow: everything they allow, look-alikes
-   * too, made longer to reach the floor where the maximum lets it (review round 1 of #56), else at the default's length
-   * within theirs. Its bits are counted from that alphabet.
+   * Look-alikes throughout only where the rules can't be met without them (review round 2 of #56): fewer than two
+   * characters allowed but look-alikes, or a required class of look-alikes alone that the clean pool can't make strong.
+   * Made longer to reach the floor where the maximum lets it (round 1), else as long as it allows, and weak.
    */
-  it.each<[string, string, number, number, boolean]>([
-    ['only look-alikes allowed: 40 of them', 'allowed: [0O];', 40, 2, true],
-    ['one letter and two look-alikes: 26', 'allowed: [a0O];', 26, 3, true],
-    ['only look-alikes, at most 30: 30 can’t reach it, 20 as before', 'allowed: [0O]; maxlength: 30;', 20, 2, false],
-    // The review's case: 8 from 32 is 40 bits, but the required 0 or O is one place at 1 bit: 36. All 36 reach it.
-    ['capitals and digits, 8, a required 0 or O', 'allowed: upper, digit; maxlength: 8; required: [0O];', 8, 36, true],
-    ['six digits: 0–9', 'allowed: digit; minlength: 6; maxlength: 6;', 6, 10, false],
-    ['thirteen digits: 2–9 fall short, 0–9 reach it', 'allowed: digit; maxlength: 13;', 13, 10, true],
-    ['anything printable, 6', 'allowed: ascii-printable; maxlength: 6;', 6, 94, false],
-  ])('%s', (_name, site, length, pool, strong) => {
+  it.each<[string, string, number, number, number[], boolean]>([
+    // A capital (the O) and a digit (the 0) are forced, at no bits each.
+    ['only look-alikes allowed: 42 of them', 'allowed: [0O];', 42, 2, [1, 1], true],
+    ['one letter and two look-alikes: 29', 'allowed: [a0O];', 29, 3, [1, 1, 1], true],
+    ['only look-alikes, at most 30: as long as allowed, and weak', 'allowed: [0O]; maxlength: 30;', 30, 2, [1, 1], false],
+    // The review's case: the 0 or O (1 bit), a capital and a digit forced, five at log2(36): about 34.9, weak.
+    ['capitals and digits, 8, a required 0 or O', 'allowed: upper, digit; maxlength: 8; required: [0O];', 8, 36, [2, 26, 10], false],
+  ])('%s', (_name, site, length, pool, forced, strong) => {
     const { rules } = passwordRulesFor({}, site);
     const random = seeded(23);
     for (let i = 0; i < N; i++) {
       const p = generatePassword(rules, random)!;
       expect(p).toHaveLength(length);
       expect(passwordSatisfies(p, rules)).toBe(true);
-      expect(passwordBits(p, rules)).toBeCloseTo(length * Math.log2(pool), 6);
+      expect(passwordBits(p, rules)).toBeCloseTo(planned(forced, pool, length), 6);
       expect(isStrongPassword(p, rules)).toBe(strong);
     }
   });
@@ -507,9 +551,9 @@ describe('never a look-alike where the rules allow anything else', () => {
   const N_RUNS = 1000;
   it.each<[string, string, number]>([
     ['two letters, at most 2 in a row: not lengthened', 'allowed: [xy]; max-consecutive: 2;', 20],
-    ['two letters and look-alikes, at most 2 in a row: all six at 20', 'allowed: [ab01lI]; max-consecutive: 2;', 20],
+    ['two letters and look-alikes, at most 2 in a row: the two letters at 20', 'allowed: [ab01lI]; max-consecutive: 2;', 20],
     ['three letters, at most 3 repeated: not lengthened', 'allowed: [abc]; max-repeating: 3;', 20],
-    ['three letters and look-alikes, at most 2 repeated: all six at 20', 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', 20],
+    ['three letters and look-alikes, at most 2 repeated: the three letters at 20', 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', 20],
     ['three letters, loose limits: lengthened to 26', 'allowed: [abc]; max-repeating: 5; max-sequential: 6;', 26],
     ['two letters, at most 2 repeated, room for 40: not lengthened', 'allowed: [xy]; max-repeating: 2; maxlength: 40;', 20],
   ])('%s', (_name, site, length) => {
@@ -521,6 +565,7 @@ describe('never a look-alike where the rules allow anything else', () => {
       if (p === null) continue;
       made++;
       expect(p).toHaveLength(length);
+      expect(p).not.toMatch(lookAlike);
       expect(passwordSatisfies(p, rules), site).toBe(true);
     }
     expect(made / N_RUNS, site).toBeGreaterThanOrEqual(0.99);
@@ -531,31 +576,38 @@ describe('never a look-alike where the rules allow anything else', () => {
     expect(generatePassword(over, seeded(27))).toHaveLength(40);
     const longest = { ...over, minLength: PASSWORD_LIMITS.password };
     expect(generatePassword(longest, seeded(27))).toHaveLength(PASSWORD_LIMITS.password);
-    // One short of what it needs: not lengthened at all.
+    // One short of what it needs: as long as allowed, and weak.
     const short = passwordRulesFor({}, 'allowed: [xy]; maxlength: 39;').rules;
     const p = generatePassword(short, seeded(27))!;
-    expect(p).toHaveLength(20);
+    expect(p).toHaveLength(39);
     expect(isStrongPassword(p, short)).toBe(false);
   });
 
-  it('as a property over random rules: a look-alike only where the plan had to allow them', () => {
+  it('as a property over random rules, run limits too: a look-alike only where the clean pool can’t meet the rules', () => {
     const r = seeded(24);
-    const shapes = ['lower', 'upper', 'digit', 'special', 'ascii-printable', '[ab0O]', '[xyz1l]', '[!|-]'];
-    for (let i = 0; i < 1500; i++) {
+    const shapes = ['lower', 'upper', 'digit', 'special', 'ascii-printable', '[ab0O]', '[xyz1l]', '[!|-]', '[0O]', '[ab]', '[abc]'];
+    let made = 0;
+    let limited = 0;
+    for (let i = 0; i < 3000; i++) {
       const allowed = shapes.filter(() => r(3) === 0);
-      const req = shapes.filter(() => r(5) === 0);
-      const site = `${allowed.length ? `allowed: ${allowed.join(', ')};` : ''} ${req.map((c) => `required: ${c};`).join(' ')} maxlength: ${8 + r(60)};`;
+      const req = shapes.filter(() => r(6) === 0);
+      const limits = [r(2) ? `max-repeating: ${1 + r(4)};` : '', r(2) ? `max-sequential: ${1 + r(4)};` : '', r(4) ? '' : `max-consecutive: ${1 + r(3)};`].join(' ');
+      const site = `${allowed.length ? `allowed: ${allowed.join(', ')};` : ''} ${req.map((c) => `required: ${c};`).join(' ')} maxlength: ${8 + r(60)}; ${limits}`;
       const { rules } = passwordRulesFor({}, site);
       const p = generatePassword(rules, r);
       if (p === null) continue;
+      made++;
+      if (rules.maxRepeating !== null || rules.maxSequential !== null) limited++;
       expect(passwordSatisfies(p, rules), site).toBe(true);
-      // One look-alike per required class with nothing else allowed; more only where the rules can't reach the floor
-      // without them at any length they allow.
-      const forced = rules.required.filter((cls) => ![...cls].some((c) => rules.allowed.includes(c) && !LOOK_ALIKES.includes(c))).length;
-      if ((p.match(lookAlike) ?? []).length > forced) {
-        const clean = new Set([...rules.allowed.replace(/ /g, '')].filter((c) => !LOOK_ALIKES.includes(c))).size;
-        expect(clean <= 1 || Math.ceil(40 / Math.log2(clean)) > rules.maxLength, site).toBe(true);
-      }
+      const chars = [...new Set(rules.allowed.replace(/ /g, ''))];
+      const clean = chars.filter((c) => !LOOK_ALIKES.includes(c));
+      const onlyLookAlikes = rules.required.some((cls) => {
+        const own = [...cls].filter((c) => chars.includes(c));
+        return own.length > 0 && own.every((c) => LOOK_ALIKES.includes(c));
+      });
+      if (p.match(lookAlike)) expect(clean.length < 2 || onlyLookAlikes, site).toBe(true);
     }
+    expect(made).toBeGreaterThan(1000);
+    expect(limited).toBeGreaterThan(500);
   });
 });
