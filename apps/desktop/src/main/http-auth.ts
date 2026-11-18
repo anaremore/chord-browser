@@ -26,7 +26,12 @@
  *   through its redirects, and ends at its commit or its failure. A box for a
  *   frame's navigation is tied to that navigation, and closes once every
  *   navigation it answers is gone (the frame started another, or the request
- *   failed or was cancelled): a box never outlives its request.
+ *   failed or was cancelled): a box never outlives its request. A frame
+ *   that goes (a removed iframe) takes its navigations with it: Electron says
+ *   nothing of them, but the page stops loading, and then nothing in it is
+ *   navigating; an event whose frame main can't name has it look at what
+ *   frames the page still has. A box for a navigation main couldn't place
+ *   closes once nothing in its page is navigating any more.
  * - **Remember.** A sign-in typed with *Remember* ticked is held here (never
  *   logged, never sent anywhere) until the server answers **that
  *   navigation**: the same frame, the same navigation (its redirects
@@ -36,8 +41,10 @@
  *   (the same box again), Cancel, a navigation of the tab, the tab closing,
  *   or HOLD_MS. Any other frame's commit says nothing. A box for a page's own
  *   script request (not a navigation) has nothing to follow, so it offers no
- *   *Remember*. Once accepted, the save goes on through a navigation (the
- *   server took it), but not through the tab closing. The first save ever
+ *   *Remember*; nor does one that more than one frame's navigation waits on
+ *   (the `login` event doesn't say which frame asked, so a commit couldn't
+ *   say whose answer it is). Once accepted, the save goes on through a
+ *   navigation (the server took it), but not through the tab closing. The first save ever
  *   chooses the passphrase in the form save card's step (`firstSave`); an
  *   update says so, with Undo (`updated`).
  * - **Never** for a proxy (decision 11, DESIGN.md §9): no fill, no *Remember*.
@@ -84,6 +91,8 @@ export interface AuthDeps {
   windowOf?(nodeId: NodeId): WindowId | undefined;
   /** A frame's tree node id (`webFrameMain.fromId(…).frameTreeNodeId`), stable across its navigations. */
   frameOf?(processId: number, routingId: number): number | undefined;
+  /** The tree node ids of a page's frames now (`mainFrame.framesInSubtree`): a frame missing from it has gone. */
+  framesOf?(contents: WebContents): Iterable<number>;
   vault?: AuthVault;
   /** No vault yet: the form save card, with its passphrase step, saves this one. */
   firstSave?(contents: WebContents, signIn: FirstHttpSave): void;
@@ -106,6 +115,13 @@ export type AuthAnswer = { username: string; password: string } | { account: num
 interface Navigation {
   nav: number;
   url: string;
+  /**
+   * It may have ended unseen: a failure in its frame matched no navigation (another address, or a frame main couldn't
+   * name). A newer one replacing it then isn't counted as waiting for a failure of its own, so a cancellation always
+   * ends what it can, a box included; if this one was still going after all, its failure ends the newer one's box
+   * early, which only asks again.
+   */
+  doubtful?: boolean;
 }
 
 interface Pending {
@@ -123,6 +139,10 @@ interface Pending {
   frames: Map<number, Navigation>;
   /** It answers frames' navigations: it closes when the last of them is gone. */
   followed: boolean;
+  /** A navigation main couldn't place: it closes once nothing in its page is navigating. */
+  unplaced: boolean;
+  /** More than one frame's navigation waited on it at some point: no *Remember*, as whose answer a commit is can't be told. */
+  shared: boolean;
   /** A frame of another page asked (its host, or null for a page with no origin of its own, `file:` and the like). */
   embedded: { host: string | null } | null;
   /** Filled at once; false for a frame of another page, or one main couldn't place. */
@@ -192,6 +212,11 @@ function isInsecure(url: string): boolean {
   }
 }
 
+function withoutFragment(url: string): string {
+  const hash = url.indexOf('#');
+  return hash < 0 ? url : url.slice(0, hash);
+}
+
 const sameNavigations = (a: Map<number, Navigation>, b: Map<number, Navigation> | undefined) =>
   !!b && [...a].every(([id, n]) => b.get(id)?.nav === n.nav);
 
@@ -218,15 +243,67 @@ export class AuthBroker {
    */
   attachPage(contents: WebContents): void {
     const frames = new Map<number, Navigation>();
+    /**
+     * By frame: navigations a newer one replaced before they ended, whose failure may still come (after the newer
+     * one's start, for the same address): that one is passed over. Not every replaced navigation reports one:
+     * Electron 45 reports no failure at all for a navigation stopped, or a removed iframe's (the E2E in
+     * passwords-http-auth.spec.ts), so a count can be owed nothing. It goes when the page stops loading, when no
+     * failure can be on its way any more.
+     */
+    const superseded = new Map<number, number>();
     this.navigating.set(contents, frames);
     const frameOf = (processId: number, routingId: number) => this.deps?.frameOf?.(processId, routingId);
+    const end = (id: number) => {
+      frames.delete(id);
+      superseded.delete(id);
+    };
+    /**
+     * Main couldn't name the frame: if one has gone (a removed iframe), its navigations went with it. What the event
+     * ended in a frame that's still there can't be told, so those frames' navigations are doubtful (see `Navigation`).
+     */
+    const sweep = () => {
+      if (contents.isDestroyed()) return;
+      let live: Iterable<number> | undefined;
+      try {
+        live = this.deps?.framesOf?.(contents);
+      } catch {
+        return;
+      }
+      if (!live) return;
+      const present = new Set(live);
+      for (const [id, navigation] of [...frames]) {
+        if (present.has(id)) {
+          navigation.doubtful = true;
+          superseded.delete(id);
+          continue;
+        }
+        end(id);
+        this.navigationGone(contents, id, () => false);
+      }
+    };
+    // Nothing in the page is loading any more: every navigation in it has ended, however it did. A removed iframe's
+    // ends with no word at all (Electron reports no failure, and lists the frame a while longer), only this.
+    contents.on('did-stop-loading', () => {
+      if (contents.isDestroyed() || contents.isLoading()) return;
+      for (const id of [...frames.keys()]) {
+        end(id);
+        this.navigationGone(contents, id, () => false);
+      }
+      superseded.clear();
+      this.settled(contents);
+    });
     contents.on('did-start-navigation', ((details: NavigationDetails) => {
       const id = details.frame?.frameTreeNodeId;
       if (id === undefined || details.isSameDocument) return;
       const navigation = { nav: this.nextNav++, url: details.url };
+      const before = frames.get(id);
+      if (before && !before.doubtful) superseded.set(id, (superseded.get(id) ?? 0) + 1);
       frames.delete(id);
       frames.set(id, navigation);
-      if (frames.size > FRAMES_MAX) frames.delete(frames.keys().next().value!);
+      if (frames.size > FRAMES_MAX) {
+        const oldest = frames.keys().next().value!;
+        end(oldest);
+      }
       // Whatever answered the frame's earlier navigation is gone.
       this.navigationGone(contents, id, (nav) => nav === navigation.nav);
     }) as never);
@@ -239,19 +316,43 @@ export class AuthBroker {
     }) as never);
     contents.on('did-frame-navigate', ((_event: unknown, url: string, code: number, _status: string, _main: boolean, processId: number, routingId: number) => {
       const id = frameOf(processId, routingId);
-      if (id === undefined) return;
+      if (id === undefined) {
+        sweep();
+        return this.settled(contents);
+      }
       const navigation = frames.get(id);
-      frames.delete(id);
+      end(id);
       this.committed(contents, id, navigation, url, code);
+      this.settled(contents);
     }) as never);
     // A navigation that fails or is cancelled (before it commits): whatever answers it is gone too. Only the one it
     // names: a cancelled navigation's failure can come after the next one's start, which goes on.
     contents.on('did-fail-provisional-load', ((_event: unknown, _code: number, _description: string, url: string, _main: boolean, processId: number, routingId: number) => {
       const id = frameOf(processId, routingId);
-      const navigation = id === undefined ? undefined : frames.get(id);
-      if (!navigation || navigation.url !== url) return;
-      frames.delete(id!);
-      this.navigationGone(contents, id!, (nav) => nav !== navigation.nav);
+      if (id === undefined) {
+        sweep();
+        return this.settled(contents);
+      }
+      const navigation = frames.get(id);
+      const replaced = superseded.get(id) ?? 0;
+      // Maybe a replaced navigation's failure, whichever address it had: the frame's own navigation goes on. Two to
+      // the same address can't be told apart, but either order ends the right one: the second failure to come does.
+      // A replaced one that never reports (see `superseded`) leaves its count to the page's stopping loading, which
+      // ends this navigation's box too.
+      if (replaced > 0) {
+        if (replaced === 1) superseded.delete(id);
+        else superseded.set(id, replaced - 1);
+        return;
+      }
+      if (!navigation) return;
+      // A failure that isn't the frame's navigation's (another address): that one may have ended without a word.
+      if (withoutFragment(navigation.url) !== withoutFragment(url)) {
+        navigation.doubtful = true;
+        return;
+      }
+      end(id);
+      this.navigationGone(contents, id, (nav) => nav !== navigation.nav);
+      this.settled(contents);
     }) as never);
   }
 
@@ -267,10 +368,10 @@ export class AuthBroker {
     (this.deps?.clearTimeout ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>)))(timer);
   }
 
-  /** The frames' navigations asking for exactly this address in the page now (usually one). */
+  /** The frames' navigations asking for exactly this address in the page now (usually one). A request never has the fragment. */
   private navigationsAsking(contents: WebContents, url: string): [number, Navigation][] {
     const frames = this.navigating.get(contents);
-    return frames ? [...frames].filter(([, n]) => n.url === url).map(([id, n]) => [id, { ...n }]) : [];
+    return frames ? [...frames].filter(([, n]) => withoutFragment(n.url) === url).map(([id, n]) => [id, { ...n }]) : [];
   }
 
   /* ---------- following each navigation ---------- */
@@ -294,6 +395,22 @@ export class AuthBroker {
       if (!navigation || keep(navigation.nav)) continue;
       held.frames.delete(frame);
       if (held.frames.size === 0) this.drop(held);
+    }
+    if (changed) this.deps?.onChange();
+  }
+
+  /**
+   * A navigation in the page ended. A box for a navigation main couldn't place answers one of those under way when
+   * it asked: once none is, its own has ended too.
+   */
+  private settled(contents: WebContents): void {
+    if ((this.navigating.get(contents)?.size ?? 0) > 0) return;
+    let changed = false;
+    for (const prompt of [...this.pending]) {
+      if (prompt.contents !== contents || !prompt.unplaced) continue;
+      this.pending.splice(this.pending.indexOf(prompt), 1);
+      for (const answer of prompt.answers) answer();
+      changed = true;
     }
     if (changed) this.deps?.onChange();
   }
@@ -350,6 +467,14 @@ export class AuthBroker {
     if (same) {
       same.answers.push(answer);
       for (const [id, navigation] of asking) same.frames.set(id, navigation);
+      // Another frame's navigation waits on it too: a commit can't say whose answer it is, so no *Remember*.
+      if (same.frames.size > 1 && !same.shared) {
+        same.shared = true;
+        if (same.remember !== null) {
+          same.remember = null;
+          if (same.ready) this.deps.onChange();
+        }
+      }
       if (retry && !same.retry) {
         same.retry = true;
         if (same.ready) this.deps.onChange();
@@ -374,6 +499,8 @@ export class AuthBroker {
       answers: [answer],
       frames: new Map(asking),
       followed: asking.length > 0,
+      unplaced: !info.isProxy && details.isRequestForNavigation && asking.length === 0,
+      shared: asking.length > 1,
       embedded: embedded ? { host: top ? hostOf(top) : null } : null,
       fill: !embedded && placed,
       tab,
@@ -411,7 +538,7 @@ export class AuthBroker {
     prompt.locked = answer.state === 'locked';
     // Off for the chord: as before passwords, no *Remember* and no fill. A private window fills, never saves. A
     // request that isn't a frame's navigation has no answer main can follow: nothing to remember.
-    if (answer.state === 'off' || tab.private || !prompt.followed) prompt.remember = null;
+    if (answer.state === 'off' || tab.private || !prompt.followed || prompt.shared) prompt.remember = null;
     else prompt.remember = (prompt.fill && prompt.accounts.length > 0) || prompt.rememberAgain;
     if (answer.state === 'off') prompt.tab = null;
     prompt.ready = true;
@@ -456,7 +583,7 @@ export class AuthBroker {
       return this.finish(prompt, { username: account.username, password });
     }
     this.finish(prompt, answer);
-    if (answer && remember && prompt.remember !== null && prompt.tab && !prompt.tab.private && !prompt.proxy && prompt.followed) this.hold(prompt, answer);
+    if (answer && remember && prompt.remember !== null && prompt.tab && !prompt.tab.private && !prompt.proxy && prompt.followed && !prompt.shared) this.hold(prompt, answer);
   }
 
   private finish(prompt: Pending, credentials: { username: string; password: string } | null): void {
@@ -564,5 +691,45 @@ export class AuthBroker {
     const held = this.held.get(nodeId);
     if (held && (held.waiting || closed)) this.drop(held);
     if (changed) this.deps?.onChange();
+  }
+}
+
+/** Timers, as a test drives them. */
+export interface Timers {
+  set(run: () => void, ms: number): unknown;
+  clear(timer: unknown): void;
+}
+
+const realTimers: Timers = { set: (run, ms) => setTimeout(run, ms), clear: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>) };
+
+/**
+ * *Password updated*'s Undo (`AuthDeps.updated`): by password id, for the window whose toast offered it, taken once,
+ * and only for `ms` (Browser makes that as long as its toast could last). Offered again, the newer one counts.
+ */
+export class UpdateUndos<W = WindowId> {
+  private readonly offers = new Map<string, { windowId: W; changedAt: number; timer: unknown }>();
+
+  constructor(
+    private readonly ms: number,
+    private readonly timers: Timers = realTimers,
+  ) {}
+
+  offer(id: string, windowId: W, changedAt: number): void {
+    const before = this.offers.get(id);
+    if (before) this.timers.clear(before.timer);
+    const offer = { windowId, changedAt, timer: null as unknown };
+    offer.timer = this.timers.set(() => {
+      if (this.offers.get(id) === offer) this.offers.delete(id);
+    }, this.ms);
+    this.offers.set(id, offer);
+  }
+
+  /** What the update wrote, for that window's Undo; null from another window, once taken, or once it's expired. */
+  take(id: string, windowId: W): { changedAt: number } | null {
+    const offer = this.offers.get(id);
+    if (!offer || offer.windowId !== windowId) return null;
+    this.timers.clear(offer.timer);
+    this.offers.delete(id);
+    return { changedAt: offer.changedAt };
   }
 }

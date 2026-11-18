@@ -92,7 +92,7 @@ import { Readers, type ReaderLinkTarget } from './reader/service';
 import type { Verdict } from './safe-browsing/database';
 import { SafeBrowsingGuard } from './safe-browsing/guard';
 import type { ScreenShareBroker } from './screen-share';
-import type { AuthBroker } from './http-auth';
+import { type AuthBroker, UpdateUndos } from './http-auth';
 import type { PasskeyBroker } from './passkeys';
 import type { PasswordService } from './passwords/service';
 import { PasswordAssist, type AssistVault } from './passwords/assist';
@@ -766,13 +766,10 @@ export class Browser {
       },
       firstSave: (contents, signIn) => void this.passwordAssist.offerFirstSave(contents, signIn),
       frameOf: (processId, routingId) => webFrameMain.fromId(processId, routingId)?.frameTreeNodeId,
+      framesOf: (contents) => contents.mainFrame.framesInSubtree.map((frame) => frame.frameTreeNodeId),
       // A changed password says so, with Undo: the one before it back.
       updated: (windowId, { id, host, changedAt }) => {
-        const before = this.passwordReverts.get(id);
-        if (before) clearTimeout(before.expires);
-        // Undo lasts as long as its toast could (it pauses under the pointer), then goes.
-        const expires = setTimeout(() => this.passwordReverts.get(id)?.expires === expires && this.passwordReverts.delete(id), Browser.PASSWORD_UNDO_MS);
-        this.passwordReverts.set(id, { windowId, changedAt, expires });
+        this.passwordReverts.offer(id, windowId, changedAt);
         this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: `Password updated for ${host}`, action: { label: 'Undo', passwordRevert: id } });
       },
     });
@@ -1428,15 +1425,13 @@ export class Browser {
   /** How long *Password updated*'s Undo works: its toast's time, five times over, as a toast pauses under the pointer. */
   private static readonly PASSWORD_UNDO_MS = durations.toast * 5;
 
-  /** Passwords *Remember* just changed, by id: the window whose toast may undo each, once, while it lasts, and what the update wrote. */
-  private readonly passwordReverts = new Map<string, { windowId: WindowId; changedAt: number; expires: ReturnType<typeof setTimeout> }>();
+  /** Passwords *Remember* just changed, by id: the window whose toast may undo each, once, while it lasts (its toast's time), and what the update wrote. */
+  private readonly passwordReverts = new UpdateUndos(Browser.PASSWORD_UNDO_MS);
 
   /** *Password updated*'s Undo, from that window's toast only, while it lasts: the password before it back, if it's still what Remember wrote. */
   async revertPasswordUpdate(windowId: WindowId, id: string): Promise<void> {
-    const revert = this.passwordReverts.get(id);
-    if (revert?.windowId !== windowId) return;
-    clearTimeout(revert.expires);
-    this.passwordReverts.delete(id);
+    const revert = this.passwordReverts.take(id, windowId);
+    if (!revert) return;
     if (!(await this.options.passwords.revertUpdate(id, revert.changedAt))) this.windows.get(windowId)?.toast({ id: `passwords:updated:${id}`, message: 'Chord couldn’t undo that. The password is in Settings → Passwords.' });
   }
 
@@ -1675,6 +1670,11 @@ export class Browser {
   findFor(contents: WebContents): FindInPage | undefined {
     const w = this.windowFor(contents);
     return w ? this.finders.get(w.id) : undefined;
+  }
+
+  /** A Peek that waited for the overlay opened (`AppWindow.markOverlayReady`): the popover follows the page now in front. */
+  peekShown(w: AppWindow): void {
+    this.syncPopover(w);
   }
 
   private syncPopovers(): void {
@@ -2727,8 +2727,10 @@ export class Browser {
         this.clearToday(w);
         return true;
       case 'split.with':
-        // Pick what opens beside the current tab; with nothing shown there's nothing to split.
-        if (active) w.openOverlay('split', '', null, from);
+        // Pick what opens beside the current tab; with nothing shown there's nothing to split. A Peek goes first.
+        if (!active) return true;
+        this.peeks.close(w);
+        w.openOverlay('split', '', null, from);
         return true;
       case 'split.focusNext':
       case 'split.focusPrevious':

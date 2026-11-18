@@ -128,3 +128,92 @@ describe('Peek before the overlay listens', () => {
     expect(w.peekOverlaySeq).toBeNull();
   });
 });
+
+/**
+ * #50: while a Peek waits for the overlay (a brand-new window's, or one reloading after a crash), it's still the page
+ * in front. Browser's page actions (⌘W, reload, back), find and the fill menu go by `peekContents`, and the popover
+ * follows once it opens (`markOverlayReady` says so). An open Peek whose overlay reloads waits again, and comes back.
+ */
+describe('Peek in front while it waits for the overlay', () => {
+  beforeEach(() => {
+    vi.mocked(send).mockClear();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  type Setup = ReturnType<typeof newWindow>;
+  const reload = ({ overlay }: Setup) => overlay.page.emit('did-start-loading');
+  it.each<[string, (s: Setup) => void, { front: boolean; chrome: boolean }]>([
+    ['none asked for', () => undefined, { front: false, chrome: false }],
+    ['waiting for a new window’s overlay', ({ w, view }) => w.openPeek(view, info, 0), { front: true, chrome: false }],
+    ['open', ({ w, view }) => (w.markOverlayReady(), w.openPeek(view, info, 0)), { front: true, chrome: true }],
+    ['open, its overlay reloading (a crash)', (s) => (s.w.markOverlayReady(), s.w.openPeek(s.view, info, 0), reload(s)), { front: true, chrome: false }],
+    ['closed while its overlay reloads', (s) => (s.w.markOverlayReady(), s.w.openPeek(s.view, info, 0), reload(s), s.w.closePeek()), { front: false, chrome: false }],
+  ])('%s', (_name, setUp, expected) => {
+    const s = newWindow();
+    setUp(s);
+    expect((s.w.peekContents as unknown) === s.peek.page).toBe(expected.front);
+    expect(s.w.peekOverlaySeq !== null).toBe(expected.chrome);
+  });
+
+  it('says when a waiting Peek opens, so the popover follows; not for the command bar’s own start', () => {
+    const fresh = newWindow();
+    expect(fresh.w.markOverlayReady()).toBe(false);
+    const waiting = newWindow();
+    waiting.w.openPeek(waiting.view, info, 0);
+    expect(waiting.w.markOverlayReady()).toBe(true);
+    expect(waiting.w.peekOverlaySeq).not.toBeNull();
+  });
+
+  it('an open Peek whose overlay reloads opens again once it listens, with what its page shows now, its page kept', () => {
+    const s = newWindow();
+    s.w.markOverlayReady();
+    s.w.openPeek(s.view, info, 0);
+    vi.runAllTimers();
+    const before = s.w.peekOverlaySeq;
+    reload(s);
+    s.w.updatePeek({ title: 'Staff page' });
+    vi.mocked(send).mockClear();
+    expect(s.w.markOverlayReady()).toBe(true);
+    const opens = toOverlay(s.overlay).filter((m) => m.channel === 'overlay:open');
+    expect(opens).toHaveLength(1);
+    expect(opens[0]!.payload).toMatchObject({ mode: 'peek', peek: { title: 'Staff page' } });
+    expect(s.w.peekOverlaySeq).not.toBe(before);
+    vi.runAllTimers();
+    expect(s.window.contentView.children.filter((c) => c === s.peek)).toHaveLength(1);
+  });
+
+  it.each<[string, (s: Setup) => void, 'peek' | 'tab' | null]>([
+    ['no Peek: the tab', () => undefined, 'tab'],
+    ['waiting for a new window’s overlay: nothing, not the tab under it', ({ w, view }) => w.openPeek(view, info, 0), null],
+    ['open: Peek’s page', (s) => (s.w.markOverlayReady(), s.w.openPeek(s.view, info, 0), vi.runAllTimers()), 'peek'],
+    ['its overlay reloading: Peek’s page still', (s) => (s.w.markOverlayReady(), s.w.openPeek(s.view, info, 0), vi.runAllTimers(), reload(s)), 'peek'],
+  ])('a screenshot takes what ⌘W would act on: %s', (_name, setUp, expected) => {
+    const s = newWindow();
+    setUp(s);
+    const target = s.w.captureTarget()?.contents as unknown;
+    expect(target === undefined ? null : target === s.peek.page ? 'peek' : 'tab').toBe(expected);
+  });
+
+  it('its overlay reloading, Peek’s page and the popover stay at its card', () => {
+    const s = newWindow();
+    s.w.markOverlayReady();
+    s.w.openPeek(s.view, info, 0);
+    vi.runAllTimers();
+    const popover = s.w.popover as unknown as FakeView;
+    const at = { page: s.peek.getBounds(), popover: popover.getBounds() };
+    reload(s);
+    vi.mocked(send).mockClear();
+    (s.w as unknown as { layout(): void }).layout();
+    expect({ page: s.peek.getBounds(), popover: popover.getBounds() }).toEqual(at);
+    // Its chrome isn't told anything until the overlay listens again.
+    expect(toOverlay(s.overlay).some((m) => m.channel === 'peek:state')).toBe(false);
+  });
+
+  it('the window closing forgets a waiting Peek', () => {
+    const s = newWindow();
+    s.w.openPeek(s.view, info, 0);
+    s.window.emit('closed');
+    expect(s.w.peekContents).toBeNull();
+  });
+});

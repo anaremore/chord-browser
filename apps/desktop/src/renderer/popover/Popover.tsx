@@ -53,6 +53,7 @@ import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import { EffectsCard } from './EffectsCard';
 import styles from './Popover.module.css';
+import { PromptKeys } from './prompt-keys';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -290,6 +291,11 @@ function ShareCard({ prompt, appearance, platform }: { prompt: SharePrompt; appe
   );
 }
 
+/** A field you type into (the box's username and password), where Space types rather than presses. */
+const isTextField = (target: EventTarget) => target instanceof HTMLInputElement && target.type !== 'checkbox';
+/** The box's Cancel buttons (`data-cancel`): they always work, as Escape does. */
+const isCancel = (target: EventTarget) => target instanceof HTMLElement && target.hasAttribute('data-cancel');
+
 /** What a filled password field holds: a mask, never the password, which stays in main. */
 const FILLED_MASK = '•'.repeat(10);
 
@@ -305,7 +311,7 @@ const FILLED_MASK = '•'.repeat(10);
  * *Remember* saves what you typed once the site takes it. Never for a proxy,
  * and a private window fills without *Remember*.
  */
-function AuthCard({ prompt }: { prompt: AuthPrompt }) {
+export function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const form = useRef<HTMLFormElement>(null);
   const usernameField = useRef<HTMLInputElement>(null);
   const signIn = useRef<HTMLButtonElement>(null);
@@ -318,10 +324,15 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const [remember, setRemember] = useState(prompt.remember ?? false);
   const ids = useId();
   // Sign in, the chooser and Unlock wait a moment after the box appears (disabled, so Enter doesn't submit either): a
-  // page can't time the box to appear under a click, or a held Enter, meant for itself. Cancel and Escape always work.
+  // page can't time the box to appear under a click, or a held Enter, meant for itself. Then Enter and Space must be
+  // pressed afresh: a key held through the wait only repeats, or is let go (prompt-keys.ts). Cancel and Escape always work.
+  const [keys] = useState(() => new PromptKeys());
   const [armed, setArmed] = useState(false);
   useEffect(() => {
-    const timer = setTimeout(() => setArmed(true), durations.promptInputDelay);
+    const timer = setTimeout(() => {
+      keys.arm();
+      setArmed(true);
+    }, durations.promptInputDelay);
     return () => clearTimeout(timer);
   }, []);
   // The username field has the keyboard when the box appears (main focuses the popover too); Sign in when it's filled.
@@ -338,6 +349,8 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
     setUsername(prompt.accounts[0]!);
     setPassword('');
     if (prompt.remember !== null) setRemember(true);
+    // An Enter held on *Unlock passwords* doesn't repeat into Sign in.
+    keys.refocused();
     signIn.current?.focus();
   }, [accounts]);
   // Main didn't answer with a saved sign-in (the vault locked meanwhile): the box is yours again.
@@ -363,9 +376,15 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
       role="alertdialog"
       aria-labelledby={`${ids}-title`}
       aria-describedby={`${ids}-notes`}
+      onKeyDownCapture={(e) => {
+        if (!keys.keydown({ key: e.key, repeat: e.repeat, field: isTextField(e.target), cancel: isCancel(e.target) })) e.preventDefault();
+      }}
+      onKeyUpCapture={(e) => {
+        if (!keys.keyup({ key: e.key, field: isTextField(e.target), cancel: isCancel(e.target) })) e.preventDefault();
+      }}
       onSubmit={(e) => {
         e.preventDefault();
-        if (!armed) return;
+        if (!keys.ready) return;
         respond(filled !== null ? { account: filled, username: prompt.accounts[filled]! } : { username, password });
       }}
       onKeyDown={(e) => {
@@ -381,7 +400,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
           {title} <span className={styles.host}>{prompt.origin}</span>
           {prompt.proxy && ' needs you to sign in'}
         </p>
-        <button type="button" className={styles.iconButton} aria-label="Cancel" title="Cancel" onClick={() => respond(null)}>
+        <button type="button" className={styles.iconButton} aria-label="Cancel" title="Cancel" data-cancel onClick={() => respond(null)}>
           <X {...ICON} />
         </button>
       </div>
@@ -476,7 +495,7 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         </label>
       )}
       <div className={styles.actions}>
-        <button type="button" className={styles.secondary} onClick={() => respond(null)}>
+        <button type="button" className={styles.secondary} data-cancel onClick={() => respond(null)}>
           Cancel
         </button>
         <button ref={signIn} type="submit" className={styles.primary} disabled={sent || !armed}>

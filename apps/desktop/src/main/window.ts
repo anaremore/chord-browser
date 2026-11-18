@@ -392,6 +392,7 @@ export class AppWindow {
       stopScale();
       this.closeFloating();
       clearTimeout(this.peekTimer);
+      this.pendingPeek = null;
       nativeTheme.off('updated', onTheme);
       clearTimeout(boundsTimer);
       this.snapshots.dispose();
@@ -421,9 +422,14 @@ export class AppWindow {
       for (const toast of pending) send(this.shell.webContents, 'toast:show', toast);
       if (this.overlayVisible) send(this.shell.webContents, 'overlay:shown', true);
     });
-    // Loading again (a reload, or after a crash), the command bar isn't listening until it says so.
+    // Loading again (a reload, or after a crash), the command bar isn't listening until it says so. An open Peek's
+    // chrome went with the old page: it waits to open again, its page where it is, as one before the overlay listens.
     this.overlay.webContents.on('did-start-loading', () => {
       this.overlayReady = false;
+      if (this.peek && this.peekView) {
+        this.pendingPeek = { view: this.peekView, info: this.peek, delayMs: 0 };
+        this.peek = null;
+      }
     });
   }
 
@@ -614,9 +620,17 @@ export class AppWindow {
 
   /* ---------- Peek (DESIGN.md §7.9, §8.5) ---------- */
 
-  /** Peek's page, while one is open. */
+  /** Peek's page, while one is open, or waits for the overlay to open it: page actions, find and fill act on it then too. */
   get peekContents() {
-    return this.peek ? (pageOf(this.peekView) ?? null) : null;
+    return pageOf(this.peek ? this.peekView : (this.pendingPeek?.view ?? null)) ?? null;
+  }
+
+  /**
+   * Peek's page is in its card on screen: open, or waiting again while the overlay reloads (its page stays put). A
+   * Peek waiting for a new window's overlay isn't on screen yet: layout and screenshots then have no page in front.
+   */
+  private get peekOnScreen(): boolean {
+    return this.peekView !== null && (this.peek !== null || this.pendingPeek?.view === this.peekView);
   }
 
   /** Which opening of the overlay is Peek's, so a close for it (overlay:close) closes the Peek. */
@@ -656,6 +670,8 @@ export class AppWindow {
     clearTimeout(this.peekTimer);
     this.peekTimer = setTimeout(() => {
       if (this.peekView !== view || this.window.isDestroyed()) return;
+      // Already in its card (opening again after the overlay reloaded): moved, not added twice.
+      if (root.children.includes(view)) root.removeChildView(view);
       root.addChildView(view, root.children.indexOf(this.popover));
       this.layout();
       pageOf(view)?.focus();
@@ -776,10 +792,12 @@ export class AppWindow {
    */
   captureTarget(): { contents: WebContents; rect: Rect } | null {
     if (this.window.isDestroyed()) return null;
-    if (this.peek && this.peekView) {
+    if (this.peekOnScreen) {
       const peek = pageOf(this.peekView);
       return peek ? { contents: peek, rect: this.peekPageRect() } : null;
     }
+    // A Peek about to open is what's in front (page actions act on it): not the pinned tab under it.
+    if (this.pendingPeek) return null;
     const view = this.tabView;
     const contents = pageOf(view);
     if (!view || !contents || this.hiddenPanes.has(view)) return null;
@@ -1064,8 +1082,11 @@ export class AppWindow {
     this.placementChanged();
   }
 
-  /** The command bar has started and listens for openings (it says so after every load). */
-  markOverlayReady(): void {
+  /**
+   * The command bar has started and listens for openings (it says so after every load). True when a Peek that
+   * waited for it opens now: the popover should follow (Browser), as it does when a Peek opens.
+   */
+  markOverlayReady(): boolean {
     this.overlayReady = true;
     const peek = this.pendingPeek;
     const pending = this.pendingOpen;
@@ -1073,6 +1094,7 @@ export class AppWindow {
     if (peek) this.openPeek(peek.view, peek.info, peek.delayMs);
     else if (pending) this.openOverlay(pending.mode, pending.url, pending.anchor, this.overlayFrom, pending.requestedAt, pending.capture);
     else if (this.shellPainted) send(this.overlay.webContents, 'overlay:warm', null);
+    return peek !== null;
   }
 
   /**
@@ -1311,11 +1333,12 @@ export class AppWindow {
     this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
-    if (this.peek) {
+    if (this.peekOnScreen) {
       const page = this.peekPageRect();
       place(this.popover, toWindowRect({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph }));
       if (this.peekView && this.window.contentView.children.includes(this.peekView)) place(this.peekView, toWindowRect(page));
-      send(this.overlay.webContents, 'peek:state', this.peekState());
+      // Its chrome, unless that's waiting for the overlay to listen again.
+      if (this.peek) send(this.overlay.webContents, 'peek:state', this.peekState());
       this.placementChanged();
       return;
     }
@@ -1328,7 +1351,7 @@ export class AppWindow {
   private placeMenu(): void {
     const view = this.menuView;
     if (!view || !pageOf(view)) return;
-    const at = this.menuAnchor && !this.peek && !this.snapshots.active && this.menuSize.width > 0 && this.menuSize.height > 0 ? this.menuPlacement(this.menuAnchor) : null;
+    const at = this.menuAnchor && !this.peekOnScreen && !this.snapshots.active && this.menuSize.width > 0 && this.menuSize.height > 0 ? this.menuPlacement(this.menuAnchor) : null;
     if (at) {
       place(view, at);
       if (!view.getVisible()) {
