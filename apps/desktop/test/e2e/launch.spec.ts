@@ -167,7 +167,7 @@ test('browses, and the shell drives navigation over IPC', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const tab = await pageWhere(app, (url) => url.startsWith(site.origin));
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
 
     await expect(shell.getByText('Personal')).toBeVisible();
     await expect(today).toContainText('First page');
@@ -189,7 +189,7 @@ test('the command bar opens new tabs, edits the address in place, and tabs close
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('First page');
 
     // New tab: type an address, press Enter.
@@ -234,7 +234,7 @@ test('the sidebar collapses to a minimal bar and docks again', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     const docked = (await viewBounds(app))[1]!;
 
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
@@ -257,7 +257,7 @@ test('zoom and copy actions act on the active tab', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     const run = (action: string) =>
       shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
     const zoom = () =>
@@ -310,7 +310,7 @@ test('page-first keys reach Chord only when the page passes; reserved keys fire 
     };
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
     // Chord is up: the page is a tab in the sidebar.
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Keys');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Keys');
 
     // The page ignores Ctrl+S, so it falls through to Chord: the sidebar collapses.
     await press('S');
@@ -353,7 +353,7 @@ test('Settings opens from the shell and its changes apply live', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
     const settings = await pageWhere(app, (url) => url.startsWith('chord://settings') || url.includes('/settings/index.html'));
 
@@ -361,7 +361,7 @@ test('Settings opens from the shell and its changes apply live', async () => {
     await settings.getByRole('radio', { name: /DuckDuckGo/ }).click();
     await expect(settings.getByRole('radio', { name: /DuckDuckGo/ })).toHaveAttribute('aria-checked', 'true');
     // Tabs: how long before Today tabs are archived, and sleeping.
-    const archiveAfter = settings.getByRole('radiogroup', { name: 'Archive Today tabs after' });
+    const archiveAfter = settings.getByRole('radiogroup', { name: 'Archive unpinned tabs after' });
     await archiveAfter.getByRole('radio', { name: 'A week' }).click();
     await expect(archiveAfter.getByRole('radio', { name: 'A week' })).toHaveAttribute('aria-checked', 'true');
     const sleepSwitch = settings.getByRole('switch', { name: "Sleep tabs you're not using" });
@@ -438,7 +438,7 @@ test('a page without a usable icon shows its monogram, never a broken image', as
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('No icon');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/bad-icon`);
@@ -576,7 +576,7 @@ test('first run: name, colors and pins land in the real sidebar, and it never co
   app = await launch({}, profile, { firstRun: true });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     await expect(shell.getByRole('dialog', { name: 'Welcome to Chord' })).toHaveCount(0);
   } finally {
     await app.close();
@@ -596,7 +596,7 @@ test('with auto picture-in-picture on, a playing video pops out when you switch 
     const pip = () => video.evaluate(() => document.pictureInPictureElement?.id ?? null);
     const paused = () => video.evaluate(() => document.querySelector('video')!.paused);
     await expect.poll(() => video.evaluate(() => document.querySelector('video')!.currentTime)).toBeGreaterThan(0.3);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     const row = (name: string) => today.getByRole('treeitem', { name, exact: true });
 
     // Switching to another tab pops the video out, and its row says so.
@@ -660,7 +660,7 @@ test('a muted background video stays in its page when you switch away', async ()
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Second page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Second page');
     await shell.waitForTimeout(800);
     expect(await video.evaluate(() => document.pictureInPictureElement)).toBeNull();
   } finally {
@@ -674,7 +674,7 @@ test('several windows: ⌘N opens one, a tab moves between them, and both come b
   try {
     const shell1 = await pageWhere(app, isShell);
     const overlay1 = await pageWhere(app, isOverlay);
-    await expect(shell1.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell1.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
 
     // ⌘N: a second window on the same chord, with the command bar open and nothing shown yet.
     await runAction(shell1, 'window.new');
@@ -684,7 +684,7 @@ test('several windows: ⌘N opens one, a tab moves between them, and both come b
     await expect(shell2.getByText('Fresh chord, fresh start.')).toBeVisible();
     await overlay2.keyboard.type(`${site.origin}/second`);
     await overlay2.keyboard.press('Enter');
-    const row = (shell: Page, name: string) => shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem', { name, exact: true });
+    const row = (shell: Page, name: string) => shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem', { name, exact: true });
     await expect(row(shell2, 'Second page')).toHaveAttribute('aria-current', 'page');
     // Both windows list the chord's tabs; each shows its own.
     await expect(row(shell1, 'Second page')).toBeVisible();
@@ -743,7 +743,7 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
     await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/secret-login`)?.title()).toBe('Secret set');
     await openCommandBar(privateShell, privateOverlay, 'new');
     await visitIn(privateOverlay, '/third');
-    await expect(privateShell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
+    await expect(privateShell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Third page');
 
     // The normal window's command bar finds nothing of it: no open tab, no history.
     await openCommandBar(shell, overlay, 'new');
@@ -765,8 +765,8 @@ test('a private window keeps to itself: no shared sign-ins, no history, and noth
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('No secret');
-    await expect(shell.getByRole('tree', { name: 'Today' })).not.toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('No secret');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).not.toContainText('Third page');
     expect(app.windows().filter((p) => isShell(p.url()))).toHaveLength(1);
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('Third');
@@ -801,7 +801,7 @@ test('closing tabs while they load never trips an error in main', async () => {
       await openCommandBar(shell, overlay, 'new');
       await overlay.keyboard.type(`${site.origin}/slow?${i}`);
       await overlay.keyboard.press('Enter');
-      await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Slow page');
+      await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Slow page');
       await runAction(shell, 'tab.close');
     }
     // Give a torn-down page time to fire its last events; failOnMainErrors checks what main logged.
@@ -950,7 +950,7 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('First page');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
@@ -980,7 +980,7 @@ test('a relaunch restores tabs, the sidebar and settings', async () => {
     // Same tabs, same order, same active tab; the sidebar is still collapsed.
     await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
     await shell.getByRole('button', { name: 'Show sidebar' }).click();
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today.getByRole('treeitem')).toHaveCount(2);
     await expect(today.getByRole('treeitem').first()).toContainText('Third page');
     await expect(today.getByRole('treeitem', { name: 'Third page', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -1054,7 +1054,7 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     const run = (action: string) =>
       shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
     const chords = shell.getByRole('tablist', { name: 'Chords' });
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
 
     // A new chord starts empty, with its name ready to type over.
     await shell.getByRole('button', { name: 'New chord' }).click();
@@ -1068,11 +1068,11 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Third page');
 
     // Back to Personal from the switcher: its tab is still there, and Work's isn't.
     await chords.getByRole('tab', { name: 'Personal' }).click();
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('First page');
     await expect(today).not.toContainText('Third page');
 
@@ -1092,7 +1092,7 @@ test('chords: create, name, switch, and each keeps its own tabs', async () => {
     const toast = shell.getByRole('group').filter({ hasText: 'Deleted “Work”' });
     await toast.getByRole('button', { name: 'Undo' }).click();
     await expect(chords.getByRole('tab', { name: 'Work' })).toHaveAttribute('aria-selected', 'true');
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Third page');
   } finally {
     await app.close();
   }
@@ -1164,8 +1164,8 @@ test('pinned tabs: pin with a key, close keeps them, and dragging reorders and p
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
-    const pinned = shell.getByRole('tree', { name: 'Pinned' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
+    const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
     await expect(today).toContainText('First page');
     for (const path of ['second', 'third']) {
       await openCommandBar(shell, overlay, 'new');
@@ -1229,7 +1229,7 @@ test('find in page: counts matches, steps through them, and closes', async () =>
   try {
     const shell = await pageWhere(app, isShell);
     const popover = await pageWhere(app, isPopover);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Words');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Words');
 
     await runAction(shell, 'view.find');
     const field = popover.getByRole('textbox', { name: 'Find in page' });
@@ -1317,7 +1317,7 @@ test('a page that fails to load explains why, and recovers', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     // A port that was just closed: connection refused.
     const closed = await new Promise<number>((done) => {
       const probe = createServer().listen(0, '127.0.0.1', () => {
@@ -1349,7 +1349,7 @@ test('a page that keeps crashing stops after two reloads, and Reload brings it b
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     const crash = () =>
       app.evaluate(({ webContents }, origin) => {
         const page = webContents.getAllWebContents().find((c) => c.getURL().startsWith(origin) && !c.isCrashed());
@@ -1426,7 +1426,7 @@ test('history: a page you visited and closed is found again from the command bar
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('Words');
 
     // Open another page so Words can be closed, then close Words.
@@ -1461,7 +1461,7 @@ test('sleeping: a tab hidden long enough frees its page, and wakes where it was'
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('Long page');
     const long = await pageWhere(app, (url) => url === `${site.origin}/long`);
     await long.evaluate(() => window.scrollTo(0, 1500));
@@ -1500,7 +1500,7 @@ test('a hung page doesn’t stop the rest from going to sleep, and goes itself',
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('Hung page');
     for (const path of ['/third', '/second']) {
       await openCommandBar(shell, overlay, 'new');
@@ -1520,7 +1520,7 @@ test('a hung page doesn’t stop the rest from going to sleep, and goes itself',
 test('Chord’s own views come back when their renderer crashes: the sidebar, and the command bar', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
-    await expect((await pageWhere(app, isShell)).getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect((await pageWhere(app, isShell)).getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     // Asked from main: a page whose renderer crashed is gone for Playwright, even once Chord has loaded it again.
     const view = (name: string, script: string) =>
       app.evaluate(
@@ -1535,7 +1535,7 @@ test('Chord’s own views come back when their renderer crashes: the sidebar, an
       app.evaluate(({ webContents }, n) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`))!.forcefullyCrashRenderer(), name);
 
     for (const [name, script, expected] of [
-      ['shell', `document.querySelector('[role="tree"][aria-label="Today"]')?.textContent ?? ''`, 'First page'],
+      ['shell', `document.querySelector('[role="tree"][aria-label="Unpinned tabs"]')?.textContent ?? ''`, 'First page'],
       ['overlay', `document.querySelector('[role="combobox"]') ? 'ready' : ''`, 'ready'],
       ['popover', `document.getElementById('root')?.childElementCount > 0 ? 'ready' : ''`, 'ready'],
     ] as const) {
@@ -1557,7 +1557,7 @@ for (const [when, env] of [
     try {
       const shell = await pageWhere(app, isShell);
       const overlay = await pageWhere(app, isOverlay);
-      const today = shell.getByRole('tree', { name: 'Today' });
+      const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
       await expect(today).toContainText('First page');
       await openCommandBar(shell, overlay, 'new');
       await overlay.keyboard.type(`${site.origin}/second`);
@@ -1578,7 +1578,7 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('First page');
     // Give the first tab some history: First → Second.
     const first = await pageWhere(app, (url) => url === `${site.origin}/`);
@@ -1647,7 +1647,7 @@ test('the archive: unused tabs are tidied away, come back from the archive page,
   app = await launch({}, profile);
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     // (Everything else hidden for a second was tidied away last time, at this test's short limit.)
     await expect(today).toBeAttached();
     await expect(today).not.toContainText('Second page');
@@ -1684,7 +1684,7 @@ test('the command bar connects to the server of the page it would open while you
     await expect.poll(() => connections).toBeGreaterThan(0);
     expect(requests).toBe(0);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Other server');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Other server');
   } finally {
     await app.close();
     other.close();
@@ -1696,7 +1696,7 @@ test('the command bar completes an address inline; Backspace never brings it bac
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('First page');
     // A recent tab on a host nothing else starts with.
     const port = new URL(site.origin).port;
@@ -1733,7 +1733,7 @@ test('site keywords and @filters narrow the command bar to a chip', async () => 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('First page');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type(`${site.origin}/third`);
@@ -1789,7 +1789,7 @@ test('search suggestions come in under local results; addresses are never sent, 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     await openCommandBar(shell, overlay, 'new');
     await overlay.keyboard.type('chord');
     const options = overlay.getByRole('option');
@@ -1869,7 +1869,7 @@ for (const appearance of ['light', 'dark'] as const) {
     const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_APPEARANCE: appearance });
     try {
       const shell = await pageWhere(app, isShell);
-      await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+      await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
       await expect.poll(() => shell.evaluate(() => document.documentElement.dataset['appearance'])).toBe(appearance);
       await shell.evaluate(() => document.fonts.ready);
       await shell.screenshot({ path: resolve(capturesDir, `shell-${process.platform}-${process.arch}-${appearance}.png`) });

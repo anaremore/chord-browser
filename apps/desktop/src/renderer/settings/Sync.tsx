@@ -207,7 +207,7 @@ function TurnOn({ onUpdates, removed }: { onUpdates(): void; removed: boolean })
     <div className={styles.group}>
       <Row
         label="Sync your setup"
-        description="Chords, pinned tabs, Favorites, themes, settings, link routes and Effects, the same on each of your computers, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. History and Today tabs stay on each computer."
+        description="Chords, pinned tabs, Favorites, themes, settings, link routes and Effects, the same on each of your computers, through a folder you already sync: iCloud Drive, Dropbox, OneDrive or Syncthing. History and unpinned tabs stay on each computer."
         control={
           <button type="button" className={styles.linkButton} aria-expanded={flow.at !== 'idle'} disabled={flow.at === 'working' || flow.at === 'choosing-folder'} onClick={() => void chooseFolder()}>
             {removed ? 'Turn on again…' : 'Turn on sync…'}
@@ -263,7 +263,7 @@ function Choose({ view }: { view: SyncView }) {
   const [problem, setProblem] = useState<string | null>(null);
   const here = view.choosing?.here ?? 0;
   const options = [
-    { key: 'synced' as const, name: 'Use the synced setup', hint: `${here === 1 ? 'This computer’s chord goes' : `This computer’s ${plural(here, 'chord')} go`}, and its Today tabs move to the synced setup. You can undo this.` },
+    { key: 'synced' as const, name: 'Use the synced setup', hint: `${here === 1 ? 'This computer’s chord goes' : `This computer’s ${plural(here, 'chord')} go`}, and its unpinned tabs move to the synced setup. You can undo this.` },
     { key: 'both' as const, name: 'Keep both', hint: 'Everything stays, side by side, and goes to your other computers too.' },
   ];
   return (

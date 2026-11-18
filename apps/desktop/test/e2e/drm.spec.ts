@@ -45,7 +45,7 @@ test('on Netflix the popover says it won’t play here yet; Open in Chrome opens
     const shell = await pageWhere(app, isShell);
     const popover = await pageWhere(app, isPopover);
     const notice = popover.getByRole('dialog', { name: /won’t play in Chord yet/ });
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Home');
     await expect(notice).toHaveCount(0);
 
     const { windowId } = await where(shell);
@@ -67,7 +67,7 @@ test('on Netflix the popover says it won’t play here yet; Open in Chrome opens
     }
     // Netflix's other pages don't ask again until Chord quits.
     await dispatch(shell, { t: 'tab.open', windowId, url: `http://www.netflix.com:${port()}/browse` });
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem', { name: 'Netflix' })).toHaveCount(2);
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem', { name: 'Netflix' })).toHaveCount(2);
     await popover.waitForTimeout(500);
     await expect(notice).toHaveCount(0);
 

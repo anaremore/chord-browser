@@ -412,7 +412,7 @@ test('launch: from main entry to a usable window', async () => {
   const seeded = await launch({ CHORD_PERF_TABS: '200', CHORD_PERF_VISITS: String(VISITS) }, profile);
   try {
     const shell = await pageWhere(seeded, isShell);
-    await expect(todaySize(shell.getByRole('tree', { name: 'Today' }))).toHaveAttribute('aria-setsize', '201', { timeout: 20_000 });
+    await expect(todaySize(shell.getByRole('tree', { name: 'Unpinned tabs' }))).toHaveAttribute('aria-setsize', '201', { timeout: 20_000 });
   } finally {
     await seeded.close();
   }
@@ -976,8 +976,8 @@ for (const tabs of [20, 200]) {
       try {
         const shell = await pageWhere(app, isShell);
         const overlay = await pageWhere(app, isOverlay);
-        const today = shell.getByRole('tree', { name: 'Today' });
-        const pinned = shell.getByRole('tree', { name: 'Pinned' });
+        const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
+        const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
         const todayRows = today.locator('[data-row="tab"]');
         await expect(todaySize(today)).toHaveAttribute('aria-setsize', String(tabs + 1), { timeout: 20_000 });
         await bringToFront(app, shell);
@@ -1271,7 +1271,7 @@ for (const motion of ['on', 'off'] as const) {
     try {
       const shell = await pageWhere(app, isShell);
       const overlay = await pageWhere(app, isOverlay);
-      const pinned = shell.getByRole('tree', { name: 'Pinned' });
+      const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
       const pinnedRows = pinned.locator('[data-row]');
       await expect(pinned.getByRole('treeitem').first()).toHaveAttribute('aria-setsize', String(PINNED - 400 + 20), { timeout: 60_000 });
       const launched = await launchTimings(app);
@@ -1864,7 +1864,7 @@ test('sync: one change, stamp to frame; chord-data’s memory with the sync work
   const app = await launch({ CHORD_PERF_TABS: String(EXPORT.tabs) });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toBeVisible();
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toBeVisible();
     const chordId = await shell.evaluate(async () => {
       const { state, windowId } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string }> } }> } } }).chord.state.snapshot();
       return state.windows[windowId]!.activeChordId;

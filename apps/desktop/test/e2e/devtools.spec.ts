@@ -149,7 +149,7 @@ async function docked(app: ElectronApplication, shell: Page, url: string, side: 
 async function setUp(app: ElectronApplication, path: string) {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  const today = shell.getByRole('tree', { name: 'Today' });
+  const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
   await expect(today).toContainText('First page');
   await shell.evaluate(() => (window as unknown as Chord).chord.overlay.open('new'));
   await expect(overlay.getByRole('dialog')).toBeVisible();
@@ -318,7 +318,7 @@ test('DevTools dock beside the page, resize, move, pop out and back, stay with t
   app = await launch(profile);
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     expect((await devtoolsState(shell)).settings).toEqual({ side: 'bottom', width: 560, height: 320, window: false });
     await runAction(shell, 'app.devtools');
     await expect.poll(async () => (await docked(app, shell, `${site.origin}/`, 'bottom', 320)).fits).toBe(true);

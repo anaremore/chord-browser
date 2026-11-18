@@ -289,7 +289,7 @@ export function ImportDetails({ flow, chords, onOpenAccess }: { flow: ImportFlow
           <li className={styles.group}>
             <span className={styles.groupText}>
               <span className={styles.groupTitle}>Open tabs</span>
-              <span className={styles.groupCount}>{`${plural(summary.tabs, 'tab')}, into Today`}</span>
+              <span className={styles.groupCount}>{`${plural(summary.tabs, 'tab')}, unpinned`}</span>
             </span>
             <TargetSelect label="Where open tabs go" value={choices.tabs} options={[...chordOptions, skip]} disabled={locked} onChange={(tabs) => flow.choose((c) => ({ ...c, tabs }))} />
           </li>

@@ -1,6 +1,6 @@
 /**
  * Peek's chrome (DESIGN.md §7.9, §8.5): a scrim over the window, and a card
- * whose 40 px header shows the site · **Open in Today** ⌘↵ · **Close** Esc.
+ * whose 40 px header shows the site · **Open as tab** ⌘↵ · **Close** Esc.
  * Main puts Peek's page in the card below the header once it has grown in
  * from the click. A click on the scrim closes it, as Esc does.
  */
@@ -73,9 +73,9 @@ export function PeekChrome({
           <span className={styles.host}>{peek.host}</span>
           {peek.title && <span className={styles.title}>{peek.title}</span>}
           <span className={styles.flex} />
-          <button type="button" className={styles.action} onClick={() => void api.peek.expand()} title={`Open in Today (${keys.open})`}>
+          <button type="button" className={styles.action} onClick={() => void api.peek.expand()} title={`Open as tab (${keys.open})`}>
             <PanelTopOpen size={14} strokeWidth={1.75} aria-hidden />
-            Open in Today
+            Open as tab
             <kbd className={styles.keycap}>{keys.open}</kbd>
           </button>
           <button type="button" className={styles.action} onClick={onClose} title={`Close (${keys.close})`}>

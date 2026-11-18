@@ -149,7 +149,7 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'tab.mute', title: 'Unmute tab', words: 'unmute tab sound audio volume', when: webTabMuted(true) },
   { action: 'tab.favorite', title: 'Add this tab to Favorites', words: 'add favorite favorites star bookmark tile' },
   { action: 'folder.new', title: 'New folder with this tab', words: 'new folder group organize pinned' },
-  { action: 'today.clear', title: 'Clear Today', words: 'clear today archive tidy close all tabs' },
+  { action: 'today.clear', title: 'Clear unpinned tabs', words: 'clear today unpinned archive tidy close all tabs' },
   { action: 'split.with', title: 'Split with…', words: 'split view side by side pane beside two tabs', when: (s, w) => activeTabId(s, w) !== null },
   { action: 'split.separate', title: 'Separate split tabs', words: 'separate split unsplit leave panes tabs apart', when: inSplit },
   { action: 'split.focusNext', title: 'Focus the pane to the right', words: 'split pane focus next right', when: inSplit },

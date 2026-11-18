@@ -80,7 +80,7 @@ export function ArchivePage({ info: infoSource, snapshot: snapshotSource }: { in
             <Archive size={24} strokeWidth={1.75} aria-hidden />
             Archive
           </h1>
-          <p className={styles.description}>Tabs you closed, and Today tabs you stopped using. Each one stays for 30 days.</p>
+          <p className={styles.description}>Tabs you closed, and unpinned tabs you stopped using. Each one stays for 30 days.</p>
           <label className={styles.search}>
             <Search size={16} strokeWidth={1.75} aria-hidden />
             <input

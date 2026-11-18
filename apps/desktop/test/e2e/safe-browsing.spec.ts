@@ -156,7 +156,7 @@ test('a flagged page shows the warning; Visit anyway lets the site through for t
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Home');
     await answerOffer(app, true);
     // The lists, asked for by name only. A test server never gets an API key.
     const update = service.requests.find((r) => r.path === '/v5/hashLists:batchGet')!;
@@ -165,7 +165,7 @@ test('a flagged page shows the warning; Visit anyway lets the site through for t
 
     // Ordinary pages are checked locally and nothing is asked.
     await visit(shell, overlay, `${site.origin}/next.html`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Next page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Next page');
     expect(service.requests.filter((r) => r.path === '/v5/hashes:search')).toHaveLength(0);
 
     await visit(shell, overlay, `${site.origin}/phish.html`);
@@ -196,7 +196,7 @@ test('a flagged page shows the warning; Visit anyway lets the site through for t
     await warning.getByRole('button', { name: 'Visit anyway' }).click();
     await expect(warning).toHaveCount(0);
     await expect.poll(() => pageUrls(app)).toContain(`${site.origin}/phish.html`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Phish page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Phish page');
     // Remembered for the rest of the session: no warning the next time.
     await visit(shell, overlay, `${site.origin}/next.html`);
     await visit(shell, overlay, `${site.origin}/phish.html`);
@@ -234,7 +234,7 @@ test('redirects and frames are checked too, and Back to safety goes back', async
 
     // A redirect to a listed page: the warning, and back to where you were.
     await visit(shell, overlay, `${site.origin}/next.html`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Next page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Next page');
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('edit'));
     await overlay.getByRole('combobox').fill(`${site.origin}/redirect`);
     await overlay.keyboard.press('Enter');
@@ -249,9 +249,9 @@ test('redirects and frames are checked too, and Back to safety goes back', async
     await expect(warning).toContainText('Part of this page comes from 127.0.0.1');
     await expect.poll(() => pageUrls(app)).not.toContain(`${site.origin}/framed.html`);
     // With nothing before it in its tab, Back to safety closes the tab.
-    const tabs = await shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').count();
+    const tabs = await shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').count();
     await warning.getByRole('button', { name: 'Back to safety' }).click();
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem')).toHaveCount(tabs - 1);
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem')).toHaveCount(tabs - 1);
   } finally {
     await app.close();
   }
@@ -336,7 +336,7 @@ test('with Safe Browsing off, nothing is checked and nothing is asked', async ()
     const overlay = await pageWhere(app, isOverlay);
     await answerOffer(app, false, true);
     await visit(shell, overlay, `${site.origin}/phish.html`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Phish page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Phish page');
     await visit(shell, overlay, `${site.origin}/evil.bin`);
     await expect.poll(() => readdirSync(downloads).filter((f) => f === 'evil.bin' && statSync(join(downloads, f)).size === EVIL_BYTES)).toEqual(['evil.bin']);
     await expect(shell.locator('[data-safe-browsing]')).toHaveCount(0);
@@ -387,7 +387,7 @@ test('Google-free mode turns it off and keeps it off: not one request', async ()
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
     await visit(shell, overlay, `${site.origin}/phish.html`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Phish page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Phish page');
     await shell.waitForTimeout(2000);
     await expect(shell.locator('[data-safe-browsing]')).toHaveCount(0);
     expect(service.requests).toEqual([]);

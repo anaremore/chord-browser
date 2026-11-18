@@ -29,7 +29,7 @@ export function whatGoesIn(c: ExportCounts): string {
   const parts = [
     plural(c.chords, 'chord'),
     c.pinnedTabs ? `${plural(c.pinnedTabs, 'pinned tab')}${c.folders ? ` in ${plural(c.folders, 'folder')}` : ''}` : '',
-    c.todayTabs ? plural(c.todayTabs, 'Today tab') : '',
+    c.todayTabs ? plural(c.todayTabs, 'unpinned tab') : '',
     c.favorites ? plural(c.favorites, 'Favorite') : '',
     c.themes ? plural(c.themes, 'theme') : '',
     c.routes ? plural(c.routes, 'link route') : '',

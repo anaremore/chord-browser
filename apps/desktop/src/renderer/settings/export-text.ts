@@ -22,7 +22,7 @@ export function exportText(p: ExportProgress): string {
     case 'setup':
       return 'Writing your setup…';
     case 'today':
-      return 'Writing Today tabs…';
+      return 'Writing unpinned tabs…';
     case 'history':
       return `Writing history: ${numbers.format(p.done)} of ${plural(p.total, 'page')}`;
     case 'assistant':

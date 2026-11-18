@@ -355,7 +355,7 @@ const SETTING_NAMES: Record<string, [label: string, describe: (value: unknown) =
   'motion.colorBlend': ['Blend chord colors', ON_OFF],
   extensionButtons: ['Show extension buttons', named({ sidebar: 'In the sidebar', titleBar: 'In the title bar' })],
   separateSignIns: ['New chords keep their own sign-ins', ON_OFF],
-  archiveAfter: ['Archive Today tabs after', named({ '12h': '12 hours', '24h': 'A day', '7d': 'A week', '30d': 'A month', never: 'Never' })],
+  archiveAfter: ['Archive unpinned tabs after', named({ '12h': '12 hours', '24h': 'A day', '7d': 'A week', '30d': 'A month', never: 'Never' })],
   sleepTabs: ['Sleep tabs you’re not using', ON_OFF],
   autoPip: ['Pop out playing videos when you switch away', ON_OFF],
   pagePreviews: ['Show page previews', ON_OFF],

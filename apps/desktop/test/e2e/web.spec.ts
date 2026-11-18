@@ -116,7 +116,7 @@ test('a PDF opens in its tab with the PDF viewer, and one sent as an attachment 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('doc.pdf');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('doc.pdf');
     // Chromium's viewer shows it: its extension's page is part of the tab.
     const viewer = () =>
       app.evaluate(({ webContents }) =>

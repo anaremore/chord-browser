@@ -75,7 +75,7 @@ test('paste or drop an image in the command bar: it searches Google Lens or Bing
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('Home');
     const paste = `${process.platform === 'darwin' ? 'Meta' : 'Control'}+V`;
 

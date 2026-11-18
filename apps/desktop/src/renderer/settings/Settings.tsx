@@ -232,13 +232,13 @@ function General({ snapshot, info }: { snapshot: SettingsSnapshot; info: SystemI
       <h2 className={styles.groupTitle}>Tabs</h2>
       <div className={styles.group}>
         <Row
-          label="Archive Today tabs after"
+          label="Archive unpinned tabs after"
           description="Tabs you haven't looked at in this long move to the archive. Pinned tabs, and tabs playing, sharing or showing a count, stay."
           changed={snapshot.settings.archiveAfter !== DEFAULT_SETTINGS.archiveAfter}
           onReset={() => void api.settings.set({ archiveAfter: DEFAULT_SETTINGS.archiveAfter })}
           control={
             <Segmented<ArchiveAfter>
-              label="Archive Today tabs after"
+              label="Archive unpinned tabs after"
               value={snapshot.settings.archiveAfter}
               options={ARCHIVE_CHOICES}
               onChange={(archiveAfter) => void api.settings.set({ archiveAfter })}

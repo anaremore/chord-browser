@@ -28,8 +28,8 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => site.server.close());
 
-const pinnedTree = (shell: Page) => shell.getByRole('tree', { name: 'Pinned' });
-const todayTree = (shell: Page) => shell.getByRole('tree', { name: 'Today' });
+const pinnedTree = (shell: Page) => shell.getByRole('tree', { name: 'Pinned', exact: true });
+const todayTree = (shell: Page) => shell.getByRole('tree', { name: 'Unpinned tabs' });
 
 async function longPinned(env: Record<string, string> = {}): Promise<{ app: ElectronApplication; shell: Page }> {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_PERF_TABS: '20', CHORD_PERF_PINNED: String(PINNED), CHORD_PERF_FOLDERS: '5', ...env });

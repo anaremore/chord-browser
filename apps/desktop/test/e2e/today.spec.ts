@@ -22,7 +22,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => site.server.close());
 
-const today = (shell: Page) => shell.getByRole('tree', { name: 'Today' });
+const today = (shell: Page) => shell.getByRole('tree', { name: 'Unpinned tabs' });
 
 /** Chord with the home tab and 200 sleeping Today tabs. */
 async function longToday(env: Record<string, string> = {}): Promise<{ app: ElectronApplication; shell: Page }> {
@@ -103,7 +103,7 @@ test('a windowed Today: 200 tabs, only rows near the view mounted, each in its p
     await expect.poll(async () => (await drawn(list)).some((r) => r.pos === 101)).toBe(true);
     await check('in the middle');
     // Unmounted rows above and below: what's left is still a tree a screen reader can read (DESIGN.md §10).
-    expect(await audit(shell, 'windowed Today', { appearance: 'light', include: '[role="tree"][aria-label="Today"]' })).toEqual([]);
+    expect(await audit(shell, 'windowed Today', { appearance: 'light', include: '[role="tree"][aria-label="Unpinned tabs"]' })).toEqual([]);
 
     // A wheel, the way a hand scrolls, to the end.
     const box = (await list.boundingBox())!;

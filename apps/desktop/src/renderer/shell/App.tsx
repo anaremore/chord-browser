@@ -499,14 +499,14 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
       unsubscribe();
     };
   }, []);
-  // A chord switch is announced: "Work chord, 3 pinned, 7 today" (DESIGN.md §8.2).
+  // A chord switch is announced: "Work chord, 3 pinned, 7 unpinned" (DESIGN.md §8.2).
   const announcedChord = useRef(chord?.id);
   useEffect(() => {
     if (!chord || announcedChord.current === chord.id) return;
     announcedChord.current = chord.id;
     const tabs = nodeList(state).filter((n) => n.kind === 'tab' && n.chordId === chord.id);
     const pinned = tabs.filter((n) => n.section === 'pinned').length;
-    announce(`${chord.name} chord, ${pinned} pinned, ${tabs.length - pinned} today`);
+    announce(`${chord.name} chord, ${pinned} pinned, ${tabs.length - pinned} unpinned`);
   }, [chord?.id]);
   // A new chord's name field opens on it as soon as it's here. Its patch can arrive after main's reply
   // (they come on different pipes), so it's found as the chord that wasn't there before, not the active one.

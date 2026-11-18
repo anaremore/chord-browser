@@ -84,7 +84,7 @@ const showing = async (page: Page) => {
 };
 const paint = (page: Page, color: string) => page.evaluate((c) => (window as unknown as { paint(c: string): void }).paint(c), color);
 
-const today = (shell: Page) => shell.getByRole('tree', { name: 'Today' });
+const today = (shell: Page) => shell.getByRole('tree', { name: 'Unpinned tabs' });
 const row = (shell: Page, name: string) => shell.getByRole('treeitem', { name, exact: true });
 const picker = (popover: Page) => popover.getByRole('alertdialog', { name: `Choose what to share with ${site.host}` });
 const indicator = (shell: Page) => shell.getByRole('group', { name: 'Presenting mode' });

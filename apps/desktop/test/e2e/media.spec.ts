@@ -51,7 +51,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => site.server.close());
 
-const today = (shell: Page) => shell.getByRole('tree', { name: 'Today' });
+const today = (shell: Page) => shell.getByRole('tree', { name: 'Unpinned tabs' });
 const row = (shell: Page, name: string) => today(shell).getByRole('treeitem', { name, exact: true });
 const card = (shell: Page) => shell.getByRole('group', { name: 'Now playing' });
 
