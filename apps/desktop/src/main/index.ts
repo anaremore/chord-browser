@@ -328,6 +328,8 @@ function registerIpc(): void {
   });
   handle('overlay:open', ({ mode, anchor }, sender) => {
     const w = senderWindow(sender);
+    // The sidebar's address bar and buttons: a Peek (one still waiting for the overlay too) goes first, as for ⌘L.
+    browser!.peeks.close(w);
     w.openOverlay(mode, mode === 'edit' ? browser!.activeUrl(w.id) : '', anchor ?? null, 'shell');
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
@@ -377,7 +379,11 @@ function registerIpc(): void {
   handle('mini:promote', (_request, sender) => browser!.minis.promote(sender));
   handle('mini:chooseChord', (anchor, sender) => browser!.minis.chooseChord(sender, anchor));
   handle('mini:copyLink', (_request, sender) => browser!.minis.copyLink(sender));
-  handle('overlay:ready', (_request, sender) => senderWindow(sender).markOverlayReady());
+  handle('overlay:ready', (_request, sender) => {
+    const w = senderWindow(sender);
+    // A Peek that waited for the overlay opens now: the find bar and fill menu of the tab under it follow.
+    if (w.markOverlayReady()) browser!.peekShown(w);
+  });
   handle('overlay:preconnect', ({ url }, sender) => browser!.preconnect(senderWindow(sender), url));
   handle('layout:anchor', (rect, sender) => senderWindow(sender).setAnchor(rect));
   handle('perf:shell', ({ milestone }, sender) => {

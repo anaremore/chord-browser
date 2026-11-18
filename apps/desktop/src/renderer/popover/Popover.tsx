@@ -53,6 +53,7 @@ import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
 import { EffectsCard } from './EffectsCard';
 import styles from './Popover.module.css';
+import { PromptKeys } from './prompt-keys';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -318,10 +319,15 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const [remember, setRemember] = useState(prompt.remember ?? false);
   const ids = useId();
   // Sign in, the chooser and Unlock wait a moment after the box appears (disabled, so Enter doesn't submit either): a
-  // page can't time the box to appear under a click, or a held Enter, meant for itself. Cancel and Escape always work.
+  // page can't time the box to appear under a click, or a held Enter, meant for itself. Then Enter must be pressed
+  // afresh: a key held through the wait only repeats (prompt-keys.ts). Cancel and Escape always work.
+  const [keys] = useState(() => new PromptKeys());
   const [armed, setArmed] = useState(false);
   useEffect(() => {
-    const timer = setTimeout(() => setArmed(true), durations.promptInputDelay);
+    const timer = setTimeout(() => {
+      keys.arm();
+      setArmed(true);
+    }, durations.promptInputDelay);
     return () => clearTimeout(timer);
   }, []);
   // The username field has the keyboard when the box appears (main focuses the popover too); Sign in when it's filled.
@@ -363,9 +369,12 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
       role="alertdialog"
       aria-labelledby={`${ids}-title`}
       aria-describedby={`${ids}-notes`}
+      onKeyDownCapture={(e) => {
+        if (!keys.keydown({ key: e.key, repeat: e.repeat })) e.preventDefault();
+      }}
       onSubmit={(e) => {
         e.preventDefault();
-        if (!armed) return;
+        if (!keys.ready) return;
         respond(filled !== null ? { account: filled, username: prompt.accounts[filled]! } : { username, password });
       }}
       onKeyDown={(e) => {

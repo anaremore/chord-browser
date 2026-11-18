@@ -1,7 +1,7 @@
 import type { AuthInfo, AuthenticationResponseDetails, WebContents } from 'electron';
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { AUTH_FILL_WAIT_MS, AuthBroker } from '../../src/main/http-auth';
+import { AUTH_FILL_WAIT_MS, AuthBroker, UpdateUndos } from '../../src/main/http-auth';
 
 /** Just enough of a page: its address, and the tab it belongs to. */
 const page = (url: string, nodeId: string | null = 'tab-1') => ({ url, nodeId: nodeId ?? undefined, getURL: () => url, isDestroyed: () => false }) as unknown as WebContents & { nodeId?: string };
@@ -102,6 +102,8 @@ describe('AuthBroker with the vault', () => {
    */
   class Page extends EventEmitter {
     mainFrame = { frameTreeNodeId: MAIN };
+    /** The frames the page has now (`framesOf`). */
+    frames = new Set([MAIN, FRAME, SIBLING]);
     constructor(
       public url: string,
       public nodeId = 'tab-1',
@@ -120,6 +122,11 @@ describe('AuthBroker with the vault', () => {
     /** The frame's navigation to `url` failed or was cancelled before it committed. */
     fail(url: string, frame = MAIN) {
       this.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', url, frame === MAIN, frame, frame);
+    }
+    /** The iframe goes (the page removes it): its navigation's cancellation names a frame main can't find any more. */
+    remove(frame: number, url: string) {
+      this.frames.delete(frame);
+      this.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', url, false, -1, -1);
     }
     /** The server answered `code` and the frame committed `url`. */
     commit(url: string, code: number, frame = MAIN) {
@@ -152,7 +159,8 @@ describe('AuthBroker with the vault', () => {
       onChange: vi.fn(),
       tabOf: () => ({ chordId: options.private ? 'priv' : 'work', private: options.private ?? false }),
       windowOf: () => 'w1' as never,
-      frameOf: (processId) => processId,
+      frameOf: (processId) => (processId < 0 ? undefined : processId),
+      framesOf: (contents) => (contents as unknown as Page).frames,
       vault: vault as never,
       firstSave,
       updated,
@@ -564,5 +572,162 @@ describe('AuthBroker with the vault', () => {
     const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
     const { prompt } = await ask(broker, page('file:///home/ada/router.html'), { frame: FRAME });
     expect(prompt).toMatchObject({ embedded: { host: null }, fill: false });
+  });
+  it.each([
+    [
+      'two frames navigating to it when it asks',
+      async (broker: AuthBroker, tab: Page) => {
+        tab.navigate(ADDRESS, SIBLING);
+        return ask(broker, tab, { frame: FRAME });
+      },
+    ],
+    [
+      'a second frame’s request joining the box',
+      async (broker: AuthBroker, tab: Page) => {
+        const first = await ask(broker, tab, { frame: FRAME });
+        expect(first.prompt!.remember).toBe(true);
+        await ask(broker, tab, { frame: SIBLING });
+        return first;
+      },
+    ],
+  ])('a box more than one frame waits on offers no Remember: %s', async (_name, asking) => {
+    const { broker, vault, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    const tab = page(`${ORIGIN}/`);
+    const { prompt } = await asking(broker, tab);
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id, remember: null });
+    // Asked to anyway (a popover drawn before): one frame's 200 from its cache saves nothing typed into the box.
+    await broker.respond(prompt!.id, { username: 'ada', password: 'typed' }, true);
+    tab.commit(ADDRESS, 200, SIBLING);
+    tab.commit(ADDRESS, 200, FRAME);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['while its box is up', false],
+    ['after the answer, with Remember', true],
+  ])('an iframe removed %s takes the box, and what was typed, with it', async (_name, answered) => {
+    const { broker, vault, page } = setUp();
+    const tab = page('https://evil.example/');
+    const { prompt, answer } = await ask(broker, tab, { frame: FRAME });
+    if (answered) await broker.respond(prompt!.id, { username: 'ada', password: 'typed' }, true);
+    tab.remove(FRAME, ADDRESS);
+    expect(broker.promptFor('tab-1' as never)).toBeNull();
+    expect(answer).toHaveBeenCalledOnce();
+    // A frame made in its place, committing the router's page, says nothing of it.
+    tab.frames.add(FRAME);
+    tab.commit(ADDRESS, 200, FRAME);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+  });
+
+  it('a removed frame’s cancellation leaves the other frames’ boxes alone', async () => {
+    const { broker, page } = setUp();
+    const tab = page(`${ORIGIN}/`);
+    tab.navigate('https://elsewhere.test/', SIBLING);
+    const { prompt } = await ask(broker, tab, { frame: FRAME });
+    tab.remove(SIBLING, 'https://elsewhere.test/');
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id });
+  });
+
+  it('a box for a navigation main couldn’t place closes once nothing in its page is navigating', async () => {
+    const { broker, page } = setUp();
+    const tab = page(`${ORIGIN}/`);
+    tab.navigate(`${ORIGIN}/public`, SIBLING);
+    tab.navigate(`${ORIGIN}/slow`, FRAME);
+    const { prompt, answer } = await ask(broker, tab, { navigate: false });
+    expect(prompt).toMatchObject({ remember: null });
+    // One navigation still under way: it might be the one that asked.
+    tab.commit(`${ORIGIN}/public`, 200, SIBLING);
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id });
+    tab.fail(`${ORIGIN}/slow`, FRAME);
+    expect(broker.promptFor('tab-1' as never)).toBeNull();
+    expect(answer).toHaveBeenCalledWith();
+  });
+
+  it('a navigation to an address with a fragment is placed: the request never has one', async () => {
+    const { broker, page } = setUp({ accounts: [{ id: 'a', username: 'ada' }] });
+    const tab = page(`${ORIGIN}/`);
+    tab.navigate(`${ADDRESS}#status`);
+    const { prompt } = await ask(broker, tab, { navigate: false });
+    expect(prompt).toMatchObject({ fill: true, remember: true });
+  });
+
+  it('the same address again while its box is up: the first one’s late cancellation leaves the new box alone', async () => {
+    const { broker, page } = setUp();
+    const tab = page();
+    const first = await ask(broker, tab);
+    const second = await ask(broker, tab);
+    expect(first.answer).toHaveBeenCalledWith();
+    expect(second.prompt!.id).not.toBe(first.prompt!.id);
+    tab.fail(ADDRESS);
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: second.prompt!.id });
+    // The second one's own cancellation still closes it.
+    tab.fail(ADDRESS);
+    expect(broker.promptFor('tab-1' as never)).toBeNull();
+    expect(second.answer).toHaveBeenCalledWith();
+  });
+
+  it('a reload after the answer, then a 200 (Chromium keeps the sign-in), saves nothing', async () => {
+    const { broker, vault, page } = setUp();
+    const tab = page();
+    const { prompt } = await ask(broker, tab);
+    await broker.respond(prompt!.id, { username: 'ada', password: 'maybe' }, true);
+    tab.navigate(ADDRESS);
+    tab.commit(ADDRESS, 200);
+    await settle();
+    expect(vault.remember).not.toHaveBeenCalled();
+  });
+});
+
+describe('UpdateUndos (Password updated’s Undo)', () => {
+  function setUp() {
+    let timers: { run: () => void; at: number; cleared: boolean }[] = [];
+    let now = 0;
+    const undos = new UpdateUndos<string>(1000, {
+      set: (run, ms) => {
+        const timer = { run, at: now + ms, cleared: false };
+        timers.push(timer);
+        return timer;
+      },
+      clear: (timer) => void ((timer as { cleared: boolean }).cleared = true),
+    });
+    const advance = (ms: number) => {
+      now += ms;
+      const due = timers.filter((t) => t.at <= now && !t.cleared);
+      timers = timers.filter((t) => t.at > now);
+      for (const t of due) t.run();
+    };
+    return { undos, advance };
+  }
+
+  type Before = (undos: UpdateUndos<string>, advance: (ms: number) => void) => void;
+  it.each<[string, Before, string, { changedAt: number } | null]>([
+    ['from its window, in time', (_u, advance) => advance(999), 'w1', { changedAt: 7 }],
+    ['from another window', () => undefined, 'w2', null],
+    ['once it has expired', (_u, advance) => advance(1000), 'w1', null],
+    ['a second time', (undos) => void undos.take('pw', 'w1'), 'w1', null],
+    [
+      'offered again: the newer one, for its full time',
+      (undos, advance) => {
+        advance(800);
+        undos.offer('pw', 'w1', 9);
+        advance(800);
+      },
+      'w1',
+      { changedAt: 9 },
+    ],
+  ])('Undo %s', (_name, before, windowId, expected) => {
+    const { undos, advance } = setUp();
+    undos.offer('pw', 'w1', 7);
+    before(undos, advance);
+    expect(undos.take('pw', windowId)).toEqual(expected);
+  });
+
+  it('another window asking leaves it for its own', () => {
+    const { undos } = setUp();
+    undos.offer('pw', 'w1', 7);
+    expect(undos.take('pw', 'w2')).toBeNull();
+    expect(undos.take('pw', 'w1')).toEqual({ changedAt: 7 });
   });
 });
