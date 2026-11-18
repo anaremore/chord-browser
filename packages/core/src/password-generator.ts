@@ -4,7 +4,7 @@
  *
  * - **The default:** 20 characters from letters and digits without look-alikes (Chromium's sets: no `l`, `o`, `I`,
  *   `O`, `0`, `1`), at least one lower case letter, one upper case letter and one digit, and `-` as the only symbol,
- *   at least once. About 116 bits.
+ *   at least once. About 105 bits, counting each class's one place at that class's own bits (`planBits`).
  * - **Site rules take precedence, in this order:** the field's `passwordrules` attribute; then Apple's
  *   `password-rules.json` for the site; then the field's `minlength` and `maxlength`. Rules come in Apple's language,
  *   parsed with Apple's parser (password-rules-parser.ts). A source that says nothing (empty, unreadable) passes to
@@ -13,6 +13,12 @@
  * - **Within the rules, the default's style:** characters come from the default's alphabet wherever the rules allow
  *   them, and a required class with none of them (`required: [!#$]`) gets one of its own. The default's classes are
  *   asked for too, as far as the rules allow and the length leaves room.
+ * - **Never a look-alike** (`LOOK_ALIKES`, the owner's decision of 2026-11-18), on every path: the default's alphabet,
+ *   a required class's own characters, and the wider pool a password under the 40-bit floor is drawn from. Where that
+ *   leaves too few bits, the password is made longer, within the rules' maximum and its run limits; under the floor
+ *   whatever's done, it's offered as it is, weak, never with look-alikes for strength. Look-alikes come back only where
+ *   the rules can't be met without them: a required class of look-alikes alone (`required: [0O]`) gets one of them, in
+ *   one place, and rules allowing only look-alikes (`allowed: [0O]`) are drawn from what they allow (`planFor`).
  * - **Every password made is checked** against its rules (`passwordSatisfies`) before it's returned; one that can't
  *   be made (a `maxlength` shorter than the classes it requires, a required class with nothing allowed in it) is null,
  *   and nothing is offered.
@@ -36,6 +42,14 @@ export const GENERATOR_CLASSES = {
   symbol: '-',
 } as const;
 const DEFAULT_ALPHABET = Object.values(GENERATOR_CLASSES).join('');
+
+/**
+ * The characters a generated password leaves out wherever the rules allow anything else: Chromium's look-alikes
+ * (`l`, `o`, `I`, `O`, `0`, `1`), which the default's alphabet already leaves out, and `|`, which reads as `l` or `I`.
+ * The one list, for every path (see the header).
+ */
+export const LOOK_ALIKES = '01IOlo|';
+const withoutLookAlikes = (s: string) => [...s].filter((c) => !LOOK_ALIKES.includes(c)).join('');
 
 /** How many tries a generation gets before it says the rules can't be met (a run limit is met by chance, often). */
 const TRIES = 300;
@@ -174,26 +188,123 @@ const SYMBOLS = NAMED['special']!.replace(' ', '');
  */
 export const STRONG_PASSWORD = { length: 8, bits: 40 } as const;
 
-/**
- * The characters a password of `length` for these rules is drawn from (as `generatePassword` draws them): the
- * default's alphabet where the rules allow it, unless that would leave the password under the floor and the rules
- * allow more, when it's everything they allow (the strongest password they allow: four digits from 0–9, not 2–9).
- */
-function poolFor(rules: PasswordRuleSet, length: number): string {
-  const allowed = rules.allowed.replace(/ /g, '');
-  const preferred = intersect(DEFAULT_ALPHABET, allowed);
-  if (!preferred) return allowed;
-  return length * Math.log2(preferred.length) < STRONG_PASSWORD.bits && allowed.length > preferred.length ? allowed : preferred;
+/** How a password for a rule set is drawn. */
+interface Plan {
+  /** The characters every place but the forced ones is drawn from. */
+  readonly pool: string;
+  readonly length: number;
+  /**
+   * The forced places, one each, as each is drawn: the rules' required classes (the default's alphabet, else without
+   * look-alikes, else whole), then the default's classes as far as the rules allow them and the length leaves room.
+   */
+  readonly forced: readonly string[];
 }
 
 /**
- * A password's strength as it was made for these rules: its length times the bits of the pool its characters were
- * drawn from. Only that pool: a required character from outside it (`required: [-]` beside `allowed: digit`) is one
- * place, not a wider alphabet for every place (review round 2 of #53).
+ * A lower bound on a plan's bits at `length` (never more than it has): each forced place at log2 of its own class,
+ * whether or not its characters are in the pool too (review round 2 of #56), and every other place at log2(pool).
+ * Shuffling the forced places in only adds to it. Run limits are the known exception: a password that breaks them is
+ * drawn again, which takes a little from this and isn't subtracted yet (#60).
+ */
+function planBits(plan: Pick<Plan, 'pool' | 'forced'>, length: number): number {
+  let bits = 0;
+  for (const cls of plan.forced) bits += Math.log2(new Set(cls).size);
+  const free = Math.max(0, length - plan.forced.length);
+  return bits + (plan.pool.length > 1 ? free * Math.log2(plan.pool.length) : 0);
+}
+
+/**
+ * A bound on how likely a password of `length` drawn from `size` characters is to break the rules' run limits: a run
+ * of r + 1 identical characters starts at a place with chance at most size^-r, and one of s + 1 in order with at most
+ * 2 · size^-s (the first step either way, then the same way). Summed over every place: a union bound.
+ */
+function runRisk(rules: PasswordRuleSet, size: number, length: number): number {
+  const r = rules.maxRepeating;
+  const s = rules.maxSequential;
+  return length * ((r === null ? 0 : size ** -r) + (s === null ? 0 : 2 * size ** -s));
+}
+
+/**
+ * A password is made longer only while `runRisk` stays at or under this: then each try meets the run limits at least
+ * half the time, and with 10 tries or more (`DRAW_BUDGET` at the longest password) at least 99.9% of focuses get one.
+ * Lengthening a tiny pool under a run limit (`allowed: [xy]; max-consecutive: 2;` at 40) would otherwise pass about
+ * one try in 3,000 (review round 1 of #56).
+ */
+const MAX_RUN_RISK = 0.5;
+
+/**
+ * How a password for these rules is drawn (as `generatePassword` draws it), the first of these that reaches the floor
+ * (`planBits`):
+ * 1. the default's alphabet where the rules allow it, at the default's length (within the rules');
+ * 2. everything the rules allow but look-alikes (`LOOK_ALIKES`), at that length, else made longer to reach the floor;
+ * 3. only where the rules allow nothing but look-alikes (`allowed: [0O]`), everything they allow, the same way.
+ * A required class of look-alikes alone (`required: [0O]`) gets one forced place of its own in 1 and 2, and every free
+ * place stays clean (review round 3 of #56); one clean character allowed (`allowed: [a0O]`) is `aaaa…`, weak.
+ * Made longer only within the rules' maximum (and the vault's), and only while the run limits are still met easily
+ * (`MAX_RUN_RISK`). When none reaches the floor, it's the last of them the rules allow, as long as the maximum and the
+ * run limits let it be, and weak: never look-alikes for strength alone, under the floor too (the owner's decision of
+ * 2026-11-18; four digits are from 2–9). Null when the rules allow no character or no length.
+ */
+function planFor(rules: PasswordRuleSet): Plan | null {
+  const minLength = Math.max(1, rules.minLength);
+  const maxLength = Math.min(rules.maxLength, PASSWORD_LIMITS.password);
+  if (minLength > maxLength) return null;
+  const length = Math.min(Math.max(GENERATED_LENGTH, minLength), maxLength);
+  // Never a space: a site that allows one may still trim it, and it can't be seen.
+  const allowed = [...new Set(rules.allowed.replace(/ /g, ''))].join('');
+  if (!allowed) return null;
+  const floor = STRONG_PASSWORD.bits;
+  const preferred = intersect(DEFAULT_ALPHABET, allowed);
+  const clean = withoutLookAlikes(allowed);
+  // A class with nothing allowed is left to `generatePassword`, which offers nothing.
+  const owns = rules.required.map((cls) => intersect(cls, allowed)).filter((own) => own);
+  // Look-alikes in the free places only when the rules allow nothing else (review round 3 of #56).
+  const onlyLookAlikes = !clean;
+  const planOf = (pool: string, full: boolean): Plan => {
+    // Drawn from more than the default's alphabet (preferred ⊆ clean ⊆ allowed): the default's classes take their own whole.
+    const wide = pool.length !== preferred.length;
+    // Each class from the default's alphabet where it can be, else without look-alikes where it can be: only a class of
+    // look-alikes alone (`required: [0O]`) gets one of them, and only for that class.
+    const forced = owns.map((own) => (full ? own : (!wide && intersect(own, DEFAULT_ALPHABET)) || withoutLookAlikes(own) || own));
+    // Then the default's classes, as far as the rules allow them and the length leaves room: a site that only bounds
+    // the length gets the default's style.
+    const classes = wide ? [NAMED['lower']!, NAMED['upper']!, NAMED['digit']!, GENERATOR_CLASSES.symbol] : Object.values(GENERATOR_CLASSES);
+    for (const cls of classes) {
+      const own = intersect(cls, pool);
+      if (own && forced.length < length && !forced.some((r) => [...r].every((c) => own.includes(c)))) forced.push(own);
+    }
+    return { pool, length, forced };
+  };
+  // The longest the maximum and the run limits allow, never under the default's length.
+  const longest = (pool: string) => {
+    const perPlace = runRisk(rules, pool.length, 1);
+    return perPlace === 0 ? maxLength : Math.max(length, Math.min(maxLength, Math.floor(MAX_RUN_RISK / perPlace)));
+  };
+  const reaching = (pool: string, full: boolean, lengthen: boolean): Plan | null => {
+    if (!pool) return null;
+    const plan = planOf(pool, full);
+    if (planBits(plan, length) >= floor) return plan;
+    if (!lengthen || pool.length < 2) return null;
+    // The shortest length that reaches the floor: each place past `length` adds log2(pool).
+    const needed = length + Math.ceil((floor - planBits(plan, length)) / Math.log2(pool.length) - 1e-9);
+    return needed <= longest(pool) ? { ...plan, length: needed } : null;
+  };
+  const strong = reaching(preferred, false, false) ?? reaching(clean, false, true) ?? (onlyLookAlikes ? reaching(allowed, true, true) : null);
+  if (strong) return strong;
+  // Under the floor whatever's done: the clean pool (or only look-alikes, when that's all the rules allow), as long as
+  // it can be. A pool of one character is no stronger for being longer.
+  const pool = onlyLookAlikes ? allowed : clean;
+  const plan = planOf(pool, onlyLookAlikes);
+  return pool.length > 1 ? { ...plan, length: longest(pool) } : plan;
+}
+
+/**
+ * A password's strength as it was made for these rules (`planBits`, from the actual alphabet: the pool its free places
+ * were drawn from, look-alikes left out where they were, and each forced place at its own class's bits).
  */
 export function passwordBits(password: string, rules: PasswordRuleSet): number {
-  const pool = new Set(poolFor(rules, password.length)).size;
-  return pool > 1 ? password.length * Math.log2(pool) : 0;
+  const plan = planFor(rules);
+  return plan ? planBits(plan, password.length) : 0;
 }
 
 /** Whether a password made for these rules may be called strong (`STRONG_PASSWORD`). */
@@ -209,7 +320,10 @@ function kindsOf(chars: string): string | null {
 
 /** Why a password isn't strong, in words, for the row's second line: `Only 4 digits, as this site asks`. */
 export function describeWeakPassword(password: string, rules: PasswordRuleSet): string {
-  return `Only ${password.length} ${kindsOf(poolFor(rules, password.length)) ?? 'characters'}, as this site asks`;
+  // The pool and the forced places' classes: a required 0 beside capitals is a digit too (review round 4 of #56).
+  const plan = planFor(rules);
+  const chars = plan ? plan.pool + plan.forced.join('') : '';
+  return `Only ${password.length} ${kindsOf(chars) ?? 'characters'}, as this site asks`;
 }
 
 /**
@@ -284,39 +398,20 @@ export function passwordSatisfies(password: string, rules: PasswordRuleSet): boo
 
 /**
  * A password for a rule set, from `randomInt` (crypto's in main), or null when the rules can't be met. Its length is
- * the default's 20, within the rules' own; its characters the default's alphabet where the rules allow them.
+ * the default's 20, within the rules' own (longer where that's what reaches the floor); its characters the default's
+ * alphabet where the rules allow them, and never a look-alike where they allow anything else (`planFor`).
  */
 export function generatePassword(rules: PasswordRuleSet, randomInt: RandomInt): string | null {
-  const minLength = Math.max(1, rules.minLength);
-  const maxLength = Math.min(rules.maxLength, PASSWORD_LIMITS.password);
-  if (minLength > maxLength) return null;
-  const length = Math.min(Math.max(GENERATED_LENGTH, minLength), maxLength);
-  // Never a space: a site that allows one may still trim it, and it can't be seen.
+  const plan = planFor(rules);
+  if (!plan) return null;
   const allowed = rules.allowed.replace(/ /g, '');
-  if (!allowed) return null;
-  // The default's alphabet where the rules allow it; else whatever they allow (and under the floor, all they allow).
-  const pool = poolFor(rules, length);
-  // Drawn from everything allowed (under the floor): the required classes and the default's take their own whole.
-  const wide = pool === allowed;
-  // The rules' classes, each from the default's alphabet where it can be.
-  const required: string[] = [];
-  for (const cls of rules.required) {
-    const own = intersect(cls, allowed);
-    if (!own) return null;
-    required.push(wide ? own : intersect(own, DEFAULT_ALPHABET) || own);
-  }
-  if (required.length > length) return null;
-  // Then the default's classes, as far as the rules allow them and the length leaves room: a site that only bounds the
-  // length gets the default's style.
-  const classes = wide ? [NAMED['lower']!, NAMED['upper']!, NAMED['digit']!, GENERATOR_CLASSES.symbol] : Object.values(GENERATOR_CLASSES);
-  for (const cls of classes) {
-    const own = intersect(cls, pool);
-    if (own && required.length < length && !required.some((r) => [...r].every((c) => own.includes(c)))) required.push(own);
-  }
+  if (!rules.required.every((cls) => intersect(cls, allowed))) return null;
+  const { pool, length, forced } = plan;
+  if (forced.length > length) return null;
   const pick = (from: string) => from[randomInt(from.length)]!;
   const tries = Math.max(1, Math.min(TRIES, Math.floor(DRAW_BUDGET / (length * 2))));
   for (let attempt = 0; attempt < tries; attempt++) {
-    const chars = required.map(pick);
+    const chars = forced.map(pick);
     while (chars.length < length) chars.push(pick(pool));
     // Fisher–Yates, so the required characters are anywhere.
     for (let i = chars.length - 1; i > 0; i--) {
