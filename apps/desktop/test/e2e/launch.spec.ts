@@ -1523,13 +1523,17 @@ test('Chord’s own views come back when their renderer crashes: the sidebar, an
     await expect((await pageWhere(app, isShell)).getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     // Asked from main: a page whose renderer crashed is gone for Playwright, even once Chord has loaded it again.
     // `open`: the command bar renders nothing while closed (only a 400 ms warm-up, which a slow runner's polls can
-    // miss), so each try sends it an opening, as main does, until its reloaded page is listening and shows the field.
+    // miss), so each try opens it from the sidebar, through main: main holds the opening until the reloaded page says
+    // it's listening (overlay:ready), so the field shows only once main has armed the overlay again.
     const view = (name: string, script: string, open: boolean) =>
       app.evaluate(
         async ({ webContents }, [n, code, o]) => {
           const contents = webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`));
           if (!contents || contents.isCrashed() || contents.isLoading()) return null;
-          if (o) contents.send('overlay:open', { mode: 'new', anchor: null, url: '', seq: 1_000_000, requestedAt: Date.now() });
+          if (o) {
+            const shell = webContents.getAllWebContents().find((c) => c.getURL().startsWith('chord://shell') || c.getURL().includes('/shell/index.html'));
+            await shell?.executeJavaScript(`window.chord.overlay.open('new')`).catch(() => null);
+          }
           return (await contents.executeJavaScript(code as string).catch(() => null)) as string | null;
         },
         [name, script, open] as const,
