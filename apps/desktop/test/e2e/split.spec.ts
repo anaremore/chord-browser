@@ -216,7 +216,7 @@ test.afterAll(() => site.server.close());
 async function setUp(app: ElectronApplication, paths: string[]) {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  const today = shell.getByRole('tree', { name: 'Today' });
+  const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
   await expect(today).toContainText('First page');
   for (const path of paths) {
     await shell.evaluate(() => (window as unknown as Chord).chord.overlay.open('new'));
@@ -423,7 +423,7 @@ test('a split comes back after a relaunch, exactly as it was', async () => {
   app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today.getByRole('treeitem', { name: 'Split: Second page + First page' })).toBeVisible();
     expect(await splitState(shell)).toMatchObject({ panes: ['Second page', 'First page'], direction: 'column', sizes: [0.3, 0.7] });
     // Stacked, the first pane about 30% of the frame.
@@ -479,7 +479,7 @@ test('killed mid-session, Chord brings back every window, chord and split', asyn
       return { windowId, first: Object.values(state.chords).sort((a, b) => (a.rank < b.rank ? -1 : 1))[0]!.id };
     });
     await dispatch(shell, { t: 'chord.activate', windowId, chordId: first });
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem', { name: 'Split: Second page + First page' })).toBeVisible();
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem', { name: 'Split: Second page + First page' })).toBeVisible();
     expect(await splitState(shell)).toMatchObject({ panes: ['Second page', 'First page'], direction: 'row' });
   } finally {
     await app.close();

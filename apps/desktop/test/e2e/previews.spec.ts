@@ -86,7 +86,7 @@ test('a pinned tab previews the last picture of its page; Settings → Privacy t
     const overlay = await pageWhere(app, isOverlay);
     const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
     await open(shell, overlay, `${site.origin}/colors`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Colors');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Colors');
     await runAction(shell, 'tab.pin');
     await expect(pinned).toContainText('Colors');
 
@@ -140,7 +140,7 @@ test('a folder previews its first tabs; a page never pictured shows its icon on 
     const overlay = await pageWhere(app, isOverlay);
     const pinned = shell.getByRole('tree', { name: 'Pinned', exact: true });
     await open(shell, overlay, `${site.origin}/third`);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Third page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Third page');
     await runAction(shell, 'folder.new');
     const folder = pinned.locator('[data-row="folder"]');
     await expect(folder).toHaveCount(1);
@@ -170,7 +170,7 @@ test('a private window is never pictured', async () => {
   const app = await launch(profile);
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     // The window's own command bar, found first: since it loads after the shell paints, a private window's can come before it.
     const mainOverlay = await pageWhere(app, isOverlay);
     await runAction(shell, 'window.newPrivate');

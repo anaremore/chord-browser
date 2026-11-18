@@ -24,7 +24,7 @@ export function countsText(c: MergeCounts, effects: boolean): string {
   return [
     c.chords ? plural(c.chords, 'chord') : '',
     c.pinnedTabs ? plural(c.pinnedTabs, 'pinned tab') : '',
-    c.todayTabs ? plural(c.todayTabs, 'Today tab') : '',
+    c.todayTabs ? plural(c.todayTabs, 'unpinned tab') : '',
     c.folders ? plural(c.folders, 'folder') : '',
     c.favorites ? plural(c.favorites, 'Favorite') : '',
     c.themes ? plural(c.themes, 'theme') : '',

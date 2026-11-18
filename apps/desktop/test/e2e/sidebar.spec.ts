@@ -73,7 +73,7 @@ test.afterAll(() => {
 async function setUp(app: ElectronApplication, paths: string[], origin = () => site.origin) {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  const today = shell.getByRole('tree', { name: 'Today' });
+  const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
   await expect(today).toContainText('First page');
   for (const path of paths) {
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
@@ -82,7 +82,7 @@ async function setUp(app: ElectronApplication, paths: string[], origin = () => s
     await overlay.keyboard.press('Enter');
     await expect(today.getByRole('treeitem').first()).toContainText(new RegExp(path.slice(1), 'i'));
   }
-  return { shell, overlay, today, pinned: shell.getByRole('tree', { name: 'Pinned' }) };
+  return { shell, overlay, today, pinned: shell.getByRole('tree', { name: 'Pinned', exact: true }) };
 }
 
 /**
@@ -158,7 +158,7 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
     for (const [typed, title] of [
       ['new folder', 'New folder with this tab'],
       ['favorites', 'Add this tab to Favorites'],
-      ['tidy', 'Clear Today'],
+      ['tidy', 'Clear unpinned tabs'],
     ]) {
       await overlay.getByRole('combobox').fill(typed!);
       await expect(overlay.getByRole('option').filter({ hasText: title! })).toHaveCount(1);
@@ -219,7 +219,7 @@ test('folders: made around a tab, dragged into, folded, renamed and deleted with
     // Delete removes the folder and what's in it; Undo brings it all back.
     await later.focus();
     await shell.keyboard.press('Delete');
-    await expect(shell.getByRole('tree', { name: 'Pinned' })).toHaveCount(0);
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toHaveCount(0);
     await expect(shell.getByText('Deleted folder “Later”')).toBeVisible();
     await shell.getByRole('button', { name: 'Undo' }).click();
     await expect(pinned.getByRole('treeitem', { name: 'Later' })).toBeVisible();
@@ -423,16 +423,16 @@ test('a private window has no Favorites, makes no folders, and Clear closes its 
       await expect(privateOverlay.getByRole('dialog')).toBeVisible();
       await privateOverlay.keyboard.type(`${site.origin}${path}`);
       await privateOverlay.keyboard.press('Enter');
-      await expect(privateShell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText(path === '/third' ? 'Third' : 'Fourth');
+      await expect(privateShell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText(path === '/third' ? 'Third' : 'Fourth');
     }
-    const today = privateShell.getByRole('tree', { name: 'Today' });
+    const today = privateShell.getByRole('tree', { name: 'Unpinned tabs' });
 
     // Favorites are kept and shared, so a private window neither shows them nor adds to them.
     await expect(privateShell.getByRole('list', { name: 'Favorites' })).toHaveCount(0);
     await runAction(privateShell, 'tab.favorite');
     await runAction(privateShell, 'folder.new');
     await expect(privateShell.getByRole('textbox', { name: 'Folder name' })).toHaveCount(0);
-    await expect(privateShell.getByRole('tree', { name: 'Pinned' })).toHaveCount(0);
+    await expect(privateShell.getByRole('tree', { name: 'Pinned', exact: true })).toHaveCount(0);
     await expect(shell.getByRole('list', { name: 'Favorites' }).getByRole('listitem')).toHaveCount(1);
 
     // Clear closes; Undo still brings them back.
@@ -450,7 +450,7 @@ test('the sidebar resizes from its edge, catches at the default width, and the p
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/` });
   try {
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     const handle = shell.getByRole('separator', { name: 'Sidebar width' });
     const pageX = async () => (await views(app))[1]!.x;
     await expect.poll(pageX).toBe(248);
@@ -489,7 +489,7 @@ test('a tab dropped on another chord moves there, reloading signed out when that
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/login` });
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     const chords = shell.getByRole('tablist', { name: 'Chords' });
     await expect(today).toContainText('Signed in');
     // Work keeps its own sign-ins; Personal has the account.
@@ -554,7 +554,7 @@ test('minimal mode: off by default, the window’s edge does nothing; turned on 
   try {
     const shell = await pageWhere(app, isShell);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     const docked = await box(sidebar);
     await countPeeks(shell);
     await shell.getByRole('button', { name: 'Hide sidebar' }).click();
@@ -599,7 +599,7 @@ test('minimal mode: off by default, the window’s edge does nothing; turned on 
     await expect(sidebar).toBeVisible();
     // It's the sidebar itself, where it is when it's showing, with its toggle, buttons and address.
     expect(await box(sidebar)).toEqual(docked);
-    await expect(sidebar.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(sidebar.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     for (const name of ['Show sidebar', 'Back', 'Forward', 'Reload']) await expect(sidebar.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(sidebar.getByRole('button', { name: /^Address/ })).toBeVisible();
 
@@ -630,7 +630,7 @@ test('minimal mode: off by default, the window’s edge does nothing; turned on 
   try {
     const shell = await pageWhere(app, isShell);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     await runAction(shell, 'app.settings');
     const settings = await pageWhere(app, isSettings);
     await settings.getByRole('button', { name: 'Appearance' }).click();
@@ -654,7 +654,7 @@ test('⌘L edits the address at the top of the window: the top strip’s, or the
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
     const sidebar = shell.getByRole('navigation', { name: 'Sidebar' });
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('First page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('First page');
     const dialog = overlay.getByRole('dialog', { name: 'Edit address' });
     // The shell and the command bar are views at the same place in the window, so their pages' coordinates compare.
     const at = (await views(app)).filter((v) => isShell(v.url) || isOverlay(v.url));

@@ -88,7 +88,7 @@ test("a tab keeps its site's icon: through pages without one, a broken one and a
     await expect.poll(async () => (await shown(shell)).favicon ?? '', { timeout: 20_000 }).toMatch(/^data:image\/png;base64,/);
     const icon = (await shown(shell)).favicon;
     const tab = await pageWhere(app, (url) => url.startsWith(origin));
-    const row = shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first();
+    const row = shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first();
 
     // The same site, by pages that name no icon, or one that's missing: the icon stays, in the store and in the row.
     for (const [path, title] of [['/b', 'Page B'], ['/broken', 'Broken icon']] as const) {

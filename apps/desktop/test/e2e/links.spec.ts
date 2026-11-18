@@ -160,7 +160,7 @@ test('a link from another app opens in a mini window, and Open in moves it into 
 
     await promote.click();
     const shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('B');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText('B');
     // The same page moved into the window, so Back still goes to A.
     expect(await contentsId(app, `${site.origin}/b`)).toBe(id);
     await expect.poll(() => canGoBack(app, id)).toBe(true);
@@ -187,7 +187,7 @@ test('a link from another app opens in a mini window, and Open in moves it into 
     await settings.getByRole('radiogroup', { name: 'Links from other apps open in' }).getByRole('radio', { name: 'New tab' }).click();
     await expect.poll(async () => (await snapshot(shell)).state.settings.externalLinks).toBe('tab');
     await handOver(app, `${site.origin}/d`);
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('D');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText('D');
     expect(app.windows().some((p) => isMini(p.url()))).toBe(false);
   } finally {
     await app.close();
@@ -201,7 +201,7 @@ test('a site in Peek that asks for a password gets the sign-in box over Peek', a
     const overlay = await pageWhere(app, isOverlay);
     const popover = await pageWhere(app, (url) => url.startsWith('chord://popover') || url.includes('/popover/index.html'));
     await runAction(shell, 'tab.pin');
-    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Pinned');
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toContainText('Pinned');
     await clickLink(app, `${site.origin}/pinned`, '#staff');
     await expect(overlay.getByRole('dialog', { name: /^Peek/ })).toBeVisible();
     const box = popover.getByRole('alertdialog', { name: `Sign in to ${site.other}` });
@@ -217,14 +217,14 @@ test('a site in Peek that asks for a password gets the sign-in box over Peek', a
   }
 });
 
-test('a pinned tab’s link to another site opens in Peek: Esc or a click outside closes it, Open in Today keeps it', async () => {
+test('a pinned tab’s link to another site opens in Peek: Esc or a click outside closes it, Open as tab keeps it', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/pinned`, CHORD_E2E_HOOKS: '1' });
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
     const tab = await pageWhere(app, (url) => url === `${site.origin}/pinned`);
     await runAction(shell, 'tab.pin');
-    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Pinned');
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toContainText('Pinned');
     const peek = overlay.getByRole('dialog', { name: /^Peek/ });
 
     // A link to the same site goes on in place, as always.
@@ -265,9 +265,9 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
     await again.locator('#next').click();
     await expect(peek).toContainText('Other 2');
     const id = (await contentsId(app, `${site.other}/other2`))!;
-    await peek.getByRole('button', { name: /Open in Today/ }).click();
+    await peek.getByRole('button', { name: /Open as tab/ }).click();
     await expect(peek).toBeHidden();
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Other 2');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText('Other 2');
     expect(await contentsId(app, `${site.other}/other2`)).toBe(id);
     await expect.poll(() => canGoBack(app, id)).toBe(true);
     const { windowId, state } = await snapshot(shell);
@@ -340,7 +340,7 @@ test('a link route sends a site’s links to its chord, from other apps and the 
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('A');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('A');
     const theme = { stops: [{ l: 0.72, c: 0.1, h: 200 }], grain: 0.2, appearance: 'auto' as const };
     await dispatch(shell, { t: 'chord.create', windowId: 'w', name: 'Work', icon: 'W', theme });
     const chordNamed = (state: State, name: string) => Object.values(state.chords).find((c) => c.name === name)!.id;
@@ -352,7 +352,7 @@ test('a link route sends a site’s links to its chord, from other apps and the 
     // Moving a site's pages to the same chord twice: Chord asks, once, and only then makes a route.
     for (const path of ['/other', '/other2']) {
       await visit(shell, overlay, `${site.other}${path}`);
-      await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText(path === '/other' ? 'Other' : 'Other 2');
+      await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText(path === '/other' ? 'Other' : 'Other 2');
       const { state } = await snapshot(shell);
       await shell.evaluate(
         ([nodeId, chordId]) => (window as unknown as { chord: { sidebar: { moveToChord(n: string, c: string): Promise<void> } } }).chord.sidebar.moveToChord(nodeId!, chordId!),

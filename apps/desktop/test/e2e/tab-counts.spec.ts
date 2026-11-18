@@ -62,7 +62,7 @@ test('a page’s count shows on its tab and adds up on Chord’s icon; frames do
   const app = await launch({ CHORD_HOME_URL: chatUrl, CHORD_E2E_HOOKS: '1', CHORD_SLEEP_AFTER_MS: '700', CHORD_IDLE_CHECK_MS: '200' });
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     const chat = await pageWhere(app, (url) => url === chatUrl);
 
     // The count on its row (its description for screen readers), and on Chord's icon.
@@ -123,7 +123,7 @@ test('a page’s count shows on its tab and adds up on Chord’s icon; frames do
     const name = shell.getByRole('textbox', { name: 'Folder name' });
     await name.fill('Messages');
     await name.press('Enter');
-    const folder = shell.getByRole('tree', { name: 'Pinned' }).getByRole('treeitem', { name: 'Messages', exact: true });
+    const folder = shell.getByRole('tree', { name: 'Pinned', exact: true }).getByRole('treeitem', { name: 'Messages', exact: true });
     await expect(folder).toHaveAttribute('aria-expanded', 'true');
     await expect(folder.locator('[data-count]')).toHaveCount(0);
     await folder.click();
@@ -160,7 +160,7 @@ test('a site’s service worker gives its count to the site’s tabs; the page�
   const app = await launch({ CHORD_HOME_URL: url, CHORD_E2E_HOOKS: '1' });
   try {
     const shell = await pageWhere(app, isShell);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     const page = await pageWhere(app, (u) => u === url);
     const toWorker = (value: number | 'clear') =>
       page.evaluate(async (v) => {

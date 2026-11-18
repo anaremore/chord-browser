@@ -79,7 +79,7 @@ async function openSync(app: ElectronApplication, shell: Page, folder: string): 
 async function chordApp(profile: string, { keyring = true } = {}): Promise<{ app: ElectronApplication; shell: Page }> {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_E2E_HOOKS: '1', ...(keyring ? {} : { CHORD_E2E_NO_KEYRING: '1' }) }, { profile });
   const shell = await pageWhere(app, isShell);
-  await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home page');
+  await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Home page');
   return { app, shell };
 }
 
@@ -94,7 +94,7 @@ test('two Chords sync through one folder: set up, join, edit on both, a wrong pa
     const deskChord = deskState.state.windows[deskState.windowId]!.activeChordId;
     await dispatch(desk.shell, { t: 'chord.update', chordId: deskChord, name: 'Work' });
     await dispatch(desk.shell, { t: 'tab.open', windowId: deskState.windowId, url: `${site.origin}/mail` });
-    await expect(desk.shell.getByRole('tree', { name: 'Today' })).toContainText('Mail');
+    await expect(desk.shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Mail');
     const mail = nodeList((await snapshot(desk.shell)).state).find((n) => n.kind === 'tab' && n.url?.endsWith('/mail'))!.id;
     await dispatch(desk.shell, { t: 'tab.pin', nodeId: mail });
 
@@ -130,7 +130,7 @@ test('two Chords sync through one folder: set up, join, edit on both, a wrong pa
     await laptopSettings.evaluate(() => (window as unknown as { chord: { settings: { set(patch: unknown): Promise<void> } } }).chord.settings.set({ searchEngine: 'duckduckgo' }));
     await dispatch(desk.shell, { t: 'chord.update', chordId: deskChord, name: 'Studio' });
     await dispatch(desk.shell, { t: 'tab.open', windowId: deskState.windowId, url: `${site.origin}/news` });
-    await expect(desk.shell.getByRole('tree', { name: 'Today' })).toContainText('News');
+    await expect(desk.shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('News');
     const news = nodeList((await snapshot(desk.shell)).state).find((n) => n.kind === 'tab' && n.url?.endsWith('/news'))!.id;
     await dispatch(desk.shell, { t: 'tab.pin', nodeId: news });
     await carry(laptop.app, desk.app);

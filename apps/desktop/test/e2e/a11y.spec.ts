@@ -76,8 +76,8 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => site.server.close());
 
-const today = (shell: Page) => shell.getByRole('tree', { name: 'Today' });
-const pinned = (shell: Page) => shell.getByRole('tree', { name: 'Pinned' });
+const today = (shell: Page) => shell.getByRole('tree', { name: 'Unpinned tabs' });
+const pinned = (shell: Page) => shell.getByRole('tree', { name: 'Pinned', exact: true });
 
 /** Opens a tab and waits for its row. */
 async function openTab(shell: Page, path: string, title: string): Promise<void> {
@@ -594,7 +594,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
         - treeitem "New folder" [expanded] [level=1]
         - treeitem "Third page" [level=2] [selected]
       - button "New tab ${process.platform === 'darwin' ? '⌘T' : 'Ctrl+T'}"
-      - tree "Today":
+      - tree "Unpinned tabs":
         - treeitem "Article" [level=1]
       - region "Notifications"
       - tablist "Chords":
@@ -680,7 +680,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
     // A chord switch is announced.
     const { windowId } = await where(shell);
     await dispatch(shell, { t: 'chord.create', windowId, name: 'Work', icon: 'W', theme: { stops: THEMES.coral, grain: 0.2, appearance: 'auto' } });
-    await expect(announcer).toHaveText('Work chord, 0 pinned, 0 today');
+    await expect(announcer).toHaveText('Work chord, 0 pinned, 0 unpinned');
   } finally {
     await app.close();
   }
@@ -757,7 +757,7 @@ test('Windows High Contrast: tints off; focus, selection, the active tab, switch
     await expect(on).toHaveAttribute('aria-checked', 'true');
     const settingsHighlight = await systemColor(settings, 'Highlight');
     await expect.poll(() => on.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(settingsHighlight);
-    const chosen = settings.getByRole('radiogroup', { name: 'Archive Today tabs after' }).getByRole('radio', { checked: true });
+    const chosen = settings.getByRole('radiogroup', { name: 'Archive unpinned tabs after' }).getByRole('radio', { checked: true });
     await expect.poll(() => chosen.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(settingsHighlight);
     await settle(settings);
     await settings.screenshot({ path: resolve(capturesDir, `forced-colors-settings-${process.platform}.png`) });

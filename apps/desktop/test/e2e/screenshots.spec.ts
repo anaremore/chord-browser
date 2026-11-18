@@ -60,7 +60,7 @@ test('⌘⇧2: an element by pointer or ↑, one taller than the screen, an area
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Boxes');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Boxes');
     const toast = shell.getByRole('region', { name: 'Notifications' }).getByRole('group', { name: 'Screenshot copied' });
 
     // Hover picks the element under the pointer; ↑ goes to its parent; a click takes it.
@@ -157,7 +157,7 @@ test('a private window’s screenshots stay in memory, listed only there, and no
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Boxes');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Boxes');
     await runAction(shell, 'window.newPrivate');
     const privateShell = await newPage(app, isShell, [shell]);
     const privateOverlay = await newPage(app, isOverlay, [overlay]);
@@ -165,7 +165,7 @@ test('a private window’s screenshots stay in memory, listed only there, and no
     await privateShell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await privateOverlay.keyboard.type(`${site.origin}/shot`);
     await privateOverlay.keyboard.press('Enter');
-    await expect(privateShell.getByRole('tree', { name: 'Today' })).toContainText('Boxes');
+    await expect(privateShell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Boxes');
 
     await runAction(privateShell, 'page.screenshot');
     await expect(privateOverlay.getByRole('dialog', { name: 'Take a screenshot' })).toBeVisible();

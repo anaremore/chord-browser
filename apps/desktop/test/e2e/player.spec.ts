@@ -210,7 +210,7 @@ test('installs Chord Player from the notice, plays a Widevine stream in it, and 
     await expect.poll(async () => (await debug(app))?.focusRequests).toBeGreaterThan(focusBefore);
 
     // A link the page follows to anywhere else opens in Chord, and the player stays on its page.
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await playerTest(app, { do: 'navigate-page', url: `${site.origin}/elsewhere` });
     await expect(today.getByRole('treeitem', { name: 'Elsewhere' })).toHaveCount(1, { timeout: 20_000 });
     expect((await debug(app))!.url).toBe(`${netflix()}/watch`);

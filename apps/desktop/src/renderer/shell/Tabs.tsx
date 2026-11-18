@@ -1800,7 +1800,7 @@ export function SidebarTabs({
         {pinned.length === 0 && active && active.type !== 'favorite' && !state.windows[windowId]?.private && <PinnedDropZone />}
         <span className={styles.hairline} role="separator" />
         {todayNodes.some((n) => n.kind === 'tab') && (
-          <button type="button" className={styles.clear} title="Archive every Today tab (splits stay)" onClick={() => void api.action.run('today.clear')}>
+          <button type="button" className={styles.clear} title="Archive every unpinned tab (splits stay)" onClick={() => void api.action.run('today.clear')}>
             Clear
           </button>
         )}
@@ -1818,7 +1818,7 @@ export function SidebarTabs({
           className={styles.list}
           data-edge-scroll
           role="tree"
-          aria-label="Today"
+          aria-label="Unpinned tabs"
           aria-describedby={help}
           data-windowed={windowed || undefined}
           onFocus={trackFocus}

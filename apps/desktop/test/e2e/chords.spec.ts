@@ -34,7 +34,7 @@ const runAction = (shell: Page, action: string) =>
   shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 
 /** Wheel events as a trackpad sends them, `gapMs` apart, over an element of the shell. */
-function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Today"]') {
+function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]') {
   return shell.evaluate(
     async ({ deltas, gapMs, over }) => {
       const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
@@ -64,7 +64,7 @@ async function threeChords(shell: Page) {
 }
 
 /** Every chord pane in the sidebar, current and beside it: one once a swipe has settled. */
-const paneCount = (shell: Page) => shell.evaluate(() => document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Today"]').length);
+const paneCount = (shell: Page) => shell.evaluate(() => document.querySelectorAll('[aria-label="Sidebar"] [aria-label="Unpinned tabs"]').length);
 
 test('a two-finger swipe follows the fingers and settles on the nearest chord', async () => {
   const app = await launch();

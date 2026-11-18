@@ -133,7 +133,7 @@ test('a seeded profile exports plain and encrypted: everything it should hold, n
   // First launch: Chord makes its database and a first chord, then quits.
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, { profile });
   let shell = await pageWhere(app, isShell);
-  await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home page');
+  await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Home page');
   const personal = await shell.evaluate(async () => {
     const { state, windowId } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string }> } }> } } }).chord.state.snapshot();
     return state.windows[windowId]!.activeChordId;
@@ -144,7 +144,7 @@ test('a seeded profile exports plain and encrypted: everything it should hold, n
   app = await launch({ CHORD_HOME_URL: `${site.origin}/`, CHORD_APPEARANCE: 'dark' }, { profile });
   try {
     shell = await pageWhere(app, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Home page');
     // A private window is open while Chord exports: nothing of it is ever saved, so nothing of it goes in.
     await runAction(shell, 'window.newPrivate');
     await newPage(app, isShell, [shell]);
@@ -152,7 +152,7 @@ test('a seeded profile exports plain and encrypted: everything it should hold, n
 
     // What goes in, counted before anything's written.
     const card = settings.getByRole('group', { name: 'Export your data' });
-    await expect(card.getByText('2 chords · 1 pinned tab in 1 folder · 1 Today tab · 1 Favorite · 1 theme · 1 link route · Effects for 1 site · your settings.')).toBeVisible();
+    await expect(card.getByText('2 chords · 1 pinned tab in 1 folder · 1 unpinned tab · 1 Favorite · 1 theme · 1 link route · Effects for 1 site · your settings.')).toBeVisible();
     // The seeded pages, and the home page each launch visited.
     await expect(card.getByText('3 pages', { exact: true })).toBeVisible();
     await expect(card.getByText('1 chat, 1 image')).toBeVisible();
@@ -267,7 +267,7 @@ test('a folder Chord can’t write to says so, and offers to choose another', as
     const shell = await pageWhere(app, isShell);
     const settings = await openExport(app, shell);
     const card = settings.getByRole('group', { name: 'Export your data' });
-    await expect(card.getByText('1 chord · 1 Today tab · your settings.')).toBeVisible();
+    await expect(card.getByText('1 chord · 1 unpinned tab · your settings.')).toBeVisible();
     await answerSaveDialog(app, join(mkdtempSync(join(tmpdir(), 'chord-e2e-export-')), 'no such folder', 'backup.jsonl'));
     await card.getByRole('button', { name: 'Choose where to save…' }).click();
     await expect(card.getByText('Chord couldn’t save there. Choose another place.')).toBeVisible({ timeout: 30_000 });
@@ -383,7 +383,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await expect(shell.getByRole('tree', { name: 'Today' })).toContainText('Home page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Home page');
     const before = await stateOf(shell);
     const first = before.state.windows[before.windowId]!.activeChordId;
     const settings = await openYourData(app, shell);
@@ -393,7 +393,7 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     await settings.getByRole('button', { name: 'Choose a file…' }).click();
     const card = settings.getByRole('group', { name: 'From a Chord file' });
     await expect(card.getByText(/^From another computer, exported \w{3} \d{1,2}, \d{4} by Chord /)).toBeVisible({ timeout: 30_000 });
-    await expect(card.getByText(/^New: 2 chords, 1 pinned tab, 1 Today tab, 1 folder, 1 Favorite, 1 theme, 1 link route, Effects for 2 sites, page zoom for 1 site, blocked permissions for 1 site\. The chord Chord started with makes way\.$/)).toBeVisible();
+    await expect(card.getByText(/^New: 2 chords, 1 pinned tab, 1 unpinned tab, 1 folder, 1 Favorite, 1 theme, 1 link route, Effects for 2 sites, page zoom for 1 site, blocked permissions for 1 site\. The chord Chord started with makes way\.$/)).toBeVisible();
     await expect(card.getByText('2 new pages, for search in every chord')).toBeVisible();
     await expect(card.getByText('1 new chat, 1 image. Nothing is sent anywhere until you write in one.')).toBeVisible();
     await expect(card.getByText(`${effectsHost(`${site.origin}/`)} and news.test. Chord checks every stylesheet again before it uses it.`)).toBeVisible();
@@ -427,8 +427,8 @@ test('a Chord file into a new profile: everything comes in as it was, nothing lo
     // Nothing loaded: the only page is the one the window was already showing.
     expect(Object.keys(after.state.live)).toEqual(Object.keys(before.state.live));
     await dispatch(shell, { t: 'chord.activate', windowId: after.windowId, chordId: 'work' });
-    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Reading');
-    await expect(shell.getByRole('tree', { name: 'Pinned' })).toContainText('Mail');
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toContainText('Reading');
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toContainText('Mail');
 
     // History in the command bar, the chat in its search, and its image beside the assistant's own.
     await expect.poll(() => historyFor(overlay, 'story')).toEqual(['https://news.test/a', 'https://news.test/b']);
@@ -509,7 +509,7 @@ test('a Chord file into a profile with data: problems first, then its settings o
 
     // A profile with data: settings stay off until you turn them on, and each change is named either way.
     // The Favorite here at the file's address, under an older name: newer there, so it's that one, renamed.
-    await expect(card.getByText(/^New: 2 chords, 1 pinned tab, 1 Today tab, 1 folder, 1 theme, .*\. Newer than yours: 1 Favorite\. Everything else is here already\.$/)).toBeVisible({ timeout: 30_000 });
+    await expect(card.getByText(/^New: 2 chords, 1 pinned tab, 1 unpinned tab, 1 folder, 1 theme, .*\. Newer than yours: 1 Favorite\. Everything else is here already\.$/)).toBeVisible({ timeout: 30_000 });
     const toggle = card.getByRole('switch', { name: 'Import settings from the file' });
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
     await expect(card.getByText(/^Off: yours stay as they are\. \d+ changes if you turn it on:$/)).toBeVisible();

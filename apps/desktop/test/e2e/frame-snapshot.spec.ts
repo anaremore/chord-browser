@@ -226,7 +226,7 @@ async function glide(app: ElectronApplication, shell: Page, name: string, act: (
 async function ready(app: ElectronApplication, home = 'Colored page'): Promise<{ shell: Page; overlay: Page }> {
   const shell = await pageWhere(app, isShell);
   const overlay = await pageWhere(app, isOverlay);
-  await expect(shell.getByRole('tree', { name: 'Today' })).toContainText(home);
+  await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText(home);
   await expect.poll(async () => (await pages(app)).views.length).toBe(1);
   await warm(app, shell);
   return { shell, overlay };
@@ -328,7 +328,7 @@ test('split view: every pane is pictured and laid out with the same pane rects',
     await expect(overlay.getByRole('dialog')).toBeVisible();
     await overlay.keyboard.type(`${site.origin}/second`);
     await overlay.keyboard.press('Enter');
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Second page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText('Second page');
     // Second page beside the first.
     await shell.evaluate(async () => {
       const chord = (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string> }>; nodes: Record<string, Record<string, { id: string; kind: string; title?: string }>> } }>; dispatch(c: unknown): Promise<void> } } }).chord;

@@ -39,8 +39,8 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => site.server.close());
 
-const today = (shell: Page) => shell.getByRole('tree', { name: 'Today' });
-const pinned = (shell: Page) => shell.getByRole('tree', { name: 'Pinned' });
+const today = (shell: Page) => shell.getByRole('tree', { name: 'Unpinned tabs' });
+const pinned = (shell: Page) => shell.getByRole('tree', { name: 'Pinned', exact: true });
 const row = (tree: Locator, name: string) => tree.getByRole('treeitem', { name, exact: true });
 
 /** Press Tab (or Shift+Tab) until `target` has focus; fails after `max` presses. */
@@ -213,7 +213,7 @@ test('chords, keyboard only: make one from the footer, name it, and switch with 
     await shell.keyboard.press('ArrowLeft');
     await expect(chords.getByRole('tab', { name: 'Personal' })).toBeFocused();
     await expect(chords.getByRole('tab', { name: 'Personal' })).toHaveAttribute('aria-selected', 'true');
-    await expect(shell.getByTestId('announcer')).toHaveText('Personal chord, 0 pinned, 1 today');
+    await expect(shell.getByTestId('announcer')).toHaveText('Personal chord, 0 pinned, 1 unpinned');
     // ⌘2 (through the registry) goes to the second chord.
     await runAction(shell, 'chord.goto2');
     await expect(chords.getByRole('tab', { name: 'Work' })).toHaveAttribute('aria-selected', 'true');
@@ -273,14 +273,14 @@ test('Settings, keyboard only: change a setting, then put it back with its ↺, 
     const nav = settings.getByRole('navigation', { name: 'Settings sections' });
 
     // A segmented choice: one Tab stop, arrows choose.
-    const archiveAfter = settings.getByRole('radiogroup', { name: 'Archive Today tabs after' });
+    const archiveAfter = settings.getByRole('radiogroup', { name: 'Archive unpinned tabs after' });
     await tabTo(settings, archiveAfter.getByRole('radio', { checked: true }));
     await settings.keyboard.press('ArrowRight');
     await expect(archiveAfter.getByRole('radio', { name: 'A day' })).toHaveAttribute('aria-checked', 'true');
     await expect(archiveAfter.getByRole('radio', { name: 'A day' })).toBeFocused();
     // Its ↺ shows, just before it; ↵ on it puts the default back and the keyboard on the setting.
     await settings.keyboard.press('Shift+Tab');
-    const reset = settings.getByRole('button', { name: 'Reset Archive Today tabs after to default' });
+    const reset = settings.getByRole('button', { name: 'Reset Archive unpinned tabs after to default' });
     await expect(reset).toBeFocused();
     await settings.keyboard.press('Enter');
     await expect(archiveAfter.getByRole('radio', { name: '12 hours' })).toHaveAttribute('aria-checked', 'true');

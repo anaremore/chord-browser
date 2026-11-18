@@ -115,7 +115,7 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
   try {
     const shell = await pageWhere(app.browser, isShell);
     const overlay = await pageWhere(app.browser, isOverlay);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     // The bundled typeface loads from inside the asar.
     await expect(shell.getByText('Personal')).toBeVisible();
     const onestLoaded = () => shell.evaluate(() => [...document.fonts].some((f) => f.family.replace(/"/g, '') === 'Onest' && f.status === 'loaded'));
@@ -150,7 +150,7 @@ test('the packaged app browses, opens Settings, and restores tabs after a relaun
   app = await start(executable, profile);
   try {
     const shell = await pageWhere(app.browser, isShell);
-    const today = shell.getByRole('tree', { name: 'Today' });
+    const today = shell.getByRole('tree', { name: 'Unpinned tabs' });
     await expect(today).toContainText('Smoke page', { timeout: 15_000 });
     await expect(today.getByRole('treeitem', { name: 'Smoke page', exact: true })).toHaveAttribute('aria-selected', 'true');
     await pageWhere(app.browser, (url) => url === page);
@@ -188,7 +188,7 @@ test('links handed over by the OS open in mini windows, at launch and in a runni
     const bar = (await urlOf(bars[0]!)) === `${site.origin}/from-second` ? bars[0]! : bars[1]!;
     await bar.getByRole('button', { name: /^Open in/ }).click();
     const shell = await pageWhere(app.browser, isShell);
-    await expect(shell.getByRole('tree', { name: 'Today' }).getByRole('treeitem').first()).toContainText('Smoke page');
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem').first()).toContainText('Smoke page');
     await expect.poll(() => pages(app.browser).filter((p) => isMini(p.url())).length).toBe(1);
 
     // A packaged build can be the default browser, so Settings offers it (not clicked here: that asks the OS).
