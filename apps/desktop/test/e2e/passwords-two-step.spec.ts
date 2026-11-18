@@ -12,6 +12,10 @@
  *    password, and the carried email gets no event at all.
  * 4. **Update:** a sign-in with a changed password gets the update card for the same account, and
  *    the next fill, step by step, is the new password.
+ *
+ * And phase 3's (S17 §4): **steps in two documents** (two-step-pages-*.html): the email posted to
+ * /password, whose new page has a password field alone. The save card offers the email from step 1,
+ * kept in main for the tab and site, and saves it with the password.
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -28,7 +32,10 @@ const USER = 'ada@acme-e2e.dev';
 const FIRST = 'Zq9-first-Sekrit';
 const SECOND = 'Zq9-second-Sekrit';
 const PASSPHRASE = 'correct horse battery staple';
-const FIXTURE = readFileSync(resolve(import.meta.dirname, '../fixtures/passwords/two-step-identifier.html'), 'utf8');
+const fixture = (name: string) => readFileSync(resolve(import.meta.dirname, `../fixtures/passwords/${name}`), 'utf8');
+const FIXTURE = fixture('two-step-identifier.html');
+const PAGES_EMAIL = fixture('two-step-pages-email.html');
+const PAGES_PASSWORD = fixture('two-step-pages-password.html');
 const SIGNED_IN = '<title>Signed in</title><p>Signed in.</p>';
 
 const isMenu = (url: string) => isPopover(url) && url.endsWith('#menu');
@@ -41,21 +48,24 @@ interface Site {
   posts: Record<string, string>[];
 }
 
-/** GET /login is the fixture; POST /session records what was posted and answers with a signed-in page. */
+/**
+ * GET /login is the fixture, GET /pages the first of the two documents; POST /password answers with the second, and
+ * POST /session with a signed-in page. Each post's fields are recorded.
+ */
 function startSite(): Promise<Site> {
   const posts: Record<string, string>[] = [];
   const server = createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/session') {
+    if (req.method === 'POST' && (req.url === '/session' || req.url === '/password')) {
       let body = '';
       req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
       req.on('end', () => {
         posts.push(Object.fromEntries(new URLSearchParams(body)));
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        res.end(SIGNED_IN);
+        res.end(req.url === '/password' ? PAGES_PASSWORD : SIGNED_IN);
       });
       return;
     }
-    const page = req.url === '/login' ? FIXTURE : null;
+    const page = req.url === '/login' ? FIXTURE : req.url === '/pages' ? PAGES_EMAIL : null;
     res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page ?? 'not found');
   });
@@ -163,6 +173,45 @@ test('passwords: a two-step identifier-then-password sign-in is saved, filled st
     await expect(menu).toBeVisible({ timeout: 10_000 });
     await press(app, 'Enter');
     await expect(page.locator('#password')).toHaveValue(SECOND);
+  } finally {
+    await app.close();
+  }
+});
+
+test('passwords: a two-step sign-in in two documents, the password page with no username, saves the email from step 1', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-two-pages-'));
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/pages`, CHORD_E2E_HOOKS: '1', CHORD_APPEARANCE: 'light', CHORD_E2E_NO_KEYRING: '1' }, { profile });
+  try {
+    const page = await pageWhere(app, (u) => u.startsWith(`${site.origin}/pages`));
+    const popover = await pageWhere(app, isCards);
+    // Step 1: the email, typed, and Next: a new document. (A moment between, as a person takes: Playwright's fill types
+    // the instant the field has focus, before the agent that focus woke is listening. Typed or not, Next takes it.)
+    await page.fill('#identifier', USER);
+    await page.waitForTimeout(300);
+    await page.click('#next');
+    await page.waitForURL(`${site.origin}/password`);
+    expect(site.posts.at(-1)).toEqual({ identifier: USER });
+    // Step 2: a password field alone. Nothing on this page says who you are.
+    expect(await page.locator('input:not([type=password])').count()).toBe(0);
+    await page.fill('#password', FIRST);
+    await page.press('#password', 'Enter');
+    await page.waitForURL(`${site.origin}/session`);
+    expect(site.posts.at(-1)).toEqual({ password: FIRST });
+    // The card offers the email from step 1, and saves it with the password.
+    const save = popover.getByRole('dialog', { name: `Save this password for ${site.host}?` });
+    await expect(save).toBeVisible({ timeout: 15_000 });
+    await expect(save.getByLabel('Username')).toHaveValue(USER);
+    await save.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
+    await save.getByLabel('Again').fill(PASSPHRASE);
+    await save.getByRole('button', { name: 'Save' }).click();
+    await expect(save).toHaveCount(0);
+    // Saved under that email: the menu on step 1 offers it.
+    await page.goto(`${site.origin}/pages`);
+    await page.focus('#identifier');
+    const menu = (await pageWhere(app, isMenu)).getByRole('listbox', { name: `Passwords for ${site.host}` });
+    await expect(menu).toBeVisible({ timeout: 10_000 });
+    await expect(menu.getByRole('option', { name: USER })).toBeVisible();
   } finally {
     await app.close();
   }

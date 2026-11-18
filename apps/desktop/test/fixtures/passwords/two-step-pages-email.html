@@ -1,0 +1,17 @@
+<!doctype html>
+<!--
+  A two-step sign-in whose steps are two documents, in Chord's own markup (passwords-two-step.spec.ts).
+  Step 1 (this page): one email field and Next, posted to /password. Step 2 (two-step-pages-password.html)
+  is a new document with only a password field: no username carried, hidden or shown. Chord keeps the
+  email from step 1 for the tab and site, so the save card can offer it (S17 §4, phase 3).
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Sign in</title>
+<style>body { margin: 40px; font: 16px system-ui, sans-serif; } label, input, button { display: block; margin: 8px 0; }</style>
+</head><body>
+<h1>Sign in</h1>
+<form action="/password" method="post">
+  <label for="identifier">Email</label>
+  <input id="identifier" name="identifier" type="email" autocomplete="username">
+  <button id="next">Next</button>
+</form>
+</body></html>

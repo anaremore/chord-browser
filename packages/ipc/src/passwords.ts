@@ -5,16 +5,17 @@
  * the sender's frame (`event.senderFrame.origin`, never a payload's word).
  *
  * **Field values, once.** A field is named by its type, id and name, never what it holds,
- * with one exception: a candidate sent at a submit signal carries the username and password
- * typed (`values`), so the save card can save them (S17 §6, step 1). Never at a blur, never
- * in any other message. Every object is strict, so a payload carrying anything else (a
+ * with two exceptions: a candidate sent at a submit signal carries the username and password
+ * typed (`values`), so the save card can save them (S17 §6, step 1), and a first step's submit
+ * (`step`) carries the username typed there, for the password step after it (S17 §4, phase 3).
+ * Never at a blur, never in any other message. Every object is strict, so a payload carrying anything else (a
  * `value`, a `password`) is refused whole.
  */
 import { PASSWORD_LIMITS, PASSWORDS_MAX_FORMS } from '@chord/core';
 import { z } from 'zod';
 
 /** The channels, by the agent's own name for each (the sentinel prefixes `passwords:`). */
-export const PASSWORDS_AGENT_CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'gone', 'still', 'hint', 'filled'] as const;
+export const PASSWORDS_AGENT_CHANNELS = ['focus', 'blur', 'forms', 'candidate', 'step', 'gone', 'still', 'hint', 'filled'] as const;
 export type PasswordsAgentChannel = (typeof PASSWORDS_AGENT_CHANNELS)[number];
 /** The preload asks main for the agent's script on this one (`invoke`). */
 export const PASSWORDS_AGENT_SOURCE = 'passwords:agent';
@@ -110,6 +111,18 @@ export const PasswordsCandidate = z.strictObject({
   .refine((c) => c.signal !== 'blur' || c.values === undefined);
 export type PasswordsCandidate = z.infer<typeof PasswordsCandidate>;
 
+/**
+ * A first step's submit (S17 §4, phase 3): a form the classifier reads as `username-only`, submitted with its username
+ * (typed or not at your Enter or click; at a form's `submit` alone, only one typed or filled). Main keeps it for the tab and site a few minutes (Chromium's `possible_usernames_`), for a
+ * password step that has no username field of its own. Never sent at a blur, nor for any other kind of form.
+ */
+export const PasswordsStep = z.strictObject({
+  formId,
+  signal: z.enum(['submit', 'enter', 'button']),
+  username: z.string().min(1).max(PASSWORD_LIMITS.username),
+});
+export type PasswordsStep = z.infer<typeof PasswordsStep>;
+
 /** After a submit signal: the password field went, or was hidden, within the agent's watch. */
 export const PasswordsGone = z.strictObject({ formId });
 /** After a submit signal: the form is still shown at the end of the watch. */
@@ -156,6 +169,7 @@ export const passwordsAgentSchemas = {
   blur: PasswordsBlur,
   forms: PasswordsForms,
   candidate: PasswordsCandidate,
+  step: PasswordsStep,
   gone: PasswordsGone,
   still: PasswordsStill,
   hint: PasswordsHint,

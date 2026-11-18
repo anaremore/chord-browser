@@ -54,7 +54,7 @@ function setup({ isPrivate = false, on = true, clock = { t: 0 } } = {}) {
   const page = fakeContents(session);
   detector.attachPage(page.contents);
   const seen: [string, Record<string, unknown>][] = [];
-  for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) detector.events.on(type, (e: unknown) => seen.push([type, e as Record<string, unknown>]));
+  for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed', 'firstStep'] as const) detector.events.on(type, (e: unknown) => seen.push([type, e as Record<string, unknown>]));
   return { detector, session, page, seen };
 }
 
@@ -166,6 +166,10 @@ describe('payloads', () => {
     ['a password longer than the vault keeps', 'candidate', { ...CANDIDATE, values: { username: 'ada', password: 'x'.repeat(1001) } }],
     ['an empty password', 'candidate', { ...CANDIDATE, values: { username: 'ada', password: '' } }],
     ['anything else beside the values', 'candidate', { ...CANDIDATE, values: { username: 'ada', password: 'hunter2', origin: 'https://bank.example' } }],
+    ['a first step at a blur (only a submit sends one)', 'step', { formId: 'f1', signal: 'blur', username: 'ada' }],
+    ['a first step with no username', 'step', { formId: 'f1', signal: 'enter', username: '' }],
+    ['a first step with a password beside its username', 'step', { formId: 'f1', signal: 'enter', username: 'ada', password: 'hunter2' }],
+    ['a first step longer than the vault keeps', 'step', { formId: 'f1', signal: 'enter', username: 'x'.repeat(501) }],
   ])('refuses %s', (_name, channel, payload) => {
     expect(checkMessage(channel as 'focus', payload)).toBeNull();
   });
@@ -216,6 +220,17 @@ describe('events', () => {
     expect(seen.map(([t]) => t)).toEqual(['submitted', 'signedIn']);
     expect(JSON.stringify(seen[0]![1])).not.toContain('hunter2');
     expect(seen[1]![1]).toMatchObject({ values });
+  });
+
+  it("a first step's username: an event for the assist, never from a private window, and only from the main frame", () => {
+    const step = { formId: 'f1', signal: 'button', username: 'ada@example.com' };
+    const open = setup();
+    open.page.send('passwords:step', step);
+    open.page.send('passwords:step', step, frame('https://example.com', 2, open.page.contents.mainFrame as unknown as Frame));
+    expect(open.seen).toEqual([['firstStep', { contents: open.page.contents, origin: 'https://example.com', formId: 'f1', username: 'ada@example.com' }]]);
+    const priv = setup({ isPrivate: true });
+    priv.page.send('passwords:step', step);
+    expect(priv.seen).toEqual([]);
   });
 
   it("a private window's values are dropped as they arrive, and nothing is signed in", () => {

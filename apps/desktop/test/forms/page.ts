@@ -4,7 +4,7 @@
  * file or one of Chord's fixtures, with each field's label from the file.
  */
 import { classifyPasswordForm, type PasswordFieldRole, type PasswordFormKind, type PasswordFormRecord } from '@chord/core';
-import { scanDocument } from '../../src/passwords/agent/scan';
+import { scanDocument, submittedBy } from '../../src/passwords/agent/scan';
 
 /** One field as the suite scores it. */
 export interface PageField {
@@ -56,3 +56,54 @@ function scan(): PageResult {
 }
 
 (globalThis as unknown as { chordFormsScan: typeof scan }).chordFormsScan = scan;
+
+/** What the click listener would take as a submit signal on a page, against DuckDuckGo's `data-manual-submit` labels. */
+export interface SubmitSignals {
+  /** Elements a person could click: buttons, links, and short-worded elements with no field inside. */
+  readonly candidates: number;
+  /** Labelled submit buttons. */
+  readonly labelled: number;
+  /** Labelled submit buttons a click on (or inside) counts as a credential form's submit. */
+  readonly found: number;
+  /** Clicks counted as a submit on an element neither labelled nor around or inside a labelled one. */
+  readonly falseSignals: number;
+  /** The false ones, for tuning: `tag "words"`. */
+  readonly examples: string[];
+}
+
+const CLICKABLE = 'button, input[type=submit], input[type=button], input[type=image], [role=button], a';
+
+function submitSignals(): SubmitSignals {
+  const forms = scanDocument(document).map((scanned) => ({ scanned, classified: classifyPasswordForm(scanned.record, 'filling') }));
+  const credential = forms.filter((f) => f.classified);
+  const anchorOf = (f: (typeof forms)[number]) => {
+    const password = f.scanned.elements.find((e) => e instanceof HTMLInputElement && e.type === 'password') ?? null;
+    if (password || f.classified?.kind !== 'username-only' || !f.classified.username) return password;
+    const i = f.scanned.record.fields.findIndex((x) => x.key === f.classified!.username!.key);
+    return f.scanned.elements[i] ?? null;
+  };
+  const labelled = [...document.querySelectorAll('[data-manual-submit]')];
+  const found = new Set<Element>();
+  let candidates = 0;
+  let falseSignals = 0;
+  const examples: string[] = [];
+  if (!credential.length) return { candidates: 0, labelled: labelled.length, found: 0, falseSignals: 0, examples };
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el.matches('input:not([type=submit]):not([type=button]):not([type=image]), select, textarea, script, style, option')) continue;
+    const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const clickable = el.matches(CLICKABLE) || (el.childElementCount <= 2 && text.length > 0 && text.length <= 40 && !el.querySelector('input, select, textarea'));
+    if (!clickable) continue;
+    candidates++;
+    const k = submittedBy(el, forms, anchorOf);
+    if (!k || !k.classified) continue;
+    const label = el.closest('[data-manual-submit]') ?? el.querySelector('[data-manual-submit]');
+    if (label) found.add(label);
+    else {
+      falseSignals++;
+      examples.push(`${el.tagName.toLowerCase()} "${text.slice(0, 40)}"`);
+    }
+  }
+  return { candidates, labelled: labelled.length, found: found.size, falseSignals, examples };
+}
+
+(globalThis as unknown as { chordSubmitSignals: typeof submitSignals }).chordSubmitSignals = submitSignals;
