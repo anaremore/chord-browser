@@ -707,6 +707,12 @@ const plainClicks: { name: string; html: string; signal: boolean }[] = [
   { name: 'a heading', html: `<div><h1 id="go" style="cursor:pointer">Sign in</h1>${FIELDS}<button>Go</button></div>`, signal: false },
   { name: 'a link that reads "Log in"', html: `<div>${FIELDS}<a id="go" href="#">Log in</a></div>`, signal: false },
   { name: 'a show-password toggle drawn as a div', html: `<div>${FIELDS}<div id="go" style="cursor:pointer">Show</div></div>`, signal: false },
+  // Review of 3A-1.
+  { name: 'a div with role=link that reads "Log in"', html: `<div>${FIELDS}<div id="go" role="link" tabindex="0">Log in</div></div>`, signal: false },
+  { name: 'a span inside a role=link', html: `<div>${FIELDS}<div role="link" tabindex="0"><span id="go">Sign in</span></div></div>`, signal: false },
+  { name: '"Sign in with SSO" drawn as a div', html: `<div>${FIELDS}<div id="go" style="cursor:pointer">Sign in with SSO</div></div>`, signal: false },
+  { name: '"Continue with passkey" drawn as a div', html: `<div>${FIELDS}<div id="go" style="cursor:pointer">Continue with passkey</div></div>`, signal: false },
+  { name: '"Single sign-on" as a button beside the fields', html: `<div>${FIELDS}<button id="go" type="button">Single sign-on</button><button type="button">Sign in</button></div>`, signal: false },
   {
     name: 'a "Sign in" div far from the fields',
     html: `<div><div><div><div><div><div><div><div>${FIELDS}</div></div></div></div></div></div></div></div><div id="go" style="cursor:pointer">Sign in</div>`,
@@ -741,4 +747,22 @@ test('a first step whose password field the last scan saw hidden, but typed in: 
   const submits = (await a.of('candidate')).filter((x) => x['signal'] !== 'blur');
   expect(submits).toHaveLength(1);
   expect(submits[0]!['values']).toMatchObject({ username: 'ada@example.com', password: 'secret pass' });
+});
+
+test("a plain div's submit made by the page's script (an untrusted click or Enter): no first step's username, no candidate", async ({ page }) => {
+  const a = await open(page, '<h1>Log in</h1><div><input id="u" name="email" type="email" aria-label="Email"><div id="next" tabindex="0">Continue</div></div>');
+  await page.fill('#u', 'ada@example.com');
+  await a.clear();
+  await page.evaluate(() => {
+    document.getElementById('next')!.click();
+    document.getElementById('next')!.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    document.getElementById('u')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, composed: true }));
+  });
+  await a.settle();
+  expect(await a.of('step')).toEqual([]);
+  expect(await a.of('candidate')).toEqual([]);
+  // The same Continue clicked by a person: the first step's username.
+  await page.click('#next');
+  await a.settle();
+  expect((await a.of('step')).map((m) => m['username'])).toEqual(['ada@example.com']);
 });

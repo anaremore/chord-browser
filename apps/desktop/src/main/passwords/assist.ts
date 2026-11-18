@@ -201,7 +201,9 @@ interface Presave {
 
 /**
  * A first step's username, for the tab and site (its registrable domain, as saving reads it): in memory only, never from
- * a private window, gone at `FIRST_STEP_MS`, a save, passwords turned off there, or the tab closing.
+ * a private window. Used at most once: the next sign-in on its site, worked or failed, card or not, takes it away
+ * (review of 3A-1: a second account's password step mustn't get the first one's). Gone too at `FIRST_STEP_MS`, when
+ * passwords are turned off there, or the tab closes; a newer first step on the same site replaces it.
  */
 interface FirstStep {
   readonly site: string;
@@ -320,8 +322,8 @@ export class PasswordAssist {
   private readonly quiet = new Map<WebContents, { formId: string; role: string; kind: string; generate: boolean }>();
   /** Each tab page's generated password, saved for a site (S17 §6). */
   private readonly presaves = new Map<WebContents, Presave>();
-  /** Each tab page's last first step's username (S17 §4, phase 3). */
-  private readonly firstSteps = new Map<WebContents, FirstStep>();
+  /** Each tab page's last first step's username, by site (S17 §4, phase 3). */
+  private readonly firstSteps = new Map<WebContents, Map<string, FirstStep>>();
   /** Rules each page asked for that can't be met (`makeFor`). */
   private readonly unmet = new WeakMap<WebContents, Set<string>>();
   private readonly generate: (origin: string, rules: GeneratorRules) => Promise<Generated | null>;
@@ -348,6 +350,8 @@ export class PasswordAssist {
     // A sign-in there that failed: what an earlier one left to save is no longer what you use.
     events.on('failed', (e) => {
       this.dropCardsOf(e.contents);
+      // The first step's username was for this sign-in; a retry, or another account, doesn't get it.
+      void this.takeFirstStep(e.contents, e.origin);
       // The site didn't take it: the tab's presave there is as if never submitted, so ↻ changes it rather than making
       // another (review round 1 of #53).
       const kept = this.presaveFor(e.contents, e.origin);
@@ -402,7 +406,7 @@ export class PasswordAssist {
       this.quiet.delete(contents);
       this.dropCardsOf(contents);
       this.dropPresave(contents);
-      this.dropFirstStep(contents);
+      this.dropFirstSteps(contents);
     });
   }
 
@@ -835,28 +839,46 @@ export class PasswordAssist {
     // Again after the wait: the tab closed, or passwords turned off there, since (review round 1 of #59).
     const now = e.contents.isDestroyed() ? null : host.tabOf(e.contents);
     if (!site || !now || now.private || !host.passwordsOn(now.chordId)) return;
-    this.dropFirstStep(e.contents);
+    // A newer first step replaces the one for its own site only (review of 3A-1).
+    this.dropFirstStep(e.contents, site);
     const kept: FirstStep = { site, username: e.username, timer: null };
     kept.timer = this.setTimer(() => {
-      if (this.firstSteps.get(e.contents) === kept) this.dropFirstStep(e.contents);
+      if (this.firstSteps.get(e.contents)?.get(site) === kept) this.dropFirstStep(e.contents, site);
     }, FIRST_STEP_MS);
-    this.firstSteps.set(e.contents, kept);
+    let bySite = this.firstSteps.get(e.contents);
+    if (!bySite) this.firstSteps.set(e.contents, (bySite = new Map()));
+    bySite.set(site, kept);
   }
 
-  /** The tab's first step's username for the site of `origin`, or null. */
+  /** The tab's first step's username for the site of `origin`, or null: to look at (the menu, a presave), not to use up. */
   private async firstStepFor(contents: WebContents, origin: string): Promise<string | null> {
-    const kept = this.firstSteps.get(contents);
-    if (!kept) return null;
+    if (!this.firstSteps.get(contents)?.size) return null;
     const site = await this.siteOf(origin).catch(() => null);
-    return site && this.firstSteps.get(contents) === kept && kept.site === site ? kept.username : null;
+    return (site && this.firstSteps.get(contents)?.get(site)?.username) || null;
   }
 
-  private dropFirstStep(contents: WebContents): void {
-    const kept = this.firstSteps.get(contents);
-    if (!kept) return;
+  /** A sign-in on the site of `origin` ended, worked or failed: its first step's username, which goes with it (used once). */
+  private async takeFirstStep(contents: WebContents, origin: string): Promise<string | null> {
+    if (!this.firstSteps.get(contents)?.size) return null;
+    const site = await this.siteOf(origin).catch(() => null);
+    const username = (site && this.firstSteps.get(contents)?.get(site)?.username) || null;
+    if (site) this.dropFirstStep(contents, site);
+    return username;
+  }
+
+  private dropFirstStep(contents: WebContents, site: string): void {
+    const bySite = this.firstSteps.get(contents);
+    const kept = bySite?.get(site);
+    if (!bySite || !kept) return;
     if (kept.timer !== null) this.clearTimer(kept.timer);
     kept.username = '';
-    this.firstSteps.delete(contents);
+    bySite.delete(site);
+    if (!bySite.size) this.firstSteps.delete(contents);
+  }
+
+  /** Every site's, for the tab (it closed, or passwords were turned off there). */
+  private dropFirstSteps(contents: WebContents): void {
+    for (const site of [...(this.firstSteps.get(contents)?.keys() ?? [])]) this.dropFirstStep(contents, site);
   }
 
   private close(menu: Menu): void {
@@ -887,7 +909,7 @@ export class PasswordAssist {
     }
     for (const contents of [...this.firstSteps.keys()]) {
       const tab = contents.isDestroyed() ? null : this.options.host.tabOf(contents);
-      if (!tab || !this.options.host.passwordsOn(tab.chordId)) this.dropFirstStep(contents);
+      if (!tab || !this.options.host.passwordsOn(tab.chordId)) this.dropFirstSteps(contents);
     }
   }
 
@@ -926,12 +948,16 @@ export class PasswordAssist {
     const tab = host.tabOf(e.contents);
     // Never in a private window (the detector and the vault refuse too), and only with what was typed.
     if (!tab || tab.private || !e.values) return;
+    // The document the sign-in ended on, read before any wait: if the tab commits another meanwhile, the card would be
+    // for a page you've left (and `leftSite`, which runs at that commit, found no card to drop yet).
+    const doc = this.docs.get(e.contents) ?? 0;
+    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc;
     const values = { ...e.values };
-    // A password step with no username of its own (a two-step sign-in's second page): the first step's (S17 §4).
-    if (!values.username && !CHANGE_KINDS.has(e.kind)) {
-      const stepped = await this.firstStepFor(e.contents, e.origin);
-      if (stepped) values.username = stepped;
-    }
+    // The first step's username goes with this sign-in, card or not, so the next account's password step can't get it.
+    // A password step with no username of its own (a two-step sign-in's second page) takes it (S17 §4).
+    const stepped = await this.takeFirstStep(e.contents, e.origin);
+    if (!here()) return;
+    if (!values.username && !CHANGE_KINDS.has(e.kind) && stepped) values.username = stepped;
     const kept = this.presaveFor(e.contents, e.origin);
     const generated = kept && kept.password === values.password ? kept : null;
     if (CHANGE_KINDS.has(e.kind)) return this.changed(e, tab, values, generated);
@@ -939,10 +965,8 @@ export class PasswordAssist {
     // and the saved card says so (the owner's design 5A), with *Delete it*.
     if (generated) {
       this.dropPresave(e.contents);
-      const doc = this.docs.get(e.contents) ?? 0;
       const done = await this.options.vault.presaved('confirm', generated.id, e.origin, tab.chordId, { ...(values.username ? { username: values.username } : {}), password: values.password }).catch(() => false);
-      if (done) this.dropFirstStep(e.contents);
-      if (!done || e.contents.isDestroyed() || (this.docs.get(e.contents) ?? 0) !== doc) return;
+      if (!done || !here()) return;
       const site = await this.siteOf(e.origin).catch(() => null);
       if (e.contents.isDestroyed()) return;
       this.showCard({ tab, contents: e.contents, origin: e.origin, site, kind: 'saved', locked: false, setup: false, values: { username: values.username, password: '' }, presaved: generated.id, until: this.now() + HOLD_MS });
@@ -951,10 +975,6 @@ export class PasswordAssist {
     if (!SAVE_KINDS.has(e.kind)) return;
     // The candidate's own deadline: the card keeps what was typed no longer than the tracker would have.
     const until = e.valuesUntil ?? this.now() + HOLD_MS;
-    // The document the sign-in ended on: if the tab commits another while the vault answers, the card would be for a
-    // page you've left (and `leftSite`, which runs at that commit, found no card to drop yet).
-    const doc = this.docs.get(e.contents) ?? 0;
-    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc;
     const answer = await vault.candidateFor({ origin: e.origin, username: values.username, password: values.password, chordId: tab.chordId });
     if (!here()) return;
     if (answer.kind !== 'new' && answer.kind !== 'update' && answer.kind !== 'locked') return;
@@ -1240,7 +1260,6 @@ export class PasswordAssist {
     card.busy = false;
     if (saved.ok) {
       this.dropCard(card);
-      this.dropFirstStep(card.contents);
       // The first one: where it went.
       if (setup) host.toast(this.windowOf(card), 'passwords:saved', 'Saved. It’s in Settings → Passwords.');
       return;

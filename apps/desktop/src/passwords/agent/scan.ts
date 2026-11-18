@@ -193,8 +193,9 @@ const buttonText = (b: Element) => clip(tagOf(b) === 'INPUT' ? (b as HTMLInputEl
 /** A button that submits its form: `<button>` without a type or of type submit, `input[type=submit|image]`. */
 export const isSubmit = (b: Element) => (tagOf(b) === 'BUTTON' ? ((b as HTMLButtonElement).type || 'submit') === 'submit' : tagOf(b) === 'INPUT' && /^(submit|image)$/i.test((b as HTMLInputElement).type));
 
-/** Words on a button that isn't the form's submit: a password's show or hide toggle, help and recovery links, cancel, and signing in with another site. */
-const NOT_SUBMIT = /\b(show|hide|reveal|toggle|view|forgot|forgotten|cancel|close|back|help)\b|\beye\b|\bwith (google|apple|facebook|microsoft|github|twitter|x|linkedin)\b/i;
+/** Words on a button that isn't the form's submit: a password's show or hide toggle, help and recovery links, cancel, signing in with another site, and signing in with single sign-on or a passkey (no password: review of 3A-1). */
+const NOT_SUBMIT =
+  /\b(show|hide|reveal|toggle|view|forgot|forgotten|cancel|close|back|help)\b|\beye\b|\bwith (google|apple|facebook|microsoft|github|twitter|x|linkedin)\b|\b(sso|passkeys?)\b|\bsingle[ -]?sign[ -]?on\b/i;
 
 /** The most characters, and words, a plain element may say to count as a button: a label, not a sentence. */
 const PLAIN_WORDS_MAX = 40;
@@ -211,11 +212,11 @@ const pressable = (el: Element) =>
  * just above the click, that shows it can be pressed and whose own few words read as the form's submit:
  * Next or Continue, sign in on any form but a sign-up, sign up on a sign-up only (a "Sign up" link on a sign-in page
  * isn't its submit). Never a heading, label or paragraph, a question ("New here? Sign up"), a toggle, help or recovery,
- * an element holding a field, or a link or anything in one: on the corpus, links that read "Log in" are another way to
+ * an element holding a field, or a link (`<a>` or `role=link`) or anything in one: on the corpus, links that read "Log in" are another way to
  * sign in far more often than a form's submit (submit-baseline.json).
  */
 function plainSubmit(target: Element, kind: string | null): Element | null {
-  if (target.closest('a')) return null;
+  if (target.closest('a, [role=link]')) return null;
   let el: Element | null = target;
   for (let depth = 0; depth < 3 && el; depth++, el = parentOf(el)) {
     const tag = tagOf(el);

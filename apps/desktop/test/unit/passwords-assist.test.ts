@@ -1980,3 +1980,72 @@ describe("a first step's username while main waits (review round 1 of #59)", () 
     expect(lastUsername(t)).toBe('ada@acme.dev');
   });
 });
+
+describe("a first step's username is used once (review of 3A-1)", () => {
+  const step = async (t: ReturnType<typeof setup>, username = 'alice@acme.dev', origin = ORIGIN) => {
+    t.events.emit('firstStep', { contents: t.contents, origin, formId: 'f1', username } as never);
+    await flush();
+    await flush();
+  };
+  const noUsername = { values: { username: '', password: VALUES.password } };
+  const lastUsername = (t: ReturnType<typeof setup>) => (t.vault.candidateFor.mock.calls.at(-1) as unknown as [{ username: string }] | undefined)?.[0].username;
+
+  it('two sign-ins in a row: alice’s saved one (no card), then bob picked from the site’s chooser (no new first step): bob’s step gets no username', async () => {
+    const t = setup({ candidate: { kind: 'same', id: 'a1' } });
+    await step(t, 'alice@acme.dev');
+    await t.signedIn(noUsername);
+    expect(lastUsername(t)).toBe('alice@acme.dev');
+    expect(t.assist.cardFor('n1')).toBeNull();
+    await t.signedIn({ values: { username: '', password: 'bobs password' } });
+    expect(lastUsername(t)).toBe('');
+  });
+
+  it('a sign-in that failed uses it up too: the retry on the same step has none', async () => {
+    const t = setup();
+    await step(t);
+    t.events.emit('failed', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, why: 'still-shown' } as never);
+    await flush();
+    await flush();
+    await t.signedIn(noUsername);
+    expect(lastUsername(t)).toBe('');
+  });
+
+  it('…but a sign-in on another site leaves it alone', async () => {
+    const t = setup();
+    await step(t);
+    await t.signedIn({ ...noUsername, origin: 'https://gitlab.com' });
+    await t.signedIn(noUsername);
+    expect(lastUsername(t)).toBe('alice@acme.dev');
+  });
+
+  it('a newer first step replaces only its own site’s', async () => {
+    const t = setup();
+    await step(t, 'alice@acme.dev', ORIGIN);
+    await step(t, 'bob@other.dev', 'https://gitlab.com');
+    await t.signedIn(noUsername);
+    expect(lastUsername(t)).toBe('alice@acme.dev');
+    await t.signedIn({ ...noUsername, origin: 'https://gitlab.com' });
+    expect(lastUsername(t)).toBe('bob@other.dev');
+  });
+
+  it('a navigation while the first step is looked up at the sign-in: no card for the page left', async () => {
+    let release: () => void = () => {};
+    let gate: Promise<void> | null = null;
+    const t = setup({
+      siteOf: async (origin: string) => {
+        if (gate) await gate;
+        return naiveSite(origin);
+      },
+    });
+    await step(t);
+    gate = new Promise<void>((done) => (release = done));
+    t.events.emit('signedIn', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, how: 'form-gone', hint: null, values: { username: '', password: VALUES.password } } as never);
+    await flush();
+    t.page.emit('did-navigate', {}, 'https://github.com/elsewhere', 200);
+    gate = null;
+    release();
+    await settle();
+    expect(t.vault.candidateFor).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+});
