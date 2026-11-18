@@ -291,6 +291,9 @@ function ShareCard({ prompt, appearance, platform }: { prompt: SharePrompt; appe
   );
 }
 
+/** A field you type into (the box's username and password), where Space types rather than presses. */
+const isTextField = (target: EventTarget) => target instanceof HTMLInputElement && target.type !== 'checkbox';
+
 /** What a filled password field holds: a mask, never the password, which stays in main. */
 const FILLED_MASK = '•'.repeat(10);
 
@@ -319,8 +322,8 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   const [remember, setRemember] = useState(prompt.remember ?? false);
   const ids = useId();
   // Sign in, the chooser and Unlock wait a moment after the box appears (disabled, so Enter doesn't submit either): a
-  // page can't time the box to appear under a click, or a held Enter, meant for itself. Then Enter must be pressed
-  // afresh: a key held through the wait only repeats (prompt-keys.ts). Cancel and Escape always work.
+  // page can't time the box to appear under a click, or a held Enter, meant for itself. Then Enter and Space must be
+  // pressed afresh: a key held through the wait only repeats, or is let go (prompt-keys.ts). Cancel and Escape always work.
   const [keys] = useState(() => new PromptKeys());
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -370,7 +373,10 @@ function AuthCard({ prompt }: { prompt: AuthPrompt }) {
       aria-labelledby={`${ids}-title`}
       aria-describedby={`${ids}-notes`}
       onKeyDownCapture={(e) => {
-        if (!keys.keydown({ key: e.key, repeat: e.repeat })) e.preventDefault();
+        if (!keys.keydown({ key: e.key, repeat: e.repeat, field: isTextField(e.target) })) e.preventDefault();
+      }}
+      onKeyUpCapture={(e) => {
+        if (!keys.keyup({ key: e.key, field: isTextField(e.target) })) e.preventDefault();
       }}
       onSubmit={(e) => {
         e.preventDefault();

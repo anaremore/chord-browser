@@ -112,6 +112,14 @@ describe('AuthBroker with the vault', () => {
     }
     getURL = () => this.url;
     isDestroyed = () => false;
+    /** Something in the page is loading: a navigation under way keeps it so. */
+    loading = true;
+    isLoading = () => this.loading;
+    /** Nothing in the page is loading any more. */
+    stopLoading() {
+      this.loading = false;
+      this.emit('did-stop-loading');
+    }
     /** A frame starts navigating to `url`. */
     navigate(url: string, frame = MAIN) {
       this.emit('did-start-navigation', { url, isSameDocument: false, isMainFrame: frame === MAIN, frame: { frameTreeNodeId: frame } });
@@ -123,8 +131,13 @@ describe('AuthBroker with the vault', () => {
     fail(url: string, frame = MAIN) {
       this.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', url, frame === MAIN, frame, frame);
     }
-    /** The iframe goes (the page removes it): its navigation's cancellation names a frame main can't find any more. */
-    remove(frame: number, url: string) {
+    /** The iframe goes, as Electron reports it: nothing of its navigation, but the page stops loading, if that was all. */
+    remove(frame: number) {
+      this.frames.delete(frame);
+      this.stopLoading();
+    }
+    /** The iframe goes, and its navigation's cancellation names a frame main can't find any more. */
+    removeNamingNothing(frame: number, url: string) {
       this.frames.delete(frame);
       this.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', url, false, -1, -1);
     }
@@ -604,14 +617,15 @@ describe('AuthBroker with the vault', () => {
   });
 
   it.each([
-    ['while its box is up', false],
-    ['after the answer, with Remember', true],
-  ])('an iframe removed %s takes the box, and what was typed, with it', async (_name, answered) => {
+    ['while its box is up', false, (tab: Page) => tab.remove(FRAME)],
+    ['after the answer, with Remember', true, (tab: Page) => tab.remove(FRAME)],
+    ['and its cancellation names a frame that’s gone', false, (tab: Page) => tab.removeNamingNothing(FRAME, ADDRESS)],
+  ])('an iframe removed %s takes the box, and what was typed, with it', async (_name, answered, removal) => {
     const { broker, vault, page } = setUp();
     const tab = page('https://evil.example/');
     const { prompt, answer } = await ask(broker, tab, { frame: FRAME });
     if (answered) await broker.respond(prompt!.id, { username: 'ada', password: 'typed' }, true);
-    tab.remove(FRAME, ADDRESS);
+    removal(tab);
     expect(broker.promptFor('tab-1' as never)).toBeNull();
     expect(answer).toHaveBeenCalledOnce();
     // A frame made in its place, committing the router's page, says nothing of it.
@@ -626,7 +640,7 @@ describe('AuthBroker with the vault', () => {
     const tab = page(`${ORIGIN}/`);
     tab.navigate('https://elsewhere.test/', SIBLING);
     const { prompt } = await ask(broker, tab, { frame: FRAME });
-    tab.remove(SIBLING, 'https://elsewhere.test/');
+    tab.removeNamingNothing(SIBLING, 'https://elsewhere.test/');
     expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id });
   });
 
@@ -643,6 +657,25 @@ describe('AuthBroker with the vault', () => {
     tab.fail(`${ORIGIN}/slow`, FRAME);
     expect(broker.promptFor('tab-1' as never)).toBeNull();
     expect(answer).toHaveBeenCalledWith();
+  });
+
+  it('the page stopping loading ends what it was asking: a box, an unplaced one, and what was typed', async () => {
+    const { broker, vault, page } = setUp();
+    const tab = page(`${ORIGIN}/`);
+    const { prompt, answer } = await ask(broker, tab, { frame: FRAME });
+    await broker.respond(prompt!.id, { username: 'ada', password: 'typed' }, true);
+    const unplaced = await ask(broker, tab, { url: `${ORIGIN}/other`, navigate: false });
+    expect(unplaced.prompt).toMatchObject({ remember: null });
+    // Still loading (another frame, say): nothing ends.
+    tab.emit('did-stop-loading');
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: unplaced.prompt!.id });
+    tab.stopLoading();
+    expect(broker.promptFor('tab-1' as never)).toBeNull();
+    expect(unplaced.answer).toHaveBeenCalledWith();
+    tab.commit(ADDRESS, 200, FRAME);
+    await settle();
+    expect(answer).toHaveBeenCalledOnce();
+    expect(vault.remember).not.toHaveBeenCalled();
   });
 
   it('a navigation to an address with a fragment is placed: the request never has one', async () => {
@@ -666,6 +699,30 @@ describe('AuthBroker with the vault', () => {
     tab.fail(ADDRESS);
     expect(broker.promptFor('tab-1' as never)).toBeNull();
     expect(second.answer).toHaveBeenCalledWith();
+  });
+
+  it.each([
+    ['for another address (a redirect main never heard of)', (tab: Page) => tab.fail(`${ORIGIN}/elsewhere`, FRAME)],
+    ['from a frame main couldn’t name, the frame still there', (tab: Page) => tab.emit('did-fail-provisional-load', {}, -3, 'ERR_ABORTED', `${ORIGIN}/start`, false, -1, -1)],
+  ])('an earlier navigation’s failure that matched nothing (%s), then the next one cancelled: its box closes', async (_name, unmatched) => {
+    const { broker, page } = setUp();
+    const tab = page('https://evil.example/');
+    tab.navigate(`${ORIGIN}/start`, FRAME);
+    unmatched(tab);
+    // The frame's next navigation asks; then it's cancelled. The earlier one ended already: nothing else is to come.
+    const { answer } = await ask(broker, tab, { frame: FRAME });
+    tab.fail(ADDRESS, FRAME);
+    expect(broker.promptFor('tab-1' as never)).toBeNull();
+    expect(answer).toHaveBeenCalledWith();
+  });
+
+  it('a page whose frames can’t be read leaves its boxes as they were, and doesn’t throw', async () => {
+    const { broker, page } = setUp();
+    const tab = page('https://evil.example/');
+    const { prompt } = await ask(broker, tab, { frame: FRAME });
+    Object.defineProperty(tab, 'frames', { get: () => { throw new Error('Render frame was disposed'); } });
+    expect(() => tab.emit('did-frame-navigate', {}, ADDRESS, 200, '', false, -1, -1)).not.toThrow();
+    expect(broker.promptFor('tab-1' as never)).toMatchObject({ id: prompt!.id });
   });
 
   it('a reload after the answer, then a 200 (Chromium keeps the sign-in), saves nothing', async () => {

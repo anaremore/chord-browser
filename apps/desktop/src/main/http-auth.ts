@@ -27,10 +27,11 @@
  *   frame's navigation is tied to that navigation, and closes once every
  *   navigation it answers is gone (the frame started another, or the request
  *   failed or was cancelled): a box never outlives its request. A frame
- *   that goes (a removed iframe) takes its navigations with it, found by
- *   what frames the page still has once main can't name the one that went;
- *   and a box for a navigation main couldn't place closes once nothing in
- *   its page is navigating any more.
+ *   that goes (a removed iframe) takes its navigations with it: Electron says
+ *   nothing of them, but the page stops loading, and then nothing in it is
+ *   navigating; an event whose frame main can't name has it look at what
+ *   frames the page still has. A box for a navigation main couldn't place
+ *   closes once nothing in its page is navigating any more.
  * - **Remember.** A sign-in typed with *Remember* ticked is held here (never
  *   logged, never sent anywhere) until the server answers **that
  *   navigation**: the same frame, the same navigation (its redirects
@@ -114,6 +115,13 @@ export type AuthAnswer = { username: string; password: string } | { account: num
 interface Navigation {
   nav: number;
   url: string;
+  /**
+   * It may have ended unseen: a failure in its frame matched no navigation (another address, or a frame main couldn't
+   * name). A newer one replacing it then isn't counted as waiting for a failure of its own, so a cancellation always
+   * ends what it can, a box included; if this one was still going after all, its failure ends the newer one's box
+   * early, which only asks again.
+   */
+  doubtful?: boolean;
 }
 
 interface Pending {
@@ -246,22 +254,46 @@ export class AuthBroker {
       frames.delete(id);
       superseded.delete(id);
     };
-    /** Main couldn't name the frame: if one has gone (a removed iframe), its navigations went with it. */
+    /**
+     * Main couldn't name the frame: if one has gone (a removed iframe), its navigations went with it. What the event
+     * ended in a frame that's still there can't be told, so those frames' navigations are doubtful (see `Navigation`).
+     */
     const sweep = () => {
-      const live = this.deps?.framesOf?.(contents);
-      if (!live || contents.isDestroyed()) return;
+      if (contents.isDestroyed()) return;
+      let live: Iterable<number> | undefined;
+      try {
+        live = this.deps?.framesOf?.(contents);
+      } catch {
+        return;
+      }
+      if (!live) return;
       const present = new Set(live);
-      for (const id of [...frames.keys()]) {
-        if (present.has(id)) continue;
+      for (const [id, navigation] of [...frames]) {
+        if (present.has(id)) {
+          navigation.doubtful = true;
+          superseded.delete(id);
+          continue;
+        }
         end(id);
         this.navigationGone(contents, id, () => false);
       }
     };
+    // Nothing in the page is loading any more: every navigation in it has ended, however it did. A removed iframe's
+    // ends with no word at all (Electron reports no failure, and lists the frame a while longer), only this.
+    contents.on('did-stop-loading', () => {
+      if (contents.isDestroyed() || contents.isLoading()) return;
+      for (const id of [...frames.keys()]) {
+        end(id);
+        this.navigationGone(contents, id, () => false);
+      }
+      this.settled(contents);
+    });
     contents.on('did-start-navigation', ((details: NavigationDetails) => {
       const id = details.frame?.frameTreeNodeId;
       if (id === undefined || details.isSameDocument) return;
       const navigation = { nav: this.nextNav++, url: details.url };
-      if (frames.has(id)) superseded.set(id, (superseded.get(id) ?? 0) + 1);
+      const before = frames.get(id);
+      if (before && !before.doubtful) superseded.set(id, (superseded.get(id) ?? 0) + 1);
       frames.delete(id);
       frames.set(id, navigation);
       if (frames.size > FRAMES_MAX) {
@@ -306,7 +338,12 @@ export class AuthBroker {
         else superseded.set(id, replaced - 1);
         return;
       }
-      if (!navigation || withoutFragment(navigation.url) !== withoutFragment(url)) return;
+      if (!navigation) return;
+      // A failure that isn't the frame's navigation's (another address): that one may have ended without a word.
+      if (withoutFragment(navigation.url) !== withoutFragment(url)) {
+        navigation.doubtful = true;
+        return;
+      }
       end(id);
       this.navigationGone(contents, id, (nav) => nav !== navigation.nav);
       this.settled(contents);

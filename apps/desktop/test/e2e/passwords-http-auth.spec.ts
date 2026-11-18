@@ -13,7 +13,9 @@
  * 5. **A private window fills but doesn't save**: filled there too, no *Remember*, and a sign-in typed there
  *    leaves Settings as it was.
  *
- * And apart: a **proxy's** box has no *Remember*, and isn't filled.
+ * And apart: a **proxy's** box has no *Remember*, and isn't filled; and a box closes with its request, when the
+ * page removes the iframe that asked or the navigation is stopped (as Electron really reports them: the page stops
+ * loading, with no failure for either).
  *
  * axe checks the filled box, and the box and *Remember* are captured for the PR.
  */
@@ -260,6 +262,48 @@ test('the sign-in box: a wrong password isn’t saved, Remember saves the right 
     await app.close();
   }
   expectClean(findings);
+});
+
+test('a sign-in box closes with its request: its iframe removed, or its navigation stopped', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-http-close-'));
+  const framing = `${router.origin.replace('router.test', 'site.test')}/frame`;
+  const app = await launch({ CHORD_HOME_URL: framing, CHORD_APPEARANCE: 'light', CHORD_E2E_NO_KEYRING: '1' }, { profile, args: [MAP] });
+  try {
+    const popover = await pageWhere(app, isCards);
+    const box = popover.getByRole('alertdialog', { name: `Sign in to ${router.origin}` });
+    await expect(box).toBeVisible();
+    const framingTab = await pageWhere(app, (u) => u === framing);
+    // What main hears of each failure, as http-auth.ts does: whether its frame's ids still name a frame (`frameOf`).
+    // In Electron 45 neither case below reports one at all: the page only stops loading, which is what closes the box.
+    // Kept as an annotation, so a change in what Electron reports shows in the report.
+    await app.evaluate(({ webContents, webFrameMain }, url) => {
+      const heard: { url: string; main: boolean; named: boolean }[] = [];
+      (globalThis as unknown as { heard: typeof heard }).heard = heard;
+      const tab = webContents.getAllWebContents().find((c) => c.getURL() === url)!;
+      tab.on('did-fail-provisional-load', (_event, _code, _description, failed, main, processId, routingId) => {
+        heard.push({ url: failed, main, named: webFrameMain.fromId(processId, routingId) != null });
+      });
+    }, framing);
+    const heard = () => app.evaluate(() => (globalThis as unknown as { heard: { url: string; main: boolean; named: boolean }[] }).heard);
+    const sent = router.tried.length;
+
+    // 1. The page removes the iframe that asked: its request goes, and so does the box.
+    await framingTab.evaluate(() => document.getElementById('router')!.remove());
+    await expect(box).toBeHidden();
+    test.info().annotations.push({ type: 'failures heard: removed iframe', description: JSON.stringify(await heard()) });
+
+    // 2. The tab itself goes to the router and asks; the navigation is stopped while the box is up: the box goes.
+    await framingTab.evaluate((admin) => (location.href = admin), `${router.origin}/admin`);
+    await expect(box).toBeVisible();
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.stop(), framing);
+    await expect(box).toBeHidden();
+    test.info().annotations.push({ type: 'failures heard: both', description: JSON.stringify(await heard()) });
+    // Nothing was ever sent to the router.
+    expect(router.tried.length).toBe(sent);
+  } finally {
+    await app.close();
+  }
 });
 
 test('a proxy’s sign-in box has no Remember, and isn’t filled', async () => {
