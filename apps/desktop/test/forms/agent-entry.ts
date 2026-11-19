@@ -17,8 +17,8 @@ let onFill: ((payload: unknown) => void) | null = null;
       send: (channel, payload) => void messages.push([channel, structuredClone(payload)]),
       onFill: (listener) => void (onFill ??= listener),
       // The sentinel's sandbox record (sandbox-recorder.ts, where a spec installed it): without it, no frame is used.
-      ...(typeof (globalThis as { chordSandboxed?: unknown }).chordSandboxed === 'function'
-        ? { sandboxed: (el: Element) => (globalThis as unknown as { chordSandboxed: (el: Element) => boolean }).chordSandboxed(el) }
+      ...(typeof (globalThis as { chordVouched?: unknown }).chordVouched === 'function'
+        ? { vouched: (el: Element) => (globalThis as unknown as { chordVouched: (el: Element) => boolean }).chordVouched(el) }
         : {}),
     });
   },

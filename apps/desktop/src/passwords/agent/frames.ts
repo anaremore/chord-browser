@@ -209,20 +209,23 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
   let focusedBy: { token: object; formId: string } | null = null;
   /**
    * What each frame document's agent has seen of its own frames since it started: those with a `sandbox` attribute
-   * change, and the documents its frames already had then (their history wasn't watched).
+   * change, and each frame's document as of its last `load` heard in that document's own tree. A frame's `load` isn't
+   * composed, so a frame that loaded inside a shadow root (and moved out, `moveBefore`) was never heard (round 3 of #67).
    */
-  const histories = new WeakMap<Document, { seen: WeakSet<Element>; predates: WeakSet<Document>; observer: MutationObserver }>();
+  const histories = new WeakMap<Document, { seen: WeakSet<Element>; loads: WeakMap<Element, Document | null>; observer: MutationObserver; children: MutationObserver }>();
   /**
-   * Whether a frame element ever had a `sandbox` attribute, as far as anyone watched: the sentinel watched the top
-   * document's from its start (the bridge's `sandboxed`); a frame's agent its own document's since it started. A frame in
-   * an open shadow root, or one nobody watched, counts as sandboxed (round 2 of #67).
+   * Whether a frame element may not be used, as far as anyone watched (true: refused). The top document's frames: the
+   * sentinel's word (`vouched`), watching from the document's start. A frame document's own: its agent's history since it
+   * started, which must hold the frame's current document's `load` and no `sandbox` change. With no cap: a document its
+   * watcher didn't see from its start gets nothing, wherever it sits (round 3 of #67). A frame in an open shadow root, or
+   * one nobody watched, is refused.
    */
   const record: SandboxRecord = (el) => {
     const owner = ownerOf.call(el) as Document | null;
     if (!owner || rootOf(el) !== owner) return true;
     if (owner === doc) {
       try {
-        return !bridge.sandboxed || bridge.sandboxed(el) !== false;
+        return !bridge.vouched || bridge.vouched(el) !== true;
       } catch {
         return true;
       }
@@ -230,21 +233,21 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
     const history = histories.get(owner);
     if (!history || history.seen.has(el)) return true;
     const current = contentDocumentOf(el);
-    return !!current && history.predates.has(current);
+    return !current || history.loads.get(el) !== current;
   };
-  /** A frame document's own frames, watched from now: what they have now predates the watch. */
+  /**
+   * A frame document's own frames, watched from now: their `sandbox` attributes, and (through `listen`'s `load`) their
+   * documents. And its own children: `document.open()` replaces its root, and its agent is released at once.
+   */
   const watchHistory = (d: Document) => {
     const seen = new WeakSet<Element>();
-    const predates = new WeakSet<Document>();
-    for (const f of framesIn(d, MAX_FRAMES_SEEN)) {
-      const current = contentDocumentOf(f);
-      if (current) predates.add(current);
-    }
     const observer = new MutationObserver((records) => {
       for (const r of records) seen.add(r.target as Element);
     });
     observer.observe(d, { attributes: true, attributeFilter: ['sandbox'], subtree: true });
-    histories.set(d, { seen, predates, observer });
+    const children = new MutationObserver(() => prune());
+    children.observe(d, { childList: true });
+    histories.set(d, { seen, loads: new WeakMap(), observer, children });
   };
   const sendForms = () => {
     const forms: Forms = [];
@@ -302,7 +305,9 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
     const old = a.node.doc.deref();
     if (old) {
       refused.add(old);
-      histories.get(old)?.observer.disconnect();
+      const history = histories.get(old);
+      history?.observer.disconnect();
+      history?.children.disconnect();
       histories.delete(old);
     }
     agents.delete(token);
@@ -389,7 +394,10 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
     const onLoad = (event: Event) => {
       const t = Event.prototype.composedPath.call(event)[0];
       const tag = t && typeof t === 'object' && 'tagName' in t ? String(tagOf.call(t as Element)) : '';
-      if (tag === 'IFRAME' || tag === 'FRAME') soon();
+      if (tag !== 'IFRAME' && tag !== 'FRAME') return;
+      // Its document, heard loading in this document's own tree: what vouches for it (round 3 of #67).
+      histories.get(d)?.loads.set(t as Element, contentDocumentOf(t as Element));
+      soon();
     };
     const onHide = () => soon();
     EventTarget.prototype.addEventListener.call(d, 'load', onLoad, { capture: true, passive: true });

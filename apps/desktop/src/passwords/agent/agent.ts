@@ -46,10 +46,11 @@ export interface PasswordsBridge {
   /** Main's fill: the sentinel calls this listener (registered once) with what main sent. */
   onFill?(listener: (payload: unknown) => void): void;
   /**
-   * Whether a frame element of the top document has had a `sandbox` attribute at any time since the document began
-   * (the sentinel watches from then; phase 3C). Absent: no frame is used.
+   * Whether a frame element of the top document may be used (phase 3C): the sentinel, watching from the document's
+   * start, saw no `sandbox` attribute on it ever, and heard its current document's `load` in the document's own tree
+   * (never in a shadow root, whose attributes nothing watches). Absent: no frame is used.
    */
-  sandboxed?(el: Element): boolean;
+  vouched?(el: Element): boolean;
 }
 
 /** How long after a submit signal the agent watches for the form to go, and for the page's requests (S17 §6, step 3). */

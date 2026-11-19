@@ -507,6 +507,8 @@ test('nit 4: a frame in use, rewritten with document.open() (by the top, and by 
       } else w.eval("document.open(); document.write('<p>Gone</p>'); document.close();");
     }, by);
     await page.waitForTimeout(300);
+    // Released at once (its document's children changed), before any look at the frames.
+    expect((await hubStats(page))?.agents).toBe(0);
     // The page's next report (the top's form, here none) is made without the frame's.
     await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<input id="poke" name="email" type="email">'));
     await page.locator('#poke').click();
@@ -573,3 +575,97 @@ for (const [name, style] of [
     expect(await a.of('focus')).toEqual([]);
   });
 }
+
+/* ---------- Review round 3 of #67: a document its watcher didn't see from its start gets nothing ---------- */
+
+const SANDBOX = 'allow-same-origin allow-scripts allow-forms';
+/** Moves `f` into `to` keeping its window (`moveBefore`), or says the browser has no `moveBefore`. */
+const MOVE = `(f, to) => (typeof to.moveBefore === 'function' ? (to.moveBefore(f, null), true) : false)`;
+
+for (const sandboxed of [true, false]) {
+  test(`BL1: a frame loaded in an open shadow root${sandboxed ? ', sandboxed, its attribute removed there' : ' (no sandbox)'}, then moved into the page’s tree with moveBefore: never used`, async ({ page }) => {
+    const a = await open(
+      page,
+      `<x-shell id="shell"></x-shell><div id="dst"></div><script>
+        const root = document.getElementById('shell').attachShadow({ mode: 'open' });
+        root.innerHTML = '<iframe id="fr" src="/login" ${sandboxed ? `sandbox="${SANDBOX}"` : ''} style="width:400px;height:200px"></iframe>';
+        const f = root.getElementById('fr');
+        f.addEventListener('load', () => {
+          f.removeAttribute('sandbox');
+          window.moved = (${MOVE})(f, document.getElementById('dst'));
+        }, { once: true });
+      </script>`,
+      { '/login': SIGN_IN() },
+    );
+    test.skip(!(await page.evaluate(() => (window as unknown as { moved?: boolean }).moved)), 'this Chromium has no moveBefore');
+    // The premise: in the page's tree now, no attribute, the same window.
+    expect(await page.evaluate(() => !!document.querySelector('#dst > #fr') && !document.getElementById('fr')!.hasAttribute('sandbox'))).toBe(true);
+    await notUsed(page, a);
+  });
+}
+
+test('BL1 nested (X18): in a frame in use, a frame loaded in a shadow root, sandboxed, its attribute removed there, moved into the frame’s tree: never used', async ({ page }) => {
+  const a = await open(page, `<iframe id="l1" src="/l1" style="width:440px;height:260px"></iframe>`, { '/l1': '<div id="dst"></div>', '/l1-poke': '<p>.</p>', '/login': SIGN_IN() });
+  await page.waitForTimeout(200);
+  const outer = page.frames().find((f) => f.url().endsWith('/l1'))!;
+  const moved = await outer.evaluate(
+    ([sandbox, move]) =>
+      new Promise<boolean>((done) => {
+        const host = document.createElement('x-shell');
+        document.body.append(host);
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = `<iframe id="fr" src="/login" sandbox="${sandbox}" style="width:400px;height:200px"></iframe>`;
+        const f = root.getElementById('fr')!;
+        f.addEventListener(
+          'load',
+          () => {
+            f.removeAttribute('sandbox');
+            done((eval(move) as (f: Element, to: Element) => boolean)(f, document.getElementById('dst')!));
+          },
+          { once: true },
+        );
+      }),
+    [SANDBOX, MOVE] as const,
+  );
+  test.skip(!moved, 'this Chromium has no moveBefore');
+  // Another frame loading in /l1's own tree: a look at the frames, which now finds the moved one.
+  await outer.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        document.body.insertAdjacentHTML('beforeend', '<iframe id="poke" src="/l1-poke"></iframe>');
+        document.getElementById('poke')!.addEventListener('load', () => done(), { once: true });
+      }),
+  );
+  await page.waitForTimeout(200);
+  await a.clear();
+  await page.frameLocator('#l1').frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+});
+
+test('BL2: a frame’s 101st frame, loaded sandboxed and its attribute removed at its load, before the agent woke: never used', async ({ page }) => {
+  // Another site's fillers: none of them takes one of the 20 slots, and all of them count toward a look's 100.
+  const fillers = `<iframe src="${OTHER}/filler" style="width:20px;height:20px"></iframe>`.repeat(100);
+  const a = await open(page, `<iframe id="l1" src="/l1" style="width:440px;height:600px"></iframe>`, {
+    '/l1': `${fillers}<iframe id="fr" src="/login" sandbox="${SANDBOX}" onload="this.removeAttribute('sandbox')" style="width:400px;height:200px"></iframe>`,
+    '/filler': '<p>.</p>',
+    '/l1-poke': '<p>.</p>',
+    '/login': SIGN_IN(),
+  });
+  // The fillers go, and a frame of the site loads in /l1's own tree: the next look reaches the 101st frame, which loaded
+  // before the frame's agent was watching.
+  await page.waitForTimeout(200);
+  await page.frames().find((f) => f.url().endsWith('/l1'))!.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        for (const f of [...document.querySelectorAll('iframe:not(#fr)')]) f.remove();
+        document.body.insertAdjacentHTML('beforeend', '<iframe id="poke" src="/l1-poke"></iframe>');
+        document.getElementById('poke')!.addEventListener('load', () => done(), { once: true });
+      }),
+  );
+  await page.waitForTimeout(300);
+  await a.clear();
+  await page.frameLocator('#l1').frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+});

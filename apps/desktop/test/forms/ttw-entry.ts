@@ -134,7 +134,7 @@ let onFill: ((payload: unknown) => void) | null = null;
       send: (channel, payload) => void messages.push([channel, structuredClone(payload) as Record<string, unknown>]),
       onFill: (listener) => void (onFill ??= listener),
       // The sentinel's sandbox record (sandbox-recorder.ts, installed by ttw.spec.ts at the document's start).
-      sandboxed: (el: Element) => (globalThis as unknown as { chordSandboxed?: (el: Element) => boolean }).chordSandboxed?.(el) ?? true,
+      vouched: (el: Element) => (globalThis as unknown as { chordVouched?: (el: Element) => boolean }).chordVouched?.(el) ?? false,
     });
   },
   stop() {
