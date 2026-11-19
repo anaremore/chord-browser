@@ -34,8 +34,19 @@ import type { PasswordsCandidate, PasswordsFieldSignature, PasswordsForms } from
 
 /** How long a typed form is held (S17 §6, step 1). */
 export const HOLD_MS = 5 * 60_000;
+/**
+ * After a sign-in read from its form going (no navigation), how long a request error for that form still takes it back:
+ * the agent's watch (SUBMIT_WATCH_MS), whose hints go on after `gone`. A slow 401 the quiet wait didn't see coming
+ * mustn't leave a save card for a password the site refused (review round 3 of #59).
+ */
+export const LATE_ERROR_MS = 10_000;
 /** After the new page stops loading, how long its agent has to report its forms before the check runs. */
 export const SETTLE_MS = 1500;
+/**
+ * How long after the late window closes a navigation the page made in it may still be judged (its new page loading and
+ * settling): past that, it ends with no outcome, and what was held for it stays cancelled (review round 2 of #62).
+ */
+export const LATE_NAV_CAP_MS = SETTLE_MS + 10_000;
 
 export type SubmitSignal = Exclude<PasswordsCandidate['signal'], 'blur'>;
 /** What was typed in a sign-in that was submitted: the username, and the password to save. */
@@ -48,8 +59,37 @@ export type SavingOutcome =
    * which leaves only with a sign-in that worked.
    */
   | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal; readonly values: { readonly username: string } | null }
-  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null }
-  | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' };
+  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null;
+      /**
+       * A sign-in read from its form going (no navigation): until when a late request error can still take it back
+       * (`LATE_ERROR_MS`). The assist holds Save and Update until then (S17 §6, phase 3A-2). Null after a navigation.
+       */
+      readonly lateUntil: number | null }
+  /**
+   * `superseded`: a late window's sign-in whose navigation was still being judged when you submitted again on the tab
+   * (review round 3 of #62). Nothing says it was refused; what was held for it just goes, so the new submit starts clean.
+   */
+  | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' | 'superseded' }
+  /**
+   * A navigation the page made during a form-gone sign-in's late window was judged (review round 1 of #62): the new page
+   * didn't show the sign-in's password field again, or the navigation never committed. A held save may go ahead.
+   */
+  | { readonly type: 'lateJudged'; readonly formId: string; readonly origin: string }
+  /**
+   * That navigation reached its cap (`LATE_NAV_CAP_MS` after the window) without being judged (review round 3 of #62): what
+   * was held for the sign-in is dropped, a pressed save with the toast. A miss is a missing offer, never an unjudged save.
+   */
+  | { readonly type: 'lateUnjudged'; readonly formId: string; readonly origin: string };
+
+/** A sign-in read from its form going, while a late error for it can still take it back, with its password fields. */
+interface Lately {
+  readonly formId: string;
+  readonly kind: PasswordsCandidate['kind'];
+  readonly origin: string;
+  readonly until: number;
+  readonly password: PasswordsFieldSignature | null;
+  readonly newPassword: PasswordsFieldSignature | null;
+}
 
 interface Held {
   /** The form as last reported; its `values` are the last submit's, dropped once a sign-in failed. */
@@ -115,6 +155,60 @@ const realTimers: TrackerTimers = {
 export class SubmissionTracker {
   private held: Held | null = null;
   private phase: Phase = { t: 'idle' };
+  /** The last sign-in read from its form going, while a late request error for it can still take it back. */
+  private lately: Lately | null = null;
+  /**
+   * A navigation the page made while `lately` was open, being judged as a submit's navigation is: an error response, or the
+   * new page showing the same password field, is the sign-in taken back (`failed`); anything else is `lateJudged`.
+   */
+  private lateNav: { readonly t: 'navigating'; readonly late: Lately; readonly cap: number } | { readonly t: 'settling'; readonly late: Lately; readonly cap: number; forms: PasswordsForms['forms'] | null } | null = null;
+  /**
+   * The judged sign-in's cap timer: at `LATE_NAV_CAP_MS` after its window, if nothing judged it, `lateUnjudged` goes out
+   * through `onLate` (review round 3 of #62). Set while it's being judged, even once the lazy check below has let
+   * `lateNav` go, so `judging` holds until the outcome is out.
+   */
+  #cap: { readonly late: Lately; readonly timer: unknown } | null = null;
+  readonly #onLate: (outcomes: SavingOutcome[]) => void;
+
+  /** The late window's navigation, while it's being judged: past its cap, the cap timer ends it with `lateUnjudged`. */
+  private liveLateNav(): typeof this.lateNav {
+    if (this.lateNav && this.now() > this.lateNav.cap) this.lateNav = null;
+    return this.lateNav;
+  }
+
+  /** The cap timer for `late`, kept when it's already the one running. */
+  private startCap(late: Lately, cap: number): void {
+    if (this.#cap?.late === late) return;
+    this.endCap();
+    const timer = this.#timers.setTimeout(() => {
+      if (this.#cap?.timer !== timer) return;
+      this.#cap = null;
+      this.lateNav = null;
+      this.#onLate([{ type: 'lateUnjudged', formId: late.formId, origin: late.origin }]);
+    }, Math.max(0, cap - this.now() + 1));
+    this.#cap = { late, timer };
+  }
+
+  /** Judged (or forgotten): the cap timer goes. */
+  private endCap(): void {
+    if (this.#cap) this.#timers.clearTimeout(this.#cap.timer);
+    this.#cap = null;
+  }
+
+  /** The judged navigation's end, with its outcome: the cap timer goes with it. */
+  private judged(outcome: SavingOutcome): SavingOutcome {
+    this.lateNav = null;
+    this.endCap();
+    return outcome;
+  }
+
+  /**
+   * Whether a navigation the page made during a late window is still being judged: a held save can't go ahead yet. Until
+   * its cap's outcome is out, too (it fails closed).
+   */
+  get judging(): boolean {
+    return this.liveLateNav() !== null || this.#cap !== null;
+  }
   /**
    * Runs at the earliest deadline of the copies that still hold values (the held form, and the one a navigation waits
    * on, each `HOLD_MS` after its own values came), and is set again for the next. (`#`: never in a JSON dump of the tracker.)
@@ -125,8 +219,11 @@ export class SubmissionTracker {
   constructor(
     private readonly now: () => number = Date.now,
     timers: TrackerTimers = realTimers,
+    /** Outcomes no call returns: a late window's navigation reaching its cap unjudged (`lateUnjudged`). */
+    onLate: (outcomes: SavingOutcome[]) => void = () => {},
   ) {
     this.#timers = timers;
+    this.#onLate = onLate;
   }
 
   /** The copies of a form the tracker holds: the held one, and the one a navigation waits on (often the same). */
@@ -195,6 +292,15 @@ export class SubmissionTracker {
     const values = candidate.signal === 'blur' ? (already ? before?.candidate.values : undefined) : candidate.values;
     // A blur keeps the submit's values, and their deadline; new values count from now.
     const valuesAt = !values ? null : candidate.signal === 'blur' ? (before?.valuesAt ?? this.now()) : this.now();
+    // A new submit while a late window's navigation is still judged (it came back to a form, and you submitted again):
+    // that judgment ends now, ahead of this submit, so its outcome can't land on this one (review round 3 of #62).
+    const superseded: SavingOutcome[] = [];
+    const judgedLate = this.lateNav?.late ?? this.#cap?.late ?? null;
+    if (submitted && !already && judgedLate) {
+      this.lateNav = null;
+      this.endCap();
+      superseded.push({ type: 'failed', formId: judgedLate.formId, kind: judgedLate.kind, origin: judgedLate.origin, why: 'superseded' });
+    }
     this.held = {
       candidate: values ? { ...withoutValues(candidate), values } : withoutValues(candidate),
       origin,
@@ -209,20 +315,34 @@ export class SubmissionTracker {
     // One submit is one `submitted`, however many signals it made. A second submit of the same form
     // while the first is still undecided (within the agent's 10 s watch) emits nothing either: the
     // save card's phase decides what a resubmit means.
-    if (candidate.signal === 'blur' || already) return [];
-    return [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal, values: candidate.values ? { username: candidate.values.username } : null }];
+    if (candidate.signal === 'blur' || already) return superseded;
+    return [...superseded, { type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal, values: candidate.values ? { username: candidate.values.username } : null }];
   }
 
-  hint(formId: string, status: number): void {
+  /**
+   * A request to the page's own origin answered after a submit. Held: its status rides with the form, and an error
+   * vetoes a success. Just signed in by the form going (`lately`): an error takes the sign-in back (`failed`), so its
+   * save card goes.
+   */
+  hint(formId: string, status: number): SavingOutcome[] {
     const held = this.current();
-    if (!held || !held.submitted || held.candidate.formId !== formId) return;
-    held.status = status;
-    if (status >= 400) held.error = true;
+    if (held && held.submitted && held.candidate.formId === formId) {
+      held.status = status;
+      if (status >= 400) held.error = true;
+      return [];
+    }
+    const late = this.lately;
+    if (!late || late.formId !== formId || status < 400) return [];
+    this.lately = null;
+    if (this.now() >= late.until) return [];
+    return [{ type: 'failed', formId, kind: late.kind, origin: late.origin, why: 'error-response' }];
   }
 
   /** The page's credential forms now: from the new document, for the reappeared-form check. */
   forms(report: PasswordsForms): SavingOutcome[] {
     if (this.phase.t === 'settling') this.phase.forms = report.forms;
+    const lateNav = this.liveLateNav();
+    if (lateNav?.t === 'settling') lateNav.forms = report.forms;
     return [];
   }
 
@@ -231,10 +351,21 @@ export class SubmissionTracker {
    * It's the sign-in's answer only after a submit signal: a link you clicked after typing a password isn't one.
    */
   navigationStarted(byPage: boolean): SavingOutcome[] {
+    // A late window still open: a navigation the page made is judged, as a submit's is (review round 1 of #62). One of
+    // your own forgets it. Either way a late error from the next document isn't this sign-in's: it numbers its forms afresh.
+    // A second navigation before the first was judged goes on being judged, for the same sign-in (review round 2 of #62).
+    const judgingBefore = this.liveLateNav();
+    // Open before `until`, closed at it: the assist's held writes come due at `until` (review round 3 of #62).
+    const late = this.lately && this.now() < this.lately.until ? this.lately : (judgingBefore?.late ?? null);
+    this.lately = null;
+    this.lateNav = byPage && late ? { t: 'navigating', late, cap: late.until + LATE_NAV_CAP_MS } : null;
+    if (this.lateNav) this.startCap(this.lateNav.late, this.lateNav.cap);
+    // One of your own: the assist drops what was held itself. Past its cap, the timer's outcome is still to come.
+    else if (!byPage) this.endCap();
     const held = this.current();
     if (!byPage || !held?.submitted) {
       // You went somewhere yourself, or the page did with nothing submitted: what was held belongs to the page left.
-      this.reset();
+      this.forget();
       return [];
     }
     this.phase = { t: 'navigating', held };
@@ -243,6 +374,17 @@ export class SubmissionTracker {
 
   /** The navigation ended without committing a document (a 204, a download, an aborted or failed one): nothing is decided by it. */
   navigationFailed(): SavingOutcome[] {
+    const out: SavingOutcome[] = [];
+    // The late window's navigation never committed: the page is as it was, and nothing came back on it.
+    const lateNav = this.liveLateNav();
+    if (lateNav?.t === 'navigating') {
+      const { late } = lateNav;
+      out.push(this.judged({ type: 'lateJudged', formId: late.formId, origin: late.origin }));
+    }
+    return [...out, ...this.heldNavigationFailed()];
+  }
+
+  private heldNavigationFailed(): SavingOutcome[] {
     if (this.phase.t !== 'navigating') return [];
     const { held } = this.phase;
     this.phase = { t: 'idle' };
@@ -256,6 +398,17 @@ export class SubmissionTracker {
 
   /** The main frame committed a new document, with its HTTP response code (-1 for none, as `did-navigate` gives). */
   navigated(code: number): SavingOutcome[] {
+    const out: SavingOutcome[] = [];
+    const lateNav = this.liveLateNav();
+    if (lateNav?.t === 'navigating') {
+      const { late, cap } = lateNav;
+      if (code >= 400) out.push(this.judged({ type: 'failed', formId: late.formId, kind: late.kind, origin: late.origin, why: 'error-response' }));
+      else this.lateNav = { t: 'settling', late, cap, forms: null };
+    }
+    return [...out, ...this.heldNavigated(code)];
+  }
+
+  private heldNavigated(code: number): SavingOutcome[] {
     if (this.phase.t !== 'navigating') return [];
     const { held } = this.phase;
     if (code >= 400) {
@@ -269,6 +422,18 @@ export class SubmissionTracker {
 
   /** The new page stopped loading and its agent had `SETTLE_MS` to report: the reappeared-form check. */
   settled(): SavingOutcome[] {
+    const out: SavingOutcome[] = [];
+    const lateNav = this.liveLateNav();
+    if (lateNav?.t === 'settling') {
+      const { late, forms } = lateNav;
+      // The sign-in's password field shown again on the new page: it didn't take.
+      const back = (forms ?? []).some((f) => f.kind !== 'username-only' && (sameField(late.password ?? late.newPassword, f.password) || sameField(late.newPassword ?? late.password, f.newPassword)));
+      out.push(this.judged(back ? { type: 'failed', formId: late.formId, kind: late.kind, origin: late.origin, why: 'reappeared' } : { type: 'lateJudged', formId: late.formId, origin: late.origin }));
+    }
+    return [...out, ...this.heldSettled()];
+  }
+
+  private heldSettled(): SavingOutcome[] {
     if (this.phase.t !== 'settling') return [];
     const { held, forms } = this.phase;
     this.phase = { t: 'idle' };
@@ -280,7 +445,7 @@ export class SubmissionTracker {
       return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: reappeared ? 'reappeared' : 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
+    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held), lateUntil: null }];
   }
 
   /** The main frame navigated within its document (`did-navigate-in-page`): an SPA's route change. */
@@ -307,7 +472,9 @@ export class SubmissionTracker {
       return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
+    const lateUntil = this.now() + LATE_ERROR_MS;
+    this.lately = { formId, kind: held.candidate.kind, origin: held.origin, until: lateUntil, password: held.candidate.password, newPassword: held.candidate.newPassword };
+    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held), lateUntil }];
   }
 
   /** After a submit signal, the form was still shown at the end of the agent's watch. */
@@ -327,18 +494,28 @@ export class SubmissionTracker {
 
   /** Whether a navigation's settle timer is wanted. */
   get settling(): boolean {
-    return this.phase.t === 'settling';
+    return this.phase.t === 'settling' || this.lateNav?.t === 'settling';
   }
 
   /** Whether a navigation has started and not yet committed. */
   get navigating(): boolean {
-    return this.phase.t === 'navigating';
+    return this.phase.t === 'navigating' || this.lateNav?.t === 'navigating';
   }
 
   /** Forget the form and anything typed: a navigation of your own, the page going, passwords turned off there. */
   reset(): void {
+    this.forget();
+    // A late window's navigation too (passwords turned off there, the page going): no stale judgment after (review rounds
+    // 2 and 3 of #62).
+    this.lateNav = null;
+    this.endCap();
+  }
+
+  /** What was held and typed goes; a late window's navigation being judged stays (`navigationStarted`'s). */
+  private forget(): void {
     this.dropValues();
     this.held = null;
+    this.lately = null;
     this.phase = { t: 'idle' };
     this.scheduleValues();
   }

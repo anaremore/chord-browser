@@ -30,6 +30,7 @@ export function PassphraseStep({
   note = 'Choose a passphrase to lock your passwords. Chord can’t get it back for you.',
   label = 'Passphrase',
   autoFocus = false,
+  readOnly = false,
 }: {
   value: PassphraseValue;
   onChange(next: PassphraseValue): void;
@@ -37,6 +38,8 @@ export function PassphraseStep({
   note?: string | null;
   label?: string;
   autoFocus?: boolean;
+  /** Read-only, and no *Suggest one*: the save card while its save waits (S17 §6, phase 3A-2), what it shows is what's saved. */
+  readOnly?: boolean;
 }) {
   const ids = useId();
   const first = useRef<HTMLInputElement>(null);
@@ -56,6 +59,7 @@ export function PassphraseStep({
           className={styles.input}
           type={value.shown ? 'text' : 'password'}
           value={value.passphrase}
+          readOnly={readOnly}
           autoComplete="new-password"
           spellCheck={false}
           aria-invalid={(value.touched && Boolean(lengthProblem)) || undefined}
@@ -75,6 +79,7 @@ export function PassphraseStep({
           className={styles.input}
           type={value.shown ? 'text' : 'password'}
           value={value.repeat}
+          readOnly={readOnly}
           autoComplete="new-password"
           spellCheck={false}
           aria-invalid={(value.touched && mismatch && !lengthProblem) || undefined}
@@ -92,6 +97,7 @@ export function PassphraseStep({
         <button
           type="button"
           className={styles.suggestButton}
+          disabled={readOnly}
           onClick={() => {
             const words = suggestPassphrase();
             onChange({ passphrase: words, repeat: words, shown: true, touched: false });

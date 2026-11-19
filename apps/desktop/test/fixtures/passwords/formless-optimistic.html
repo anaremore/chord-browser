@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  A formless sign-in that answers by script, in Chord's own markup (passwords-late.spec.ts, S17 phase 3A-2).
+  Sign in hides the fields at once (an app that shows its next view before the server has answered) and
+  posts them to /session; the server takes its time, and answers 401 for a wrong password. A wrong one puts
+  the fields back with an alert, but only after Chord has read the sign-in as done.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Sign in</title>
+<style>body { margin: 40px; font: 16px system-ui, sans-serif; } label, input, button { display: block; margin: 8px 0; }</style>
+</head><body>
+<h1>Sign in</h1>
+<div id="app">
+  <div id="fields">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+    <button id="go" type="button">Sign in</button>
+  </div>
+</div>
+<script>
+  const fields = document.getElementById('fields');
+  document.getElementById('go').addEventListener('click', async () => {
+    const body = new URLSearchParams({ email: document.getElementById('email').value, password: document.getElementById('password').value });
+    fields.hidden = true;
+    const welcome = Object.assign(document.createElement('p'), { id: 'welcome', textContent: 'Welcome back.' });
+    document.getElementById('app').append(welcome);
+    const response = await fetch('/session', { method: 'POST', body });
+    await response.text();
+    if (!response.ok) {
+      welcome.remove();
+      fields.hidden = false;
+      document.getElementById('app').insertAdjacentHTML('afterbegin', '<p role="alert">Wrong password.</p>');
+    }
+  });
+</script>
+</body></html>

@@ -1194,11 +1194,56 @@ Only what a real desktop can show; everything else above was measured.
 - **The corpus** is unchanged at 393 of 458 files.
 - **Cost** (Playwright's Chromium, a page of about 4,200 elements, medians of three runs of 15): the scan unchanged (0.8 ms); the click rule 0.24 → 1.45 µs a click (it reads the computed cursor only for an element with no button's role); the agent 35.2 → 37.2 KB minified (14.6 → 15.3 KB gzipped).
 
-**Moved to 3A-2** (review rounds 2 to 4 of #59): a form drawn again after a wrong password (a re-render) read as `still`, a spinner standing in for the form not read as a sign-in, and a late request error taking a sign-in back. Main's watch says `gone` 100 ms after the field goes, as it did before 3A; 3A-2 replaces it, with Save held until the late window closes.
+**Moved to 3A-2** (review rounds 2 to 4 of #59): a form drawn again after a wrong password (a re-render) read as `still`, a spinner standing in for the form not read as a sign-in, and a late request error taking a sign-in back. [Built in 3A-2](#phase-3a-2-did-a-sign-in-with-no-navigation-work-built-2026-11-19).
 
 **Tried and dropped:** narrowing a formless form to the container holding its password field and a button (§4's refinement) cost the corpus 6 files (393 → 387), so it's left as a follow-up rather than tuned here.
 
 **Tests:** the first step's username and its negatives, the click rule's table, and a typed password in a form read as a first step in `forms/agent.spec.ts`; the saving-mode first step and `submitWords` in `core/test/password-forms.test.ts`; `step`'s schema and its private rule in `unit/passwords-detector.test.ts`; keeping, using, ordering and forgetting it, and the checks again after each wait, in `unit/passwords-assist.test.ts`; and the journey in `e2e/passwords-two-step.spec.ts`: a sign-in in two documents whose password page has no username, saved under the email from step 1.
+
+## Phase 3A-2: did a sign-in with no navigation work? (built 2026-11-19)
+
+*Branch `feat/passwords-3a-2-success-check`, from main after 3A-1 (#59), built on review rounds 2 to 4 of #59. The interface is the owner's choice of 2026-11-18 from the planning thread's mock (`passwords-3a2.html`): 1A, 2A and 3A. A sign-in that navigates is unchanged: it's decided by the new page, and saves at once.*
+
+**The agent's watch after a submit** (rounds 2 to 4 of #59):
+- It holds only the password fields that submit's classification used, by WeakRef, with their descriptions (never their values), built outside the watch's closures.
+- **A field drawn again** (a framework re-rendering the form after a wrong password) is the form still there. It must be a password field not shown at the submit (a snapshot from a scan made then), never a new password's where the held one wasn't, and one of these:
+  - its id and name are the held one's; or
+  - its words are (a generated id that changed, a name dropped); or
+  - where the held field had nothing to know it by, it's inside the submitted `<form>` (or, on a formless page, any new one).
+- **`gone` waits for quiet:** 1.5 s with no change to the document, no request answered (whatever its origin), and no busy marker (`aria-busy="true"`, `role=progressbar`). Only an added input makes it scan again, at most every 500 ms. A spinner, then the form back with *Wrong password*, is `still`; a page that never stops changing is decided at the 10 s deadline.
+- **At the deadline,** a busy marker still shown is `still`. After a `gone` there, the page's errors are still reported for 3 s (`DEADLINE_TAIL_MS`).
+- **Hints:** only requests started at or after the submit count, and, after `gone`, only those started before it (what the app asks once signed in isn't the sign-in's answer). Errors (400 or more) have a cap of their own (10), so a page answering its polls with 200s can't use up the hints before a 401.
+
+**Main's tracker** keeps a sign-in read from its form going (`lately`) for `LATE_ERROR_MS` (10 s): a 400 or more for its form then turns it into `failed`. Its `signedIn` says until when (`lateUntil`), null after a navigation.
+- **A navigation the page makes during the window is judged** as a submit's is (review round 1 of #62): an error response, or the new page showing the sign-in's password field again, is `failed`; a new page without it, or a navigation that never commits, is `lateJudged`. A navigation you start yourself forgets the sign-in, and its card goes.
+- **Until it's judged, nothing held commits.** The judging is the tab's (the tracker's, read through `detector.judging` when a held write comes due), so a card or confirmation made after the navigation began is covered too, and an old judgment can't clear a newer navigation. A second navigation before the first was judged goes on being judged for the same sign-in. At `LATE_NAV_CAP_MS` after the window (the new page never settling), a timer ends it as unjudged (`lateUnjudged`, review round 3 of #62): the sign-in's card goes, a pressed one with the toast below, and so does a held confirmation, so a Save pressed after the cap writes nothing. A miss is a missing offer, never a save nobody judged. Until that outcome is out, the tab counts as judging. Turning passwords off there ends it too, and so does a new submit on the tab (the page came back to the form and you tried again): the old sign-in's judgment ends first, as `failed` with `superseded`, quietly, so its outcome can't land on the new one. Cards with no late window of their own (a navigation's sign-in, the browser box's first save) don't wait on the tab's judging. The window is open before `lateUntil` and closed at it, the millisecond the assist's held writes come due. A Save or Update that comes due while it's judged is cancelled with its own toast, *Chord couldn't tell whether that worked, so it didn't save.* (*…didn't update.*), which claims no refusal. A generated password's confirmation never runs then (it stays *Not confirmed*), nor once the vault locks. Losing a save is better than a wrong one.
+
+**The late window, in the cards** (the owner's designs):
+- **1A:** Save, Update or *Save as new* pressed before `lateUntil` waits. The card says *Saving…* (*Updating…*) with a spinner (still, for reduced motion), the username read-only, *Never for this site* and *Save as new* disabled, and *Waiting a moment for example.com to confirm the sign-in.* The save runs when the window closes. × closes the card and cancels it.
+- **2A:** a late error cancels it. Nothing is written to the vault, and the window's toast says *The site didn't accept that password, so Chord didn't save it.* (*…didn't update it.* for an update). A card for the sign-in goes, pressed or not.
+- **3A:** a generated password's entry is confirmed only once the window has closed with no error, the tab still open, passwords still on there, and the site not left. A late error leaves it *Not confirmed* (never lost), and its saved card turns into *example.com didn't take your new password.*, *Chord kept it in Settings → Passwords, Not confirmed, in case the sign-up went through after all.*, with *Delete it* and **Done**. *Delete it* while the window is open deletes it, and nothing is confirmed after.
+- **A `failed` on the tab is counted**, and the save card's path checks the count after every wait (the vault's answer, the site's name), so a sign-in taken back while Chord was asking the vault never shows a card.
+- **Private windows** never get `signedIn`, so nothing waits or says anything there.
+
+**What Chord can't see.** The agent sees a request only once it has answered and its body has been read (M0 Q7: the PerformanceObserver from the isolated world). A sign-in whose 401 body the page never reads, or whose request goes to another origin, or is a WebSocket message, is never visible. There, a sign-in with no navigation is decided by the form alone: drawn again, still shown, or gone after the quiet wait. A slow refusal the page shows only by words, with nothing busy shown, can still read as a sign-in. The save card's own words and the update card's previous password remain the remedy (phase 1).
+
+**Tests:**
+- `forms/agent.spec.ts`:
+  - the redraw cases;
+  - the spinner, the beacon's 200 and the slow 401, the busy marker at the deadline;
+  - three 200s before a 401;
+  - a poll started before the submit, and a request started after `gone`;
+  - the `<form>` that stays;
+  - a page that never stops.
+- `unit/passwords-saving.test.ts` and `unit/passwords-detector.test.ts`: the take-back and its negatives, and `lateUntil`.
+- `unit/passwords-assist.test.ts`:
+  - Save and Update waiting, then saved;
+  - a late error after Save, after Update, before anything was pressed, and during the vault's answer;
+  - × cancelling;
+  - a navigating sign-in, and Save pressed after the window, saving at once;
+  - the generated password confirmed at the end, refused, deleted, and **Done**;
+  - private windows.
+- **Journey** (`e2e/passwords-late.spec.ts`, fixture `formless-optimistic.html`): a wrong password's late 401 after Save is the toast with nothing saved; the right one, *Saving…* with the fields read-only, is saved after the window.
 
 ## Phase 3B: open shadow roots (built 2026-11-18)
 

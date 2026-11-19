@@ -49,8 +49,29 @@ export interface PasswordsBridge {
 
 /** How long after a submit signal the agent watches for the form to go, and for the page's requests (S17 §6, step 3). */
 export const SUBMIT_WATCH_MS = 10_000;
+/**
+ * After a submit, with the password field gone and nothing drawing it again, how long the page must stay quiet before
+ * the agent says `gone`: no change to the document, no request answered (a `hint`), no busy marker shown. A spinner
+ * standing in for the form while the request runs mustn't read as a sign-in (review rounds 2 and 3 of #59). A hint never
+ * shortens it: a beacon's 200 says nothing of the sign-in's answer.
+ */
+export const GONE_QUIET_MS = 1500;
+/** While waiting for quiet, a scan for a field drawn again runs at most this often, and only when an input was added. */
+const REDRAW_SCAN_GAP_MS = 500;
+/** A busy marker shown on the page: a request may still be running (the agent can't see one until it's answered). */
+const BUSY = '[aria-busy="true"], [role="progressbar"]';
 /** At most this many `hint`s per submit: the first few requests say enough. */
 const MAX_HINTS = 3;
+/**
+ * Errors (400 or more) have a cap of their own: a page answering its polls with 200s can't use up the hints, so a sign-in's
+ * 401 always reaches main (review round 4 of #59).
+ */
+const MAX_ERROR_HINTS = 10;
+/**
+ * After a `gone` at the watch's deadline, how long the agent still reports the page's errors: a request started before it
+ * may answer just after (review round 4 of #59). An earlier `gone` reports them until the deadline.
+ */
+export const DEADLINE_TAIL_MS = 3000;
 /** Submit signals for one form within this long are one submit: Enter, then the form's `submit`, then the click a browser makes. */
 export const ONE_SUBMIT_MS = 1000;
 /** A scan of the page runs at most this often; one wanted sooner runs at the next flush. */
@@ -71,6 +92,35 @@ interface KnownForm {
   readonly scanned: ScannedForm;
   readonly classified: PasswordFormClassification | null;
 }
+
+/** What describes a held password field after a submit, to know it drawn again: never its value. */
+type Described = Pick<PasswordField, 'id' | 'name' | 'autocomplete' | 'label' | 'placeholder'>;
+
+/** A watch's password fields: what describes them, and the elements by WeakRef. */
+interface HeldFields {
+  readonly held: readonly Described[];
+  readonly passwords: WeakRef<HTMLElement>[];
+}
+
+/**
+ * The password fields a submit was about, for its watch (S17 §6 step 3): the classification's, not every one in the form
+ * (a formless page's fields are one form, and a sign-up panel's beside the sign-in's isn't this sign-in's; review round 1
+ * of #59). Only their descriptions are kept, never their values, and the elements by WeakRef. Outside the agent's
+ * closures, so the watch keeps nothing of the scan that read the values (review rounds 2 and 3 of #59).
+ */
+function heldFields(from: ScannedForm, c: PasswordFormClassification): HeldFields {
+  const roles = new Set([c.password, c.newPassword, c.confirmation].flatMap((f) => (f ? [f.key] : [])));
+  const all = from.elements.flatMap((el, i) => (controlType(el) === 'password' ? [{ el, f: from.record.fields[i]! }] : []));
+  const own = all.filter((h) => roles.has(h.f.key));
+  const fields = own.length ? own : all;
+  return {
+    held: fields.map(({ f }) => ({ id: f.id, name: f.name, autocomplete: f.autocomplete, label: f.label, placeholder: f.placeholder })),
+    passwords: fields.map(({ el }) => new WeakRef(el)),
+  };
+}
+
+/** Whether any element matching `selector` is shown on the page. */
+const allShown = (doc: Document, selector: string) => [...Document.prototype.querySelectorAll.call(doc, selector)].some((el) => isShown(el));
 
 /** Something a submit signal can come from: a `<form>`, or the page's fields outside one. */
 type FormKey = HTMLFormElement | Document;
@@ -426,7 +476,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       hasPassword: hasValue(c.password) || hasValue(c.newPassword),
       ...(values ? { values } : {}),
     });
-    if (signal !== 'blur') watch(k, fresh);
+    if (signal !== 'blur') watch(k, heldFields(fresh ?? k.scanned, c));
   }
 
   /**
@@ -456,22 +506,113 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
 
   // ----- After a submit signal: did the form go? (S17 §6, step 3) -----
   let watching: (() => void) | null = null;
-  function watch(k: KnownForm, fresh: ScannedForm | undefined): void {
+  /**
+   * After a submit, watch for the form's password fields to go (`gone`) or stay (`still`). `fields` is what describes
+   * them and the elements by WeakRef only (`heldFields`, outside: no closure here keeps the scan that read the values).
+   */
+  function watch(k: KnownForm, fields: HeldFields): void {
     watching?.();
-    const passwords = (fresh ?? k.scanned).elements.filter((e) => controlType(e) === 'password').map((e) => new WeakRef(e));
+    const { held } = fields;
+    let passwords = fields.passwords;
     if (!passwords.length) return;
+    // Every password field shown at the submit, this form's or another's, from a scan made now (a panel added since the
+    // last one counts): none of them can be this one drawn again (a sign-up panel's beside the sign-in's stays shown
+    // when the sign-in works; review rounds 1 and 2 of #59).
+    rescan();
+    const before = new WeakSet<Element>();
+    for (const x of known) x.scanned.elements.forEach((e) => controlType(e) === 'password' && e.isConnected && isShown(e) && before.add(e));
+    // The submitted <form>, for a field that has nothing else to be known by.
+    const formRef = k.scanned.form ? new WeakRef(k.scanned.form) : null;
+    const formless = !k.scanned.form;
     let done = false;
     let timer = 0;
+    /** Waiting, with the field gone, for the page to be quiet before saying so: a spinner may stand in for the form. */
+    let quiet = 0;
+    /** An input was added since the last scan for a redraw: the next check scans (at most every REDRAW_SCAN_GAP_MS). */
+    let inputsAdded = false;
+    let scannedAt = Number.NEGATIVE_INFINITY;
     const shown = () =>
       passwords.some((r) => {
         const el = r.deref();
         return !!el && el.isConnected && isShown(el);
       });
+    /**
+     * The held password field drawn again in a new element (a framework re-rendering the form after a wrong password,
+     * with an error banner): a password field shown now that wasn't at the submit, never a new password's where the held
+     * one wasn't (an app's *New password* view), and
+     * - its id and name are the held one's; or else
+     * - its words are (autocomplete, label and placeholder, where the held one has any): a framework's generated id
+     *   (`mat-input-1` to `mat-input-3`, React's `:r1:` to `:r5:`) or a name dropped in the redraw doesn't hide it; or else
+     * - where the held field had no id, name or words at all: inside the submitted <form> while that's in the page, or,
+     *   on a formless page, any new one (nothing else can tell; review round 3 of #59).
+     */
+    const sameAs = (h: Described, f: PasswordField, el: Element) => {
+      if (f.autocomplete === 'new-password' && h.autocomplete !== 'new-password') return false;
+      const hasWords = h.autocomplete !== '' || h.label !== '' || h.placeholder !== '';
+      if ((h.id !== '' || h.name !== '') && h.id === f.id && h.name === f.name) return true;
+      if (hasWords && h.autocomplete === f.autocomplete && h.label === f.label && h.placeholder === f.placeholder) return true;
+      if (h.id !== '' || h.name !== '' || hasWords) return false;
+      const form = formRef?.deref();
+      return form ? form.isConnected && form.contains(el) : formless;
+    };
+    const redrawn = (): WeakRef<HTMLElement>[] => {
+      scannedAt = performance.now();
+      inputsAdded = false;
+      rescan();
+      const out: WeakRef<HTMLElement>[] = [];
+      for (const x of known)
+        x.scanned.elements.forEach((e, i) => {
+          const f = x.scanned.record.fields[i]!;
+          if (f.type !== 'password' || before.has(e) || !e.isConnected || !isShown(e)) return;
+          if (held.some((h) => sameAs(h, f, e))) out.push(new WeakRef(e));
+        });
+      return out;
+    };
+    const busy = () => allShown(doc, BUSY);
+    const unquiet = () => {
+      if (quiet) win.clearTimeout(quiet);
+      quiet = 0;
+    };
+    /**
+     * The field is gone and nothing has drawn it again: `gone` once the page has been quiet for `GONE_QUIET_MS` (no change
+     * to the document, no request answered) with no busy marker shown. Anything else starts the wait again; the watch's
+     * deadline decides at the end. A spinner, then the form back with *Wrong password*, is `still`.
+     */
+    const settle = () => {
+      unquiet();
+      quiet = win.setTimeout(() => {
+        quiet = 0;
+        if (done || shown()) return;
+        if (busy()) return settle();
+        const again = redrawn();
+        if (again.length) passwords = again;
+        else finish('gone');
+      }, GONE_QUIET_MS);
+    };
     const check = () => {
       timer = 0;
-      if (!done && !shown()) finish('gone');
+      if (done) return;
+      if (shown()) return unquiet();
+      // A full scan only for a change that added an input, and not more often than REDRAW_SCAN_GAP_MS: a dashboard that
+      // keeps rendering only starts the quiet wait again (review round 3 of #59). The wait's end scans once anyway.
+      if (inputsAdded) {
+        const wait = REDRAW_SCAN_GAP_MS - (performance.now() - scannedAt);
+        if (wait > 0) {
+          timer = win.setTimeout(check, wait);
+          return settle();
+        }
+        const again = redrawn();
+        if (again.length) {
+          passwords = again;
+          return unquiet();
+        }
+      }
+      settle();
     };
-    const observer = new MutationObserver(() => {
+    const addsInput = (records: MutationRecord[]) =>
+      records.some((r) => [...r.addedNodes].some((n) => n instanceof Element && (n.tagName === 'INPUT' || !!n.querySelector('input'))));
+    const observer = new MutationObserver((records) => {
+      if (addsInput(records)) inputsAdded = true;
       if (!timer) timer = win.setTimeout(check, 100);
     });
     const watched = { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] };
@@ -482,14 +623,24 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       let root = el ? rootOf(el) : null;
       for (let depth = 0; root instanceof ShadowRoot && depth < 32; depth++, root = rootOf(root.host)) observer.observe(root, watched);
     }
-    // A request to the page's own origin finishing: a hint (M0 Q7: seen only once its body is read).
+    // A request to the page's own origin finishing: a hint (M0 Q7: seen only once its body is read). Any answer is
+    // activity, which starts the quiet wait again. Hints keep coming after `gone` until the deadline, so a late error (a
+    // slow 401 the quiet wait didn't see coming) still reaches main, which takes the sign-in back (review round 3 of #59).
     let hints = 0;
+    let errorHints = 0;
+    /** When the watch began (the submit) and when it said `gone`: a request is this sign-in's only if it started between. */
+    const submittedAt = performance.now();
+    let goneAt: number | null = null;
     let resources: PerformanceObserver | null = null;
     try {
       resources = new PerformanceObserver((list) => {
         for (const e of list.getEntries() as PerformanceResourceTiming[]) {
-          if (done || hints >= MAX_HINTS) return;
           if (e.initiatorType !== 'fetch' && e.initiatorType !== 'xmlhttprequest') continue;
+          // Only requests started at or after the submit (a poll that began before it says nothing of the sign-in), and,
+          // after `gone`, only those started before it: what the app asks once signed in isn't the sign-in's answer.
+          if (e.startTime < submittedAt || (goneAt !== null && e.startTime > goneAt)) continue;
+          // Any request answered, the page's own or another site's, is activity: the quiet wait starts again.
+          if (!done && quiet) settle();
           let origin: string;
           try {
             origin = new URL(e.name).origin;
@@ -498,7 +649,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
           }
           const status = e.responseStatus;
           if (origin !== win.location.origin || !(status >= 100 && status <= 599)) continue;
-          hints++;
+          if (status >= 400 ? errorHints++ >= MAX_ERROR_HINTS : hints++ >= MAX_HINTS) continue;
           bridge.send('hint', { formId: k.id, status });
         }
       });
@@ -506,22 +657,38 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     } catch {
       resources = null;
     }
-    const deadline = win.setTimeout(() => finish(shown() ? 'still' : 'gone'), SUBMIT_WATCH_MS);
+    let tail = 0;
+    const deadline = win.setTimeout(() => {
+      if (done) return end();
+      // The deadline decides: the field still there (or drawn again), or a busy marker still shown (the request may not
+      // have answered), is no sign-in (review round 4 of #59).
+      const how = shown() || redrawn().length || busy() ? 'still' : 'gone';
+      finish(how);
+      // A `gone` decided here: the page's errors are reported a little longer, for a request that answers just after.
+      if (how === 'gone') tail = win.setTimeout(end, DEADLINE_TAIL_MS);
+    }, SUBMIT_WATCH_MS);
     function finish(how: 'gone' | 'still'): void {
       if (done) return;
       done = true;
-      stop();
+      if (how === 'gone') goneAt = performance.now();
+      observer.disconnect();
+      if (timer) win.clearTimeout(timer);
+      unquiet();
       bridge.send(how, { formId: k.id });
+      // `still` is the end; after `gone`, only the hints go on, until the deadline (or its tail).
+      if (how === 'still') end();
     }
-    function stop(): void {
+    function end(): void {
       done = true;
       observer.disconnect();
       resources?.disconnect();
       win.clearTimeout(deadline);
+      if (tail) win.clearTimeout(tail);
       if (timer) win.clearTimeout(timer);
-      if (watching === stop) watching = null;
+      unquiet();
+      if (watching === end) watching = null;
     }
-    watching = stop;
+    watching = end;
   }
 
   // ----- Filling (S17 §5): only the form the menu was shown for, only as it was -----
