@@ -45,6 +45,11 @@ export interface PasswordsBridge {
   send<C extends PasswordsAgentChannel>(channel: C, payload: PasswordsAgentMessage<C>): void;
   /** Main's fill: the sentinel calls this listener (registered once) with what main sent. */
   onFill?(listener: (payload: unknown) => void): void;
+  /**
+   * Whether a frame element of the top document has had a `sandbox` attribute at any time since the document began
+   * (the sentinel watches from then; phase 3C). Absent: no frame is used.
+   */
+  sandboxed?(el: Element): boolean;
 }
 
 /** How long after a submit signal the agent watches for the form to go, and for the page's requests (S17 §6, step 3). */

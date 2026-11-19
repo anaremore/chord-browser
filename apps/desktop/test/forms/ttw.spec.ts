@@ -147,6 +147,8 @@ test('test-the-web, held to its baseline', async ({ page, context }) => {
     return;
   }
   await serveSite(context, site.siteDir);
+  // The sentinel's sandbox record, from each document's start, as the preload keeps it (phase 3C).
+  await context.addInitScript({ content: await bundleAgent({ entry: join(here, 'sandbox-recorder.ts'), minify: true }) });
   await page.setViewportSize({ width: 1280, height: 900 });
   const script = await bundleAgent({ entry: join(here, 'ttw-entry.ts'), minify: false });
 

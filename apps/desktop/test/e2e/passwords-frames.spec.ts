@@ -7,13 +7,17 @@
  *    tab on, is saved from the card, which offers the email.
  * 2. **The menu under the frame's field** offers the account; Enter fills both fields in the frame, the frame's own
  *    script reads them, and the server gets them.
+ * 3. **The sentinel's frame cap counts usable frames only** (review round 2 of #67): 25 other sites' frames ahead of the
+ *    login frame, and it still wakes on the login frame's field.
+ * 4. **A frame loaded sandboxed, its attribute removed at its load** (P3a, the real sentinel's record): the agent is
+ *    awake on the page's own field, and the frame's sign-in gets no menu and sends nothing.
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type ElectronApplication } from '@playwright/test';
 import { isPopover, isShell, launch, pageWhere, pressReal } from './a11y-kit';
 import { failOnMainErrors } from './main-errors';
 
@@ -27,6 +31,14 @@ const LOGIN = '<!doctype html><title>Sign in</title><h1>Sign in</h1><iframe id="
 const HOME = '<title>Home</title><p>Signed in.</p>';
 
 const isMenu = (url: string) => isPopover(url) && url.endsWith('#menu');
+/** Runs `code` in the page's world 4440 (the agent's), from main. */
+const inAgentWorld = (app: ElectronApplication, url: string, code: string) =>
+  app.evaluate(({ webContents }, [u, c]) => webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.getURL().startsWith(u))!.executeJavaScriptInIsolatedWorld(4440, [{ code: c }]), [url, code] as const);
+interface Hooks {
+  passwordEvents(): Record<string, unknown>[];
+  clearPasswordEvents(): void;
+}
+const types = async (app: ElectronApplication) => (await app.evaluate(() => (globalThis as unknown as { chordTestHooks: Hooks }).chordTestHooks.passwordEvents())).map((e) => e['type']);
 const isCards = (url: string) => isPopover(url) && !url.includes('#');
 
 interface Site {
@@ -50,7 +62,7 @@ function startSite(): Promise<Site> {
       });
       return;
     }
-    const page = req.url === '/login' ? LOGIN : req.url === '/frame' ? FRAME : req.url === '/home' ? HOME : null;
+    const page = req.url === '/login' ? LOGIN : req.url === '/frame' ? FRAME : req.url === '/home' ? HOME : req.url === '/ads-login' ? ADS_LOGIN() : req.url === '/sandboxed-login' ? SANDBOXED_LOGIN : null;
     res.writeHead(page ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page ?? 'not found');
   });
@@ -63,10 +75,28 @@ function startSite(): Promise<Site> {
 }
 
 let site: Site;
+/** Another site (another port, so another origin): its ad frames. */
+let ads: Server;
+let adsOrigin = '';
 test.beforeAll(async () => {
   site = await startSite();
+  ads = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><p>Ad</p>');
+  });
+  await new Promise<void>((done) => ads.listen(0, '127.0.0.1', () => done()));
+  adsOrigin = `http://127.0.0.1:${(ads.address() as AddressInfo).port}`;
 });
-test.afterAll(() => site.server.close());
+test.afterAll(() => {
+  site.server.close();
+  ads.close();
+});
+/** 25 other sites' frames, then the login frame. */
+const ADS_LOGIN = () =>
+  `<!doctype html><title>Sign in</title><h1>Sign in</h1>${`<iframe src="${adsOrigin}/ad" style="width:60px;height:30px"></iframe>`.repeat(25)}<iframe id="fr" src="/frame" style="width:420px;height:260px;border:0"></iframe>`;
+/** The page's own sign-in, and a frame loaded sandboxed whose attribute goes at its load. */
+const SANDBOXED_LOGIN =
+  '<!doctype html><title>Sign in</title><form><input id="own" type="password" aria-label="Password"></form><iframe id="fr" src="/frame" sandbox="allow-same-origin allow-scripts allow-forms" onload="this.removeAttribute(\'sandbox\')" style="width:420px;height:260px;border:0"></iframe>';
 
 test('passwords: a sign-in form in a same-origin frame is saved and filled', async () => {
   test.setTimeout(120_000);
@@ -111,6 +141,33 @@ test('passwords: a sign-in form in a same-origin frame is saved and filled', asy
     await page.frameLocator('#fr').locator('#go').click();
     await page.waitForURL(`${site.origin}/home`);
     expect(site.posts.at(-1)).toEqual({ email: USER, password: PASSWORD });
+  } finally {
+    await app.close();
+  }
+});
+
+test('passwords: 25 other sites’ frames ahead of a same-origin login frame, and one loaded sandboxed: the sentinel’s frame look', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-frames-look-'));
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/ads-login`, CHORD_E2E_HOOKS: '1', CHORD_APPEARANCE: 'light', CHORD_E2E_NO_KEYRING: '1' }, { profile });
+  try {
+    // 3. The page's own tree has no field; the login frame comes after 25 others: the sentinel still wakes the agent.
+    await pageWhere(app, (u) => u.startsWith(`${site.origin}/ads-login`));
+    await expect.poll(() => inAgentWorld(app, `${site.origin}/ads-login`, 'typeof chordPasswords'), { timeout: 10_000 }).toBe('object');
+
+    // 4. A frame loaded sandboxed, its attribute removed at its load: still sandboxed, and never used.
+    const page = await pageWhere(app, (u) => u.startsWith(`${site.origin}/`));
+    await page.goto(`${site.origin}/sandboxed-login`);
+    await expect.poll(() => inAgentWorld(app, `${site.origin}/sandboxed-login`, 'typeof chordPasswords'), { timeout: 10_000 }).toBe('object');
+    expect(await page.evaluate(() => document.getElementById('fr')!.hasAttribute('sandbox'))).toBe(false);
+    const frame = page.frameLocator('#fr');
+    await frame.locator('#email').click();
+    await frame.locator('#email').fill(USER);
+    await frame.locator('#password').fill(PASSWORD);
+    await frame.locator('#password').press('Enter');
+    await page.waitForTimeout(2000);
+    expect(await types(app)).not.toContain('submitted');
+    expect(await app.evaluate(({ webContents }) => webContents.getAllWebContents().some((w) => w.getURL().endsWith('#menu') && w.isFocused()))).toBe(false);
   } finally {
     await app.close();
   }

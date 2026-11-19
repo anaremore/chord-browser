@@ -37,7 +37,8 @@ function scanFrames(): number {
     if (depth >= MAX_FRAME_DEPTH) return;
     for (const el of framesIn(doc, MAX_FRAMES)) {
       if (++seen > MAX_FRAMES) return;
-      const frameDoc = frameDocumentOf(el, location.origin);
+      // Cost only: every frame counts as never sandboxed here (the agent asks the sentinel's record).
+      const frameDoc = frameDocumentOf(el, location.origin, () => false);
       if (!frameDoc) continue;
       used++;
       for (const f of scanDocument(frameDoc)) classifyPasswordForm(f.record, 'filling');

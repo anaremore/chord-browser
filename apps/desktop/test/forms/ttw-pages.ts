@@ -183,12 +183,14 @@ export const PAGES: readonly SitePage[] = [
     what: 'a sign-in form in a sandboxed frame (allow-same-origin too): never used',
     steps: [{ name: 'out of reach', kind: null, field: `${FRAME} #password`, unreached: true }],
   },
+  // The inner frames load before the frame above them is in use, so their sandbox history wasn't watched: never used,
+  // failing closed (review round 2 of #67). A nested frame added once the one above is in use is (frames.spec.ts).
   {
     path: 'login/nested-iframe-login',
-    what: 'two sign-in forms side by side, three frames deep',
+    what: 'two sign-in forms side by side, three frames deep, there before the agent woke: never used',
     steps: [
-      { ...SIGN_IN(`${NESTED} #form-iframe-1 >>| #username`, `${NESTED} #form-iframe-1 >>| #password`), name: 'with a username' },
-      { ...SIGN_IN(`${NESTED} #form-iframe-2 >>| #email`, `${NESTED} #form-iframe-2 >>| #password`), name: 'with an email' },
+      { name: 'with a username, out of reach', kind: null, field: `${NESTED} #form-iframe-1 >>| #password`, unreached: true },
+      { name: 'with an email, out of reach', kind: null, field: `${NESTED} #form-iframe-2 >>| #password`, unreached: true },
     ],
   },
   {

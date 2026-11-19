@@ -20,18 +20,27 @@ import { bundleAgent } from '../../src/passwords/build';
 const ORIGIN = 'http://frames.test';
 const OTHER = 'http://other.test';
 let script = '';
+let recorder = '';
 /** The pages served, by path, for both origins. */
 let pages: Record<string, string> = {};
+/** Response headers by path (a CSP `sandbox`). */
+let headers: Record<string, Record<string, string>> = {};
 test.beforeAll(async () => {
   script = await bundleAgent({ entry: join(import.meta.dirname, 'agent-entry.ts'), minify: false });
+  recorder = await bundleAgent({ entry: join(import.meta.dirname, 'sandbox-recorder.ts'), minify: true });
 });
 test.beforeEach(async ({ context }) => {
   pages = {};
+  headers = {};
+  // The sentinel's sandbox record, from each document's start, as the preload keeps it.
+  await context.addInitScript({ content: recorder });
   await context.route('**/*', (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== ORIGIN && url.origin !== OTHER) return route.abort();
     const body = pages[url.pathname];
-    return body === undefined ? route.fulfill({ status: 404, body: '' }) : route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body });
+    return body === undefined
+      ? route.fulfill({ status: 404, body: '' })
+      : route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', headers: headers[url.pathname] ?? {}, body });
   });
 });
 
@@ -145,23 +154,40 @@ for (const [name, top, more] of [
 }
 
 /** Frames `n` deep: `/l1` holds `/l2`, and so on, the last holding the sign-in. */
-const nested = (n: number) => {
-  const more: Record<string, string> = {};
-  for (let i = 1; i <= n; i++) more[`/l${i}`] = i === n ? SIGN_IN() : `<iframe id="fr" src="/l${i + 1}" style="width:420px;height:240px"></iframe>`;
-  return more;
-};
+/**
+ * Frames `n` deep, each added once the frame above it is in use (its agent watches its own frames from then): `/l1`
+ * is in the page, and each level's frame is added by script into the one above, the last holding the sign-in.
+ */
 const deepField = (page: Page, n: number) => {
   let loc = page.frameLocator('#fr');
   for (let i = 1; i < n; i++) loc = loc.frameLocator('#fr');
   return loc.locator('#p');
 };
+const addNested = async (page: Page, n: number) => {
+  for (let level = 1; level < n; level++) {
+    // The frame at `level`, once its agent runs (a look 50 ms after its load), gets the next frame.
+    await page.waitForTimeout(150);
+    const parent = page.frames().find((f) => f.url().endsWith(`/l${level}`))!;
+    await parent.evaluate(
+      (next) =>
+        new Promise<void>((done) => {
+          document.body.insertAdjacentHTML('beforeend', `<iframe id="fr" src="/l${next}" style="width:420px;height:240px"></iframe>`);
+          document.getElementById('fr')!.addEventListener('load', () => done(), { once: true });
+        }),
+      level + 1,
+    );
+  }
+  await page.waitForTimeout(150);
+};
+const levels = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`/l${i + 1}`, i + 1 === n ? SIGN_IN() : '<p>A level</p>']));
 for (const [n, used] of [
   [2, true],
   [3, true],
   [4, false],
 ] as const) {
-  test(`a sign-in ${n} frames deep: ${used ? 'used' : 'past the 3 levels, never used'}`, async ({ page }) => {
-    const a = await open(page, `<iframe id="fr" src="/l1" style="width:440px;height:260px"></iframe>`, nested(n));
+  test(`a sign-in ${n} frames deep, each frame added once the one above is in use: ${used ? 'used' : 'past the 3 levels, never used'}`, async ({ page }) => {
+    const a = await open(page, `<iframe id="fr" src="/l1" style="width:440px;height:260px"></iframe>`, levels(n));
+    await addNested(page, n);
     await deepField(page, n).click();
     await a.settle();
     expect((await a.of('focus')).length > 0).toBe(used);
@@ -173,6 +199,19 @@ for (const [n, used] of [
     }
   });
 }
+
+test('a frame inside a frame that loaded before the agent woke (its history unwatched): never used, the frame above is', async ({ page }) => {
+  const a = await open(page, `<iframe id="fr" src="/l1" style="width:440px;height:260px"></iframe>`, {
+    '/l1': `${SIGN_IN('outer')}<iframe id="fr" src="/l2" style="width:420px;height:240px"></iframe>`,
+    '/l2': SIGN_IN(),
+  });
+  await deepField(page, 2).click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+  await page.frameLocator('#fr').locator('#outer #p').click();
+  await a.settle();
+  expect(await a.of('focus')).toHaveLength(1);
+});
 
 test('21 frames: the first 20 are used, the 21st never', async ({ page }) => {
   const frames = Array.from({ length: 21 }, (_, i) => `<iframe id="fr${i}" src="/login" style="width:300px;height:120px"></iframe>`).join('');
@@ -403,3 +442,134 @@ test('a frame scaled by a CSS transform: the focus box is where the field is dra
   });
   for (const k of ['x', 'y', 'width', 'height'] as const) expect(rect[k]).toBeCloseTo(want[k], 1);
 });
+
+/* ---------- Review round 2 of #67: provenance fixed when the document was made ---------- */
+
+/** No focus, no form and no fill from the frame `#fr`'s field: the frame isn't used. */
+const notUsed = async (page: Page, a: ReturnType<typeof api>) => {
+  await a.clear();
+  await page.frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+  expect(await formIds(a)).toEqual([]);
+};
+const FORM = `'<form><input id="p" name="password" type="password" aria-label="Password"></form>'`;
+
+test('P2f: a frame on a real page, then sent to a javascript: URL by its src (same address, no response): never used', async ({ page }) => {
+  const a = await open(page, frame('/login'), { '/login': SIGN_IN() });
+  await page.evaluate((form) => ((document.getElementById('fr') as HTMLIFrameElement).src = `javascript:${form}`), FORM);
+  await page.waitForTimeout(300);
+  // The premise: the address is still the real page's.
+  expect(await page.evaluate(() => (document.getElementById('fr') as HTMLIFrameElement).contentDocument!.URL)).toBe(`${ORIGIN}/login`);
+  await notUsed(page, a);
+});
+
+test('P2f by location: the frame’s window sent to a javascript: URL: never used', async ({ page }) => {
+  const a = await open(page, frame('/login'), { '/login': SIGN_IN() });
+  await page.evaluate((form) => void ((document.getElementById('fr') as HTMLIFrameElement).contentWindow!.location.href = `javascript:${form}`), FORM);
+  await page.waitForTimeout(300);
+  await notUsed(page, a);
+});
+
+test('P2g: a real page, rewritten by the top with document.open() before the agent wakes: never used', async ({ page }) => {
+  pages = { '/login': html('<p>Real</p>') };
+  const a = await open(
+    page,
+    `${frame('/login')}<script>
+      document.getElementById('fr').addEventListener('load', () => {
+        const d = document.getElementById('fr').contentDocument;
+        d.open();
+        d.write('${SIGN_IN()}');
+        d.close();
+      }, { once: true });
+    </script>`,
+    { '/login': '<p>Real</p>' },
+  );
+  await page.waitForTimeout(200);
+  await notUsed(page, a);
+});
+
+test('nit 4: a frame in use, rewritten with document.open() (by the top, and by itself): released, its form leaves the report', async ({ page }) => {
+  for (const by of ['top', 'self'] as const) {
+    const a = await open(page, frame('/login'), { '/login': SIGN_IN() });
+    await page.frameLocator('#fr').locator('#p').click();
+    await a.settle();
+    const theirs = (await formIds(a))[0];
+    expect(theirs).toBeTruthy();
+    await page.evaluate((who) => {
+      const f = document.getElementById('fr') as HTMLIFrameElement;
+      const d = f.contentDocument!;
+      const w = f.contentWindow as Window & { eval(code: string): unknown };
+      if (who === 'top') {
+        d.open();
+        d.write('<p>Gone</p>');
+        d.close();
+      } else w.eval("document.open(); document.write('<p>Gone</p>'); document.close();");
+    }, by);
+    await page.waitForTimeout(300);
+    // The page's next report (the top's form, here none) is made without the frame's.
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<input id="poke" name="email" type="email">'));
+    await page.locator('#poke').click();
+    await a.settle();
+    expect(await formIds(a)).not.toContain(theirs);
+    expect((await hubStats(page))?.agents).toBe(0);
+  }
+});
+
+test('P3a: a frame loaded sandboxed, its attribute removed at its load, before the agent wakes: never used', async ({ page }) => {
+  const a = await open(page, `<iframe id="fr" src="/login" sandbox="allow-same-origin allow-scripts allow-forms" onload="this.removeAttribute('sandbox')" style="width:400px;height:200px"></iframe>`, { '/login': SIGN_IN() });
+  await notUsed(page, a);
+});
+
+test('P3b: a frame inserted with a sandbox attribute, removed in the same task while the agent runs: never used', async ({ page }) => {
+  const a = await open(page, '<h1>Top</h1>', { '/login': SIGN_IN() });
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        document.body.insertAdjacentHTML('beforeend', '<iframe id="fr" src="/login" sandbox="allow-same-origin allow-scripts allow-forms" style="width:400px;height:200px"></iframe>');
+        const f = document.getElementById('fr')!;
+        f.removeAttribute('sandbox');
+        f.addEventListener('load', () => done(), { once: true });
+      }),
+  );
+  await page.waitForTimeout(200);
+  await notUsed(page, a);
+});
+
+test('a frame sandboxed by a CSP header without allow-same-origin (its window’s origin opaque): never used', async ({ page }) => {
+  headers['/login'] = { 'content-security-policy': 'sandbox allow-scripts allow-forms' };
+  const a = await open(page, frame('/login'), { '/login': SIGN_IN() });
+  await notUsed(page, a);
+});
+
+test('a frame whose page called history.pushState (its address no longer the navigation’s): refused, failing closed', async ({ page }) => {
+  const a = await open(page, frame('/login'), { '/login': `${SIGN_IN()}<script>history.pushState({}, '', '/login/step-2');</script>` });
+  await notUsed(page, a);
+});
+
+test('a frame inside an open shadow root (no record of its attribute): never used', async ({ page }) => {
+  const a = await open(page, `<x-shell id="shell"></x-shell><script>document.getElementById('shell').attachShadow({ mode: 'open' }).innerHTML = '<iframe id="fr" src="/login" style="width:400px;height:200px"></iframe>';</script>`, {
+    '/login': SIGN_IN(),
+  });
+  await a.clear();
+  await page.locator('#shell >> #fr').waitFor();
+  await page.frameLocator('#shell >> #fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+});
+
+for (const [name, style] of [
+  ['a CSS zoom', 'zoom: 2'],
+  ['a rotation', 'transform: rotate(10deg)'],
+  ['a skew', 'transform: skewX(10deg)'],
+  ['a rotation on its parent', ''],
+] as const) {
+  test(`a frame under ${name}: no focus box (no menu in the wrong place)`, async ({ page }) => {
+    const top = style ? `<style>#fr { ${style}; }</style>${frame('/login')}` : `<div style="rotate: 5deg">${frame('/login')}</div>`;
+    const a = await open(page, top, { '/login': SIGN_IN() });
+    await a.clear();
+    await page.frameLocator('#fr').locator('#p').click({ force: true });
+    await a.settle();
+    expect(await a.of('focus')).toEqual([]);
+  });
+}

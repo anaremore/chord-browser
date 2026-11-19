@@ -5,8 +5,8 @@
  * real fill path.
  */
 import { classifyPasswordForm, type PasswordFieldRole } from '@chord/core';
-import { frameDocumentOf, MAX_FRAME_DEPTH, MAX_FRAMES, startAgents } from '../../src/passwords/agent/frames';
-import { framesIn, scanDocument } from '../../src/passwords/agent/scan';
+import { startAgents, type AgentsStop } from '../../src/passwords/agent/frames';
+import { scanDocument } from '../../src/passwords/agent/scan';
 
 /** What a step expects, by selector: the username's and the current password's fields, or a negative step's one field (no role). */
 export interface Expected {
@@ -45,23 +45,8 @@ function query(selector: string): Element | null {
   return el;
 }
 
-/** The documents the agent may use (phase 3C, frames.ts's rules): the page's, then its allowed same-origin frames'. */
-function usableDocuments(): Document[] {
-  const out: Document[] = [document];
-  let seen = 0;
-  const walk = (doc: Document, depth: number) => {
-    if (depth >= MAX_FRAME_DEPTH) return;
-    for (const el of framesIn(doc, MAX_FRAMES)) {
-      if (++seen > MAX_FRAMES) return;
-      const frameDoc = frameDocumentOf(el, location.origin);
-      if (!frameDoc) continue;
-      out.push(frameDoc);
-      walk(frameDoc, depth + 1);
-    }
-  };
-  walk(document, 0);
-  return out;
-}
+/** The documents the agent uses (phase 3C): the page's, and the frames' its agents run on, as it decided them. */
+const usableDocuments = (): Document[] => stop?.documents() ?? [document];
 
 /** Every text-like field, in the documents the agent may use and their open shadow roots, in tree order (roots after their host). */
 function allInputs(): Element[] {
@@ -121,7 +106,7 @@ function check(expected: Expected): CheckResult {
 
 type Message = [string, Record<string, unknown>];
 const messages: Message[] = [];
-let stop: (() => void) | null = null;
+let stop: AgentsStop | null = null;
 let onFill: ((payload: unknown) => void) | null = null;
 
 (globalThis as unknown as { chordTtw: unknown }).chordTtw = {
@@ -148,6 +133,8 @@ let onFill: ((payload: unknown) => void) | null = null;
     stop = startAgents({
       send: (channel, payload) => void messages.push([channel, structuredClone(payload) as Record<string, unknown>]),
       onFill: (listener) => void (onFill ??= listener),
+      // The sentinel's sandbox record (sandbox-recorder.ts, installed by ttw.spec.ts at the document's start).
+      sandboxed: (el: Element) => (globalThis as unknown as { chordSandboxed?: (el: Element) => boolean }).chordSandboxed?.(el) ?? true,
     });
   },
   stop() {

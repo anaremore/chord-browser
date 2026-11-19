@@ -26,7 +26,7 @@
  */
 import type { PasswordsAgentChannel, PasswordsAgentMessage } from '@chord/ipc';
 import { FORMS_JSON_MAX, startAgent, type AgentOptions, type AgentStop, type FrameContext, type PasswordsBridge } from './agent';
-import { framesIn, MAX_REPORTED_FORMS } from './scan';
+import { composedParentOf, framesIn, MAX_REPORTED_FORMS, rootOf } from './scan';
 
 /** How deep frames go, and how many are used at once. */
 export const MAX_FRAME_DEPTH = 3;
@@ -47,48 +47,71 @@ const clientLeft = getter(Element.prototype, 'clientLeft');
 const clientTop = getter(Element.prototype, 'clientTop');
 const offsetWidth = getter(HTMLElement.prototype, 'offsetWidth');
 const entriesByType = Performance.prototype.getEntriesByType;
+const ownerOf = getter(Node.prototype, 'ownerDocument');
+const rootElementOf = getter(Document.prototype, 'documentElement');
+/** A window's own `origin`, through the top realm's getter: opaque ("null") for a sandbox without allow-same-origin. */
+const windowOrigin = Object.getOwnPropertyDescriptor(window, 'origin')?.get ?? null;
+/** The effective CSS zoom on an element (Chromium's `currentCSSZoom`), where there's a getter for it. */
+const zoomOf = Object.getOwnPropertyDescriptor(Element.prototype, 'currentCSSZoom')?.get ?? null;
 
-/** Documents seen in a frame with a `sandbox` attribute: refused for good, the attribute removed or not (round 1 of #67). */
-const sandboxed = new WeakSet<Document>();
+/**
+ * Documents refused for good: one seen in a frame with a `sandbox` attribute (the flags last until its next navigation),
+ * and one an agent was released from (its frame navigated, or it was rewritten with `document.open()`; round 2 of #67).
+ */
+const refused = new WeakSet<Document>();
 
-/** Whether a navigation of the top's origin made `doc`: its window's navigation timing entry (none for a written about:blank). */
-function navigated(doc: Document, origin: string): boolean {
+/**
+ * Whether a frame element has had a `sandbox` attribute at any time its document's history could have seen: true when
+ * that history wasn't watched (round 2 of #67). It fails closed.
+ */
+export type SandboxRecord = (el: Element) => boolean;
+
+/**
+ * Whether a real HTTP navigation of the top's origin made `doc`, as it is now (round 2 of #67):
+ * - its window's own origin is the top's (opaque, "null", for a sandbox without allow-same-origin, a CSP header's too);
+ * - a navigation timing entry of its window names its address (the hash aside: `document.open()` from another
+ *   document changes the address and keeps the entry; a frame's own `history.pushState` does too, and is refused), and
+ *   came with a response's content type (a `javascript:` URL's document has an entry under the old address, with none).
+ * `unknown`: no entry yet (just loaded: it can come after the `load`), for a later look.
+ */
+function navigated(doc: Document, origin: string): boolean | 'unknown' {
   const view = viewOf.call(doc) as (Window & { performance: Performance }) | null;
-  if (!view) return false;
-  const entries = entriesByType.call(view.performance, 'navigation') as PerformanceEntry[];
-  return entries.some((e) => {
-    try {
-      const u = new URL(e.name);
-      return (u.protocol === 'https:' || u.protocol === 'http:') && u.origin === origin;
-    } catch {
-      return false;
-    }
-  });
+  if (!view || !windowOrigin || String(windowOrigin.call(view)) !== origin) return false;
+  // `contentType` is newer than the DOM typings.
+  const entries = entriesByType.call(view.performance, 'navigation') as (PerformanceEntry & { contentType?: unknown })[];
+  if (!entries.length) return 'unknown';
+  const url = String(urlOf.call(doc)).split('#')[0];
+  return entries.some((e) => String(e.name).split('#')[0] === url && typeof e.contentType === 'string' && e.contentType !== '');
 }
 
+const contentDocumentOf = (el: Element): Document | null => {
+  const tag = String(tagOf.call(el));
+  return ((tag === 'IFRAME' ? iframeDocument : tag === 'FRAME' ? frameDocument : null)?.call(el) as Document | null) ?? null;
+};
+
 /** The document of `el` (an iframe or frame) when it may be used, else null: see the rules above. */
-export function frameDocumentOf(el: Element, origin: string): Document | null {
-  const r = frameCheck(el, origin);
+export function frameDocumentOf(el: Element, origin: string, record: SandboxRecord): Document | null {
+  const r = frameCheck(el, origin, record);
   return typeof r === 'object' ? r : null;
 }
 /**
  * `frameDocumentOf`, saying why not: `unnavigated` is a document of the top's origin with no navigation timing entry
  * yet (just loaded: the entry can come after its `load`), which a later look may find; `null` is a no for good.
  */
-function frameCheck(el: Element, origin: string): Document | 'unnavigated' | null {
+function frameCheck(el: Element, origin: string, record: SandboxRecord): Document | 'unnavigated' | null {
   try {
-    const tag = String(tagOf.call(el));
-    const doc = (tag === 'IFRAME' ? iframeDocument : tag === 'FRAME' ? frameDocument : null)?.call(el) as Document | null;
-    if (Element.prototype.getAttribute.call(el, 'sandbox') !== null) {
-      if (doc) sandboxed.add(doc);
+    const doc = contentDocumentOf(el);
+    if (Element.prototype.getAttribute.call(el, 'sandbox') !== null || record(el)) {
+      if (doc) refused.add(doc);
       return null;
     }
-    if (!doc || sandboxed.has(doc)) return null;
+    if (!doc || refused.has(doc)) return null;
     const url = String(urlOf.call(doc));
     if (!/^https?:/i.test(url)) return null;
     const own = new URL(url).origin;
     if (own === 'null' || own !== origin) return null;
-    return navigated(doc, origin) ? doc : 'unnavigated';
+    const made = navigated(doc, origin);
+    return made === true ? doc : made === 'unknown' ? 'unnavigated' : null;
   } catch {
     return null;
   }
@@ -98,24 +121,40 @@ const windowOf = (el: Element): Window | null => {
   return ((tag === 'IFRAME' ? iframeWindow : frameWindow).call(el) as Window | null) ?? null;
 };
 
-/** A frame the agents run in: its element, its document as it was taken, and the frame above it. */
+/** A frame the agents run in: its element, its document as it was taken and that document's root, and the frame above it. */
 interface FrameNode {
   readonly el: WeakRef<Element>;
   readonly doc: WeakRef<Document>;
+  /** Its `documentElement` when first used: another one means `document.open()` rewrote it (round 2 of #67). */
+  readonly root: WeakRef<Element> | null;
   readonly parent: FrameNode | null;
 }
-/** Whether `node` and every frame above it is still the same document of the top's origin. */
-const stillAllowed = (node: FrameNode | null, origin: string): boolean => {
+/** Whether `node` and every frame above it is still the same document, as it was, of the top's origin. */
+const stillAllowed = (node: FrameNode | null, origin: string, record: SandboxRecord): boolean => {
   for (let n = node; n; n = n.parent) {
     const el = n.el.deref();
     const doc = n.doc.deref();
-    if (!el || !doc || !connected.call(el) || frameDocumentOf(el, origin) !== doc) return false;
+    if (!el || !doc || !connected.call(el) || frameDocumentOf(el, origin, record) !== doc) return false;
+    if (n.root && rootElementOf.call(doc) !== n.root.deref()) return false;
   }
   return true;
 };
+/** A computed transform that's a translation and one scale for both axes (or none): anything else turns the box. */
+const plainTransform = (style: CSSStyleDeclaration): boolean => {
+  if (style.rotate && style.rotate !== 'none') return false;
+  if (style.scale && style.scale !== 'none' && new Set(style.scale.trim().split(/\s+/)).size > 1) return false;
+  const t = style.transform;
+  if (!t || t === 'none') return true;
+  const m = /^matrix\(([^)]*)\)$/.exec(t);
+  if (!m) return false;
+  const [a, b, c, d] = m[1]!.split(',').map(Number);
+  return b === 0 && c === 0 && a === d && a! > 0;
+};
 /**
  * Where the frame's content is in the tab's CSS pixels, and its scale: each frame's box, border and padding, from the
- * top down, with the scale a CSS transform or zoom gives it (its drawn width over its layout width; round 1 of #67).
+ * top down, with the scale a CSS transform gives it (its drawn width over its layout width; round 1 of #67). Null under
+ * a CSS zoom, a rotation or a skew, on the frame or anything above it: no menu, rather than one in the wrong place
+ * (round 2 of #67).
  */
 const offsetOf = (node: FrameNode, top: Window): { x: number; y: number; scale: number } | null => {
   const chain: Element[] = [];
@@ -128,6 +167,8 @@ const offsetOf = (node: FrameNode, top: Window): { x: number; y: number; scale: 
   let y = 0;
   let scale = 1;
   for (const el of chain) {
+    if (zoomOf && Number(zoomOf.call(el)) !== 1) return null;
+    for (let a: Element | null = el, depth = 0; a && depth < 64; a = composedParentOf(a), depth++) if (!plainTransform(top.getComputedStyle(a))) return null;
     const r = Element.prototype.getBoundingClientRect.call(el);
     const style = top.getComputedStyle(el);
     const width = Number(offsetWidth.call(el));
@@ -147,8 +188,8 @@ interface Running {
   /** Its window's `pagehide` and its document's frame `load` listeners, taken off. */
   readonly unlisten: () => void;
 }
-/** What `startAgents` returns: its stop, and (tests) what the hub holds. */
-export type AgentsStop = (() => void) & { stats(): { agents: number; forms: number; fills: number; owners: number } };
+/** What `startAgents` returns: its stop, and (tests) what the hub holds and the documents its agents run on. */
+export type AgentsStop = (() => void) & { stats(): { agents: number; forms: number; fills: number; owners: number }; documents(): Document[] };
 
 /** Starts the top document's agent and one for each allowed same-origin frame. */
 export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions, 'document' | 'window'> = {}): AgentsStop {
@@ -166,6 +207,45 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
   const listened = new WeakSet<Document>();
   let sentForms = '';
   let focusedBy: { token: object; formId: string } | null = null;
+  /**
+   * What each frame document's agent has seen of its own frames since it started: those with a `sandbox` attribute
+   * change, and the documents its frames already had then (their history wasn't watched).
+   */
+  const histories = new WeakMap<Document, { seen: WeakSet<Element>; predates: WeakSet<Document>; observer: MutationObserver }>();
+  /**
+   * Whether a frame element ever had a `sandbox` attribute, as far as anyone watched: the sentinel watched the top
+   * document's from its start (the bridge's `sandboxed`); a frame's agent its own document's since it started. A frame in
+   * an open shadow root, or one nobody watched, counts as sandboxed (round 2 of #67).
+   */
+  const record: SandboxRecord = (el) => {
+    const owner = ownerOf.call(el) as Document | null;
+    if (!owner || rootOf(el) !== owner) return true;
+    if (owner === doc) {
+      try {
+        return !bridge.sandboxed || bridge.sandboxed(el) !== false;
+      } catch {
+        return true;
+      }
+    }
+    const history = histories.get(owner);
+    if (!history || history.seen.has(el)) return true;
+    const current = contentDocumentOf(el);
+    return !!current && history.predates.has(current);
+  };
+  /** A frame document's own frames, watched from now: what they have now predates the watch. */
+  const watchHistory = (d: Document) => {
+    const seen = new WeakSet<Element>();
+    const predates = new WeakSet<Document>();
+    for (const f of framesIn(d, MAX_FRAMES_SEEN)) {
+      const current = contentDocumentOf(f);
+      if (current) predates.add(current);
+    }
+    const observer = new MutationObserver((records) => {
+      for (const r of records) seen.add(r.target as Element);
+    });
+    observer.observe(d, { attributes: true, attributeFilter: ['sandbox'], subtree: true });
+    histories.set(d, { seen, predates, observer });
+  };
   const sendForms = () => {
     const forms: Forms = [];
     let size = 2;
@@ -192,7 +272,9 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
   const hub = (token: object): PasswordsBridge => ({
     send<C extends PasswordsAgentChannel>(channel: C, payload: PasswordsAgentMessage<C>) {
       if (channel === 'forms') {
-        // A released agent's last report isn't the page's.
+        // A released agent's last report isn't the page's; and one whose frame went is released now, so its forms go
+        // with this report (a frame rewritten by `document.open()` sends no `pagehide`).
+        prune();
         if (token !== topToken && !agents.has(token)) return;
         const forms = (payload as PasswordsAgentMessage<'forms'>).forms;
         formsOf.set(token, forms);
@@ -216,6 +298,13 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
   const release = (token: object, a: Running) => {
     a.stop.release();
     a.unlisten();
+    // Its document is done with: navigated away, rewritten or gone. Never used again.
+    const old = a.node.doc.deref();
+    if (old) {
+      refused.add(old);
+      histories.get(old)?.observer.disconnect();
+      histories.delete(old);
+    }
     agents.delete(token);
     formsOf.delete(token);
     fills.delete(token);
@@ -228,15 +317,18 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
   };
 
   /** The frames as they are now: new allowed documents get an agent while a slot's free; one that went is released. */
+  function prune(): void {
+    for (const [token, a] of agents) if (!stillAllowed(a.node, origin, record)) release(token, a);
+  }
   const discover = () => {
-    for (const [token, a] of agents) if (!stillAllowed(a.node, origin)) release(token, a);
+    prune();
     let seen = 0;
     let later = false;
     const walk = (within: Document, parent: FrameNode | null, depth: number, ancestors: FrameContext['ancestors']) => {
       if (depth >= MAX_FRAME_DEPTH) return;
       for (const el of framesIn(within, MAX_FRAMES_SEEN)) {
         if (++seen > MAX_FRAMES_SEEN) return;
-        const checked = frameCheck(el, origin);
+        const checked = frameCheck(el, origin, record);
         // Just loaded, its navigation entry not there yet: looked at again shortly, a few times at most. A document
         // written into about:blank never gets one, and never gets used.
         if (checked === 'unnavigated') {
@@ -256,11 +348,13 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
         if (!node) {
           // A frame keeps its slot while it's used; one found past 20 is skipped (round 1 of #67).
           if (agents.size >= MAX_FRAMES) continue;
-          const made: FrameNode = { el: new WeakRef(el), doc: new WeakRef(frameDoc), parent };
+          const rootElement = rootElementOf.call(frameDoc) as Element | null;
+          const made: FrameNode = { el: new WeakRef(el), doc: new WeakRef(frameDoc), root: rootElement ? new WeakRef(rootElement) : null, parent };
           node = made;
           const fresh = {};
           running.set(frameDoc, fresh);
-          const frame: FrameContext = { allowed: () => stillAllowed(made, origin), offset: () => (stillAllowed(made, origin) ? offsetOf(made, win) : null), ancestors: up };
+          watchHistory(frameDoc);
+          const frame: FrameContext = { allowed: () => stillAllowed(made, origin, record), offset: () => (stillAllowed(made, origin, record) ? offsetOf(made, win) : null), ancestors: up };
           const stop = startAgent(hub(fresh), { document: frameDoc, window: frameWin, frame, ids, timers: win });
           agents.set(fresh, { node: made, stop, unlisten: listen(frameDoc, frameWin) });
         }
@@ -318,6 +412,9 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
       unlistenTop();
       stopTop();
     },
-    { stats: () => ({ agents: agents.size, forms: formsOf.size, fills: fills.size, owners: owners.size }) },
+    {
+      stats: () => ({ agents: agents.size, forms: formsOf.size, fills: fills.size, owners: owners.size }),
+      documents: () => [doc, ...[...agents.values()].flatMap((a) => (stillAllowed(a.node, origin, record) ? [a.node.doc.deref()!] : []))],
+    },
   );
 }

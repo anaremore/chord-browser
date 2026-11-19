@@ -16,6 +16,10 @@ let onFill: ((payload: unknown) => void) | null = null;
     stop = startAgents({
       send: (channel, payload) => void messages.push([channel, structuredClone(payload)]),
       onFill: (listener) => void (onFill ??= listener),
+      // The sentinel's sandbox record (sandbox-recorder.ts, where a spec installed it): without it, no frame is used.
+      ...(typeof (globalThis as { chordSandboxed?: unknown }).chordSandboxed === 'function'
+        ? { sandboxed: (el: Element) => (globalThis as unknown as { chordSandboxed: (el: Element) => boolean }).chordSandboxed(el) }
+        : {}),
     });
   },
   /** A fill as main sends it, through the bridge. */
