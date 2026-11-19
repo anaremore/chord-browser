@@ -1,9 +1,8 @@
 /**
- * The formless scope of a page's password field after a scan, and whether a click on a button would submit, with the
- * roots' index counted on a clock the test chooses: one that jumps past `ROOT_INDEX_MS` cuts the count short (review
- * rounds 1 and 2 of #65). Bundled by scope-probe.spec.ts and run in the page.
+ * Whether a click on a button submits a page's formless password field, by `submitButtonFor`, after a scan. Bundled by
+ * scope-probe.spec.ts and run in the page.
  */
-import { formlessScope, scanDocument, setRootIndexClock, submitButtonFor } from '../../src/passwords/agent/scan';
+import { scanDocument, submitButtonFor } from '../../src/passwords/agent/scan';
 
 /** The first element matching `selector` in the document or any open root in it. */
 function deep(root: Document | ShadowRoot, selector: string): Element | null {
@@ -16,14 +15,11 @@ function deep(root: Document | ShadowRoot, selector: string): Element | null {
   return null;
 }
 
-function probe(truncate: boolean, button: string | null): { scope: string | null; submits: boolean | null } {
-  let t = 0;
-  setRootIndexClock(truncate ? () => (t += 10) : () => performance.now());
+function probe(button: string): boolean | null {
   scanDocument(document);
   const field = deep(document, 'input[type=password]');
-  const scope = field ? formlessScope(field) : null;
-  const target = button ? deep(document, button) : null;
-  return { scope: scope ? scope.id || scope.tagName : null, submits: target && field ? submitButtonFor(target, field, null, 'sign-in') !== null : null };
+  const target = deep(document, button);
+  return target && field ? submitButtonFor(target, field, null, 'sign-in') !== null : null;
 }
 
 (globalThis as unknown as { chordScopeProbe: typeof probe }).chordScopeProbe = probe;

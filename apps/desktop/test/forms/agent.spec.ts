@@ -1369,35 +1369,35 @@ const typePassword = async (page: Page, selector = '#pw >> #i') => {
 
 for (const shell of [false, true]) {
   const where = shell ? 'in an app shell' : 'with no shell';
-  test(`scenario A ${where}: a lone Material-like field, its eye slotted, and a component Sign in: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+  test(`scenario A ${where}: a lone Material-like field, its eye slotted, and a component Sign in: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><x-button id="go">Sign in</x-button></div>', shell));
     await typePassword(page);
     expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
     await page.waitForTimeout(1100);
-    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
   });
 
-  test(`scenario B ${where}: a lone Material-like field, no eye, and a slot-labelled Next component: Next submits`, async ({ page }) => {
+  test(`scenario B ${where}: a lone Material-like field, no eye, and a slot-labelled Next component: Next isn’t a submit: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"></x-tf><x-button id="go">Next</x-button></div>', shell));
     await typePassword(page);
-    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
   });
 
-  test(`a page’s own lone password field and a slot-labelled Next component beside it, ${where}: Next submits`, async ({ page }) => {
+  test(`a page’s own lone password field and a slot-labelled Next component beside it, ${where}: Next isn’t a submit: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, shelled('<div><div><input id="p" name="password" type="password" aria-label="Password"></div><x-button id="go">Next</x-button></div>', shell));
     await typePassword(page, '#p');
-    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
   });
 
-  test(`a lone field whose component holds a “Remember me” checkbox, its eye slotted, ${where}: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+  test(`a lone field whose component holds a “Remember me” checkbox, its eye slotted, ${where}: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, shelled('<div><x-tf-rm id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf-rm><button id="go" type="button">Sign in</button></div>', shell));
     await typePassword(page);
     expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
     await page.waitForTimeout(1100);
-    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
   });
 
-  test(`several candidate buttons beside a lone field, ${where}: the eye, Forgot password? and a slot-labelled Help aren’t submits; Sign in is`, async ({ page }) => {
+  test(`several candidate buttons beside a lone field, ${where}: none is a submit, Sign in included: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(
       page,
       shelled('<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="forgot" type="button">Forgot password?</button><x-button id="help">Help</x-button><x-button id="go">Sign in</x-button></div>', shell),
@@ -1407,7 +1407,7 @@ for (const shell of [false, true]) {
       expect(await submitsAfterClick(page, a, not)).toEqual([]);
       await page.waitForTimeout(1100);
     }
-    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
   });
 }
 
@@ -1426,7 +1426,7 @@ test('a lone password field directly in an app shell’s root, <button>Submit</b
   expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
 });
 
-test('a form component whose own root holds a lone password field and its Next: Next submits', async ({ page }) => {
+test('a form component whose own root holds a lone password field and its Next: Next isn’t a submit: main’s answer (component submits deferred, a known gap)', async ({ page }) => {
   const a = await open(
     page,
     `<x-step id="step"></x-step><script>
@@ -1434,7 +1434,7 @@ test('a form component whose own root holds a lone password field and its Next: 
     </script>`,
   );
   await typePassword(page, '#step >> #i');
-  expect(await submitsAfterClick(page, a, '#step >> #b')).toEqual(['button']);
+  expect(await submitsAfterClick(page, a, '#step >> #b')).toEqual([]);
 });
 
 /** A Material-like formless sign-in: each field an x-tf (input in its root), the password's with a slotted eye. */
@@ -1451,17 +1451,17 @@ for (const [name, extra, nested] of [
   ['a hidden csrf input in the field component’s root', '<input type="hidden" name="csrf" value="x">', false],
   ['Material’s real nesting (the input under a field element in the root, the eye slotted)', '', true],
 ] as const) {
-  test(`a Material-like formless sign-in, ${name}: the eye isn’t a submit, Sign in outside is`, async ({ page }) => {
+  test(`a Material-like formless sign-in, ${name}: the eye isn’t a submit, nor is Sign in outside: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, MATERIAL_FORMLESS(extra, nested));
     await page.fill('#em >> #i', 'ada@example.com');
     await typePassword(page);
     expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
     await page.waitForTimeout(1100);
-    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
   });
 }
 
-test('deep scans off (a first scan with no root), then a Sign in component attached beside the fields: its click submits', async ({ page }) => {
+test('deep scans off (a first scan with no root), then a Sign in component attached beside the fields: its click isn’t a submit: main’s answer (component submits deferred, a known gap)', async ({ page }) => {
   const a = await open(page, `<div id="wrap"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"></div>${COMPONENTS}`);
   await page.fill('#u', 'ada@example.com');
   await typePassword(page, '#p');
@@ -1471,7 +1471,7 @@ test('deep scans off (a first scan with no root), then a Sign in component attac
     host.textContent = 'Sign in';
     document.getElementById('wrap')!.append(host);
   });
-  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
 });
 
 /* ---------- Review round 1 of #65 ---------- */
@@ -1493,30 +1493,30 @@ for (const shell of [false, true]) {
     expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
   });
 
-  test(`P3, ${where}: an eye component beside a field component (not slotted), Sign in beside them: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+  test(`P3, ${where}: an eye component beside a field component (not slotted), Sign in beside them: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"></x-tf><x-icon id="eye"></x-icon><button id="go" type="button">Sign in</button></div>', shell));
     await typePassword(page);
     expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
     await page.waitForTimeout(1100);
-    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
   });
 
 
-  test(`a two-field component sign-in, ${where}, the eye slotted in the password’s component: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+  test(`a two-field component sign-in, ${where}, the eye slotted in the password’s component: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
     const a = await open(page, shelled('<div><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><x-button id="go">Sign in</x-button></div>', shell));
     await page.fill('#em >> #i', 'ada@example.com');
     await typePassword(page);
     expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
     await page.waitForTimeout(1100);
-    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
   });
 }
 
-test('a button component’s label that comes after the walk (none, then Sign in) is read at the click', async ({ page }) => {
+test('a button component’s label that comes after the walk (none, then Sign in) gives no submit either way: main’s answer (component submits deferred, a known gap)', async ({ page }) => {
   const a = await open(page, `<div><x-tf id="pw" data-type="password"></x-tf><x-button id="go"></x-button></div>${COMPONENTS}`);
   await typePassword(page);
   await page.evaluate(() => void (document.getElementById('go')!.textContent = 'Sign in'));
-  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
 });
 
 /* ---------- Review round 2 of #65 ---------- */
@@ -1650,7 +1650,7 @@ const INNER_SHELL = `<script>
 </script>`;
 
 for (const row of TABLE) {
-  test(`round 3’s table, ${row.name}: ${row.pr}${row.pr === row.main ? ' (as main)' : ` (main: ${row.main})`}`, async ({ page }) => {
+  test(`round 3’s table, ${row.name}: ${row.main}, as main${row.pr === row.main ? '' : ` (deferred: ${row.pr}, a known gap)`}`, async ({ page }) => {
     const a = await open(page, row.body + INNER_SHELL);
     if (row.field === '#u') await page.fill('#u', 'ada@example.com');
     else await typePassword(page, row.field);
@@ -1660,7 +1660,7 @@ for (const row of TABLE) {
     const signals = (await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal']);
     const steps = await a.of('step');
     const got: Outcome = signals.includes('button') ? 'submit' : steps.length ? 'step' : 'none';
-    // CHORD_TABLE_MAIN=1, with main's scan and agent swapped in, checks the `main` column itself.
-    expect(got).toBe(process.env['CHORD_TABLE_MAIN'] ? row.main : row.pr);
+    // Main's answer everywhere (the owner's fallback for #65): `pr` is what the deferred component submits would give.
+    expect(got).toBe(row.main);
   });
 }

@@ -187,17 +187,14 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let deep = true;
   let rootsSeen = false;
   /** An event that started inside an open shadow root: its target is the host, its path's first entry the field. */
-  /** Whether this event turned the walk on: the last scan skipped roots, so what's known can't hold the event's own. */
-  const fromRoot = (event: Event): boolean => {
-    if (rootsSeen) return false;
+  const fromRoot = (event: Event) => {
+    if (rootsSeen) return;
     const first = event.composedPath()[0];
     if (first !== event.target && first instanceof Node && rootOf(first) instanceof ShadowRoot) {
       rootsSeen = deep = true;
       // The field isn't known yet, and the last scan skipped roots: the next lookup scans again.
       scanWanted = true;
-      return true;
     }
-    return false;
   };
   /** Scans the page again and classifies each form for filling. Main hears of a change at the next flush. */
   function rescan(): void {
@@ -419,7 +416,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (k) candidate(k, 'enter');
   };
   const onClick = (event: MouseEvent) => {
-    const walkOn = fromRoot(event);
+    fromRoot(event);
     if (!event.isTrusted) return;
     const target = event.composedPath()[0];
     if (!(target instanceof Element)) return;
@@ -429,9 +426,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     let k = submittedBy(target, known, anchorOf);
     // Nothing known for a click inside an open root: a component added since the last scan (or with deep scans off) may
     // hold its form. Scanned afresh once and asked again, only then, and not right after a scan (review rounds 3 and 4
-    // of #61). The click that turns the walk on rescans whatever the gap: the scan just before it skipped roots (review
-    // round 4 of #61, nit 1).
-    if (!k && rootOf(target) instanceof ShadowRoot && (walkOn || performance.now() - scannedAt >= SCAN_GAP_MS)) {
+    // of #61).
+    if (!k && rootOf(target) instanceof ShadowRoot && performance.now() - scannedAt >= SCAN_GAP_MS) {
       rescan();
       k = submittedBy(target, known, anchorOf);
     }
