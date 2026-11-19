@@ -848,3 +848,42 @@ test('a component rendered after the first scan, on a page that had no root: its
   await a.settle();
   expect(await a.of('focus')).toEqual([expect.objectContaining({ role: 'current-password', kind: 'sign-in' })]);
 });
+
+/** A text field that fades its empty, unfocused input under its resting label, as Material Web's outlined field does. */
+const FADING_FIELDS = (hostStyle = '') => `<h1>Sign in</h1><form id="f" onsubmit="return false"><x-fade id="user" style="${hostStyle}"></x-fade><x-fade id="pass" style="${hostStyle}"></x-fade><button id="go">Sign in</button></form>
+<script>
+  for (const [id, type, label] of [['user', 'email', 'Email'], ['pass', 'password', 'Password']]) {
+    const root = document.getElementById(id).attachShadow({ mode: 'open' });
+    root.innerHTML = '<style>:host { display: block; position: relative; } span { position: absolute; left: 8px; top: 6px; } input:placeholder-shown:not(:focus) { opacity: 0; }</style><span>' + label + '</span><input id="i" name="' + id + '" type="' + type + '" placeholder=" " aria-label="' + label + '">';
+  }
+</script>`;
+
+test('a component that fades its empty input under its label: the fill goes into both fields, the unfocused one too', async ({ page }) => {
+  const a = await open(page, FADING_FIELDS());
+  await page.click(inRoot('user'));
+  await a.settle();
+  const focus = (await a.of('focus')).at(-1)!;
+  expect(focus).toMatchObject({ role: 'username', kind: 'sign-in' });
+  await page.evaluate(
+    (p) => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.fill(p),
+    { formId: focus['formId'], username: 'ada@example.com', password: 'pw-one', highlight: { color: 'red', ms: 10, stagger: 0, easing: 'linear' } },
+  );
+  await a.settle();
+  expect((await a.of('filled')).at(-1)).toMatchObject({ ok: true });
+  expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
+});
+
+test('a component that hides itself (its host at opacity 0): the fill writes nothing', async ({ page }) => {
+  const a = await open(page, FADING_FIELDS('opacity: 0'));
+  await page.focus(inRoot('user'));
+  await a.settle();
+  const focus = (await a.of('focus')).at(-1);
+  if (focus)
+    await page.evaluate(
+      (p) => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.fill(p),
+      { formId: focus['formId'], username: 'ada@example.com', password: 'pw-one', highlight: { color: 'red', ms: 10, stagger: 0, easing: 'linear' } },
+    );
+  await a.settle();
+  expect(await page.inputValue(inRoot('pass'))).toBe('');
+  expect(await page.inputValue(inRoot('user'))).toBe('');
+});

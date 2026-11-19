@@ -191,9 +191,28 @@ function previousText(el: Element): string {
 
 /** On screen: rendered, opaque enough, at least 4 px each way (as the assistant's read and §5's fill check). */
 export function isShown(el: Element): boolean {
-  if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+  if (typeof el.checkVisibility === 'function') {
+    // In an open shadow root, opacity is the component's to judge, at its outermost host: a design system's text field
+    // fades its empty input under the resting label (Material Web's does) while the field itself is plainly on screen.
+    // The input must still be rendered and not `visibility: hidden`, and the host shown with opacity; a component that
+    // hides itself gets nothing (phase 3B).
+    const host = outermostHost(el);
+    if (host) {
+      if (!el.checkVisibility({ visibilityProperty: true }) || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+    } else if (!el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+  }
   const r = el.getBoundingClientRect();
   return r.width >= 4 && r.height >= 4;
+}
+
+/** The host in the document's own tree of the open shadow roots `el` is in, or null when it's in the document's. */
+function outermostHost(el: Element): Element | null {
+  let host: Element | null = null;
+  for (let root = el.getRootNode(), depth = 0; root instanceof ShadowRoot && depth < 32; depth++) {
+    host = root.host;
+    root = host.getRootNode();
+  }
+  return host;
 }
 
 /** Blink's `IsFocusable`, roughly: rendered, not `visibility: hidden`, not disabled or inert. */
