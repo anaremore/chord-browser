@@ -114,6 +114,10 @@ export interface PasswordDetectorEvents {
   filled: [PasswordsFilledEvent];
   forms: [PasswordsFormsEvent];
   firstStep: [PasswordsFirstStepEvent];
+  /** A navigation the page made during a form-gone sign-in's late window was judged: no sign of a refusal (phase 3A-2). */
+  lateJudged: [Outcome<'lateJudged'>];
+  /** That navigation reached its cap unjudged: what was held for the sign-in goes (review round 3 of #62). */
+  lateUnjudged: [Outcome<'lateUnjudged'>];
 }
 
 export interface PasswordDetectorOptions {
@@ -143,6 +147,8 @@ export interface PasswordDetector {
   /** Detection on in exactly these chords' profiles and off in every other one (and every one made later). */
   setProfiles(profileIds: readonly string[]): void;
   isEnabled(profileId: string): boolean;
+  /** Whether a page's navigation during a late window is still being judged (phase 3A-2): a held save waits on it. */
+  judging(contents: WebContents): boolean;
 }
 
 interface SessionEntry {
@@ -211,7 +217,10 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       if (!entry || !isEnabled(entry.profileId) || contents.isDestroyed()) return null;
       return pageOrigin(event.senderFrame, contents.mainFrame);
     };
-    const tracker = new SubmissionTracker(now);
+    // Its cap's outcome comes from a timer, not a call: emitted as the calls' are.
+    const tracker = new SubmissionTracker(now, undefined, (outcomes) => {
+      if (!contents.isDestroyed()) emit(outcomes);
+    });
     pages.set(contents, tracker);
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     const emit = (outcomes: SavingOutcome[]) => {
@@ -222,6 +231,8 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         // Private windows never save (S17 §7): nothing is offered there.
         else if (priv) continue;
         else if (type === 'signedIn') events.emit('signedIn', { ...(rest as Omit<Extract<SavingOutcome, { type: 'signedIn' }>, 'type'>), contents });
+        else if (type === 'lateJudged') events.emit('lateJudged', { ...(rest as Omit<Extract<SavingOutcome, { type: 'lateJudged' }>, 'type'>), contents });
+        else if (type === 'lateUnjudged') events.emit('lateUnjudged', { ...(rest as Omit<Extract<SavingOutcome, { type: 'lateUnjudged' }>, 'type'>), contents });
         else events.emit('failed', { ...(rest as Omit<Extract<SavingOutcome, { type: 'failed' }>, 'type'>), contents });
       }
     };
@@ -269,7 +280,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
     });
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));
-    on('hint', (m) => tracker.hint(m.formId, m.status));
+    on('hint', (m) => emit(tracker.hint(m.formId, m.status)));
     on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok, ...(m.reason ? { reason: m.reason } : {}) }));
 
     contents.on('did-start-navigation', (details) => {
@@ -345,5 +356,6 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       forgetWhereOff();
     },
     isEnabled,
+    judging: (contents) => pages.get(contents)?.judging ?? false,
   };
 }

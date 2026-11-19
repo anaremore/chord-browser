@@ -795,8 +795,12 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
     void api.passwords.card(card.id, action, details);
   const update = card.kind === 'update';
   const change = card.kind === 'change';
-  const saved = card.kind === 'saved';
-  const ready = !card.busy && (!card.setup || passphraseReady(passphrase)) && (!change || account !== null);
+  const refused = card.kind === 'refused';
+  // A refused card is a saved card that turned (S17 §6, phase 3A-2): *Delete it* and **Done**, as the saved card's.
+  const saved = card.kind === 'saved' || refused;
+  // Save or Update pressed while the site could still say no (the owner's design 1A): it waits, read-only.
+  const waiting = !!card.waiting;
+  const ready = !card.busy && !waiting && (!card.setup || passphraseReady(passphrase)) && (!change || account !== null);
   const save = () => {
     if (card.setup && !passphraseReady(passphrase)) return setPassphrase({ ...passphrase, touched: true });
     if (!ready) return;
@@ -813,7 +817,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
       className={styles.card}
       role="dialog"
       aria-labelledby={`${ids}-title`}
-      aria-busy={card.busy || undefined}
+      aria-busy={card.busy || waiting || undefined}
       onFocus={() => act('hold')}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) act('release');
@@ -830,9 +834,13 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
       }}
     >
       <div className={styles.permissionHead}>
-        <KeyRound className={styles.offerIcon} {...ICON} aria-hidden />
+        {refused ? <TriangleAlert className={`${styles.offerIcon} ${styles.offerIconWarn}`} {...ICON} aria-hidden /> : <KeyRound className={styles.offerIcon} {...ICON} aria-hidden />}
         <p id={`${ids}-title`} className={styles.permissionTitle}>
-          {update ? (
+          {refused ? (
+            <>
+              <span className={styles.host}>{card.host}</span> didn’t take your new password.
+            </>
+          ) : update ? (
             <>
               {card.username ? (
                 <>
@@ -870,7 +878,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
         <>
           <div className={styles.authChooser} role="listbox" aria-label={`Accounts on ${card.host}`}>
             {(card.accounts ?? []).map((name, i) => (
-              <button key={i} type="button" role="option" aria-selected={account === i} className={styles.authAccount} disabled={card.busy} onClick={() => setAccount(i)}>
+              <button key={i} type="button" role="option" aria-selected={account === i} className={styles.authAccount} disabled={card.busy || waiting} onClick={() => setAccount(i)}>
                 <span className={styles.menuIcon} aria-hidden>
                   {[...name.trim()][0]?.toUpperCase() || '·'}
                 </span>
@@ -882,7 +890,8 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
           <p className={styles.offerNotice}>Or save it as another account.</p>
         </>
       )}
-      {saved && (
+      {refused && <p className={styles.offerNotice}>Chord kept it in Settings → Passwords, Not confirmed, in case the sign-up went through after all.</p>}
+      {saved && !refused && (
         <div className={styles.authFields}>
           <span className={styles.authLabel}>Username</span>
           <span className={styles.savedPassword}>{card.username || 'No username yet'}</span>
@@ -898,6 +907,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
               id={`${ids}-username`}
               className={styles.authInput}
               value={username}
+              readOnly={waiting}
               maxLength={500}
               autoComplete="off"
               spellCheck={false}
@@ -922,7 +932,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
       </div>
       {card.setup && (
         <div className={styles.saveStep}>
-          <PassphraseStep value={passphrase} onChange={setPassphrase} />
+          <PassphraseStep value={passphrase} onChange={setPassphrase} readOnly={waiting} />
         </div>
       )}
       {card.problem && (
@@ -930,14 +940,19 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
           Chord couldn’t save it. Try again.
         </p>
       )}
+      {waiting && (
+        <p className={styles.offerNotice} role="status">
+          Waiting a moment for {card.host} to confirm the sign-in.
+        </p>
+      )}
       <div className={styles.actions}>
         {!update && !card.setup && !change && !saved && (
-          <button type="button" className={styles.link} disabled={card.busy} onClick={() => act('never')}>
+          <button type="button" className={styles.link} disabled={card.busy || waiting} onClick={() => act('never')}>
             Never for this site
           </button>
         )}
         {change && (
-          <button type="button" className={styles.link} disabled={card.busy} onClick={() => act('new')}>
+          <button type="button" className={styles.link} disabled={card.busy || waiting} onClick={() => act('new')}>
             Save as new
           </button>
         )}
@@ -946,8 +961,19 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
             Delete it
           </button>
         )}
-        <button type="submit" className={styles.primary} disabled={card.busy || (change && account === null)}>
-          {update || change ? 'Update' : saved ? 'Done' : 'Save'}
+        <button type="submit" className={`${styles.primary}${waiting ? ` ${styles.primaryBusy}` : ''}`} disabled={card.busy || waiting || (change && account === null)}>
+          {waiting ? (
+            <>
+              <span className={styles.spin} aria-hidden />
+              {update || change ? 'Updating…' : 'Saving…'}
+            </>
+          ) : update || change ? (
+            'Update'
+          ) : saved ? (
+            'Done'
+          ) : (
+            'Save'
+          )}
         </button>
       </div>
     </form>

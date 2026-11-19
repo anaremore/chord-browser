@@ -874,9 +874,11 @@ export interface PasswordSaveCard {
    * `change`: a change-password form whose account Chord can't tell (none or several saved ones have its current
    * password, S17 §6): the card asks which, from `accounts`, with the sign-in box's chooser; **Update** sends the one
    * chosen (`account`), *Save as new* (`new`) keeps it as another. `saved`: a sign-up with Chord's own password, saved
-   * already and confirmed now: *Your new password … is saved*, **Done**, *Delete it* (`delete`).
+   * already and confirmed now: *Your new password … is saved*, **Done**, *Delete it* (`delete`). `refused`: that saved
+   * card after a late error took the sign-in back (S17 §6, phase 3A-2): *… didn't take your new password.*, kept *Not
+   * confirmed*, **Done**, *Delete it*.
    */
-  kind: 'new' | 'update' | 'change' | 'saved';
+  kind: 'new' | 'update' | 'change' | 'saved' | 'refused';
   /** A sign-up's (`new`): *Save the password for your new account on …?* */
   signUp?: boolean;
   /** `change`: the site's saved usernames to choose from, best first. */
@@ -892,6 +894,11 @@ export interface PasswordSaveCard {
   setup: boolean;
   busy: boolean;
   problem: 'io' | null;
+  /**
+   * Save or Update was pressed while a late error could still take the sign-in back (S17 §6, phase 3A-2): *Saving…*
+   * (*Updating…*), the fields read-only, until the window closes. × cancels it.
+   */
+  waiting?: boolean;
 }
 
 export interface PopoverState {

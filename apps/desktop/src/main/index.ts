@@ -127,6 +127,7 @@ const passwords = new PasswordService({
   clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
   changed: () => browser?.passwordsChanged(),
   hide: () => browser?.passwordsHide(),
+  locked: () => browser?.passwordAssist.locked(),
   chord: (chordId) => browser?.store.state.chords[chordId] ?? null,
   extensions: () => browser?.store.state.extensions ?? {},
 });
@@ -1162,6 +1163,11 @@ if (!app.requestSingleInstanceLock()) {
         /** Passwords (S17): turn detection on or off, as the vault's switch will; and what it has reported. */
         passwordsEnabled: (on: boolean, profileIds?: string[]) => passwordDetector.setEnabled(on, profileIds),
         passwordEvents: () => passwordEvents.slice(),
+        /** The vault's state and how many sign-ins it holds (no usernames, no passwords): what a test can say was saved. */
+        passwordsCount: async () => {
+          const view = await passwords.view();
+          return { state: view.state, count: view.count };
+        },
         /**
          * An extension recorded as installed in the first chord's sign-ins, by store id, with no files (it never loads):
          * a known password manager's stands in for one (S17 §11), whose real package no test can sign. Its chord's name.

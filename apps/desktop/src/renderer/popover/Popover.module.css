@@ -873,3 +873,37 @@
     background: CanvasText;
   }
 }
+
+/* The save card while the site could still say no (S17 §6, phase 3A-2; the owner's design 1A). */
+.primaryBusy {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.spin {
+  inline-size: var(--space-3);
+  block-size: var(--space-3);
+  border: var(--size-focus-ring) solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: var(--radius-full);
+  animation: save-spin var(--duration-spin) linear infinite;
+}
+
+@keyframes save-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+    border-inline-end-color: currentColor;
+    opacity: 0.5;
+  }
+}
+
+.offerIconWarn {
+  color: var(--color-danger);
+}

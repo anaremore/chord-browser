@@ -1,6 +1,6 @@
 import type { PasswordsCandidate, PasswordsForms } from '@chord/ipc';
 import { describe, expect, it } from 'vitest';
-import { HOLD_MS, SubmissionTracker, type SavingOutcome } from '../../src/main/passwords/saving';
+import { HOLD_MS, LATE_ERROR_MS, LATE_NAV_CAP_MS, SubmissionTracker, type SavingOutcome } from '../../src/main/passwords/saving';
 
 const ORIGIN = 'https://example.com';
 const password = { type: 'password', id: 'p', name: 'password' };
@@ -28,7 +28,7 @@ type Step =
   | ['settled']
   | ['inPage']
   | ['gone' | 'still', string?]
-  | ['hint', number]
+  | ['hint', number, string?]
   | ['wait', number];
 
 /** Runs a journey and gives what it decided, as `type:detail` strings. */
@@ -66,14 +66,14 @@ function run(steps: Step[]): string[] {
         out.push(...t.still(step[1] ?? 'f1'));
         break;
       case 'hint':
-        t.hint('f1', step[1]);
+        out.push(...t.hint(step[2] ?? 'f1', step[1]));
         break;
       case 'wait':
         now += step[1];
         break;
     }
   }
-  return out.map((o) => (o.type === 'submitted' ? `submitted:${o.signal}` : o.type === 'signedIn' ? `signedIn:${o.how}:${o.hint ?? '-'}` : `failed:${o.why}`));
+  return out.map((o) => (o.type === 'submitted' ? `submitted:${o.signal}` : o.type === 'signedIn' ? `signedIn:${o.how}:${o.hint ?? '-'}` : o.type === 'lateJudged' ? 'lateJudged' : o.type === 'lateUnjudged' ? 'lateUnjudged' : `failed:${o.why}`));
 }
 
 describe('knowing you signed in (S17 §6)', () => {
@@ -115,6 +115,21 @@ describe('knowing you signed in (S17 §6)', () => {
     ['blur after submit keeps the submit', [['candidate'], ['candidate', { signal: 'blur' }], ['gone']], ['submitted:submit', 'signedIn:form-gone:-']],
     ['a `gone` while the page navigates waits for the new page', [['candidate'], ['start', true], ['gone'], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:submit', 'failed:reappeared']],
     ['a new password field matched by its new-password signature', [['candidate', { kind: 'sign-up', password: null, newPassword: password }], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, kind: 'sign-up', password: null, newPassword: password }])], ['settled']], ['submitted:submit', 'failed:reappeared']],
+    // Review round 3 of #59: a late error takes a sign-in read from its form going back.
+    ['the form went (signed in), then a slow 401 for it: taken back', [['candidate', { signal: 'button' }], ['gone'], ['wait', 2000], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
+    ['…a 200 after it: nothing', [['candidate', { signal: 'button' }], ['gone'], ['hint', 200]], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a 401 for another form: nothing', [['candidate', { signal: 'button' }], ['gone'], ['hint', 401, 'f2']], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a 401 after LATE_ERROR_MS: nothing', [['candidate', { signal: 'button' }], ['gone'], ['wait', LATE_ERROR_MS + 1], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…only once: a second 401 says nothing more', [['candidate', { signal: 'button' }], ['gone'], ['hint', 401], ['hint', 403]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
+    ['…a navigation since (a new document numbers its forms afresh): nothing', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a sign-in read from a navigation is never taken back by a hint', [['candidate'], ['start', true], ['navigated', 200], ['settled'], ['hint', 401]], ['submitted:submit', 'signedIn:navigation:-']],
+    // Review round 1 of #62: a navigation the page made during the late window is judged.
+    ['…the page then navigates to the same sign-in form: taken back', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:button', 'signedIn:form-gone:-', 'failed:reappeared']],
+    ['…the page then navigates to a dashboard: judged, nothing taken back', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['navigated', 200], ['forms', formsWith([])], ['settled']], ['submitted:button', 'signedIn:form-gone:-', 'lateJudged']],
+    ['…the page then navigates to an error page: taken back', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['navigated', 401]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
+    ['…the page’s navigation never commits: judged (the page is as it was)', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['failedLoad']], ['submitted:button', 'signedIn:form-gone:-', 'lateJudged']],
+    ['…a navigation of your own: forgotten, never judged', [['candidate', { signal: 'button' }], ['gone'], ['start', false], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a navigation after the window closed: not judged', [['candidate', { signal: 'button' }], ['gone'], ['wait', LATE_ERROR_MS + 1], ['start', true], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:button', 'signedIn:form-gone:-']],
   ])('%s', (_name, steps, expected) => {
     expect(run(steps)).toEqual(expected);
   });
@@ -131,7 +146,7 @@ describe('knowing you signed in (S17 §6)', () => {
     t.candidate(candidate(), 'https://real.example');
     t.navigationStarted(true);
     t.navigated(200);
-    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null, valuesUntil: null }]);
+    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null, valuesUntil: null, lateUntil: null }]);
   });
 });
 
@@ -313,5 +328,154 @@ describe('a deadline per held copy (security review, round 2)', () => {
     const signedIn = tracker.settled().find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }>;
     expect(signedIn.values).toEqual(A);
     expect(signedIn.valuesUntil).toBe(HOLD_MS);
+  });
+});
+
+
+describe('a late window’s navigation, judged (review round 2 of #62)', () => {
+  /** A form-gone sign-in, then a navigation the page made: the tracker judging it. */
+  function judgingTracker() {
+    let now = 0;
+    const tasks = new Map<number, { at: number; run: () => void }>();
+    let n = 0;
+    const timers = {
+      setTimeout: (run: () => void, ms: number) => (tasks.set(++n, { at: now + ms, run }), n),
+      clearTimeout: (id: unknown) => void tasks.delete(id as number),
+    };
+    const late: SavingOutcome[] = [];
+    const t = new SubmissionTracker(() => now, timers, (o) => late.push(...o));
+    t.candidate(candidate({ signal: 'button' }), ORIGIN);
+    t.gone('f1');
+    t.navigationStarted(true);
+    /** The timers due by now, run. */
+    const run = () => {
+      for (const [id, task] of [...tasks]) if (task.at <= now && tasks.delete(id)) task.run();
+    };
+    return { t, late, run, pending: () => tasks.size, advance: (ms: number) => void (now += ms), at: (ms: number) => void (now = ms) };
+  }
+
+  it('is judging from the navigation until its new page settles', () => {
+    const { t } = judgingTracker();
+    expect(t.judging).toBe(true);
+    t.navigated(200);
+    expect(t.judging).toBe(true);
+    t.forms(formsWith([]));
+    expect(t.settled()).toEqual([{ type: 'lateJudged', formId: 'f1', origin: ORIGIN }]);
+    expect(t.judging).toBe(false);
+  });
+
+  it('a second navigation the page makes before the first settles: still judging, the same sign-in, then judged on its page', () => {
+    const { t } = judgingTracker();
+    t.navigated(200);
+    t.navigationStarted(true);
+    expect(t.judging).toBe(true);
+    t.navigated(200);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([{ type: 'failed', formId: 'f1', kind: 'sign-in', origin: ORIGIN, why: 'reappeared' }]);
+  });
+
+  it('…a navigation of your own in between: no longer judged, and nothing comes of it', () => {
+    const { t } = judgingTracker();
+    t.navigationStarted(false);
+    expect(t.judging).toBe(false);
+    t.navigated(200);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+  });
+
+  it('passwords turned off and on there while it’s judged (reset): no stale judgment after', () => {
+    const { t } = judgingTracker();
+    t.navigated(200);
+    t.reset();
+    expect(t.judging).toBe(false);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+  });
+
+  it('past its cap (LATE_NAV_CAP_MS after the window): judging until its timer runs, which sends lateUnjudged, then nothing comes of it', () => {
+    const { t, late, run, advance } = judgingTracker();
+    t.navigated(200);
+    advance(LATE_ERROR_MS + LATE_NAV_CAP_MS);
+    run();
+    expect([t.judging, late]).toEqual([true, []]);
+    // Past the cap, before its timer ran: still judging (it fails closed, review round 3 of #62).
+    advance(1);
+    expect(t.judging).toBe(true);
+    run();
+    expect(late).toEqual([{ type: 'lateUnjudged', formId: 'f1', origin: ORIGIN }]);
+    expect(t.judging).toBe(false);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+  });
+});
+
+describe('a late window’s navigation, review round 3 of #62', () => {
+  function judgingTracker() {
+    let now = 0;
+    const tasks = new Map<number, { at: number; run: () => void }>();
+    let n = 0;
+    const timers = {
+      setTimeout: (run: () => void, ms: number) => (tasks.set(++n, { at: now + ms, run }), n),
+      clearTimeout: (id: unknown) => void tasks.delete(id as number),
+    };
+    const late: SavingOutcome[] = [];
+    const t = new SubmissionTracker(() => now, timers, (o) => late.push(...o));
+    t.candidate(candidate({ signal: 'button' }), ORIGIN);
+    t.gone('f1');
+    const run = () => {
+      for (const [id, task] of [...tasks]) if (task.at <= now && tasks.delete(id)) task.run();
+    };
+    return { t, late, run, pending: () => tasks.size, at: (ms: number) => void (now = ms) };
+  }
+  const kinds = (out: SavingOutcome[]) => out.map((o) => (o.type === 'failed' ? `failed:${o.why}` : o.type));
+
+  it('you submit again while it’s judged (the page came back to the form): the old judgment ends first, as superseded, and never lands on the new sign-in', () => {
+    const { t, late, run, pending, at } = judgingTracker();
+    t.navigationStarted(true);
+    t.navigated(200);
+    expect(kinds(t.candidate(candidate({ signal: 'button' }), ORIGIN))).toEqual(['failed:superseded', 'submitted']);
+    expect(t.judging).toBe(false);
+    // The old page's settling finds the new form shown: nothing for the old sign-in (its ids restart per document).
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+    // The page answers the new submit in place: its own sign-in, with its own window.
+    expect(kinds(t.gone('f1'))).toEqual(['signedIn']);
+    // The old cap's timer went with it (no values here, so no values timer either).
+    expect(pending()).toBe(0);
+    at(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+    run();
+    expect(late).toEqual([]);
+  });
+
+  it('…a blur, or the same submit’s second signal, doesn’t end it', () => {
+    const { t } = judgingTracker();
+    t.navigationStarted(true);
+    t.navigated(200);
+    expect(t.candidate(candidate({ signal: 'blur' }), ORIGIN)).toEqual([]);
+    expect(t.judging).toBe(true);
+  });
+
+  it('the window’s last millisecond: closed at lateUntil, so a navigation then isn’t judged and an error then takes nothing back', () => {
+    const a = judgingTracker();
+    a.at(LATE_ERROR_MS);
+    a.t.navigationStarted(true);
+    expect(a.t.judging).toBe(false);
+    const b = judgingTracker();
+    b.at(LATE_ERROR_MS);
+    expect(b.t.hint('f1', 500)).toEqual([]);
+    const c = judgingTracker();
+    c.at(LATE_ERROR_MS - 1);
+    c.t.navigationStarted(true);
+    expect(c.t.judging).toBe(true);
+  });
+
+  it('your own navigation while it’s judged: no judging, and no cap outcome later', () => {
+    const { t, late, run, at } = judgingTracker();
+    t.navigationStarted(true);
+    t.navigationStarted(false);
+    expect(t.judging).toBe(false);
+    at(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+    run();
+    expect(late).toEqual([]);
   });
 });
