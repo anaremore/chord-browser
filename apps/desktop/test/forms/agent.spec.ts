@@ -1200,3 +1200,55 @@ test('deep scans off (a first scan with no root), then a Sign in component attac
   });
   expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
 });
+
+/* ---------- Review round 1 of #65 ---------- */
+
+/** A wordless icon button, in the page's tree. */
+const ICON = (id: string) => `<button id="${id}" type="button"><svg width="12" height="12"></svg></button>`;
+
+test('P1, as on main: a wordless icon component beside the field’s box doesn’t shrink the scope, and the page’s Sign in submits', async ({ page }) => {
+  const a = await open(page, `<div><div class="row"><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div><x-icon id="eye"></x-icon></div><button id="go" type="button">Sign in</button></div>${COMPONENTS}`);
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+});
+
+for (const shell of [false, true]) {
+  const where = shell ? 'in an app shell' : 'in the page’s tree';
+  test(`P2, ${where}: a fully wordless icon button beside a lone field in its own box, the only button: it submits, as on main`, async ({ page }) => {
+    const a = await open(page, shelled(`<div><div class="field"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('go')}</div>`, shell));
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+
+  test(`P3, ${where}: an eye component beside a field component (not slotted), Sign in beside them: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"></x-tf><x-icon id="eye"></x-icon><button id="go" type="button">Sign in</button></div>', shell));
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+
+  test(`P4, ${where}: a wordless eye beside the field’s box, Sign in beside it: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+    const a = await open(page, shelled(`<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('eye')}<button id="go" type="button">Sign in</button></div>`, shell));
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#eye')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+
+  test(`a two-field component sign-in, ${where}, the eye slotted in the password’s component: the eye isn’t a submit, Sign in is`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><x-button id="go">Sign in</x-button></div>', shell));
+    await page.fill('#em >> #i', 'ada@example.com');
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+  });
+}
+
+test('a button component’s label that comes after the walk (none, then Sign in) is read at the click', async ({ page }) => {
+  const a = await open(page, `<div><x-tf id="pw" data-type="password"></x-tf><x-button id="go"></x-button></div>${COMPONENTS}`);
+  await typePassword(page);
+  await page.evaluate(() => void (document.getElementById('go')!.textContent = 'Sign in'));
+  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
+});

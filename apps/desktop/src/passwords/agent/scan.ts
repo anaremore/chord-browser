@@ -97,18 +97,31 @@ const composedContains = (outer: Node, inner: Node): boolean => {
  * `max` of those `keep` takes. It returns as soon as it has `max`, so a scope with a button of its own costs one query;
  * what `keep` leaves out (hidden inputs) doesn't count toward `max` (review round 4 of #61, nit 3).
  */
-const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64, keep: (el: Element) => boolean = () => true, depth = 0): Element[] => {
+const allInComposed = (
+  el: Element | ShadowRoot,
+  selector: string,
+  max = 64,
+  keep: (el: Element) => boolean = () => true,
+  budget: { roots: number; cut?: boolean } = { roots: Number.POSITIVE_INFINITY },
+  depth = 0,
+): Element[] => {
   const out: Element[] = [];
   for (const found of el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector)) if (keep(found)) out.push(found);
-  // Roots inside roots, 64 deep at most (review round 2 of #61): a page can't overflow the stack with them.
+  // Roots inside roots, 64 deep at most (review round 2 of #61): a page can't overflow the stack with them. `budget`
+  // bounds the roots it goes into, and says when it ran out (`cut`).
   if (out.length >= max || depth >= 64) return out;
+  const into = (root: ShadowRoot) => {
+    if (budget.roots <= 0) return void (budget.cut = true);
+    budget.roots--;
+    out.push(...allInComposed(root, selector, max - out.length, keep, budget, depth + 1));
+  };
   const own = el instanceof ShadowRoot ? null : shadowOf(el);
-  if (own) out.push(...allInComposed(own, selector, max - out.length, keep, depth + 1));
+  if (own) into(own);
   const all = el instanceof ShadowRoot ? el.querySelectorAll('*') : elementProto.querySelectorAll.call(el, '*');
   for (const n of all) {
-    if (out.length >= max) break;
+    if (out.length >= max || budget.cut) break;
     const inner = shadowOf(n);
-    if (inner) out.push(...allInComposed(inner, selector, max - out.length, keep, depth + 1));
+    if (inner) into(inner);
   }
   return out;
 };
@@ -118,27 +131,47 @@ interface RootButtons {
   readonly found: NodeListOf<Element>;
   /** Of those, the ones that read as a submit (Next, Sign in, with their component's own words): read when first asked. */
   submits?: number;
+  /** Of those, the ones that could submit: with words (their component's included), none of them a toggle's or help's. */
+  worded?: number;
 }
 /**
  * The roots the last deep walk of a document went into, and their buttons, counted the first time the formless scope
  * asks (`inRoots`), not at every walk: a page with a `<form>` never pays for it (review round 4 of #61, nit 2).
+ * `truncated`: the count ran past `ROOT_INDEX_MS`, and the scope ignores roots (main's, its own tree's only), since a
+ * part of the roots could let it climb to a wider scope (review round 1 of #65).
  */
-const rootIndex = new WeakMap<Document, { readonly roots: readonly ShadowRoot[]; buttons: RootButtons[] | null }>();
-/** The index's counting stops past this, and finds fewer buttons, so fewer submits, never more. */
+const rootIndex = new WeakMap<Document, { readonly roots: readonly ShadowRoot[]; buttons: RootButtons[] | null; truncated: boolean }>();
 const ROOT_INDEX_MS = 5;
+let indexNow = () => performance.now();
+/** For tests: the clock the index's count reads. */
+export const setRootIndexClock = (now: () => number) => void (indexNow = now);
 const rootButtons = (doc: Document): readonly RootButtons[] => {
   const entry = rootIndex.get(doc);
   if (!entry) return [];
   if (!entry.buttons) {
-    const until = performance.now() + ROOT_INDEX_MS;
+    const until = indexNow() + ROOT_INDEX_MS;
     entry.buttons = [];
     for (const [i, root] of entry.roots.entries()) {
-      if ((i & 63) === 63 && performance.now() > until) break;
+      if ((i & 63) === 63 && indexNow() > until) {
+        entry.truncated = true;
+        break;
+      }
       const found = root.querySelectorAll(SCOPE_BUTTONS);
       if (found.length) entry.buttons.push({ host: root.host, found });
     }
   }
-  return entry.buttons;
+  return entry.truncated ? [] : entry.buttons;
+};
+/**
+ * The roots' buttons are counted again at the next ask: a click reads them as they are now, not as at the walk (a label
+ * that went from *Loading…* to *Sign in* in the gap; review round 1 of #65).
+ */
+const forgetRootButtons = (doc: Document) => {
+  const entry = rootIndex.get(doc);
+  if (entry) {
+    entry.buttons = null;
+    entry.truncated = false;
+  }
 };
 const SCOPE_BUTTONS = 'button, input[type=submit], input[type=button], [role=button]';
 const CONTROLS = 'input, select, textarea';
@@ -148,18 +181,16 @@ const CONTROLS = 'input, select, textarea';
  */
 const isTypeable = (el: Element) => !SKIP_TYPES.has(controlType(el));
 /** The buttons inside `node` through open roots, or those reading as a submit, from the last walk's index (no walk). */
-function inRoots(node: Element, what: 'buttons' | 'submits'): number {
+function inRoots(node: Element, what: 'worded' | 'submits'): number {
   let n = 0;
   for (const r of rootButtons(node.ownerDocument)) {
     if (!composedContains(node, r.host)) continue;
-    if (what === 'buttons') n += r.found.length;
-    else {
-      if (r.submits === undefined) {
-        r.submits = 0;
-        for (const b of r.found) if (readsAsOwnSubmit(b)) r.submits++;
-      }
-      n += r.submits;
+    if (r[what] === undefined) {
+      let count = 0;
+      for (const b of r.found) if (what === 'submits' ? readsAsOwnSubmit(b) : couldSubmit(b)) count++;
+      r[what] = count;
     }
+    n += r[what]!;
   }
   return n;
 }
@@ -174,7 +205,10 @@ export function fieldComponent(field: Element): Element | null {
   const slot = root instanceof ShadowRoot ? null : (slotGetter.call(field) as Element | null);
   const slotRoot = slot ? rootOf(slot) : null;
   const host = root instanceof ShadowRoot ? root.host : slotRoot instanceof ShadowRoot ? slotRoot.host : null;
-  return host && allInComposed(host, CONTROLS, 2, isTypeable).length === 1 ? host : null;
+  if (!host) return null;
+  // Counted to two, through at most 32 roots: an app shell's whole page isn't walked, and one cut short is no field's own.
+  const budget = { roots: 32 } as { roots: number; cut?: boolean };
+  return allInComposed(host, CONTROLS, 2, isTypeable, budget).length === 1 && !budget.cut ? host : null;
 }
 const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
@@ -246,7 +280,7 @@ export function deepControls(
   };
   walk(doc);
   // The roots, for the formless scope until the next walk (`inRoots` counts their buttons when it's first asked).
-  rootIndex.set(doc, { roots, buttons: null });
+  rootIndex.set(doc, { roots, buttons: null, truncated: false });
   return { controls, roots, stopped };
 }
 const tagOf = (el: Element): string => String(tagGetter.call(el));
@@ -424,6 +458,18 @@ function readsAsOwnSubmit(b: Element): boolean {
   const words = buttonWords(b);
   return readsAsSubmit(words) && !NOT_SUBMIT.test(words);
 }
+/** A button that could submit: it says something (its component's words included), and not a toggle's or help's. */
+function couldSubmit(b: Element): boolean {
+  // Its own words first, its component host's only when it has none: most roots' buttons say something themselves.
+  const own = `${buttonText(b)} ${attrOf(b, 'aria-label') ?? ''} ${attrOf(b, 'title') ?? ''}`.trim();
+  const words = own || buttonWords(b).trim();
+  return words !== '' && !NOT_SUBMIT.test(words);
+}
+/** Whether `scope` holds a button reading as a submit: in its own tree, or in its roots (the index). */
+function submitIn(scope: Element): boolean {
+  for (const b of elementProto.querySelectorAll.call(scope, SCOPE_BUTTONS)) if (readsAsOwnSubmit(b)) return true;
+  return inRoots(scope, 'submits') > 0;
+}
 /** A button that submits its form: `<button>` without a type or of type submit, `input[type=submit|image]`. */
 export const isSubmit = (b: Element) => (tagOf(b) === 'BUTTON' ? ((b as HTMLButtonElement).type || 'submit') === 'submit' : tagOf(b) === 'INPUT' && /^(submit|image)$/i.test((b as HTMLInputElement).type));
 
@@ -500,11 +546,11 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
   if (form && !isSubmit(button) && !readsAsSubmit(words) && allIn(form, ANY_BUTTON).length !== 1) return null;
   if (anchor) {
     if (composedContains(button, anchor)) return null;
-    // The field's own component: a button inside it that doesn't read as a submit is the field's (an eye), when it's in
-    // a component of its own (Material's slotted `md-icon-button`) or says nothing at all. One with words beside the field
-    // in the same root (a shell's `<button>Submit</button>`, *Go*) is no eye (review round 4 of #61).
+    // The field's own component: a button inside it, in another root than the field's (Material's slotted
+    // `md-icon-button`), that doesn't read as a submit is the field's (an eye). A button in the field's own root is left
+    // to main's wrapper rule below (review round 4 of #61; round 1 of #65).
     const own = fieldComponent(anchor);
-    if (own && composedContains(own, button) && !readsAsOwnSubmit(button) && (rootOf(button) !== rootOf(anchor) || !buttonWords(button).trim())) return null;
+    if (own && rootOf(button) !== rootOf(anchor) && composedContains(own, button) && !readsAsOwnSubmit(button)) return null;
     const controls = (attrOf(button, 'aria-controls') ?? '').split(/\s+/);
     if (anchor.id && controls.includes(anchor.id)) return null;
     // The password field's own wrapper (a box holding only it and its eye): a button there toggles it. A first step's
@@ -513,8 +559,11 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
     // One whose words read as a submit (Next on a password-only step) is no toggle (review round 3 of #61).
     if (wrapper && tagOf(wrapper) !== 'FORM' && composedContains(wrapper, button) && !readsAsOwnSubmit(button) && allInComposed(wrapper, CONTROLS, 2, isTypeable).length === 1) return null;
     if (!form) {
-      const scope = formlessScope(anchor);
+      const scope = formlessScope(anchor, own);
       if (!scope || !composedContains(scope, button)) return null;
+      // A button with no words at all (an eye, an icon) counts only when nothing else there reads as a submit: a lone
+      // arrow beside the field still does (review round 1 of #65).
+      if (!buttonWords(button).trim() && submitIn(scope)) return null;
     }
   }
   return button;
@@ -528,6 +577,8 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
 export function submittedBy<T extends { readonly scanned: ScannedForm; readonly classified: { readonly kind: string } | null }>(target: Element, forms: readonly T[], anchorOf: (form: T) => Element | null): T | null {
   // Up through shadow roots: a button in a component's root submits the form its host is in.
   const form = composedClosest(target, 'form');
+  // The roots' buttons as they are at this click.
+  forgetRootButtons(target.ownerDocument);
   const k = form ? forms.find((x) => x.scanned.form === form) : forms.find((x) => x.scanned.form === null);
   if (!k) return null;
   const button = submitButtonFor(target, anchorOf(k), k.scanned.form, k.classified?.kind ?? null);
@@ -540,16 +591,17 @@ export function submittedBy<T extends { readonly scanned: ScannedForm; readonly 
 const ANY_BUTTON = 'button, input[type=submit], input[type=button], input[type=image], [role=button]';
 
 /** The closest ancestor of `el` (up to 6 levels) that holds a button: a formless form's scope. */
-export function formlessScope(el: Element): Element | null {
-  const own = fieldComponent(el);
+export function formlessScope(el: Element, own: Element | null = fieldComponent(el)): Element | null {
   let node = composedParentOf(el);
   for (let depth = 0; depth < 6 && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) {
     // Its own tree's buttons by one native query, as on main.
     if (elementProto.querySelectorAll.call(node, SCOPE_BUTTONS).length) return node;
     // A component's own button (in its root), from the last walk's index: a formless sign-in submitted with
     // `md-filled-button` or Shoelace's. Inside the field's own component only one that reads as a submit counts, so its
-    // eye (Material's slotted `md-icon-button`) makes no scope; above it, any does (review round 4 of #61).
-    if (inRoots(node, own && composedContains(own, node) ? 'submits' : 'buttons')) return node;
+    // eye (Material's slotted `md-icon-button`) makes no scope; above it, one that could submit: with words, none a
+    // toggle's. A wordless icon component beside the field's box makes none, as on main, which counted no component's
+    // button (review round 4 of #61; round 1 of #65).
+    if (inRoots(node, own && composedContains(own, node) ? 'submits' : 'worded')) return node;
   }
   return null;
 }
