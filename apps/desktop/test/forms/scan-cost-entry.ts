@@ -4,7 +4,7 @@
  * frames), each timed in the page. Nothing here is the agent's code but `scanDocument`.
  */
 import { classifyPasswordForm } from '@chord/core';
-import { scanDocument } from '../../src/passwords/agent/scan';
+import { formlessScope, scanDocument } from '../../src/passwords/agent/scan';
 
 export interface ScanCost {
   readonly elements: number;
@@ -21,6 +21,8 @@ export interface ScanCost {
   readonly walkTreeMs: number;
   /** A deep look for a password field: the main tree's `querySelector` first, then each open root's. */
   readonly deepLookMs: number;
+  /** `formlessScope` from the page's password field in its own tree: the scan's words and the click rule pay it. */
+  readonly scopeMs: number;
 }
 
 /** Every open shadow root under `root`, roots inside roots too, by visiting every element. */
@@ -68,6 +70,10 @@ function measure(): ScanCost {
     walkAllMs: time(() => rootsByAll(document)),
     walkTreeMs: time(() => rootsByWalker(document)),
     deepLookMs: time(() => document.querySelector('input[type=password]') ?? rootsByWalker(document).find((r) => r.querySelector('input[type=password]'))),
+    scopeMs: (() => {
+      const field = document.querySelector('input[type=password]');
+      return field ? time(() => formlessScope(field), 20) : 0;
+    })(),
   };
 }
 

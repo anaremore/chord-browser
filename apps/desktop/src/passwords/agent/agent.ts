@@ -150,10 +150,11 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   function rescan(): void {
     scannedAt = performance.now();
     scanWanted = false;
-    const roots = { count: 0 };
+    const roots: { count: number; stopped?: boolean } = { count: 0 };
     const scanned = scanDocument(doc, { typed, filled, keys, nextKey, deep, roots });
-    // A page with no open root at its first scan, and no event from inside one since, is scanned without the walk.
-    if (deep && roots.count === 0 && !rootsSeen) deep = false;
+    // A page with no open root at its first scan, and no event from inside one since, is scanned without the walk. Only
+    // after a walk that went all the way: one cut short (the cap, the deadline) proves nothing (review round 2 of #61).
+    if (deep && roots.count === 0 && !roots.stopped && !rootsSeen) deep = false;
     else if (roots.count > 0) rootsSeen = true;
     known = scanned.map((s) => ({ id: idOf(s.form ?? doc), scanned: s, classified: classifyPasswordForm(s.record, 'filling') }));
     for (const s of scanned) for (const el of s.elements) if (controlType(el) === 'password') wasPassword.add(el);

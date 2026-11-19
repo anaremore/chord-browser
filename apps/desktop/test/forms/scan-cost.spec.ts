@@ -38,6 +38,10 @@ const PAGES: Record<string, string> = {
   'no roots, the form in the main tree': `${cards()}<form><label>Username <input name="username"></label><label>Password <input name="password" type="password"></label><button>Sign in</button></form>`,
   'the form’s fields in roots, 300 other components': `${cards()}${components()}<form>${field('username', 'text', 'Username')}${field('password', 'password', 'Password')}<button>Sign in</button></form>`,
   'no sign-in, 300 components (what every page would pay)': `${cards()}${components()}`,
+  // A formless sign-in inside a big container (a feed of cards, components) with no button in it, the button outside:
+  // each of the scope's levels holds the whole feed and finds none, formlessScope's worst case.
+  'formless, no button near the field': `<main><div class="feed">${cards()}<div><input name="email" type="email"><input name="password" type="password"></div></div></main><button>Sign in</button>`,
+  'formless, no button near the field, 300 components': `<main><div class="feed">${cards()}${components()}<div><input name="email" type="email"><input name="password" type="password"></div></div></main><button>Sign in</button>`,
 };
 
 test('the scan, and walking open shadow roots, on a heavy page', async ({ page }) => {
@@ -57,7 +61,7 @@ test('the scan, and walking open shadow roots, on a heavy page', async ({ page }
       const xs = runs.map((r) => r[key]).sort((a, b) => a - b);
       return Math.round(xs[Math.floor(xs.length / 2)]! * 1000) / 1000;
     };
-    report[name] = Object.fromEntries((['elements', 'roots', 'scanMs', 'scanFlatMs', 'lookMs', 'walkAllMs', 'walkTreeMs', 'deepLookMs'] as const).map((k) => [k, median(k)]));
+    report[name] = Object.fromEntries((['elements', 'roots', 'scanMs', 'scanFlatMs', 'lookMs', 'walkAllMs', 'walkTreeMs', 'deepLookMs', 'scopeMs'] as const).map((k) => [k, median(k)]));
     console.log(`[scan-cost] ${name}: ${JSON.stringify(report[name])}`);
   }
   mkdirSync(RESULTS, { recursive: true });

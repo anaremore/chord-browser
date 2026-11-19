@@ -44,8 +44,8 @@ export interface ScanOptions {
    * events never came from inside one: there the document's own `querySelectorAll` is all a scan needs (phase 3B).
    */
   readonly deep?: boolean;
-  /** Told how many open roots the walk went into (none when `deep` is off). */
-  readonly roots?: { count: number };
+  /** Told how many open roots the walk went into (none when `deep` is off), and whether it was cut short. */
+  readonly roots?: { count: number; stopped?: boolean };
 }
 
 /** Controls that are never credentials, and never read. */
@@ -96,19 +96,35 @@ const composedContains = (outer: Node, inner: Node): boolean => {
  * `querySelectorAll` in `el`, its own open root, and the open roots inside them (a component's own button), at most
  * `max`. It returns as soon as it has `max`, so a scope with a button of its own costs one query.
  */
-const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64): Element[] => {
+const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64, depth = 0): Element[] => {
   const out: Element[] = [...(el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector))];
-  if (out.length >= max) return out;
+  // Roots inside roots, 64 deep at most (review round 2 of #61): a page can't overflow the stack with them.
+  if (out.length >= max || depth >= 64) return out;
   const own = el instanceof ShadowRoot ? null : shadowOf(el);
-  if (own) out.push(...allInComposed(own, selector, max - out.length));
+  if (own) out.push(...allInComposed(own, selector, max - out.length, depth + 1));
   const all = el instanceof ShadowRoot ? el.querySelectorAll('*') : elementProto.querySelectorAll.call(el, '*');
   for (const n of all) {
     if (out.length >= max) break;
     const inner = shadowOf(n);
-    if (inner) out.push(...allInComposed(inner, selector, max - out.length));
+    if (inner) out.push(...allInComposed(inner, selector, max - out.length, depth + 1));
   }
   return out;
 };
+/** What the last deep walk of a document found in each open root it went into: its host, and how many buttons and fields. */
+interface RootCounts {
+  readonly host: Element;
+  readonly buttons: number;
+  readonly fields: number;
+}
+const rootIndex = new WeakMap<Document, readonly RootCounts[]>();
+const SCOPE_BUTTONS = 'button, input[type=submit], input[type=button], [role=button]';
+const FIELDS = 'input, select, textarea';
+/** The buttons, or fields, inside `node` through open roots, from the last walk's index (no walk of `node`). */
+function inRoots(node: Element, what: 'buttons' | 'fields'): number {
+  let n = 0;
+  for (const r of rootIndex.get(node.ownerDocument) ?? []) if (r[what] && composedContains(node, r.host)) n += r[what];
+  return n;
+}
 const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
 const shadowRootGetter = getter(elementProto, 'shadowRoot');
@@ -151,7 +167,7 @@ export const MAX_ROOTS = 1000;
 export function deepControls(
   doc: Document,
   limits: { maxControls?: number; deadline?: number; now?: () => number } = {},
-): { controls: Element[]; roots: ShadowRoot[] } {
+): { controls: Element[]; roots: ShadowRoot[]; stopped: boolean } {
   const controls: Element[] = [];
   const roots: ShadowRoot[] = [];
   const max = limits.maxControls ?? ASSISTANT_FORM_SCAN;
@@ -178,7 +194,15 @@ export function deepControls(
     }
   };
   walk(doc);
-  return { controls, roots };
+  // The roots' buttons and fields, for the scope's checks until the next walk (`inRoots`): only roots holding any.
+  const index: RootCounts[] = [];
+  for (const root of roots) {
+    const buttons = root.querySelectorAll(SCOPE_BUTTONS).length;
+    const fields = root.querySelectorAll(FIELDS).length;
+    if (buttons || fields) index.push({ host: root.host, buttons, fields });
+  }
+  rootIndex.set(doc, index);
+  return { controls, roots, stopped };
 }
 const tagOf = (el: Element): string => String(tagGetter.call(el));
 const textOf = (el: Element): string => String(textGetter.call(el) ?? '');
@@ -240,7 +264,8 @@ export function isShown(el: Element): boolean {
  * An empty field a component fades under its resting label (Material Web's outlined field fades its content until it has
  * a value or focus), while the component is plainly on screen (review of 3B). Opacity is waived only when all hold:
  * the field is in an open shadow root that holds no other field (a text field component's, not an app shell's around
- * everything), empty, not focused, rendered and not `visibility: hidden`, 4 px or more each way; and its own root's host
+ * everything), empty, rendered and not `visibility: hidden`, 4 px or more each way (focus isn't asked: a pick in the menu
+ * moves focus to the popover, and the field fades again while still the page's active element; review round 2 of #61); and its own root's host
  * (or, for a host with `display: contents`, its first composed ancestor with a box) is shown, opacity included, with the
  * field's box inside the host's. A field with a value, a component that hides itself, or one in an app shell's root
  * gets nothing. A page can still hide its own empty field inside its own
@@ -249,11 +274,11 @@ export function isShown(el: Element): boolean {
 function fadedInComponent(el: Element): boolean {
   const root = nodeProto.getRootNode.call(el);
   if (!(root instanceof ShadowRoot)) return false;
-  if ((el as HTMLInputElement).value !== '' || activeElementOf(el.ownerDocument) === el) return false;
+  if ((el as HTMLInputElement).value !== '') return false;
   if (allInComposed(root, 'input, select, textarea', 2).length !== 1) return false;
   if (!el.checkVisibility({ visibilityProperty: true })) return false;
+  // (4 px or more each way: `isShown` checks the size after this, for every field.)
   const r = el.getBoundingClientRect();
-  if (r.width < 4 || r.height < 4) return false;
   let host: Element | null = root.host;
   for (let depth = 0; host && depth < 8 && host.getClientRects().length === 0; depth++) host = composedParentOf(host);
   if (!host || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
@@ -446,8 +471,15 @@ const ANY_BUTTON = 'button, input[type=submit], input[type=button], input[type=i
 export function formlessScope(el: Element): Element | null {
   let node = composedParentOf(el);
   for (let depth = 0; depth < 6 && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) {
-    // A component's own button (in its root) counts: a formless sign-in submitted with one (review of 3B).
-    if (allInComposed(node, 'button, input[type=submit], input[type=button], [role=button]', 1).length) return node;
+    // A component's own button (in its root) counts: a formless sign-in submitted with one (review of 3B). But a level
+    // holding no field but this one, whose buttons are all inside roots, is the field's own component, and its button
+    // its own (a show-password eye, as Material's slotted `md-icon-button`): the scope is further out (review round 2 of
+    // #61). A plain <button> beside a lone field (a password-only step) still makes it the scope.
+    // Its own tree by one native query, as before 3B; the roots from the last walk's index (review round 2 of #61: the
+    // scope's levels each enumerating their elements made this four to six times main's). Fields are counted only for
+    // a level whose buttons are all in roots.
+    if (elementProto.querySelectorAll.call(node, SCOPE_BUTTONS).length) return node;
+    if (inRoots(node, 'buttons') && elementProto.querySelectorAll.call(node, FIELDS).length + inRoots(node, 'fields') > 1) return node;
   }
   return null;
 }
@@ -504,7 +536,10 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
   else {
     const walked = deepControls(doc, { maxControls: ASSISTANT_FORM_SCAN, deadline: started + ASSISTANT_FORM_SCAN_MS, now });
     found = walked.controls;
-    if (options.roots) options.roots.count = walked.roots.length;
+    if (options.roots) {
+      options.roots.count = walked.roots.length;
+      options.roots.stopped = walked.stopped;
+    }
   }
   const controls = found as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
   for (const el of controls) {

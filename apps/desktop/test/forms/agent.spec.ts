@@ -997,3 +997,68 @@ test('a show-password eye in a field component’s root (the input slotted): no 
   await a.settle();
   expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur')).toEqual([]);
 });
+
+/* ---------- Review round 2 of #61 ---------- */
+
+test('a pick in the menu moves focus to the popover: the empty field it was opened on fades again, and still fills', async ({ page }) => {
+  const a = await open(page, FADING_FIELDS());
+  await page.click(inRoot('pass'));
+  await a.settle();
+  // As a click on the popover leaves it: the page's active element is still the field, which fades back to 0.
+  await page.evaluate(() => {
+    const input = document.getElementById('pass')!.shadowRoot!.getElementById('i') as HTMLInputElement;
+    input.style.opacity = '0';
+  });
+  expect(await page.evaluate(() => document.getElementById('pass')!.shadowRoot!.activeElement?.id)).toBe('i');
+  expect(await fillLastFocus(page, a)).toMatchObject({ ok: true });
+  expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
+});
+
+test('a formless Material-like password field with a slotted eye, and Sign in outside it: the outside button submits, the eye doesn’t', async ({ page }) => {
+  const a = await open(
+    page,
+    `<div id="wrap"><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="go" type="button">Sign in</button></div><script>
+      for (const host of document.querySelectorAll('x-tf')) {
+        host.attachShadow({ mode: 'open' }).innerHTML = '<input id="i" type="' + host.dataset.type + '" name="' + host.id + '" aria-label="' + host.id + '"><slot></slot>';
+      }
+      document.getElementById('eye').attachShadow({ mode: 'open' }).innerHTML = '<button id="b" type="button"><svg width="12" height="12"></svg></button>';
+    </script>`,
+  );
+  await page.fill('#em >> #i', 'ada@example.com');
+  await page.fill('#pw >> #i', 'secret pass');
+  await a.clear();
+  await page.click('#eye >> #b');
+  await a.settle();
+  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur')).toEqual([]);
+  await page.click('#go');
+  await a.settle();
+  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal'])).toEqual(['button']);
+});
+
+/** A password field alone in a component's root, faded (opacity 0) and broken one more way: no fill. */
+const BROKEN_FADE = (inputStyle: string) => `<h1>Sign in</h1><form id="f" onsubmit="return false"><input id="u" name="email" type="email" aria-label="Email"><x-pw id="pass"></x-pw><button>Sign in</button></form>
+<script>
+  document.getElementById('pass').attachShadow({ mode: 'open' }).innerHTML = '<style>:host { display: block; position: relative; width: 240px; height: 32px; }</style><input id="i" name="password" type="password" aria-label="Password" style="opacity: 0; ${inputStyle}">';
+</script>`;
+
+for (const [clause, style] of [
+  ['its box outside the host’s', 'position: absolute; top: 120px; left: 0;'],
+  // The size is isShown's own check, after the waiver, for every field: this row pins that one.
+  ['under 4 px', 'width: 2px; height: 2px; padding: 0; border: 0;'],
+  ['visibility: hidden', 'visibility: hidden;'],
+] as const) {
+  test(`a faded password field in a visible component, ${clause}: no fill (the waiver's clause pinned)`, async ({ page }) => {
+    const a = await open(page, BROKEN_FADE(style));
+    await page.click('#u');
+    await a.settle();
+    expect(await fillLastFocus(page, a)).toMatchObject({ ok: false });
+    expect(await page.inputValue('#u')).toBe('');
+  });
+}
+
+test('…and the same component, faded only, fills (the rows above fail on their clause alone)', async ({ page }) => {
+  const a = await open(page, BROKEN_FADE(''));
+  await page.click('#u');
+  await a.settle();
+  expect(await fillLastFocus(page, a)).toMatchObject({ ok: true });
+});
