@@ -370,6 +370,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!event.isTrusted) return;
     const target = event.composedPath()[0];
     if (!(target instanceof Element)) return;
+    // A click inside an open root (a component's own button): the roots' index may be older than the component, or
+    // never made (deep scans off), so the page is scanned afresh first, unless a scan just ran (review round 3 of #61).
+    if (rootOf(target) instanceof ShadowRoot && performance.now() - scannedAt >= SCAN_GAP_MS) rescan();
     // A button that submits: in a <form>, its submit buttons; outside one, a button beside the fields; and an element
     // whose words say so (a script's `div`). Never a show-password toggle, a "Forgot password?" or one that wraps the
     // field (submitButtonFor).
