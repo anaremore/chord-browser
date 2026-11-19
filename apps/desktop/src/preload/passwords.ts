@@ -7,7 +7,8 @@
  *
  * It does nothing until the page shows a sign-in field: a password field once the document is
  * parsed or loaded, or focus or typing in a password field or one that reads as a username or
- * email. Then, once, it asks main for the agent's script, exposes the agent's bridge in
+ * email, in an open shadow root too (phase 3B: the event's path, the focus's chain of roots; no
+ * walk). Then, once, it asks main for the agent's script, exposes the agent's bridge in
  * isolated world 4440 (`contextBridge.exposeInIsolatedWorld`) and runs the agent there. Two
  * passive capturing listeners and a `querySelector` at each of two moments are its whole cost
  * on any other page (M0 §6: nothing measurable).
@@ -37,11 +38,16 @@ interface Field {
   name?: string;
   id?: string;
 }
+/** An event as the sentinel reads it: its first target through open shadow roots, where the page gives one. */
+interface PageEvent {
+  target: unknown;
+  composedPath?(): unknown[];
+}
 interface PageGlobals {
   location: { protocol: string };
-  document: { querySelector(selector: string): unknown; addEventListener(type: string, fn: () => void, options: { once: boolean }): void; readyState: string };
-  addEventListener(type: string, fn: (event: { target: unknown }) => void, options: { capture: boolean; passive: boolean } | { once: boolean }): void;
-  removeEventListener(type: string, fn: (event: { target: unknown }) => void, options: { capture: boolean }): void;
+  document: { querySelector(selector: string): unknown; addEventListener(type: string, fn: () => void, options: { once: boolean }): void; readyState: string; activeElement: unknown };
+  addEventListener(type: string, fn: (event: PageEvent) => void, options: { capture: boolean; passive: boolean } | { once: boolean }): void;
+  removeEventListener(type: string, fn: (event: PageEvent) => void, options: { capture: boolean }): void;
 }
 
 const page = globalThis as unknown as PageGlobals;
@@ -77,11 +83,18 @@ async function wake(): Promise<void> {
   await webFrame.executeJavaScriptInIsolatedWorld(WORLD, [{ code: source, url: 'chord://passwords/agent.js' }]).catch(() => undefined);
 }
 
-const onField = (event: { target: unknown }) => {
-  if (signInField(event.target)) void wake();
+const fieldOf = (event: PageEvent) => event.composedPath?.()[0] ?? event.target;
+const onField = (event: PageEvent) => {
+  if (signInField(fieldOf(event))) void wake();
+};
+const activeField = () => {
+  type Focused = { shadowRoot?: { activeElement?: unknown } | null } | null;
+  let el = page.document.activeElement as Focused;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement as Focused;
+  return el;
 };
 const look = () => {
-  if (page.document.querySelector('input[type=password]')) void wake();
+  if (page.document.querySelector('input[type=password]') || signInField(activeField())) void wake();
 };
 function stopListening(): void {
   page.removeEventListener('focusin', onField, { capture: true });

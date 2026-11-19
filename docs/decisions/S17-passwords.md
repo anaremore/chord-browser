@@ -145,7 +145,7 @@ Then Chord adds what Chromium gets from Google's server and Firefox does locally
 | Pages that re-render the field | Fields are held by `WeakRef` and re-read at focus and at fill | Medium |
 | Sign-up and change password | Phase 2 | Medium: the two- and three-password rules are sound; telling sign-up from sign-in by words is fuzzy |
 | Two-step sign-ins (Google, Microsoft, Okta) | Phase 3. Fill: the menu on the username step fills the username; the password step, a new document or a re-render, gets its own menu with the same account first. Save: the username you typed is remembered in main for that tab and site for a few minutes, as Chromium's `possible_usernames_` is ✅ (fill built in #46; save [built in 3A](#phase-3a-two-step-saving-and-formless-submits-built-2026-11-18)) | Medium-low without server hints. A by-hand list per provider |
-| Open shadow roots (Reddit's components ⚠) | Phase 3: walk `shadowRoot`s, as the assistant's read does ✅; events are read through `composedPath()` | Medium |
+| Open shadow roots (Reddit's components ⚠) | Phase 3: walk `shadowRoot`s, as the assistant's read does ✅; events are read through `composedPath()` ([3B, built 2026-11-18](#phase-3b-open-shadow-roots-built-2026-11-18)) | Medium |
 | Closed shadow roots | **Not reachable.** Extensions get `chrome.dom.openOrClosedShadowRoot`; an isolated world doesn't ⚠ | A gap. Rare for sign-in ⚠ |
 | Same-site frames | Phase 3: the main frame's world can reach a same-origin frame's document ⚠ (to prove in the spike) | Medium |
 | Another site's frame (embedded sign-in, some banks, Apple ID ⚠) | Phase 4, and only if preloads in iframes are affordable (§8) | Open |
@@ -1199,3 +1199,58 @@ Only what a real desktop can show; everything else above was measured.
 **Tried and dropped:** narrowing a formless form to the container holding its password field and a button (§4's refinement) cost the corpus 6 files (393 → 387), so it's left as a follow-up rather than tuned here.
 
 **Tests:** the first step's username and its negatives, the click rule's table, and a typed password in a form read as a first step in `forms/agent.spec.ts`; the saving-mode first step and `submitWords` in `core/test/password-forms.test.ts`; `step`'s schema and its private rule in `unit/passwords-detector.test.ts`; keeping, using, ordering and forgetting it, and the checks again after each wait, in `unit/passwords-assist.test.ts`; and the journey in `e2e/passwords-two-step.spec.ts`: a sign-in in two documents whose password page has no username, saved under the email from step 1.
+
+## Phase 3B: open shadow roots (built 2026-11-18)
+
+*Branch `feat/passwords-3b-shadow`, after 3A-1 (#59). No new interface: the menu, fill and cards are phase 1's, for fields that a web component keeps in its open shadow root.*
+
+**Built**, as §4's table planned:
+- **The scan walks open roots** (`deepControls`): the document and every open root in it, roots inside roots too, in tree order. It visits a host, then its root, then its light children, so a slotted input (the host's child, drawn through its root) is scanned once, in the page's tree.
+  - It's bounded like the scan: 2,000 controls and 250 ms, with at most 1,000 roots.
+  - `createTreeWalker`, `shadowRoot` and `tagName` are read through the prototypes (a page can clobber them).
+- **A field in a root with no `<form>` of its own belongs to the form its host is in** (`formOfControl`). That's how a design system's text fields sit in a page's form (Bitwarden's test-the-web page uses Material Web's `md-outlined-text-field`).
+  - Labels are read in the field's own root.
+- **Events through roots.** Focus, typing, Enter and clicks were already read from `composedPath()[0]`. A `submit`, which doesn't cross a root, is listened for in each root that holds a form. The focused element is followed through each root's `activeElement` (a chain of hosts), at the agent's start and at each flush. The watch after a submit also observes the roots its fields are in.
+- **The fill** writes into the field in its root, as into any other: the native setter, then `input` (composed) and `change`.
+- **Shown, in a root:** a design system's text field fades its empty, unfocused input under the resting label (Material Web's outlined field does, on test-the-web), while the field is plainly on screen. So opacity is waived only when all of these hold (review round 1 of #61):
+  - the field is in an open root that holds no other field (a text field component's, not an app shell's around everything);
+  - it's empty;
+  - it's rendered, not `visibility: hidden`, and 4 px or more each way;
+  - its own root's host (or, for a host with `display: contents`, its first composed ancestor with a box) is shown, opacity included, with the field's box inside the host's.
+
+  A field with a value, a component that hides itself, or a field in an app shell's root gets nothing. The rule still lets a page hide its own empty field in its own visible component; the fill writes only the account you picked, to that page's origin.
+- **Which button submits stays main's** (the owner's decision on #61's review round 4). In a `<form>`, a field in a root counts as the form's, so its buttons submit it as on main. For a formless field, `submitButtonFor` and `formlessScope` are main's, unchanged: they look in the field's own tree only, so a formless field inside a component isn't submitted by a click on a button (Enter and the form going still are), and a component's own `<button>` beside a formless field isn't a submit yet. Both are the follow-up, `feat/passwords-3b-formless-components`: the field's own component, and a button host's words. A click inside a root that no known form answers scans the page afresh once, then asks again, unless a scan has just run. `getRootNode` is read through the prototype, since a form with a field named so clobbers it.
+- **The sentinel adds no deep look at load** (the planning thread's decision, 2026-11-18): pages pay nothing new.
+  - It wakes on focus or typing in a sign-in field inside a root, read through the event's `composedPath()` (its target is only the host).
+  - At parse and load it also looks at the focused element through the chain of roots, for a field focused before it looked (autofocus in a component).
+  - A page whose only password field is in a root, never focused, keeps the agent asleep, as it should: nothing to fill or save until you use it.
+- **A page without roots keeps main's scan.** The agent's first scan walks the page. Where it found no root, and no event since has come from inside one, the scans after it use the document's own `querySelectorAll`, as before 3B. An event from inside a root (a component rendered after the first scan) turns the walk on for good.
+- **Closed roots** stay out of reach of any page script, the agent's too. A fixture pins that nothing is taken from one, and nothing beside it is taken for a username.
+
+**Measured** (`test/forms/scan-cost.spec.ts`, Playwright's headless Chromium, medians of 15, three runs):
+
+| Page | Scan before 3B | Scan, first (walk) | Scan, later |
+|---|---:|---:|---:|
+| ~4,200 elements, no roots, the form in the page's tree | 0.22 ms | 0.36–0.38 ms | 0.22 ms (no walk) |
+| ~5,100 elements, the form's fields in roots, 300 other components | 0.14–0.18 ms (fields not seen) | 0.46–0.54 ms | 0.46–0.54 ms |
+| ~5,100 elements, 300 components, no sign-in | — (the agent sleeps) | — | — |
+
+The sentinel's look stays one `querySelectorAll` (0.02 ms) plus the active element's chain. Its built preload is 2,367 bytes, held in bytes to 4,096 (perf.spec): since review round 1 the preloads' build drops JSDoc comments, keeping legal and annotation ones, so the budget is for code (3,664 bytes on main, comments included). A deep look for a password field would have cost 0.22–0.26 ms on every page, twice per load, and isn't made.
+
+**Tests:**
+- **Fixtures** (`test/forms/fixtures/shadow-*.html`, declarative shadow DOM, since the fixtures' pages run no script):
+  - fields in text fields in a page's `<form>`;
+  - a whole form in one root;
+  - roots three deep with no form, and a search box that must stay none;
+  - inputs two roots down in a page's form;
+  - slotted light-DOM inputs;
+  - a closed root, as a negative.
+
+  The fixtures' check now fails a field with an expectation that the scan never reached.
+- **`forms/agent.spec.ts`:**
+  - focus on a field in a root, and autofocus in a component before the agent starts;
+  - a sign-in in roots, whose one submit is one candidate with its values and whose fill goes in through the roots;
+  - a component rendered after a scan that found no root;
+  - main's formless submits unchanged: `<button>Submit</button>`, *Go*, an icon-only button and `<input type=submit>` beside a lone password field, or a lone username's step.
+- **Test-the-web:** `login/shadow-root-inputs` (Material Web) is scored now. The closed-root page stays listed and skipped.
+- **Journey:** `e2e/passwords-shadow.spec.ts`. A form of web components is saved from the card, which offers the email, then filled by the menu through the roots, and the page's own script posts it.

@@ -1,0 +1,19 @@
+<!doctype html>
+<!--
+  Phase 3B: roots inside roots, with no <form>: an app shell's root holds a card's root, which holds
+  the fields, each in a text field's own root, and a Sign in button. A search box in the shell is no
+  username.
+-->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<x-app><template shadowrootmode="open">
+  <header><input type="search" name="q" aria-label="Search" data-chord-expect="none"></header>
+  <x-card><template shadowrootmode="open">
+    <h2>Welcome back</h2>
+    <div>
+      <x-field><template shadowrootmode="open"><input type="email" name="email" aria-label="Email address" data-chord-expect="username"></template></x-field>
+      <x-field><template shadowrootmode="open"><input type="password" name="password" aria-label="Password" data-chord-expect="current-password"></template></x-field>
+      <button type="button">Sign in</button>
+    </div>
+  </template></x-card>
+</template></x-app>
+</body></html>

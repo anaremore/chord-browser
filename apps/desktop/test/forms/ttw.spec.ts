@@ -58,6 +58,10 @@ interface Ttw {
   fill(payload: unknown): void;
   messages(): Message[];
   clear(): void;
+  focused(selector: string): boolean;
+  valueOf(selector: string): string | null;
+  values(): string[];
+  indexes(selectors: readonly string[]): number[];
 }
 /** Calls the page's `chordTtw` (ttw-entry.ts). */
 const call = <M extends keyof Ttw>(page: Page, method: M, arg?: Parameters<Ttw[M]>[0]) =>
@@ -66,24 +70,27 @@ const lastOf = async (page: Page, channel: string) => (await call(page, 'message
 /** Two animation frames and the agent's fallback timer: anything it coalesces has gone out. */
 const settle = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 150)))));
 
+/** A ttw-pages.ts selector for Playwright, whose CSS steps into open shadow roots itself: `>>>` is a descendant there. */
+const pw = (selector: string) => selector.replaceAll(' >>> ', ' ');
+
 async function act(page: Page, action: Action) {
-  if ('click' in action) await page.click(action.click, { timeout: 5000 });
-  else await page.waitForSelector(action.waitFor, { state: 'visible', timeout: 5000 });
+  if ('click' in action) await page.click(pw(action.click), { timeout: 5000 });
+  else await page.waitForSelector(pw(action.waitFor), { state: 'visible', timeout: 5000 });
 }
 
-/** Every text-like field's value, by its place among the page's inputs: what a fill may and may not change. */
-const values = (page: Page) => page.evaluate(() => [...document.querySelectorAll('input, textarea')].map((el) => (el as HTMLInputElement).value));
+/** Every text-like field's value (open shadow roots too), by its place among the page's inputs: what a fill may and may not change. */
+const values = (page: Page) => call(page, 'values');
 
 /** The fill, as the menu and main do it: what's wrong with it, or nothing. */
 async function fillStep(page: Page, step: SignInStep): Promise<string[]> {
   const target = step.username ?? step.password;
   if (!target) return [];
   // A field focused as it appeared (autofocus) has its focus already; any other is clicked, as a person would.
-  const active = await page.evaluate((sel) => document.activeElement === document.querySelector(sel), target);
+  const active = await call(page, 'focused', target);
   if (active) await page.waitForTimeout(600);
   else {
     await call(page, 'clear');
-    await page.click(target, { timeout: 5000 });
+    await page.click(pw(target), { timeout: 5000 });
   }
   await settle(page);
   // The menu shows for the agent's last `focus` (with the field focused already, the one it sent then).
@@ -100,11 +107,11 @@ async function fillStep(page: Page, step: SignInStep): Promise<string[]> {
   // Half a second for a page that puts its own values back.
   await page.waitForTimeout(500);
   const problems: string[] = [];
-  const valueOf = (sel: string) => page.evaluate((s) => (document.querySelector(s) as HTMLInputElement | null)?.value ?? null, sel);
+  const valueOf = (sel: string) => call(page, 'valueOf', sel);
   if (step.username && (await valueOf(step.username)) !== ACCOUNT.username) problems.push('fill: the username didn’t land');
   if (step.password && (await valueOf(step.password)) !== ACCOUNT.password) problems.push('fill: the password didn’t land');
   // No other field may change (a honeypot, a newsletter's email).
-  const expected = await page.evaluate((sels) => sels.map((s) => [...document.querySelectorAll('input, textarea')].indexOf(document.querySelector(s)!)), [step.username, step.password].filter((s): s is string => !!s));
+  const expected = await call(page, 'indexes', [step.username, step.password].filter((s): s is string => !!s));
   const after = await values(page);
   after.forEach((v, i) => {
     if (!expected.includes(i) && v !== before[i]) problems.push(`fill: another field changed (input ${i})`);
@@ -115,7 +122,7 @@ async function fillStep(page: Page, step: SignInStep): Promise<string[]> {
 /** A negative step's field clicked, as a person would: the agent's `focus` must open no menu. */
 async function noMenu(page: Page, step: NegativeStep): Promise<string[]> {
   await call(page, 'clear');
-  await page.click(step.field, { timeout: 5000 });
+  await page.click(pw(step.field), { timeout: 5000 });
   await settle(page);
   const focus = await lastOf(page, 'focus');
   return focus && MENU_KINDS.has(String(focus['kind'])) ? [`menu: clicking ${step.field} opens one (${String(focus['kind'])}, ${String(focus['role'])})`] : [];

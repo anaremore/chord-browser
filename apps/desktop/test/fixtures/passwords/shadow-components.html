@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  A sign-in form of web components, in Chord's own markup (passwords-shadow.spec.ts, S17 phase 3B).
+  Each field is an <x-text-field> whose label and input live in its open shadow root; the <form> and
+  its button are the page's own. The inputs aren't the form's (a shadow tree's controls never are),
+  so the page's script posts their values itself, then goes to /home, as such sites do.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Sign in</title>
+<style>body { margin: 40px; font: 16px system-ui, sans-serif; } x-text-field { display: block; margin: 8px 0; } button { margin-top: 8px; }</style>
+</head><body>
+<h1>Sign in</h1>
+<form id="f" action="/session" method="post">
+  <x-text-field id="email" data-type="email" data-label="Email" data-autocomplete="username"></x-text-field>
+  <x-text-field id="password" data-type="password" data-label="Password" data-autocomplete="current-password"></x-text-field>
+  <button id="go">Sign in</button>
+</form>
+<script>
+  customElements.define('x-text-field', class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = '<style>label, input { display: block; margin: 4px 0; }</style><label for="i"></label><input id="i">';
+      root.querySelector('label').textContent = this.dataset.label;
+      const input = root.querySelector('input');
+      input.type = this.dataset.type;
+      input.name = this.id;
+      input.autocomplete = this.dataset.autocomplete;
+    }
+    get value() { return this.shadowRoot.querySelector('input').value; }
+  });
+  document.getElementById('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = new URLSearchParams({ email: document.getElementById('email').value, password: document.getElementById('password').value });
+    await fetch('/session', { method: 'POST', body }).then((r) => r.text());
+    location.href = '/home';
+  });
+</script>
+</body></html>

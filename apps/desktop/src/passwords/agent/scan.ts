@@ -4,6 +4,12 @@
  * every field outside one in one more form). It only reads: no attribute, class, element,
  * style or listener is added to the page.
  *
+ * **Open shadow roots** (phase 3B): the scan walks the document and every open root in it, roots
+ * inside roots too, in tree order (a host, then its root, then its light children: a slotted input
+ * is the host's child, scanned once). A field in a root with no `<form>` of its own belongs to the
+ * form its host is in, as a design system's text fields do (`md-outlined-text-field` in a page's
+ * `<form>`). Closed roots can't be reached by any page script, the agent's included (S17 §4).
+ *
  * Bounded like the assistant's read (core's ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS):
  * at most 2,000 controls and 250 ms. Values are read only when `values` is set, and
  * they never leave the page's renderer.
@@ -33,6 +39,13 @@ export interface ScanOptions {
   readonly only?: readonly Element[];
   /** For tests: a clock. */
   readonly now?: () => number;
+  /**
+   * Walk into open shadow roots (default). The agent turns it off on a page whose first scan found no root and whose
+   * events never came from inside one: there the document's own `querySelectorAll` is all a scan needs (phase 3B).
+   */
+  readonly deep?: boolean;
+  /** Told how many open roots the walk went into (none when `deep` is off), and whether it was cut short. */
+  readonly roots?: { count: number; stopped?: boolean };
 }
 
 /** Controls that are never credentials, and never read. */
@@ -57,10 +70,119 @@ const activeGetter = getter(documentProto, 'activeElement');
 /** A document's own properties, which named forms, images and embeds can clobber (`<form name="title">`): read through the prototype. */
 export const documentBody = (doc: Document): HTMLElement | null => bodyGetter.call(doc) as HTMLElement | null;
 export const documentTitle = (doc: Document): string => String(titleGetter.call(doc) ?? '');
-export const activeElementOf = (doc: Document): Element | null => activeGetter.call(doc) as Element | null;
-const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
+/**
+ * The element with focus, through open shadow roots: the document's active element is the host of the root that holds
+ * it, and each root's is the next one in. A chain of hosts, not a walk.
+ */
+export const activeElementOf = (doc: Document): Element | null => {
+  let el = activeGetter.call(doc) as Element | null;
+  for (let depth = 0; el && depth < 32; depth++) {
+    const inner = shadowOf(el)?.activeElement;
+    if (!inner) break;
+    el = inner;
+  }
+  return el;
+};
 const contains = (outer: Node, inner: Node): boolean => nodeProto.contains.call(outer, inner);
+/**
+ * `querySelectorAll` in `el`, its own open root, and the open roots inside them (a component's own button), at most
+ * `max`. It returns as soon as it has `max`, so a scope with a button of its own costs one query.
+ */
+const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64, depth = 0): Element[] => {
+  const out: Element[] = [...(el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector))];
+  // Roots inside roots, 64 deep at most (review round 2 of #61): a page can't overflow the stack with them.
+  if (out.length >= max || depth >= 64) return out;
+  const own = el instanceof ShadowRoot ? null : shadowOf(el);
+  if (own) out.push(...allInComposed(own, selector, max - out.length, depth + 1));
+  const all = el instanceof ShadowRoot ? el.querySelectorAll('*') : elementProto.querySelectorAll.call(el, '*');
+  for (const n of all) {
+    if (out.length >= max) break;
+    const inner = shadowOf(n);
+    if (inner) out.push(...allInComposed(inner, selector, max - out.length, depth + 1));
+  }
+  return out;
+};
+const CONTROLS = 'input, select, textarea';
+/**
+ * Fields a person types in, among `found`: never a hidden one (a csrf token), a checkbox or a button (review round 3 of
+ * #61). Filtered here rather than by a `:not()` selector, which cost every root's query more than the few matches do.
+ */
+const typeable = (found: Iterable<Element>): number => {
+  let n = 0;
+  for (const el of found) if (!SKIP_TYPES.has(controlType(el))) n++;
+  return n;
+};
+const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
+const shadowRootGetter = getter(elementProto, 'shadowRoot');
+/** An element's open shadow root, read through the prototype (`<input name="shadowRoot">` clobbers a form's own). */
+const shadowOf = (el: Element): ShadowRoot | null => shadowRootGetter.call(el) as ShadowRoot | null;
+const createWalker = documentProto.createTreeWalker;
+/** A node's root, read through the prototype: a form with a field named `getRootNode` clobbers its own (review of 3B). */
+export const rootOf = (n: Node): Node => nodeProto.getRootNode.call(n);
+/** The element's parent, or, at the top of an open shadow root, its host: up through roots, as the page draws it. */
+export const composedParentOf = (el: Element): Element | null => {
+  const parent = parentOf(el);
+  if (parent) return parent;
+  const root = rootOf(el);
+  return root instanceof ShadowRoot ? root.host : null;
+};
+/** `closest`, on through the hosts of the shadow roots `el` is in. */
+export function composedClosest(el: Element, selector: string): Element | null {
+  for (let node: Element | null = el, depth = 0; node && depth < 32; depth++) {
+    const found = elementProto.closest.call(node, selector);
+    if (found) return found;
+    const root = rootOf(node);
+    node = root instanceof ShadowRoot ? root.host : null;
+  }
+  return null;
+}
+/** The `<form>` a control belongs to: its own, or, in a shadow root with none, the one its host (or its host's) is in. */
+export function formOfControl(el: Element): HTMLFormElement | null {
+  const own = (el as HTMLInputElement).form;
+  if (own instanceof HTMLFormElement) return own;
+  if (!(rootOf(el) instanceof ShadowRoot)) return null;
+  const form = composedClosest(el, 'form');
+  return form instanceof HTMLFormElement ? form : null;
+}
+/** The most open shadow roots the scan walks into: a page of thousands of components still costs a bounded walk. */
+export const MAX_ROOTS = 1000;
+/**
+ * Every control in `doc` and its open shadow roots, in tree order, and the roots the walk went into. It stops early at
+ * the scan's own limits (`maxControls`, and `deadline` by `now`), and goes into at most `MAX_ROOTS` roots (review of 3B).
+ */
+export function deepControls(
+  doc: Document,
+  limits: { maxControls?: number; deadline?: number; now?: () => number } = {},
+): { controls: Element[]; roots: ShadowRoot[]; stopped: boolean } {
+  const controls: Element[] = [];
+  const roots: ShadowRoot[] = [];
+  const max = limits.maxControls ?? ASSISTANT_FORM_SCAN;
+  const now = limits.now ?? (() => performance.now());
+  const deadline = limits.deadline ?? Number.POSITIVE_INFINITY;
+  let visited = 0;
+  let stopped = false;
+  const walk = (root: Document | ShadowRoot) => {
+    const walker = createWalker.call(doc, root, NodeFilter.SHOW_ELEMENT);
+    for (let n = walker.nextNode(); n && !stopped; n = walker.nextNode()) {
+      // The clock is read every 256 elements: often enough to stop near the deadline, rarely enough to cost nothing.
+      if ((++visited & 255) === 0 && now() > deadline) return void (stopped = true);
+      const el = n as Element;
+      const tag = tagOf(el);
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+        controls.push(el);
+        if (controls.length > max) return void (stopped = true);
+      }
+      const inner = shadowOf(el);
+      if (inner && roots.length < MAX_ROOTS) {
+        roots.push(inner);
+        walk(inner);
+      }
+    }
+  };
+  walk(doc);
+  return { controls, roots, stopped };
+}
 const tagOf = (el: Element): string => String(tagGetter.call(el));
 const textOf = (el: Element): string => String(textGetter.call(el) ?? '');
 const childNodesGetter = getter(nodeProto, 'childNodes');
@@ -112,9 +234,35 @@ function previousText(el: Element): string {
 
 /** On screen: rendered, opaque enough, at least 4 px each way (as the assistant's read and §5's fill check). */
 export function isShown(el: Element): boolean {
-  if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+  if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !fadedInComponent(el)) return false;
   const r = el.getBoundingClientRect();
   return r.width >= 4 && r.height >= 4;
+}
+
+/**
+ * An empty field a component fades under its resting label (Material Web's outlined field fades its content until it has
+ * a value or focus), while the component is plainly on screen (review of 3B). Opacity is waived only when all hold:
+ * the field is in an open shadow root that holds no other field (a text field component's, not an app shell's around
+ * everything), empty, rendered and not `visibility: hidden`, 4 px or more each way (focus isn't asked: a pick in the menu
+ * moves focus to the popover, and the field fades again while still the page's active element; review round 2 of #61); and its own root's host
+ * (or, for a host with `display: contents`, its first composed ancestor with a box) is shown, opacity included, with the
+ * field's box inside the host's. A field with a value, a component that hides itself, or one in an app shell's root
+ * gets nothing. A page can still hide its own empty field inside its own
+ * visible component: the fill writes only what you picked, to that page's origin.
+ */
+function fadedInComponent(el: Element): boolean {
+  const root = nodeProto.getRootNode.call(el);
+  if (!(root instanceof ShadowRoot)) return false;
+  if ((el as HTMLInputElement).value !== '') return false;
+  if (typeable(allInComposed(root, CONTROLS, 8)) !== 1) return false;
+  if (!el.checkVisibility({ visibilityProperty: true })) return false;
+  // (4 px or more each way: `isShown` checks the size after this, for every field.)
+  const r = el.getBoundingClientRect();
+  let host: Element | null = root.host;
+  for (let depth = 0; host && depth < 8 && host.getClientRects().length === 0; depth++) host = composedParentOf(host);
+  if (!host || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+  const h = host.getBoundingClientRect();
+  return r.left >= h.left - 1 && r.top >= h.top - 1 && r.right <= h.right + 1 && r.bottom <= h.bottom + 1;
 }
 
 /** Blink's `IsFocusable`, roughly: rendered, not `visibility: hidden`, not disabled or inert. */
@@ -136,7 +284,7 @@ export function controlType(el: Element): string {
 function labeller(): (el: HTMLElement) => string {
   const byTree = new Map<Node, Map<string, HTMLLabelElement[]>>();
   return (el) => {
-    const root = el.getRootNode() as Document | ShadowRoot;
+    const root = rootOf(el) as Document | ShadowRoot;
     let byFor = byTree.get(root);
     if (!byFor) {
       byFor = new Map();
@@ -336,7 +484,7 @@ function formWords(doc: Document, form: HTMLFormElement | null, firstPassword: E
   }
 }
 
-/** Scans `doc`'s main tree (not frames or shadow roots: phase 3) into forms. */
+/** Scans `doc`'s main tree and its open shadow roots (not frames: phase 3C) into forms. */
 export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedForm[] {
   const now = options.now ?? (() => performance.now());
   const started = now();
@@ -352,7 +500,18 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
   };
   const groups = new Map<HTMLFormElement | null, { fields: PasswordField[]; elements: HTMLElement[] }>();
   let seen = 0;
-  const controls = (options.only ?? allIn(doc, 'input, select, textarea')) as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
+  let found: Element[];
+  if (options.only) found = [...options.only];
+  else if (options.deep === false) found = allIn(doc, 'input, select, textarea');
+  else {
+    const walked = deepControls(doc, { maxControls: ASSISTANT_FORM_SCAN, deadline: started + ASSISTANT_FORM_SCAN_MS, now });
+    found = walked.controls;
+    if (options.roots) {
+      options.roots.count = walked.roots.length;
+      options.roots.stopped = walked.stopped;
+    }
+  }
+  const controls = found as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
   for (const el of controls) {
     if (++seen > ASSISTANT_FORM_SCAN || now() - started > ASSISTANT_FORM_SCAN_MS) break;
     const type = controlType(el);
@@ -362,7 +521,7 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
       key = nextKey.value++;
       keys.set(el, key);
     }
-    const form = el.form instanceof HTMLFormElement ? el.form : null;
+    const form = formOfControl(el);
     let group = groups.get(form);
     if (!group) groups.set(form, (group = { fields: [], elements: [] }));
     group.fields.push({
