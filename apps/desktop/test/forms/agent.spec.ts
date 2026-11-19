@@ -1252,3 +1252,48 @@ test('a button component’s label that comes after the walk (none, then Sign in
   await page.evaluate(() => void (document.getElementById('go')!.textContent = 'Sign in'));
   expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
 });
+
+/* ---------- Review round 2 of #65 ---------- */
+
+// A wordless arrow beside a lone field still submits beside a button that isn't this form's own submit (as on main).
+for (const label of ['Create account', 'Sign up', 'Sign in another way', 'Sign-in options'] as const) {
+  for (const component of [false, true]) {
+    const other = component ? `<x-button id="other">${label}</x-button>` : `<button id="other" type="button">${label}</button>`;
+    test(`a wordless arrow beside a lone password field, ${component ? 'a component' : 'a button'} saying “${label}” beside it: the arrow submits`, async ({ page }) => {
+      const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('go')}${other}</div>${COMPONENTS}`);
+      await typePassword(page, '#p');
+      expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+    });
+  }
+}
+
+test('a first step’s wordless arrow, “Sign in another way” beside it: the arrow is its step', async ({ page }) => {
+  const a = await open(page, `<div><div class="box"><input id="u" name="email" type="email" aria-label="Email" autocomplete="username"></div>${ICON('go')}<button type="button">Sign in another way</button></div>`);
+  await page.fill('#u', 'ada@example.com');
+  await a.clear();
+  await page.click('#go');
+  await a.settle();
+  expect((await a.of('step')).map((x) => x['username'])).toEqual(['ada@example.com']);
+});
+
+test('a phone layout’s wordless arrow, the desktop Sign in hidden beside it: the arrow submits', async ({ page }) => {
+  const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('go')}<button type="button" style="display: none">Sign in</button></div>`);
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+});
+
+for (const label of ['Sign back in', 'Sign in to view your account'] as const) {
+  test(`“${label}” beside a lone password field: a submit (back and view are a toggle’s or a link’s only as the first word)`, async ({ page }) => {
+    const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div><button id="go" type="button">${label}</button></div>`);
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+}
+
+test('…and a “‹ Back” or “View password” button beside the field still isn’t one', async ({ page }) => {
+  const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div><button id="back" type="button">‹ Back</button><button id="view" type="button">View password</button><button type="button">Sign in</button></div>`);
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#back')).toEqual([]);
+  await page.waitForTimeout(1100);
+  expect(await submitsAfterClick(page, a, '#view')).toEqual([]);
+});
