@@ -1213,7 +1213,14 @@ Only what a real desktop can show; everything else above was measured.
   - Ancestor checks cross out of a root through its host: the formless scope, the six levels a plain submit must be near, a link around a click, and the button and form of a click.
 - **Events through roots.** Focus, typing, Enter and clicks were already read from `composedPath()[0]`. A `submit`, which doesn't cross a root, is listened for in each root that holds a form. The focused element is followed through each root's `activeElement` (a chain of hosts), at the agent's start and at each flush. The watch after a submit also observes the roots its fields are in.
 - **The fill** writes into the field in its root, as into any other: the native setter, then `input` (composed) and `change`.
-- **Shown, in a root:** opacity is judged at the outermost host, not inside the component. A design system's text field fades its empty, unfocused input under the resting label (Material Web's outlined field does, on test-the-web), while the field is plainly on screen. The input must still be rendered, not `visibility: hidden`, and 4 px or more each way, and its host shown with opacity. A component that hides itself gets nothing filled or offered.
+- **Shown, in a root:** a design system's text field fades its empty, unfocused input under the resting label (Material Web's outlined field does, on test-the-web), while the field is plainly on screen. So opacity is waived only when all of these hold (review round 1 of #61):
+  - the field is in an open root that holds no other field (a text field component's, not an app shell's around everything);
+  - it's empty and not focused;
+  - it's rendered, not `visibility: hidden`, and 4 px or more each way;
+  - its own root's host (or, for a host with `display: contents`, its first composed ancestor with a box) is shown, opacity included, with the field's box inside the host's.
+
+  A field with a value, a component that hides itself, or a field in an app shell's root gets nothing. The rule still lets a page hide its own empty field in its own visible component; the fill writes only the account you picked, to that page's origin.
+- **Ancestor checks through roots:** `contains` and the scope's buttons go through open roots, so a formless sign-in submitted with a component's own `<button>` is a submit, and an eye in a field component's root is the field's own toggle. The walk stops at the scan's control cap and deadline. `getRootNode` is read through the prototype, since a form with a field named so clobbers it.
 - **The sentinel adds no deep look at load** (the planning thread's decision, 2026-11-18): pages pay nothing new.
   - It wakes on focus or typing in a sign-in field inside a root, read through the event's `composedPath()` (its target is only the host).
   - At parse and load it also looks at the focused element through the chain of roots, for a field focused before it looked (autofocus in a component).
@@ -1229,7 +1236,7 @@ Only what a real desktop can show; everything else above was measured.
 | ~5,100 elements, the form's fields in roots, 300 other components | 0.14–0.18 ms (fields not seen) | 0.46–0.54 ms | 0.46–0.54 ms |
 | ~5,100 elements, 300 components, no sign-in | — (the agent sleeps) | — | — |
 
-The sentinel's look stays one `querySelectorAll` (0.02 ms) plus the active element's chain. A deep look for a password field would have cost 0.22–0.26 ms on every page, twice per load, and isn't made.
+The sentinel's look stays one `querySelectorAll` (0.02 ms) plus the active element's chain. Its built preload is 2,367 bytes, held in bytes to 4,096 (perf.spec): since review round 1 the preloads' build drops JSDoc comments, keeping legal and annotation ones, so the budget is for code (3,664 bytes on main, comments included). A deep look for a password field would have cost 0.22–0.26 ms on every page, twice per load, and isn't made.
 
 **Tests:**
 - **Fixtures** (`test/forms/fixtures/shadow-*.html`, declarative shadow DOM, since the fixtures' pages run no script):

@@ -873,17 +873,127 @@ test('a component that fades its empty input under its label: the fill goes into
   expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
 });
 
-test('a component that hides itself (its host at opacity 0): the fill writes nothing', async ({ page }) => {
+/** The fill as main sends it for the agent's last focus: what the agent answered. */
+const fillLastFocus = async (page: Page, a: Awaited<ReturnType<typeof open>>) => {
+  const focus = (await a.of('focus')).at(-1);
+  expect(focus, 'the agent sent a focus for the field').toBeTruthy();
+  await page.evaluate(
+    (p) => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.fill(p),
+    { formId: focus!['formId'], username: 'ada@example.com', password: 'pw-one', highlight: { color: 'red', ms: 10, stagger: 0, easing: 'linear' } },
+  );
+  await a.settle();
+  return (await a.of('filled')).at(-1);
+};
+
+test('a component that hides itself (its host at opacity 0): the agent knows the field, and the fill writes nothing', async ({ page }) => {
   const a = await open(page, FADING_FIELDS('opacity: 0'));
   await page.focus(inRoot('user'));
   await a.settle();
-  const focus = (await a.of('focus')).at(-1);
-  if (focus)
-    await page.evaluate(
-      (p) => (globalThis as unknown as { chordAgentTest: AgentTest }).chordAgentTest.fill(p),
-      { formId: focus['formId'], username: 'ada@example.com', password: 'pw-one', highlight: { color: 'red', ms: 10, stagger: 0, easing: 'linear' } },
-    );
-  await a.settle();
+  expect(await fillLastFocus(page, a)).toMatchObject({ ok: false });
   expect(await page.inputValue(inRoot('pass'))).toBe('');
   expect(await page.inputValue(inRoot('user'))).toBe('');
+});
+
+/** A sign-in whose password input sits at opacity 0 in a visible component: a page's hidden field, not a resting label. */
+const HIDDEN_IN_COMPONENT = (password: string) => `<h1>Sign in</h1><form id="f" onsubmit="return false"><input id="u" name="email" type="email" aria-label="Email"><x-pw id="pass"></x-pw><button>Sign in</button></form>
+<script>
+  const root = document.getElementById('pass').attachShadow({ mode: 'open' });
+  root.innerHTML = '<style>:host { display: block; width: 240px; height: 32px; } input { opacity: 0; }</style><input id="i" name="password" type="password" aria-label="Password">';
+  root.querySelector('input').value = ${JSON.stringify(password)};
+</script>`;
+
+test('an opacity-0 input with a value, in a visible component: no fill', async ({ page }) => {
+  const a = await open(page, HIDDEN_IN_COMPONENT('already there'));
+  await page.click('#u');
+  await a.settle();
+  expect(await fillLastFocus(page, a)).toMatchObject({ ok: false });
+  expect(await page.inputValue('#u')).toBe('');
+});
+
+test('an empty opacity-0 password input in an app shell’s root around the whole page: no fill', async ({ page }) => {
+  const a = await open(
+    page,
+    `<x-app id="app"></x-app><script>
+      document.getElementById('app').attachShadow({ mode: 'open' }).innerHTML = '<style>:host { display: block; }</style><h1>Sign in</h1><form onsubmit="return false"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password" style="opacity:0"><button>Sign in</button></form>';
+    </script>`,
+  );
+  await page.click('#app >> #u');
+  await a.settle();
+  expect(await fillLastFocus(page, a)).toMatchObject({ ok: false });
+  expect(await page.inputValue('#app >> #p')).toBe('');
+});
+
+test('a component host with display: contents: judged at the first ancestor with a box, and filled', async ({ page }) => {
+  const a = await open(page, FADING_FIELDS('display: contents'));
+  await page.click(inRoot('user'));
+  await a.settle();
+  expect(await fillLastFocus(page, a)).toMatchObject({ ok: true });
+  expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
+});
+
+test('a form with a field named getRootNode (its own method clobbered): the agent still works', async ({ page }) => {
+  const a = await open(page, '<h1>Sign in</h1><form id="f"><input name="getRootNode" type="hidden" value="x"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"><button>Sign in</button></form>');
+  await a.clear();
+  await page.click('#p');
+  await a.settle();
+  expect(await a.of('focus')).toEqual([expect.objectContaining({ role: 'current-password', kind: 'sign-in' })]);
+});
+
+/** A sign-in form wholly inside a component's open root, built by the page's script. */
+const FORM_IN_ROOT = `<x-login id="login"></x-login><script>
+  document.getElementById('login').attachShadow({ mode: 'open' }).innerHTML = '<h2>Log in</h2><form id="f" onsubmit="return false"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"><button id="go">Log in</button></form>';
+</script>`;
+
+test('a form in a root submitted by its script (requestSubmit): the submit inside the root is heard', async ({ page }) => {
+  const a = await open(page, FORM_IN_ROOT);
+  await page.fill('#login >> #u', 'ada@example.com');
+  await page.fill('#login >> #p', 'secret pass');
+  await a.clear();
+  await page.evaluate(() => (document.getElementById('login')!.shadowRoot!.getElementById('f') as HTMLFormElement).requestSubmit());
+  await a.settle();
+  expect((await a.of('candidate')).map((c) => c['signal'])).toEqual(['submit']);
+});
+
+test('a form in a root that goes after its submit (inside the root): gone', async ({ page }) => {
+  const a = await open(page, FORM_IN_ROOT);
+  await page.evaluate(() => {
+    const root = document.getElementById('login')!.shadowRoot!;
+    root.getElementById('go')!.addEventListener('click', () => setTimeout(() => (root.innerHTML = '<p>Welcome</p>'), 50));
+  });
+  await page.fill('#login >> #u', 'ada@example.com');
+  await page.fill('#login >> #p', 'secret pass');
+  await a.clear();
+  await page.click('#login >> #go');
+  // Seen inside the root at once (the document's observer alone would wait for the watch's end).
+  await expect.poll(() => a.of('gone'), { timeout: 3000 }).toHaveLength(1);
+});
+
+test('a formless sign-in whose button is a component (its <button> in the root): a click submits', async ({ page }) => {
+  const a = await open(
+    page,
+    `<div><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"><x-button id="go"></x-button></div><script>
+      document.getElementById('go').attachShadow({ mode: 'open' }).innerHTML = '<button id="b">Sign in</button>';
+    </script>`,
+  );
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'secret pass');
+  await a.clear();
+  await page.click('#go >> #b');
+  await a.settle();
+  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal'])).toEqual(['button']);
+});
+
+test('a show-password eye in a field component’s root (the input slotted): no submit', async ({ page }) => {
+  const a = await open(
+    page,
+    `<div><input id="u" name="email" type="email" aria-label="Email"><x-pw id="pw"><input id="p" name="password" type="password" aria-label="Password"></x-pw><button>Sign in</button></div><script>
+      document.getElementById('pw').attachShadow({ mode: 'open' }).innerHTML = '<slot></slot><button id="eye" type="button"><svg width="12" height="12"></svg></button>';
+    </script>`,
+  );
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'secret pass');
+  await a.clear();
+  await page.click('#pw >> #eye');
+  await a.settle();
+  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur')).toEqual([]);
 });

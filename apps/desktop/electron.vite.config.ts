@@ -112,7 +112,9 @@ export default defineConfig({
           // pages and workers, and every page of a profile that has extensions (ARCHITECTURE.md §12).
           extensions: resolve(import.meta.dirname, '../../packages/chrome-extensions/src/preload.ts'),
         },
-        output: { format: 'cjs', entryFileNames: '[name].cjs' },
+        // No JSDoc in what runs in every page: the sentinel's 4 KB budget is for code (review of 3B). Legal and
+        // annotation comments stay (the extension library's licence, `@__PURE__`).
+        output: { format: 'cjs', entryFileNames: '[name].cjs', comments: { legal: true, annotation: true, jsdoc: false } },
       },
     },
   },

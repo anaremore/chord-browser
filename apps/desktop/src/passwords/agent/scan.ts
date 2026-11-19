@@ -83,18 +83,45 @@ export const activeElementOf = (doc: Document): Element | null => {
   }
   return el;
 };
+/** `contains`, through open shadow roots: `inner` is inside `outer` as the page draws it (up through each root's host). */
+const composedContains = (outer: Node, inner: Node): boolean => {
+  for (let n: Node | null = inner, depth = 0; n && depth < 64; depth++) {
+    if (nodeProto.contains.call(outer, n)) return true;
+    const root: Node = nodeProto.getRootNode.call(n);
+    n = root instanceof ShadowRoot ? root.host : null;
+  }
+  return false;
+};
+/**
+ * `querySelectorAll` in `el`, its own open root, and the open roots inside them (a component's own button), at most
+ * `max`. It returns as soon as it has `max`, so a scope with a button of its own costs one query.
+ */
+const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64): Element[] => {
+  const out: Element[] = [...(el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector))];
+  if (out.length >= max) return out;
+  const own = el instanceof ShadowRoot ? null : shadowOf(el);
+  if (own) out.push(...allInComposed(own, selector, max - out.length));
+  const all = el instanceof ShadowRoot ? el.querySelectorAll('*') : elementProto.querySelectorAll.call(el, '*');
+  for (const n of all) {
+    if (out.length >= max) break;
+    const inner = shadowOf(n);
+    if (inner) out.push(...allInComposed(inner, selector, max - out.length));
+  }
+  return out;
+};
 const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
-const contains = (outer: Node, inner: Node): boolean => nodeProto.contains.call(outer, inner);
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
 const shadowRootGetter = getter(elementProto, 'shadowRoot');
 /** An element's open shadow root, read through the prototype (`<input name="shadowRoot">` clobbers a form's own). */
 const shadowOf = (el: Element): ShadowRoot | null => shadowRootGetter.call(el) as ShadowRoot | null;
 const createWalker = documentProto.createTreeWalker;
+/** A node's root, read through the prototype: a form with a field named `getRootNode` clobbers its own (review of 3B). */
+export const rootOf = (n: Node): Node => nodeProto.getRootNode.call(n);
 /** The element's parent, or, at the top of an open shadow root, its host: up through roots, as the page draws it. */
 export const composedParentOf = (el: Element): Element | null => {
   const parent = parentOf(el);
   if (parent) return parent;
-  const root = el.getRootNode();
+  const root = rootOf(el);
   return root instanceof ShadowRoot ? root.host : null;
 };
 /** `closest`, on through the hosts of the shadow roots `el` is in. */
@@ -102,7 +129,7 @@ export function composedClosest(el: Element, selector: string): Element | null {
   for (let node: Element | null = el, depth = 0; node && depth < 32; depth++) {
     const found = elementProto.closest.call(node, selector);
     if (found) return found;
-    const root = node.getRootNode();
+    const root = rootOf(node);
     node = root instanceof ShadowRoot ? root.host : null;
   }
   return null;
@@ -111,25 +138,38 @@ export function composedClosest(el: Element, selector: string): Element | null {
 export function formOfControl(el: Element): HTMLFormElement | null {
   const own = (el as HTMLInputElement).form;
   if (own instanceof HTMLFormElement) return own;
-  if (!(el.getRootNode() instanceof ShadowRoot)) return null;
+  if (!(rootOf(el) instanceof ShadowRoot)) return null;
   const form = composedClosest(el, 'form');
   return form instanceof HTMLFormElement ? form : null;
 }
 /** The most open shadow roots the scan walks into: a page of thousands of components still costs a bounded walk. */
 export const MAX_ROOTS = 1000;
 /**
- * Every control in `doc` and its open shadow roots, in tree order, and the roots the walk went into. Bounded by
- * `MAX_ROOTS` roots and the scan's own limits, which the caller applies as it reads.
+ * Every control in `doc` and its open shadow roots, in tree order, and the roots the walk went into. It stops early at
+ * the scan's own limits (`maxControls`, and `deadline` by `now`), and goes into at most `MAX_ROOTS` roots (review of 3B).
  */
-export function deepControls(doc: Document): { controls: Element[]; roots: ShadowRoot[] } {
+export function deepControls(
+  doc: Document,
+  limits: { maxControls?: number; deadline?: number; now?: () => number } = {},
+): { controls: Element[]; roots: ShadowRoot[] } {
   const controls: Element[] = [];
   const roots: ShadowRoot[] = [];
+  const max = limits.maxControls ?? ASSISTANT_FORM_SCAN;
+  const now = limits.now ?? (() => performance.now());
+  const deadline = limits.deadline ?? Number.POSITIVE_INFINITY;
+  let visited = 0;
+  let stopped = false;
   const walk = (root: Document | ShadowRoot) => {
     const walker = createWalker.call(doc, root, NodeFilter.SHOW_ELEMENT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    for (let n = walker.nextNode(); n && !stopped; n = walker.nextNode()) {
+      // The clock is read every 256 elements: often enough to stop near the deadline, rarely enough to cost nothing.
+      if ((++visited & 255) === 0 && now() > deadline) return void (stopped = true);
       const el = n as Element;
       const tag = tagOf(el);
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') controls.push(el);
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+        controls.push(el);
+        if (controls.length > max) return void (stopped = true);
+      }
       const inner = shadowOf(el);
       if (inner && roots.length < MAX_ROOTS) {
         roots.push(inner);
@@ -191,28 +231,34 @@ function previousText(el: Element): string {
 
 /** On screen: rendered, opaque enough, at least 4 px each way (as the assistant's read and §5's fill check). */
 export function isShown(el: Element): boolean {
-  if (typeof el.checkVisibility === 'function') {
-    // In an open shadow root, opacity is the component's to judge, at its outermost host: a design system's text field
-    // fades its empty input under the resting label (Material Web's does) while the field itself is plainly on screen.
-    // The input must still be rendered and not `visibility: hidden`, and the host shown with opacity; a component that
-    // hides itself gets nothing (phase 3B).
-    const host = outermostHost(el);
-    if (host) {
-      if (!el.checkVisibility({ visibilityProperty: true }) || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
-    } else if (!el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
-  }
+  if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !fadedInComponent(el)) return false;
   const r = el.getBoundingClientRect();
   return r.width >= 4 && r.height >= 4;
 }
 
-/** The host in the document's own tree of the open shadow roots `el` is in, or null when it's in the document's. */
-function outermostHost(el: Element): Element | null {
-  let host: Element | null = null;
-  for (let root = el.getRootNode(), depth = 0; root instanceof ShadowRoot && depth < 32; depth++) {
-    host = root.host;
-    root = host.getRootNode();
-  }
-  return host;
+/**
+ * An empty field a component fades under its resting label (Material Web's outlined field fades its content until it has
+ * a value or focus), while the component is plainly on screen (review of 3B). Opacity is waived only when all hold:
+ * the field is in an open shadow root that holds no other field (a text field component's, not an app shell's around
+ * everything), empty, not focused, rendered and not `visibility: hidden`, 4 px or more each way; and its own root's host
+ * (or, for a host with `display: contents`, its first composed ancestor with a box) is shown, opacity included, with the
+ * field's box inside the host's. A field with a value, a component that hides itself, or one in an app shell's root
+ * gets nothing. A page can still hide its own empty field inside its own
+ * visible component: the fill writes only what you picked, to that page's origin.
+ */
+function fadedInComponent(el: Element): boolean {
+  const root = nodeProto.getRootNode.call(el);
+  if (!(root instanceof ShadowRoot)) return false;
+  if ((el as HTMLInputElement).value !== '' || activeElementOf(el.ownerDocument) === el) return false;
+  if (allInComposed(root, 'input, select, textarea', 2).length !== 1) return false;
+  if (!el.checkVisibility({ visibilityProperty: true })) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4) return false;
+  let host: Element | null = root.host;
+  for (let depth = 0; host && depth < 8 && host.getClientRects().length === 0; depth++) host = composedParentOf(host);
+  if (!host || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+  const h = host.getBoundingClientRect();
+  return r.left >= h.left - 1 && r.top >= h.top - 1 && r.right <= h.right + 1 && r.bottom <= h.bottom + 1;
 }
 
 /** Blink's `IsFocusable`, roughly: rendered, not `visibility: hidden`, not disabled or inert. */
@@ -234,7 +280,7 @@ export function controlType(el: Element): string {
 function labeller(): (el: HTMLElement) => string {
   const byTree = new Map<Node, Map<string, HTMLLabelElement[]>>();
   return (el) => {
-    const root = el.getRootNode() as Document | ShadowRoot;
+    const root = rootOf(el) as Document | ShadowRoot;
     let byFor = byTree.get(root);
     if (!byFor) {
       byFor = new Map();
@@ -334,7 +380,7 @@ function plainSubmit(target: Element, kind: string | null): Element | null {
 /** Whether `el` is within `levels` ancestors of `field`: the fields' own neighbourhood, for a formless form. */
 function near(field: Element, el: Element, levels: number): boolean {
   let node = composedParentOf(field);
-  for (let depth = 0; depth < levels && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) if (contains(node, el)) return true;
+  for (let depth = 0; depth < levels && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) if (composedContains(node, el)) return true;
   return false;
 }
 
@@ -352,7 +398,7 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
   const button = composedClosest(target, ANY_BUTTON);
   if (!button) {
     const plain = plainSubmit(target, kind);
-    if (!plain || !anchor || contains(plain, anchor)) return null;
+    if (!plain || !anchor || composedContains(plain, anchor)) return null;
     if (!form && !near(anchor, plain, 6)) return null;
     return plain;
   }
@@ -362,16 +408,16 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
   // one whose words say sign in, sign up, Next or Continue, or the form's only button.
   if (form && !isSubmit(button) && !readsAsSubmit(words) && allIn(form, ANY_BUTTON).length !== 1) return null;
   if (anchor) {
-    if (contains(button, anchor)) return null;
+    if (composedContains(button, anchor)) return null;
     const controls = (attrOf(button, 'aria-controls') ?? '').split(/\s+/);
     if (anchor.id && controls.includes(anchor.id)) return null;
     // The password field's own wrapper (a box holding only it and its eye): a button there toggles it. A first step's
-    // username and its Next often share one.
-    const wrapper = controlType(anchor) === 'password' ? parentOf(anchor) : null;
-    if (wrapper && tagOf(wrapper) !== 'FORM' && contains(wrapper, button) && allIn(wrapper, 'input, select, textarea').length === 1) return null;
+    // username and its Next often share one. Through roots: an eye in a field component's root is the field's own.
+    const wrapper = controlType(anchor) === 'password' ? composedParentOf(anchor) : null;
+    if (wrapper && tagOf(wrapper) !== 'FORM' && composedContains(wrapper, button) && allInComposed(wrapper, 'input, select, textarea').length === 1) return null;
     if (!form) {
       const scope = formlessScope(anchor);
-      if (!scope || !contains(scope, button)) return null;
+      if (!scope || !composedContains(scope, button)) return null;
     }
   }
   return button;
@@ -400,7 +446,8 @@ const ANY_BUTTON = 'button, input[type=submit], input[type=button], input[type=i
 export function formlessScope(el: Element): Element | null {
   let node = composedParentOf(el);
   for (let depth = 0; depth < 6 && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) {
-    if (allIn(node, 'button, input[type=submit], input[type=button], [role=button]').length) return node;
+    // A component's own button (in its root) counts: a formless sign-in submitted with one (review of 3B).
+    if (allInComposed(node, 'button, input[type=submit], input[type=button], [role=button]', 1).length) return node;
   }
   return null;
 }
@@ -455,7 +502,7 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
   if (options.only) found = [...options.only];
   else if (options.deep === false) found = allIn(doc, 'input, select, textarea');
   else {
-    const walked = deepControls(doc);
+    const walked = deepControls(doc, { maxControls: ASSISTANT_FORM_SCAN, deadline: started + ASSISTANT_FORM_SCAN_MS, now });
     found = walked.controls;
     if (options.roots) options.roots.count = walked.roots.length;
   }

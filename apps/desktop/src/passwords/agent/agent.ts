@@ -38,7 +38,7 @@
  */
 import { classifyPasswordForm, PASSWORD_LIMITS, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature, PasswordsFill } from '@chord/ipc';
-import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, scanDocument, SKIP_TYPES, submittedBy, type ScannedForm } from './scan';
+import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, rootOf, scanDocument, SKIP_TYPES, submittedBy, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
 export interface PasswordsBridge {
@@ -140,7 +140,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const fromRoot = (event: Event) => {
     if (rootsSeen) return;
     const first = event.composedPath()[0];
-    if (first !== event.target && first instanceof Node && first.getRootNode() instanceof ShadowRoot) {
+    if (first !== event.target && first instanceof Node && rootOf(first) instanceof ShadowRoot) {
       rootsSeen = deep = true;
       // The field isn't known yet, and the last scan skipped roots: the next lookup scans again.
       scanWanted = true;
@@ -161,7 +161,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     for (const k of known) for (const el of k.scanned.elements) byElement.set(el, k);
     // A form inside an open shadow root: its `submit` doesn't cross the root, so the agent listens there too (phase 3B).
     for (const s of scanned) {
-      const root = s.form?.getRootNode();
+      const root = s.form ? rootOf(s.form) : null;
       if (root instanceof ShadowRoot && !listenedRoots.has(root)) {
         listenedRoots.add(root);
         EventTarget.prototype.addEventListener.call(root, 'submit', onSubmit as EventListener, { capture: true, passive: true });
@@ -470,8 +470,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     observer.observe(doc, watched);
     // A field in an open shadow root: the document's observer doesn't see inside it, so each root it's in is watched too.
     for (const r of passwords) {
-      let root = r.deref()?.getRootNode();
-      for (let depth = 0; root instanceof ShadowRoot && depth < 32; depth++, root = root.host.getRootNode()) observer.observe(root, watched);
+      const el = r.deref();
+      let root = el ? rootOf(el) : null;
+      for (let depth = 0; root instanceof ShadowRoot && depth < 32; depth++, root = rootOf(root.host)) observer.observe(root, watched);
     }
     // A request to the page's own origin finishing: a hint (M0 Q7: seen only once its body is read).
     let hints = 0;
