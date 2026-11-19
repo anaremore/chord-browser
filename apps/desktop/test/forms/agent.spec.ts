@@ -968,21 +968,6 @@ test('a form in a root that goes after its submit (inside the root): gone', asyn
   await expect.poll(() => a.of('gone'), { timeout: 3000 }).toHaveLength(1);
 });
 
-test('a formless sign-in whose button is a component (its <button> in the root): a click submits', async ({ page }) => {
-  const a = await open(
-    page,
-    `<div><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"><x-button id="go"></x-button></div><script>
-      document.getElementById('go').attachShadow({ mode: 'open' }).innerHTML = '<button id="b">Sign in</button>';
-    </script>`,
-  );
-  await page.fill('#u', 'ada@example.com');
-  await page.fill('#p', 'secret pass');
-  await a.clear();
-  await page.click('#go >> #b');
-  await a.settle();
-  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal'])).toEqual(['button']);
-});
-
 test('a show-password eye in a field component’s root (the input slotted): no submit', async ({ page }) => {
   const a = await open(
     page,
@@ -1014,27 +999,6 @@ test('a pick in the menu moves focus to the popover: the empty field it was open
   expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
 });
 
-test('a formless Material-like password field with a slotted eye, and Sign in outside it: the outside button submits, the eye doesn’t', async ({ page }) => {
-  const a = await open(
-    page,
-    `<div id="wrap"><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="go" type="button">Sign in</button></div><script>
-      for (const host of document.querySelectorAll('x-tf')) {
-        host.attachShadow({ mode: 'open' }).innerHTML = '<input id="i" type="' + host.dataset.type + '" name="' + host.id + '" aria-label="' + host.id + '"><slot></slot>';
-      }
-      document.getElementById('eye').attachShadow({ mode: 'open' }).innerHTML = '<button id="b" type="button"><svg width="12" height="12"></svg></button>';
-    </script>`,
-  );
-  await page.fill('#em >> #i', 'ada@example.com');
-  await page.fill('#pw >> #i', 'secret pass');
-  await a.clear();
-  await page.click('#eye >> #b');
-  await a.settle();
-  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur')).toEqual([]);
-  await page.click('#go');
-  await a.settle();
-  expect((await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal'])).toEqual(['button']);
-});
-
 /** A password field alone in a component's root, faded (opacity 0) and broken one more way: no fill. */
 const BROKEN_FADE = (inputStyle: string) => `<h1>Sign in</h1><form id="f" onsubmit="return false"><input id="u" name="email" type="email" aria-label="Email"><x-pw id="pass"></x-pw><button>Sign in</button></form>
 <script>
@@ -1063,7 +1027,7 @@ test('…and the same component, faded only, fills (the rows above fail on their
   expect(await fillLastFocus(page, a)).toMatchObject({ ok: true });
 });
 
-/* ---------- Review round 3 of #61: formlessScope ---------- */
+/* ---------- Review round 4 of #61: main's formless submits kept, the rescan only when nothing's known ---------- */
 
 /** What a click on `selector` sent: the submit signals, no blurs. */
 const submitsAfterClick = async (page: Page, a: Awaited<ReturnType<typeof open>>, selector: string) => {
@@ -1072,73 +1036,30 @@ const submitsAfterClick = async (page: Page, a: Awaited<ReturnType<typeof open>>
   await a.settle();
   return (await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal']);
 };
-/** A button component: its <button> in its own open root. */
-const BUTTON_COMPONENT = (id: string, words: string) =>
-  `document.getElementById('${id}').attachShadow({ mode: 'open' }).innerHTML = '<button id="b" type="button">${words}</button>';`;
 
-test('a password-only formless step whose Next is a component (its <button> in its root): the click submits', async ({ page }) => {
-  const a = await open(page, `<div><input id="p" name="password" type="password" aria-label="Password"><x-button id="next"></x-button></div><script>${BUTTON_COMPONENT('next', 'Next')}</script>`);
-  await page.fill('#p', 'secret pass');
-  expect(await submitsAfterClick(page, a, '#next >> #b')).toEqual(['button']);
-});
+// As on main (submitButtonFor and formlessScope are main's again): a button beside a lone formless field submits,
+// whatever its words, and with none (an icon). A password field's own box holding only it and a button is its eye's
+// (main's wrapper rule), so the field sits in a box of its own here.
+const LONE_BUTTONS = [
+  ['<button>Submit</button>', '<button id="go">Submit</button>'],
+  ['a “Go” button', '<button id="go" type="button">Go</button>'],
+  ['an icon-only button', '<button id="go" type="button" aria-label="Continue"><svg width="12" height="12"></svg></button>'],
+  ['an <input type=submit>', '<input id="go" type="submit" value="Continue">'],
+] as const;
 
-test('a Material-like password field (its input in a root) with a component Sign in beside it: the click submits', async ({ page }) => {
-  const a = await open(
-    page,
-    `<div><x-tf id="pw"></x-tf><x-button id="go"></x-button></div><script>
-      document.getElementById('pw').attachShadow({ mode: 'open' }).innerHTML = '<input id="i" type="password" name="password" aria-label="Password">';
-      ${BUTTON_COMPONENT('go', 'Sign in')}
-    </script>`,
-  );
-  await page.fill('#pw >> #i', 'secret pass');
-  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
-});
-
-test('a form component whose own root holds a lone password field and its Next: the Next submits', async ({ page }) => {
-  const a = await open(
-    page,
-    `<x-step id="step"></x-step><script>
-      document.getElementById('step').attachShadow({ mode: 'open' }).innerHTML = '<input id="i" type="password" name="password" aria-label="Password"><button id="b" type="button">Next</button>';
-    </script>`,
-  );
-  await page.fill('#step >> #i', 'secret pass');
-  expect(await submitsAfterClick(page, a, '#step >> #b')).toEqual(['button']);
-});
-
-test('deep scans off (a first scan with no root), then a button component attached: its click submits', async ({ page }) => {
-  const a = await open(page, '<div id="wrap"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"></div>');
-  await page.fill('#u', 'ada@example.com');
-  await page.fill('#p', 'secret pass');
-  await page.evaluate(() => {
-    const host = document.createElement('x-button');
-    host.id = 'go';
-    document.getElementById('wrap')!.append(host);
-    host.attachShadow({ mode: 'open' }).innerHTML = '<button id="b" type="button">Sign in</button>';
-  });
-  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual(['button']);
-});
-
-/** A Material-like formless sign-in: each field an x-tf (input in its root), the password's with a slotted eye. */
-const MATERIAL_FORMLESS = (extraInRoot: string, nested: boolean) => `<div id="wrap"><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="go" type="button">Sign in</button></div><script>
-  for (const host of document.querySelectorAll('x-tf')) {
-    const input = '<input id="i" type="' + host.dataset.type + '" name="' + host.id + '" aria-label="' + host.id + '">';
-    host.attachShadow({ mode: 'open' }).innerHTML = ${nested ? `'<span class="text-field"><x-field id="field">' + input + '</x-field>${extraInRoot}</span><slot></slot>'` : `input + '${extraInRoot}<slot></slot>'`};
-    const field = host.shadowRoot.getElementById('field');
-    if (field) field.attachShadow({ mode: 'open' }).innerHTML = '<div class="content"><slot></slot></div>';
-  }
-  document.getElementById('eye').attachShadow({ mode: 'open' }).innerHTML = '<button id="b" type="button"><svg width="12" height="12"></svg></button>';
-</script>`;
-
-for (const [name, extra, nested] of [
-  ['a hidden csrf input in the field component’s root', '<input type="hidden" name="csrf" value="x">', false],
-  ['Material’s real nesting (the input under a field element in the root, the eye slotted)', '', true],
-] as const) {
-  test(`a Material-like formless field, ${name}: the eye isn’t a submit, Sign in outside is`, async ({ page }) => {
-    const a = await open(page, MATERIAL_FORMLESS(extra, nested));
-    await page.fill('#em >> #i', 'ada@example.com');
-    await page.fill('#pw >> #i', 'secret pass');
-    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
-    await page.waitForTimeout(1100);
+for (const [name, button] of LONE_BUTTONS) {
+  test(`a lone formless password field with ${name} beside it: the click submits (main's behaviour)`, async ({ page }) => {
+    const a = await open(page, `<div><div class="field"><input id="p" name="password" type="password" aria-label="Password"></div>${button}</div>`);
+    await page.fill('#p', 'secret pass');
     expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+
+  test(`a lone formless username field with ${name} beside it: the click is its step (main's behaviour)`, async ({ page }) => {
+    const a = await open(page, `<div><input id="u" name="email" type="email" aria-label="Email" autocomplete="username">${button}</div>`);
+    await page.fill('#u', 'ada@example.com');
+    await a.clear();
+    await page.click('#go');
+    await a.settle();
+    expect((await a.of('step')).map((x) => x['username'])).toEqual(['ada@example.com']);
   });
 }

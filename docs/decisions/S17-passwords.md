@@ -1210,17 +1210,16 @@ Only what a real desktop can show; everything else above was measured.
   - `createTreeWalker`, `shadowRoot` and `tagName` are read through the prototypes (a page can clobber them).
 - **A field in a root with no `<form>` of its own belongs to the form its host is in** (`formOfControl`). That's how a design system's text fields sit in a page's form (Bitwarden's test-the-web page uses Material Web's `md-outlined-text-field`).
   - Labels are read in the field's own root.
-  - Ancestor checks cross out of a root through its host: the formless scope, the six levels a plain submit must be near, a link around a click, and the button and form of a click.
 - **Events through roots.** Focus, typing, Enter and clicks were already read from `composedPath()[0]`. A `submit`, which doesn't cross a root, is listened for in each root that holds a form. The focused element is followed through each root's `activeElement` (a chain of hosts), at the agent's start and at each flush. The watch after a submit also observes the roots its fields are in.
 - **The fill** writes into the field in its root, as into any other: the native setter, then `input` (composed) and `change`.
 - **Shown, in a root:** a design system's text field fades its empty, unfocused input under the resting label (Material Web's outlined field does, on test-the-web), while the field is plainly on screen. So opacity is waived only when all of these hold (review round 1 of #61):
   - the field is in an open root that holds no other field (a text field component's, not an app shell's around everything);
-  - it's empty and not focused;
+  - it's empty;
   - it's rendered, not `visibility: hidden`, and 4 px or more each way;
   - its own root's host (or, for a host with `display: contents`, its first composed ancestor with a box) is shown, opacity included, with the field's box inside the host's.
 
   A field with a value, a component that hides itself, or a field in an app shell's root gets nothing. The rule still lets a page hide its own empty field in its own visible component; the fill writes only the account you picked, to that page's origin.
-- **Ancestor checks through roots:** `contains` and the scope's buttons go through open roots, so a formless sign-in submitted with a component's own `<button>` is a submit, and an eye in a field component's root is the field's own toggle. The walk stops at the scan's control cap and deadline. `getRootNode` is read through the prototype, since a form with a field named so clobbers it.
+- **Which button submits stays main's** (the owner's decision on #61's review round 4). In a `<form>`, a field in a root counts as the form's, so its buttons submit it as on main. For a formless field, `submitButtonFor` and `formlessScope` are main's, unchanged: they look in the field's own tree only, so a formless field inside a component isn't submitted by a click on a button (Enter and the form going still are), and a component's own `<button>` beside a formless field isn't a submit yet. Both are the follow-up, `feat/passwords-3b-formless-components`: the field's own component, and a button host's words. A click inside a root that no known form answers scans the page afresh once, then asks again, unless a scan has just run. `getRootNode` is read through the prototype, since a form with a field named so clobbers it.
 - **The sentinel adds no deep look at load** (the planning thread's decision, 2026-11-18): pages pay nothing new.
   - It wakes on focus or typing in a sign-in field inside a root, read through the event's `composedPath()` (its target is only the host).
   - At parse and load it also looks at the focused element through the chain of roots, for a field focused before it looked (autofocus in a component).
@@ -1251,6 +1250,7 @@ The sentinel's look stays one `querySelectorAll` (0.02 ms) plus the active eleme
 - **`forms/agent.spec.ts`:**
   - focus on a field in a root, and autofocus in a component before the agent starts;
   - a sign-in in roots, whose one submit is one candidate with its values and whose fill goes in through the roots;
-  - a component rendered after a scan that found no root.
+  - a component rendered after a scan that found no root;
+  - main's formless submits unchanged: `<button>Submit</button>`, *Go*, an icon-only button and `<input type=submit>` beside a lone password field, or a lone username's step.
 - **Test-the-web:** `login/shadow-root-inputs` (Material Web) is scored now. The closed-root page stays listed and skipped.
 - **Journey:** `e2e/passwords-shadow.spec.ts`. A form of web components is saved from the card, which offers the email, then filled by the menu through the roots, and the page's own script posts it.
