@@ -122,7 +122,8 @@ export type AssistVault = Pick<
 
 export interface PasswordAssistOptions {
   readonly vault: AssistVault;
-  readonly detector: { readonly events: EventEmitter<PasswordDetectorEvents> };
+  /** Its events, and whether a page's navigation during a late window is still being judged (S17 §6, phase 3A-2). */
+  readonly detector: { readonly events: EventEmitter<PasswordDetectorEvents>; judging?(contents: WebContents): boolean };
   readonly host: PasswordAssistHost;
   readonly now?: () => number;
   readonly setTimeout?: (run: () => void, ms: number) => unknown;
@@ -263,12 +264,7 @@ interface Card {
   lateUntil?: number | null;
   /** What was pressed while the late window was open, and its timer: run when the window closes, unless a late error comes. */
   waiting?: { readonly action: 'save' | 'new'; readonly details: { username?: string; passphrase?: string; account?: number }; timer: unknown } | null;
-  /**
-   * The page navigated during the late window, and the new page hasn't been judged yet (the tracker's `lateJudged`, or its
-   * `failed`). A held save that comes due meanwhile is cancelled: losing a save is better than a wrong one (review round 1
-   * of #62).
-   */
-  navPending?: boolean;
+
   busy: boolean;
   problem: 'io' | null;
   held: boolean;
@@ -344,7 +340,7 @@ export class PasswordAssist {
    */
   private readonly confirms = new Map<
     WebContents,
-    { readonly id: string; readonly origin: string; readonly chordId: string | null; values: { username?: string; password: string } | null; card: Card | null; timer: unknown; navPending: boolean }
+    { readonly id: string; readonly origin: string; readonly chordId: string | null; values: { username?: string; password: string } | null; card: Card | null; timer: unknown }
   >();
   /** Each tab page's last first step's username, by site (S17 §4, phase 3). */
   private readonly firstSteps = new Map<WebContents, Map<string, FirstStep>>();
@@ -368,12 +364,6 @@ export class PasswordAssist {
     const { events } = options.detector;
     events.on('submitted', (e) => void this.submitted(e));
     events.on('firstStep', (e) => void this.firstStep(e));
-    // The late window's navigation judged: no refusal on the new page, so a held save or confirm may go ahead.
-    events.on('lateJudged', (e) => {
-      for (const card of this.cards.values()) if (card.contents === e.contents) card.navPending = false;
-      const pending = this.confirms.get(e.contents);
-      if (pending) pending.navPending = false;
-    });
     events.on('focus', (e) => void this.focused(e));
     events.on('blur', (e) => this.blurred(e.contents));
     events.on('signedIn', (e) => void this.signedIn(e));
@@ -429,12 +419,10 @@ export class PasswordAssist {
       if (!details.initiator) {
         this.dropCardsOf(contents);
         this.dropConfirm(contents);
-        return;
       }
-      // The page's own, during a late window: what it leads to must be judged before a held save or confirm can go ahead.
-      for (const card of this.cards.values()) if (card.contents === contents && (card.lateUntil ?? 0) > this.now()) card.navPending = true;
-      const pending = this.confirms.get(contents);
-      if (pending) pending.navPending = true;
+      // The page's own, during a late window: the tracker judges what it leads to (`judging`), and a held save or confirm
+      // that comes due before then doesn't go ahead. Read when it comes due, so a card made after the navigation began
+      // is covered too (review round 2 of #62).
     });
     contents.on('did-navigate', (_event, url) => {
       this.docs.set(contents, (this.docs.get(contents) ?? 0) + 1);
@@ -1296,14 +1284,14 @@ export class PasswordAssist {
   private wait(card: Card, action: 'save' | 'new', details: { username?: string; passphrase?: string; account?: number }): boolean {
     const left = (card.lateUntil ?? 0) - this.now();
     // Past the window, but the page's navigation not judged yet: it waits too, and is cancelled when it comes due (now).
-    if (left <= 0 && !card.navPending) return false;
+    if (left <= 0 && !this.judging(card.contents)) return false;
     // `change`'s **Update** with no account picked does nothing, now or later.
     if (action === 'save' && card.kind === 'change' && details.account === undefined) return true;
     const waiting = { action, details: { ...details }, timer: null as unknown };
     waiting.timer = this.setTimer(() => {
       if (card.waiting !== waiting || this.cards.get(card.tab.nodeId) !== card) return;
-      // The page navigated and the new page isn't judged yet: no write. Cancelled, as a late refusal is.
-      if (card.navPending) return this.cancelCard(card);
+      // The page navigated and the new page isn't judged yet: no write (review rounds 1 and 2 of #62).
+      if (this.judging(card.contents)) return this.cancelCard(card, true, 'unjudged');
       card.waiting = null;
       card.lateUntil = null;
       this.options.host.changed(this.windowOf(card));
@@ -1327,23 +1315,39 @@ export class PasswordAssist {
     for (const card of [...this.cards.values()]) if (card.contents === contents && card.waiting) this.cancelCard(card, false);
   }
 
-  /** A waiting save cancelled, with the toast; the card goes too unless the caller drops it itself. */
-  private cancelCard(card: Card, drop = true): void {
+  /**
+   * A waiting save cancelled, with the toast; the card goes too unless the caller drops it itself. `refused`: the site
+   * said no (the owner's wording, 2A). `unjudged`: the page navigated and its new page couldn't be judged in time, so
+   * Chord can't claim a refusal (review round 2 of #62).
+   */
+  private cancelCard(card: Card, drop = true, why: 'refused' | 'unjudged' = 'refused'): void {
     if (!card.waiting) return;
     const updating = card.kind === 'update' || (card.kind === 'change' && card.waiting.action === 'save');
     this.unwait(card);
-    this.options.host.toast(this.windowOf(card), 'passwords:refused', `The site didn’t accept that password, so Chord didn’t ${updating ? 'update' : 'save'} it.`);
+    const message =
+      why === 'refused' ? `The site didn’t accept that password, so Chord didn’t ${updating ? 'update' : 'save'} it.` : `Chord couldn’t tell whether that worked, so it didn’t ${updating ? 'update' : 'save'}.`;
+    this.options.host.toast(this.windowOf(card), 'passwords:refused', message);
     if (drop) this.dropCard(card);
+  }
+
+  /** Whether the tab's page navigated during a late window, and what it led to isn't judged yet (the tracker's). */
+  private judging(contents: WebContents): boolean {
+    return !contents.isDestroyed() && (this.options.detector.judging?.(contents) ?? false);
+  }
+
+  /** The vault locked: a generated password's confirmation waiting on the late window is dropped with its values. */
+  locked(): void {
+    for (const contents of [...this.confirms.keys()]) this.dropConfirm(contents);
   }
 
   /** A generated password's confirmation, held until the late window closes (S17 §6, phase 3A-2). */
   private holdConfirm(contents: WebContents, held: { id: string; origin: string; chordId: string | null; values: { username?: string; password: string } }, until: number): void {
     this.dropConfirm(contents);
-    const pending = { ...held, values: held.values as { username?: string; password: string } | null, card: null as Card | null, timer: null as unknown, navPending: false };
+    const pending = { ...held, values: held.values as { username?: string; password: string } | null, card: null as Card | null, timer: null as unknown };
     pending.timer = this.setTimer(() => {
       if (this.confirms.get(contents) !== pending) return;
       // The page's navigation not judged by now: never confirmed (it stays Not confirmed, in Settings).
-      if (pending.navPending) return this.dropConfirm(contents);
+      if (this.judging(contents)) return this.dropConfirm(contents);
       this.confirms.delete(contents);
       const values = pending.values;
       pending.values = null;

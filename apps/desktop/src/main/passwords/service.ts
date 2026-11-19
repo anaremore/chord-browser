@@ -64,6 +64,8 @@ export interface PasswordServiceOptions {
   changed(): void;
   /** The vault locked: Settings hides any password it shows, without asking for its view again. */
   hide?(): void;
+  /** The vault locked: what waits to be written into it (a generated password's confirmation) is dropped (phase 3A-2). */
+  locked?(): void;
   /** A chord by id (its sign-ins' profile, whether it's a private window's), for the detector's API; null when there's none. */
   chord?(chordId: string): { id: string; profileId: string; private?: boolean } | null;
   /** The installed extensions, for the extension rule. */
@@ -229,8 +231,9 @@ export class PasswordService {
   private async lockIdle(): Promise<void> {
     this.locks++;
     const { status } = await this.data({ op: 'lock' }).catch((): PasswordResult => ({}));
-    // A password Settings shows goes, always.
+    // A password Settings shows goes, always, and what waited to be written.
     this.options.hide?.();
+    this.options.locked?.();
     // Kept unlocked: the list doesn't change (the next use opens it again unasked), so Settings isn't asked to look
     // again, which would open it again at once.
     if (!status?.kept) this.options.changed();
@@ -356,6 +359,7 @@ export class PasswordService {
     // Held in chord.db too, so a relaunch with the key kept still waits for the passphrase.
     await this.data({ op: 'lock', held: true }).catch(() => undefined);
     this.options.hide?.();
+    this.options.locked?.();
     this.options.changed();
     return this.view();
   }

@@ -145,6 +145,8 @@ export interface PasswordDetector {
   /** Detection on in exactly these chords' profiles and off in every other one (and every one made later). */
   setProfiles(profileIds: readonly string[]): void;
   isEnabled(profileId: string): boolean;
+  /** Whether a page's navigation during a late window is still being judged (phase 3A-2): a held save waits on it. */
+  judging(contents: WebContents): boolean;
 }
 
 interface SessionEntry {
@@ -348,5 +350,6 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       forgetWhereOff();
     },
     isEnabled,
+    judging: (contents) => pages.get(contents)?.judging ?? false,
   };
 }

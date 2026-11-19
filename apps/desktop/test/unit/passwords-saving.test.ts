@@ -1,6 +1,6 @@
 import type { PasswordsCandidate, PasswordsForms } from '@chord/ipc';
 import { describe, expect, it } from 'vitest';
-import { HOLD_MS, LATE_ERROR_MS, SubmissionTracker, type SavingOutcome } from '../../src/main/passwords/saving';
+import { HOLD_MS, LATE_ERROR_MS, LATE_NAV_CAP_MS, SubmissionTracker, type SavingOutcome } from '../../src/main/passwords/saving';
 
 const ORIGIN = 'https://example.com';
 const password = { type: 'password', id: 'p', name: 'password' };
@@ -328,5 +328,65 @@ describe('a deadline per held copy (security review, round 2)', () => {
     const signedIn = tracker.settled().find((o) => o.type === 'signedIn') as Extract<SavingOutcome, { type: 'signedIn' }>;
     expect(signedIn.values).toEqual(A);
     expect(signedIn.valuesUntil).toBe(HOLD_MS);
+  });
+});
+
+
+describe('a late window’s navigation, judged (review round 2 of #62)', () => {
+  /** A form-gone sign-in, then a navigation the page made: the tracker judging it. */
+  function judgingTracker() {
+    let now = 0;
+    const t = new SubmissionTracker(() => now);
+    t.candidate(candidate({ signal: 'button' }), ORIGIN);
+    t.gone('f1');
+    t.navigationStarted(true);
+    return { t, advance: (ms: number) => void (now += ms) };
+  }
+
+  it('is judging from the navigation until its new page settles', () => {
+    const { t } = judgingTracker();
+    expect(t.judging).toBe(true);
+    t.navigated(200);
+    expect(t.judging).toBe(true);
+    t.forms(formsWith([]));
+    expect(t.settled()).toEqual([{ type: 'lateJudged', formId: 'f1', origin: ORIGIN }]);
+    expect(t.judging).toBe(false);
+  });
+
+  it('a second navigation the page makes before the first settles: still judging, the same sign-in, then judged on its page', () => {
+    const { t } = judgingTracker();
+    t.navigated(200);
+    t.navigationStarted(true);
+    expect(t.judging).toBe(true);
+    t.navigated(200);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([{ type: 'failed', formId: 'f1', kind: 'sign-in', origin: ORIGIN, why: 'reappeared' }]);
+  });
+
+  it('…a navigation of your own in between: no longer judged, and nothing comes of it', () => {
+    const { t } = judgingTracker();
+    t.navigationStarted(false);
+    expect(t.judging).toBe(false);
+    t.navigated(200);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+  });
+
+  it('passwords turned off and on there while it’s judged (reset): no stale judgment after', () => {
+    const { t } = judgingTracker();
+    t.navigated(200);
+    t.reset();
+    expect(t.judging).toBe(false);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+  });
+
+  it('past its cap (LATE_NAV_CAP_MS after the window): it ends with no outcome', () => {
+    const { t, advance } = judgingTracker();
+    t.navigated(200);
+    advance(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+    expect(t.judging).toBe(false);
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
   });
 });

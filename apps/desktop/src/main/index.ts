@@ -127,6 +127,7 @@ const passwords = new PasswordService({
   clipboard: { writeText: (text) => clipboard.writeText(text), readText: () => clipboard.readText() },
   changed: () => browser?.passwordsChanged(),
   hide: () => browser?.passwordsHide(),
+  locked: () => browser?.passwordAssist.locked(),
   chord: (chordId) => browser?.store.state.chords[chordId] ?? null,
   extensions: () => browser?.store.state.extensions ?? {},
 });
