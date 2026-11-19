@@ -123,7 +123,8 @@ export type AssistVault = Pick<
 export interface PasswordAssistOptions {
   readonly vault: AssistVault;
   /** Its events, and whether a page's navigation during a late window is still being judged (S17 §6, phase 3A-2). */
-  readonly detector: { readonly events: EventEmitter<PasswordDetectorEvents>; judging?(contents: WebContents): boolean };
+  /** `judging`: required, so an assist without it can't save a sign-in nobody judged (review round 3 of #62). */
+  readonly detector: { readonly events: EventEmitter<PasswordDetectorEvents>; judging(contents: WebContents): boolean };
   readonly host: PasswordAssistHost;
   readonly now?: () => number;
   readonly setTimeout?: (run: () => void, ms: number) => unknown;
@@ -369,6 +370,9 @@ export class PasswordAssist {
     events.on('signedIn', (e) => void this.signedIn(e));
     // A sign-in there that failed: what an earlier one left to save is no longer what you use.
     events.on('failed', (e) => {
+      // You submitted again while a late window's navigation was judged: what was held for that sign-in goes quietly
+      // (no toast claims a refusal), before the new submit's `submitted` (review round 3 of #62).
+      if (e.why === 'superseded') return this.dropLate(e.contents, null);
       // Counted, so a sign-in being offered while this came is dropped after its next wait (review round 4 of #59).
       this.failures.set(e.contents, (this.failures.get(e.contents) ?? 0) + 1);
       // A save or update pressed while the late window was open: cancelled, and the window's toast says why.
@@ -386,6 +390,9 @@ export class PasswordAssist {
       // nothing about it.
       if (kept && e.formId === kept.formId) kept.submitted = false;
     });
+    // That navigation reached its cap unjudged: a pressed save is cancelled with the toast, an unpressed card and a held
+    // confirmation go. A miss is a missing offer, never a save nobody judged (review round 3 of #62).
+    events.on('lateUnjudged', (e) => this.dropLate(e.contents, 'unjudged'));
     events.on('forms', (e) => {
       const kinds = new Map(e.forms.map((f) => [f.formId, f.kind] as const));
       this.kinds.set(e.contents, kinds);
@@ -1009,8 +1016,9 @@ export class PasswordAssist {
       this.dropPresave(e.contents);
       const confirmWith = { ...(values.username ? { username: values.username } : {}), password: values.password };
       // No navigation: confirmed only once the late window has closed, with no error (S17 §6, phase 3A-2).
-      if (e.lateUntil && e.lateUntil > this.now()) {
-        this.holdConfirm(e.contents, { id: generated.id, origin: e.origin, chordId: tab.chordId, values: confirmWith }, e.lateUntil);
+      // A navigation the page made during an earlier window, still judged, holds it too (review round 3 of #62).
+      if ((e.lateUntil && e.lateUntil > this.now()) || this.judging(e.contents)) {
+        this.holdConfirm(e.contents, { id: generated.id, origin: e.origin, chordId: tab.chordId, values: confirmWith }, e.lateUntil ?? this.now());
       } else {
         const done = await this.options.vault.presaved('confirm', generated.id, e.origin, tab.chordId, confirmWith).catch(() => false);
         if (!done) return;
@@ -1282,7 +1290,10 @@ export class PasswordAssist {
    * *Saving…* (or *Updating…*) and the save runs when the window closes. Whether it waits.
    */
   private wait(card: Card, action: 'save' | 'new', details: { username?: string; passphrase?: string; account?: number }): boolean {
-    const left = (card.lateUntil ?? 0) - this.now();
+    // A card with no late window of its own (a navigation's sign-in, the browser box's first save) isn't the judged
+    // sign-in's: it never waits on the tab's judging (review round 3 of #62).
+    if (card.lateUntil == null) return false;
+    const left = card.lateUntil - this.now();
     // Past the window, but the page's navigation not judged yet: it waits too, and is cancelled when it comes due (now).
     if (left <= 0 && !this.judging(card.contents)) return false;
     // `change`'s **Update** with no account picked does nothing, now or later.
@@ -1332,7 +1343,22 @@ export class PasswordAssist {
 
   /** Whether the tab's page navigated during a late window, and what it led to isn't judged yet (the tracker's). */
   private judging(contents: WebContents): boolean {
-    return !contents.isDestroyed() && (this.options.detector.judging?.(contents) ?? false);
+    return !contents.isDestroyed() && this.options.detector.judging(contents);
+  }
+
+  /**
+   * A late window's sign-in ended with no judgment (`unjudged`: its cap; null: superseded by a new submit): its cards go,
+   * a pressed one with the toast when `why` says one, and a generated password's held confirmation. Counted as a failure,
+   * so an offer for it still being made is dropped. Cards with no late window of their own stay.
+   */
+  private dropLate(contents: WebContents, why: 'unjudged' | null): void {
+    this.failures.set(contents, (this.failures.get(contents) ?? 0) + 1);
+    for (const card of [...this.cards.values()]) {
+      if (card.contents !== contents || card.lateUntil == null) continue;
+      if (card.waiting && why) this.cancelCard(card, true, why);
+      else this.dropCard(card);
+    }
+    this.dropConfirm(contents);
   }
 
   /** The vault locked: a generated password's confirmation waiting on the late window is dropped with its values. */

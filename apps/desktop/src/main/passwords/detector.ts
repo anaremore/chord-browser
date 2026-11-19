@@ -116,6 +116,8 @@ export interface PasswordDetectorEvents {
   firstStep: [PasswordsFirstStepEvent];
   /** A navigation the page made during a form-gone sign-in's late window was judged: no sign of a refusal (phase 3A-2). */
   lateJudged: [Outcome<'lateJudged'>];
+  /** That navigation reached its cap unjudged: what was held for the sign-in goes (review round 3 of #62). */
+  lateUnjudged: [Outcome<'lateUnjudged'>];
 }
 
 export interface PasswordDetectorOptions {
@@ -215,7 +217,10 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
       if (!entry || !isEnabled(entry.profileId) || contents.isDestroyed()) return null;
       return pageOrigin(event.senderFrame, contents.mainFrame);
     };
-    const tracker = new SubmissionTracker(now);
+    // Its cap's outcome comes from a timer, not a call: emitted as the calls' are.
+    const tracker = new SubmissionTracker(now, undefined, (outcomes) => {
+      if (!contents.isDestroyed()) emit(outcomes);
+    });
     pages.set(contents, tracker);
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     const emit = (outcomes: SavingOutcome[]) => {
@@ -227,6 +232,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         else if (priv) continue;
         else if (type === 'signedIn') events.emit('signedIn', { ...(rest as Omit<Extract<SavingOutcome, { type: 'signedIn' }>, 'type'>), contents });
         else if (type === 'lateJudged') events.emit('lateJudged', { ...(rest as Omit<Extract<SavingOutcome, { type: 'lateJudged' }>, 'type'>), contents });
+        else if (type === 'lateUnjudged') events.emit('lateUnjudged', { ...(rest as Omit<Extract<SavingOutcome, { type: 'lateUnjudged' }>, 'type'>), contents });
         else events.emit('failed', { ...(rest as Omit<Extract<SavingOutcome, { type: 'failed' }>, 'type'>), contents });
       }
     };

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Session, WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { checkMessage, createPasswordDetector, MESSAGE_RATE, pageOrigin, SENTINEL_ID, tokenBucket } from '../../src/main/passwords/detector';
-import { SETTLE_MS } from '../../src/main/passwords/saving';
+import { LATE_ERROR_MS, LATE_NAV_CAP_MS, SETTLE_MS } from '../../src/main/passwords/saving';
 
 interface Frame {
   origin: string;
@@ -415,5 +415,49 @@ describe('navigations that never commit', () => {
     page.emitter.emit('did-stop-loading');
     page.send('passwords:gone', { formId: 'f1' });
     expect(seen.map(([t]) => t)).toEqual(['submitted', 'signedIn']);
+  });
+});
+
+describe('a late window’s navigation, judged by the real tracker (review round 3 of #62)', () => {
+  /** A sign-in read from its form going, then a navigation the page makes in its window. */
+  function lateNavigation(clock: { t: number }) {
+    const t = setup({ clock });
+    const late: string[] = [];
+    for (const type of ['lateJudged', 'lateUnjudged'] as const) t.detector.events.on(type, () => late.push(type));
+    t.page.send('passwords:candidate', CANDIDATE);
+    t.page.send('passwords:gone', { formId: 'f1' });
+    t.page.emitter.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: t.page.contents.mainFrame });
+    return { ...t, late };
+  }
+
+  it('judging() follows the tracker: on from the navigation, off once its new page settles, with lateJudged', () => {
+    vi.useFakeTimers();
+    try {
+      const { detector, page, late } = lateNavigation({ t: 0 });
+      expect(detector.judging(page.contents)).toBe(true);
+      page.emitter.emit('did-navigate', {}, 'https://example.com/home', 200);
+      page.emitter.emit('did-stop-loading');
+      expect(detector.judging(page.contents)).toBe(true);
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(detector.judging(page.contents)).toBe(false);
+      expect(late).toEqual(['lateJudged']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('…a new page that never settles: lateUnjudged at the cap, from the tracker’s own timer', () => {
+    vi.useFakeTimers();
+    try {
+      const clock = { t: 0 };
+      const { detector, page, late } = lateNavigation(clock);
+      page.emitter.emit('did-navigate', {}, 'https://example.com/home', 200);
+      clock.t = LATE_ERROR_MS + LATE_NAV_CAP_MS + 1;
+      vi.advanceTimersByTime(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+      expect(late).toEqual(['lateUnjudged']);
+      expect(detector.judging(page.contents)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

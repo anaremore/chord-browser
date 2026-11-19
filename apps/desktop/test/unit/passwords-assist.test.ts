@@ -2521,3 +2521,115 @@ describe('the late window, judged per tab (review round 2 of #62)', () => {
     expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ username: VALUES.username, passphrase: 'a long enough passphrase' }));
   });
 });
+
+describe('the late window, review round 3 of #62', () => {
+  const LATE = 10_000;
+  const pageNavigates = (t: ReturnType<typeof setup>) => {
+    t.judging.add(t.contents);
+    t.page.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: t.page.mainFrame });
+  };
+  /** The tracker's outcome at the navigation's cap. */
+  const capped = async (t: ReturnType<typeof setup>) => {
+    t.judging.delete(t.contents);
+    t.events.emit('lateUnjudged', { contents: t.contents, formId: 'f1', origin: ORIGIN } as never);
+    await settle();
+  };
+  const refusedToasts = (t: ReturnType<typeof setup>) => t.host.toast.mock.calls.filter(([, kind]) => kind === 'passwords:refused');
+  const confirmed = (t: ReturnType<typeof setup>) => t.vault.presaved.mock.calls.filter(([action]) => action === 'confirm');
+  const generated = async (t: ReturnType<typeof setup>) => {
+    await t.focus(NEW);
+    await settle(2);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+    t.vault.presaved.mockClear();
+  };
+
+  it('you submit again while the last sign-in’s navigation is judged: its pressed save goes quietly, and the new sign-in’s card saves', async () => {
+    const t = setup();
+    await t.signedIn({ how: 'form-gone', lateUntil: t.timers.now() + LATE });
+    pageNavigates(t);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    t.judging.delete(t.contents);
+    t.events.emit('failed', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, why: 'superseded' } as never);
+    await settle();
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(refusedToasts(t)).toEqual([]);
+    await t.signedIn({ how: 'form-gone', lateUntil: t.timers.now() + LATE });
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+    expect(refusedToasts(t)).toEqual([]);
+  });
+
+  it('the navigation reaches its cap unjudged with Save pressed: cancelled, nothing written, and “couldn’t tell”', async () => {
+    const t = setup();
+    await t.signedIn({ how: 'form-gone', lateUntil: t.timers.now() + LATE });
+    pageNavigates(t);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    await capped(t);
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:refused', 'Chord couldn’t tell whether that worked, so it didn’t save.');
+  });
+
+  it('…with the card not pressed: it goes at the cap, so a Save after it writes nothing', async () => {
+    const t = setup();
+    await t.signedIn({ how: 'form-gone', lateUntil: t.timers.now() + LATE });
+    const id = t.assist.cardFor('n1')!.id;
+    pageNavigates(t);
+    t.timers.advance(LATE);
+    await settle();
+    await capped(t);
+    expect(t.assist.cardFor('n1')).toBeNull();
+    await t.assist.answer('w1', id, 'save', { username: VALUES.username });
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(refusedToasts(t)).toEqual([]);
+  });
+
+  it('…a generated password’s confirmation held on it: dropped at the cap, never confirmed', async () => {
+    const t = setup();
+    await generated(t);
+    await t.signedIn({ kind: 'sign-up', how: 'form-gone', lateUntil: t.timers.now() + LATE, values: { username: 'ada@example.com', password: 'Gen-1' } });
+    await settle();
+    pageNavigates(t);
+    await capped(t);
+    t.timers.advance(LATE);
+    await settle();
+    expect(confirmed(t)).toEqual([]);
+  });
+
+  it('a generated password signed in by a navigation (no window of its own) while the tab judges an earlier one: not confirmed', async () => {
+    const t = setup();
+    await generated(t);
+    t.judging.add(t.contents);
+    await t.signedIn({ kind: 'sign-up', how: 'navigation', lateUntil: null, values: { username: 'ada@example.com', password: 'Gen-1' } });
+    await settle();
+    t.timers.advance(0);
+    await settle();
+    expect(confirmed(t)).toEqual([]);
+  });
+
+  it('a card with no late window of its own (the browser box’s first save) while the tab judges: Save writes at once, no “couldn’t tell”', async () => {
+    const t = setup();
+    t.judging.add(t.contents);
+    await t.assist.offerFirstSave(t.contents, { origin: 'http://router.test:8080', realm: 'Router admin', username: 'ada@example.com', password: 'box-Sekrit', until: HOLD_MS });
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: 'ada@example.com', passphrase: 'a long enough passphrase' });
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+    expect(refusedToasts(t)).toEqual([]);
+  });
+
+  it('…and a navigation’s sign-in card (no window) while the tab judges: Save writes at once', async () => {
+    const t = setup();
+    t.judging.add(t.contents);
+    await t.signedIn();
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+  });
+});

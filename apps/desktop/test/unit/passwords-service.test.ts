@@ -86,8 +86,10 @@ const CHORDS: Record<string, { id: string; profileId: string; private?: boolean 
   priv: { id: 'priv', profileId: 'private-w1', private: true },
 };
 
+let locks = 0;
 function make(): PasswordService {
   return new PasswordService({
+    locked: () => void locks++,
     chord: (chordId) => CHORDS[chordId] ?? null,
     extensions: () => extensions,
     data: (op) => db.passwords.run(op, clock.now),
@@ -898,5 +900,17 @@ describe('generated passwords, sign-up and change forms (S17 §6, phase 2)', () 
     const mine = view.logins.find((l) => l.origin === SITE)!;
     expect(await service.changePasswordUrl(mine.id)).toBe('https://example.com/.well-known/change-password');
     expect(await service.changePasswordUrl('not-an-id')).toBeNull();
+  });
+});
+
+describe('the locks tell the assist (review round 3 of #62)', () => {
+  it('idle lock and Lock now each call `locked`, so a held confirmation goes', async () => {
+    await oneLogin();
+    locks = 0;
+    await clock.advance(31 * MIN);
+    expect(locks).toBe(1);
+    await service.unlock(PASSPHRASE);
+    await service.lock();
+    expect(locks).toBe(2);
   });
 });

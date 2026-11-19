@@ -73,7 +73,7 @@ function run(steps: Step[]): string[] {
         break;
     }
   }
-  return out.map((o) => (o.type === 'submitted' ? `submitted:${o.signal}` : o.type === 'signedIn' ? `signedIn:${o.how}:${o.hint ?? '-'}` : o.type === 'lateJudged' ? 'lateJudged' : `failed:${o.why}`));
+  return out.map((o) => (o.type === 'submitted' ? `submitted:${o.signal}` : o.type === 'signedIn' ? `signedIn:${o.how}:${o.hint ?? '-'}` : o.type === 'lateJudged' ? 'lateJudged' : o.type === 'lateUnjudged' ? 'lateUnjudged' : `failed:${o.why}`));
 }
 
 describe('knowing you signed in (S17 §6)', () => {
@@ -336,11 +336,22 @@ describe('a late window’s navigation, judged (review round 2 of #62)', () => {
   /** A form-gone sign-in, then a navigation the page made: the tracker judging it. */
   function judgingTracker() {
     let now = 0;
-    const t = new SubmissionTracker(() => now);
+    const tasks = new Map<number, { at: number; run: () => void }>();
+    let n = 0;
+    const timers = {
+      setTimeout: (run: () => void, ms: number) => (tasks.set(++n, { at: now + ms, run }), n),
+      clearTimeout: (id: unknown) => void tasks.delete(id as number),
+    };
+    const late: SavingOutcome[] = [];
+    const t = new SubmissionTracker(() => now, timers, (o) => late.push(...o));
     t.candidate(candidate({ signal: 'button' }), ORIGIN);
     t.gone('f1');
     t.navigationStarted(true);
-    return { t, advance: (ms: number) => void (now += ms) };
+    /** The timers due by now, run. */
+    const run = () => {
+      for (const [id, task] of [...tasks]) if (task.at <= now && tasks.delete(id)) task.run();
+    };
+    return { t, late, run, pending: () => tasks.size, advance: (ms: number) => void (now += ms), at: (ms: number) => void (now = ms) };
   }
 
   it('is judging from the navigation until its new page settles', () => {
@@ -381,12 +392,90 @@ describe('a late window’s navigation, judged (review round 2 of #62)', () => {
     expect(t.settled()).toEqual([]);
   });
 
-  it('past its cap (LATE_NAV_CAP_MS after the window): it ends with no outcome', () => {
-    const { t, advance } = judgingTracker();
+  it('past its cap (LATE_NAV_CAP_MS after the window): judging until its timer runs, which sends lateUnjudged, then nothing comes of it', () => {
+    const { t, late, run, advance } = judgingTracker();
     t.navigated(200);
-    advance(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+    advance(LATE_ERROR_MS + LATE_NAV_CAP_MS);
+    run();
+    expect([t.judging, late]).toEqual([true, []]);
+    // Past the cap, before its timer ran: still judging (it fails closed, review round 3 of #62).
+    advance(1);
+    expect(t.judging).toBe(true);
+    run();
+    expect(late).toEqual([{ type: 'lateUnjudged', formId: 'f1', origin: ORIGIN }]);
     expect(t.judging).toBe(false);
     t.forms(formsWith([signInForm]));
     expect(t.settled()).toEqual([]);
+  });
+});
+
+describe('a late window’s navigation, review round 3 of #62', () => {
+  function judgingTracker() {
+    let now = 0;
+    const tasks = new Map<number, { at: number; run: () => void }>();
+    let n = 0;
+    const timers = {
+      setTimeout: (run: () => void, ms: number) => (tasks.set(++n, { at: now + ms, run }), n),
+      clearTimeout: (id: unknown) => void tasks.delete(id as number),
+    };
+    const late: SavingOutcome[] = [];
+    const t = new SubmissionTracker(() => now, timers, (o) => late.push(...o));
+    t.candidate(candidate({ signal: 'button' }), ORIGIN);
+    t.gone('f1');
+    const run = () => {
+      for (const [id, task] of [...tasks]) if (task.at <= now && tasks.delete(id)) task.run();
+    };
+    return { t, late, run, pending: () => tasks.size, at: (ms: number) => void (now = ms) };
+  }
+  const kinds = (out: SavingOutcome[]) => out.map((o) => (o.type === 'failed' ? `failed:${o.why}` : o.type));
+
+  it('you submit again while it’s judged (the page came back to the form): the old judgment ends first, as superseded, and never lands on the new sign-in', () => {
+    const { t, late, run, pending, at } = judgingTracker();
+    t.navigationStarted(true);
+    t.navigated(200);
+    expect(kinds(t.candidate(candidate({ signal: 'button' }), ORIGIN))).toEqual(['failed:superseded', 'submitted']);
+    expect(t.judging).toBe(false);
+    // The old page's settling finds the new form shown: nothing for the old sign-in (its ids restart per document).
+    t.forms(formsWith([signInForm]));
+    expect(t.settled()).toEqual([]);
+    // The page answers the new submit in place: its own sign-in, with its own window.
+    expect(kinds(t.gone('f1'))).toEqual(['signedIn']);
+    // The old cap's timer went with it (no values here, so no values timer either).
+    expect(pending()).toBe(0);
+    at(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+    run();
+    expect(late).toEqual([]);
+  });
+
+  it('…a blur, or the same submit’s second signal, doesn’t end it', () => {
+    const { t } = judgingTracker();
+    t.navigationStarted(true);
+    t.navigated(200);
+    expect(t.candidate(candidate({ signal: 'blur' }), ORIGIN)).toEqual([]);
+    expect(t.judging).toBe(true);
+  });
+
+  it('the window’s last millisecond: closed at lateUntil, so a navigation then isn’t judged and an error then takes nothing back', () => {
+    const a = judgingTracker();
+    a.at(LATE_ERROR_MS);
+    a.t.navigationStarted(true);
+    expect(a.t.judging).toBe(false);
+    const b = judgingTracker();
+    b.at(LATE_ERROR_MS);
+    expect(b.t.hint('f1', 500)).toEqual([]);
+    const c = judgingTracker();
+    c.at(LATE_ERROR_MS - 1);
+    c.t.navigationStarted(true);
+    expect(c.t.judging).toBe(true);
+  });
+
+  it('your own navigation while it’s judged: no judging, and no cap outcome later', () => {
+    const { t, late, run, at } = judgingTracker();
+    t.navigationStarted(true);
+    t.navigationStarted(false);
+    expect(t.judging).toBe(false);
+    at(LATE_ERROR_MS + LATE_NAV_CAP_MS + 1);
+    run();
+    expect(late).toEqual([]);
   });
 });
