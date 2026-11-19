@@ -441,12 +441,19 @@ test('main sent a password and the form has none now: refused as changed, nothin
 test('a field hidden at the last scan, focused within the scan gap: classed again once, at the next flush', async ({ page }) => {
   body = `<!doctype html><html><head><meta charset="utf-8"><title>Test</title></head><body><form id="f"><input id="u" type="email" name="email" aria-label="Email"><input id="p" type="password" name="password" aria-label="Password" style="display:none"><button>Log in</button></form></body></html>`;
   await page.goto(`${ORIGIN}/page`);
-  // Count the agent's scans: each reads the document's controls once.
+  // Count the agent's scans: each reads the document's controls once, by a walk into open shadow roots (the first scan,
+  // and every one on a page with roots) or the document's own querySelectorAll (a page without).
   await page.evaluate(() => {
+    const g = globalThis as unknown as { scans: number };
+    g.scans = 0;
+    const walker = Document.prototype.createTreeWalker;
+    Document.prototype.createTreeWalker = function (this: Document, root: Node, ...rest: [number?, NodeFilter?]) {
+      if (root instanceof Document) g.scans++;
+      return walker.call(this, root, ...rest);
+    } as typeof walker;
     const qsa = Document.prototype.querySelectorAll;
-    (globalThis as unknown as { scans: number }).scans = 0;
     Document.prototype.querySelectorAll = function (this: Document, selector: string) {
-      if (selector === 'input, select, textarea') (globalThis as unknown as { scans: number }).scans++;
+      if (selector === 'input, select, textarea') g.scans++;
       return qsa.call(this, selector);
     } as typeof qsa;
   });
@@ -765,6 +772,8 @@ test("a plain div's submit made by the page's script (an untrusted click or Ente
   await page.click('#next');
   await a.settle();
   expect((await a.of('step')).map((m) => m['username'])).toEqual(['ada@example.com']);
+});
+
 /* ---------- Phase 3B: open shadow roots (S17 §4) ---------- */
 
 /** A page whose sign-in fields are a component's: each input in an open root of its host, built by the page's script. */
@@ -824,4 +833,18 @@ test('a sign-in in open shadow roots: one submit is one candidate, with what was
   expect((await a.of('filled')).at(-1)).toMatchObject({ ok: true });
   expect(await page.inputValue(inRoot('user'))).toBe('ada@example.com');
   expect(await page.inputValue(inRoot('pass'))).toBe('pw-one');
+});
+
+test('a component rendered after the first scan, on a page that had no root: its field is found once an event comes from inside it', async ({ page }) => {
+  // A sign-in form in the page's own tree, scanned without roots; then the page adds a component with its own sign-in.
+  const a = await open(page, SIGN_IN);
+  await page.evaluate(() => {
+    const host = document.createElement('x-login');
+    document.body.append(host);
+    host.attachShadow({ mode: 'open' }).innerHTML = '<form><label for="e">Email</label><input id="e" name="email" type="email"><label for="w">Password</label><input id="w" name="pw" type="password"><button>Log in</button></form>';
+  });
+  await a.clear();
+  await page.click('x-login >> #w');
+  await a.settle();
+  expect(await a.of('focus')).toEqual([expect.objectContaining({ role: 'current-password', kind: 'sign-in' })]);
 });

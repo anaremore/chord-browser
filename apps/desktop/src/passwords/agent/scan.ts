@@ -4,6 +4,12 @@
  * every field outside one in one more form). It only reads: no attribute, class, element,
  * style or listener is added to the page.
  *
+ * **Open shadow roots** (phase 3B): the scan walks the document and every open root in it, roots
+ * inside roots too, in tree order (a host, then its root, then its light children: a slotted input
+ * is the host's child, scanned once). A field in a root with no `<form>` of its own belongs to the
+ * form its host is in, as a design system's text fields do (`md-outlined-text-field` in a page's
+ * `<form>`). Closed roots can't be reached by any page script, the agent's included (S17 §4).
+ *
  * Bounded like the assistant's read (core's ASSISTANT_FORM_SCAN, ASSISTANT_FORM_SCAN_MS):
  * at most 2,000 controls and 250 ms. Values are read only when `values` is set, and
  * they never leave the page's renderer.
@@ -33,6 +39,13 @@ export interface ScanOptions {
   readonly only?: readonly Element[];
   /** For tests: a clock. */
   readonly now?: () => number;
+  /**
+   * Walk into open shadow roots (default). The agent turns it off on a page whose first scan found no root and whose
+   * events never came from inside one: there the document's own `querySelectorAll` is all a scan needs (phase 3B).
+   */
+  readonly deep?: boolean;
+  /** Told how many open roots the walk went into (none when `deep` is off). */
+  readonly roots?: { count: number };
 }
 
 /** Controls that are never credentials, and never read. */
@@ -57,10 +70,76 @@ const activeGetter = getter(documentProto, 'activeElement');
 /** A document's own properties, which named forms, images and embeds can clobber (`<form name="title">`): read through the prototype. */
 export const documentBody = (doc: Document): HTMLElement | null => bodyGetter.call(doc) as HTMLElement | null;
 export const documentTitle = (doc: Document): string => String(titleGetter.call(doc) ?? '');
-export const activeElementOf = (doc: Document): Element | null => activeGetter.call(doc) as Element | null;
+/**
+ * The element with focus, through open shadow roots: the document's active element is the host of the root that holds
+ * it, and each root's is the next one in. A chain of hosts, not a walk.
+ */
+export const activeElementOf = (doc: Document): Element | null => {
+  let el = activeGetter.call(doc) as Element | null;
+  for (let depth = 0; el && depth < 32; depth++) {
+    const inner = shadowOf(el)?.activeElement;
+    if (!inner) break;
+    el = inner;
+  }
+  return el;
+};
 const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
 const contains = (outer: Node, inner: Node): boolean => nodeProto.contains.call(outer, inner);
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
+const shadowRootGetter = getter(elementProto, 'shadowRoot');
+/** An element's open shadow root, read through the prototype (`<input name="shadowRoot">` clobbers a form's own). */
+const shadowOf = (el: Element): ShadowRoot | null => shadowRootGetter.call(el) as ShadowRoot | null;
+const createWalker = documentProto.createTreeWalker;
+/** The element's parent, or, at the top of an open shadow root, its host: up through roots, as the page draws it. */
+export const composedParentOf = (el: Element): Element | null => {
+  const parent = parentOf(el);
+  if (parent) return parent;
+  const root = el.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
+};
+/** `closest`, on through the hosts of the shadow roots `el` is in. */
+export function composedClosest(el: Element, selector: string): Element | null {
+  for (let node: Element | null = el, depth = 0; node && depth < 32; depth++) {
+    const found = elementProto.closest.call(node, selector);
+    if (found) return found;
+    const root = node.getRootNode();
+    node = root instanceof ShadowRoot ? root.host : null;
+  }
+  return null;
+}
+/** The `<form>` a control belongs to: its own, or, in a shadow root with none, the one its host (or its host's) is in. */
+export function formOfControl(el: Element): HTMLFormElement | null {
+  const own = (el as HTMLInputElement).form;
+  if (own instanceof HTMLFormElement) return own;
+  if (!(el.getRootNode() instanceof ShadowRoot)) return null;
+  const form = composedClosest(el, 'form');
+  return form instanceof HTMLFormElement ? form : null;
+}
+/** The most open shadow roots the scan walks into: a page of thousands of components still costs a bounded walk. */
+export const MAX_ROOTS = 1000;
+/**
+ * Every control in `doc` and its open shadow roots, in tree order, and the roots the walk went into. Bounded by
+ * `MAX_ROOTS` roots and the scan's own limits, which the caller applies as it reads.
+ */
+export function deepControls(doc: Document): { controls: Element[]; roots: ShadowRoot[] } {
+  const controls: Element[] = [];
+  const roots: ShadowRoot[] = [];
+  const walk = (root: Document | ShadowRoot) => {
+    const walker = createWalker.call(doc, root, NodeFilter.SHOW_ELEMENT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const el = n as Element;
+      const tag = tagOf(el);
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') controls.push(el);
+      const inner = shadowOf(el);
+      if (inner && roots.length < MAX_ROOTS) {
+        roots.push(inner);
+        walk(inner);
+      }
+    }
+  };
+  walk(doc);
+  return { controls, roots };
+}
 const tagOf = (el: Element): string => String(tagGetter.call(el));
 const textOf = (el: Element): string => String(textGetter.call(el) ?? '');
 const childNodesGetter = getter(nodeProto, 'childNodes');
@@ -216,9 +295,9 @@ const pressable = (el: Element) =>
  * sign in far more often than a form's submit (submit-baseline.json).
  */
 function plainSubmit(target: Element, kind: string | null): Element | null {
-  if (target.closest('a, [role=link]')) return null;
+  if (composedClosest(target, 'a, [role=link]')) return null;
   let el: Element | null = target;
-  for (let depth = 0; depth < 3 && el; depth++, el = parentOf(el)) {
+  for (let depth = 0; depth < 3 && el; depth++, el = composedParentOf(el)) {
     const tag = tagOf(el);
     if (tag === 'BODY' || tag === 'FORM' || tag === 'HTML' || NOT_PLAIN.test(tag)) return null;
     if (allIn(el, 'input, select, textarea, h1, h2, h3, h4, h5, h6, label, p').length) return null;
@@ -235,8 +314,8 @@ function plainSubmit(target: Element, kind: string | null): Element | null {
 
 /** Whether `el` is within `levels` ancestors of `field`: the fields' own neighbourhood, for a formless form. */
 function near(field: Element, el: Element, levels: number): boolean {
-  let node = parentOf(field);
-  for (let depth = 0; depth < levels && node && tagOf(node) !== 'BODY'; depth++, node = parentOf(node)) if (contains(node, el)) return true;
+  let node = composedParentOf(field);
+  for (let depth = 0; depth < levels && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) if (contains(node, el)) return true;
   return false;
 }
 
@@ -251,7 +330,7 @@ function near(field: Element, el: Element, levels: number): boolean {
  * `div`. Outside a `<form>`, it must be near the fields (within the scope's six levels).
  */
 export function submitButtonFor(target: Element, anchor: Element | null, form: HTMLFormElement | null, kind: string | null = null): Element | null {
-  const button = target.closest(ANY_BUTTON);
+  const button = composedClosest(target, ANY_BUTTON);
   if (!button) {
     const plain = plainSubmit(target, kind);
     if (!plain || !anchor || contains(plain, anchor)) return null;
@@ -285,12 +364,13 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
  * click listener and the corpus's measure of false submit signals both use this.
  */
 export function submittedBy<T extends { readonly scanned: ScannedForm; readonly classified: { readonly kind: string } | null }>(target: Element, forms: readonly T[], anchorOf: (form: T) => Element | null): T | null {
-  const form = target.closest('form');
+  // Up through shadow roots: a button in a component's root submits the form its host is in.
+  const form = composedClosest(target, 'form');
   const k = form ? forms.find((x) => x.scanned.form === form) : forms.find((x) => x.scanned.form === null);
   if (!k) return null;
   const button = submitButtonFor(target, anchorOf(k), k.scanned.form, k.classified?.kind ?? null);
   if (!button) return null;
-  const owner = (button as HTMLButtonElement).form ?? button.closest('form');
+  const owner = (button as HTMLButtonElement).form ?? composedClosest(button, 'form');
   return (owner ? forms.find((x) => x.scanned.form === owner) : forms.find((x) => x.scanned.form === null)) === k ? k : null;
 }
 
@@ -299,8 +379,8 @@ const ANY_BUTTON = 'button, input[type=submit], input[type=button], input[type=i
 
 /** The closest ancestor of `el` (up to 6 levels) that holds a button: a formless form's scope. */
 export function formlessScope(el: Element): Element | null {
-  let node = parentOf(el);
-  for (let depth = 0; depth < 6 && node && tagOf(node) !== 'BODY'; depth++, node = parentOf(node)) {
+  let node = composedParentOf(el);
+  for (let depth = 0; depth < 6 && node && tagOf(node) !== 'BODY'; depth++, node = composedParentOf(node)) {
     if (allIn(node, 'button, input[type=submit], input[type=button], [role=button]').length) return node;
   }
   return null;
@@ -336,7 +416,7 @@ function formWords(doc: Document, form: HTMLFormElement | null, firstPassword: E
   }
 }
 
-/** Scans `doc`'s main tree (not frames or shadow roots: phase 3) into forms. */
+/** Scans `doc`'s main tree and its open shadow roots (not frames: phase 3C) into forms. */
 export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedForm[] {
   const now = options.now ?? (() => performance.now());
   const started = now();
@@ -352,7 +432,15 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
   };
   const groups = new Map<HTMLFormElement | null, { fields: PasswordField[]; elements: HTMLElement[] }>();
   let seen = 0;
-  const controls = (options.only ?? allIn(doc, 'input, select, textarea')) as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
+  let found: Element[];
+  if (options.only) found = [...options.only];
+  else if (options.deep === false) found = allIn(doc, 'input, select, textarea');
+  else {
+    const walked = deepControls(doc);
+    found = walked.controls;
+    if (options.roots) options.roots.count = walked.roots.length;
+  }
+  const controls = found as Iterable<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
   for (const el of controls) {
     if (++seen > ASSISTANT_FORM_SCAN || now() - started > ASSISTANT_FORM_SCAN_MS) break;
     const type = controlType(el);
@@ -362,7 +450,7 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
       key = nextKey.value++;
       keys.set(el, key);
     }
-    const form = el.form instanceof HTMLFormElement ? el.form : null;
+    const form = formOfControl(el);
     let group = groups.get(form);
     if (!group) groups.set(form, (group = { fields: [], elements: [] }));
     group.fields.push({

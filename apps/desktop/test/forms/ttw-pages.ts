@@ -163,13 +163,12 @@ export const PAGES: readonly SitePage[] = [
       { name: 'question', kind: null, field: '#security-question', actions: [NEXT, { waitFor: '#security-question' }] },
     ],
   },
-  // Not scored: phase 1 reads the main frame's own tree only (S17 §15; scan.ts).
+  // Not scored: closed shadow roots (out of reach), and frames (phase 3C; S17 §15).
   // Material Web's text fields: each one's <input> in the component's open root, the form in the page's tree (S17 phase 3B).
   {
     path: 'login/shadow-root-inputs',
     what: 'a sign-in form of web components, its fields in open shadow roots',
     steps: [SIGN_IN('#username >>> input', '#password >>> input')],
-    skip: 'shadow roots: phase 3B, with the agent’s walk of open roots',
   },
   { path: 'login/shadow-root-inputs-closed', what: 'a sign-in form in an open root whose fields are in closed shadow roots', steps: [], skip: 'closed shadow roots are out of any page script’s reach, the agent’s too (S17 §4)' },
   { path: 'login/iframe-login', what: 'a sign-in form in a frame', steps: [], skip: 'frames: phase 1 is the main frame only' },

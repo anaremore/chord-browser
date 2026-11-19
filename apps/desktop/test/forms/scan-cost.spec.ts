@@ -57,7 +57,7 @@ test('the scan, and walking open shadow roots, on a heavy page', async ({ page }
       const xs = runs.map((r) => r[key]).sort((a, b) => a - b);
       return Math.round(xs[Math.floor(xs.length / 2)]! * 1000) / 1000;
     };
-    report[name] = Object.fromEntries((['elements', 'roots', 'scanMs', 'lookMs', 'walkAllMs', 'walkTreeMs', 'deepLookMs'] as const).map((k) => [k, median(k)]));
+    report[name] = Object.fromEntries((['elements', 'roots', 'scanMs', 'scanFlatMs', 'lookMs', 'walkAllMs', 'walkTreeMs', 'deepLookMs'] as const).map((k) => [k, median(k)]));
     console.log(`[scan-cost] ${name}: ${JSON.stringify(report[name])}`);
   }
   mkdirSync(RESULTS, { recursive: true });

@@ -130,17 +130,48 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
 
   let scannedAt = Number.NEGATIVE_INFINITY;
   let scanWanted = false;
+  /**
+   * Whether scans walk into open shadow roots (phase 3B). The first one does; it stays on where that found a root, and
+   * comes on again (for good) when an event's path starts inside one: a component rendered after the first scan.
+   */
+  let deep = true;
+  let rootsSeen = false;
+  /** An event that started inside an open shadow root: its target is the host, its path's first entry the field. */
+  const fromRoot = (event: Event) => {
+    if (rootsSeen) return;
+    const first = event.composedPath()[0];
+    if (first !== event.target && first instanceof Node && first.getRootNode() instanceof ShadowRoot) {
+      rootsSeen = deep = true;
+      // The field isn't known yet, and the last scan skipped roots: the next lookup scans again.
+      scanWanted = true;
+    }
+  };
   /** Scans the page again and classifies each form for filling. Main hears of a change at the next flush. */
   function rescan(): void {
     scannedAt = performance.now();
     scanWanted = false;
-    const scanned = scanDocument(doc, { typed, filled, keys, nextKey });
+    const roots = { count: 0 };
+    const scanned = scanDocument(doc, { typed, filled, keys, nextKey, deep, roots });
+    // A page with no open root at its first scan, and no event from inside one since, is scanned without the walk.
+    if (deep && roots.count === 0 && !rootsSeen) deep = false;
+    else if (roots.count > 0) rootsSeen = true;
     known = scanned.map((s) => ({ id: idOf(s.form ?? doc), scanned: s, classified: classifyPasswordForm(s.record, 'filling') }));
     for (const s of scanned) for (const el of s.elements) if (controlType(el) === 'password') wasPassword.add(el);
     byElement = new WeakMap();
     for (const k of known) for (const el of k.scanned.elements) byElement.set(el, k);
+    // A form inside an open shadow root: its `submit` doesn't cross the root, so the agent listens there too (phase 3B).
+    for (const s of scanned) {
+      const root = s.form?.getRootNode();
+      if (root instanceof ShadowRoot && !listenedRoots.has(root)) {
+        listenedRoots.add(root);
+        EventTarget.prototype.addEventListener.call(root, 'submit', onSubmit as EventListener, { capture: true, passive: true });
+        stops.push(() => EventTarget.prototype.removeEventListener.call(root, 'submit', onSubmit as EventListener, { capture: true }));
+      }
+    }
     schedule();
   }
+  /** The open shadow roots the agent listens for `submit` in (a form there). */
+  const listenedRoots = new WeakSet<ShadowRoot>();
   /** The credential forms, as main hears of them: at most MAX_REPORTED_FORMS, and FORMS_JSON_MAX characters. */
   const formsReport = () => {
     const forms: PasswordsAgentMessage<'forms'>['forms'] = [];
@@ -276,6 +307,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!timer) timer = win.setTimeout(flush, FLUSH_MS);
   }
   const onFocusIn = (event: FocusEvent) => {
+    fromRoot(event);
     const el = event.composedPath()[0];
     if (!isTextField(el)) return;
     focusOn(el);
@@ -300,6 +332,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
 
   // ----- Typing -----
   const onInput = (event: Event) => {
+    fromRoot(event);
     const el = event.composedPath()[0];
     if (!isTextField(el) || !event.isTrusted) return;
     typed.add(el);
@@ -324,6 +357,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
   };
   const onKeyDown = (event: KeyboardEvent) => {
+    fromRoot(event);
     if (event.key !== 'Enter' || !event.isTrusted) return;
     const el = event.composedPath()[0];
     if (!isTextField(el)) return;
@@ -331,6 +365,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (k) candidate(k, 'enter');
   };
   const onClick = (event: MouseEvent) => {
+    fromRoot(event);
     if (!event.isTrusted) return;
     const target = event.composedPath()[0];
     if (!(target instanceof Element)) return;
@@ -431,7 +466,13 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const observer = new MutationObserver(() => {
       if (!timer) timer = win.setTimeout(check, 100);
     });
-    observer.observe(doc, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] });
+    const watched = { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] };
+    observer.observe(doc, watched);
+    // A field in an open shadow root: the document's observer doesn't see inside it, so each root it's in is watched too.
+    for (const r of passwords) {
+      let root = r.deref()?.getRootNode();
+      for (let depth = 0; root instanceof ShadowRoot && depth < 32; depth++, root = root.host.getRootNode()) observer.observe(root, watched);
+    }
     // A request to the page's own origin finishing: a hint (M0 Q7: seen only once its body is read).
     let hints = 0;
     let resources: PerformanceObserver | null = null;

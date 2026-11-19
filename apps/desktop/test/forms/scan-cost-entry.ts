@@ -9,8 +9,10 @@ import { scanDocument } from '../../src/passwords/agent/scan';
 export interface ScanCost {
   readonly elements: number;
   readonly roots: number;
-  /** The agent's scan and classifier, as `rescan` runs them. */
+  /** The agent's scan and classifier, walking into open shadow roots (a page's first scan, and every one where it found a root). */
   readonly scanMs: number;
+  /** The same without the walk (`deep: false`): what the agent's later scans cost on a page whose first found no root. */
+  readonly scanFlatMs: number;
   /** The sentinel's look today: one `querySelector` for a password field in the main tree. */
   readonly lookMs: number;
   /** Every element visited, its `shadowRoot` read, roots inside roots too: what a deep scan pays before reading a field. */
@@ -58,6 +60,9 @@ function measure(): ScanCost {
     roots: roots.length,
     scanMs: time(() => {
       for (const f of scanDocument(document)) classifyPasswordForm(f.record, 'filling');
+    }),
+    scanFlatMs: time(() => {
+      for (const f of scanDocument(document, { deep: false })) classifyPasswordForm(f.record, 'filling');
     }),
     lookMs: time(() => document.querySelector('input[type=password]')),
     walkAllMs: time(() => rootsByAll(document)),
