@@ -1228,13 +1228,6 @@ for (const shell of [false, true]) {
     expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
   });
 
-  test(`P4, ${where}: a wordless eye beside the field’s box, Sign in beside it: the eye isn’t a submit, Sign in is`, async ({ page }) => {
-    const a = await open(page, shelled(`<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('eye')}<button id="go" type="button">Sign in</button></div>`, shell));
-    await typePassword(page, '#p');
-    expect(await submitsAfterClick(page, a, '#eye')).toEqual([]);
-    await page.waitForTimeout(1100);
-    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
-  });
 
   test(`a two-field component sign-in, ${where}, the eye slotted in the password’s component: the eye isn’t a submit, Sign in is`, async ({ page }) => {
     const a = await open(page, shelled('<div><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><x-button id="go">Sign in</x-button></div>', shell));
@@ -1297,3 +1290,104 @@ test('…and a “‹ Back” or “View password” button beside the field sti
   await page.waitForTimeout(1100);
   expect(await submitsAfterClick(page, a, '#view')).toEqual([]);
 });
+
+/* ---------- Review round 3 of #65: round 3's probe table, each row with what main gives ---------- */
+
+/** 40 icon components (Ionic's `ion-icon`, a ripple): roots with no button (`x-ico`, defined with the inner shell). */
+const ICONS_40 = '<x-ico></x-ico>'.repeat(40);
+const LIGHT_FIELD = '<div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>';
+const LIGHT_EMAIL = '<div class="box"><input id="u" name="email" type="email" aria-label="Email" autocomplete="username"></div>';
+const XTF_FIELD = '<x-tf id="pw" data-type="password"></x-tf>';
+type Outcome = 'submit' | 'none' | 'step';
+interface TableRow {
+  readonly name: string;
+  readonly body: string;
+  /** The field typed in: `#p`, `#pw >> #i` (a component's), or `#u` for a first step. */
+  readonly field: string;
+  readonly click: string;
+  readonly pr: Outcome;
+  /** What main gives, with main's scan and agent (round 3's table): where main has a scope, `pr` must match it. */
+  readonly main: Outcome;
+}
+const OTHER_LABELS = ['Help', 'Forgot password?', 'Sign in with Google', 'Create account', 'Sign up', 'Sign in another way', 'Sign-in options'] as const;
+const ODD_SUBMITS = [
+  ['Submit', '<button id="go" type="button">Submit</button>', 'none'],
+  ['Done', '<button id="go" type="button">Done</button>', 'none'],
+  ['a 5-word Sign in', '<button id="go" type="button">Sign in to your account</button>', 'submit'],
+  ['Sign in in text, aria-label and title', '<button id="go" type="button" aria-label="Sign in" title="Sign in">Sign in</button>', 'submit'],
+  ['Sign in at opacity 0', '<button id="go" type="button" style="opacity: 0">Sign in</button>', 'submit'],
+  ['Log in to continue now', '<button id="go" type="button">Log in to continue now</button>', 'submit'],
+  ['Continue', '<button id="go" type="button">Continue</button>', 'submit'],
+] as const;
+
+const TABLE: TableRow[] = [];
+for (const shell of [false, true]) {
+  const w = shell ? 'shell' : 'light';
+  const add = (row: Omit<TableRow, 'body'> & { body: string }) => TABLE.push({ ...row, name: `${w}: ${row.name}`, body: shelled(row.body, shell) });
+  // The 28 arrow combinations: a wordless arrow beside each other-way label, as a button and as a component.
+  for (const label of OTHER_LABELS) {
+    for (const component of [false, true]) {
+      const other = component ? `<x-button>${label}</x-button>` : `<button type="button">${label}</button>`;
+      add({ name: `arrow beside ${component ? 'a component' : 'a button'} “${label}”`, body: `<div>${LIGHT_FIELD}${ICON('go')}${other}</div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+    }
+  }
+  // First steps.
+  for (const label of ['Sign in another way', 'Continue with phone', 'Continue with email'] as const) {
+    add({ name: `first step: arrow beside “${label}”`, body: `<div>${LIGHT_EMAIL}${ICON('go')}<button type="button">${label}</button></div>`, field: '#u', click: '#go', pr: 'step', main: 'step' });
+  }
+  add({ name: 'first step: the “Continue with email” button itself', body: `<div>${LIGHT_EMAIL}${ICON('arrow')}<button id="go" type="button">Continue with email</button></div>`, field: '#u', click: '#go', pr: 'step', main: 'step' });
+  // Hidden and aria-hidden buttons beside an arrow.
+  add({ name: 'a hidden desktop Sign in beside a phone’s arrow', body: `<div>${LIGHT_FIELD}${ICON('go')}<button type="button" style="display: none">Sign in</button></div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: 'an aria-hidden, visible Sign in beside an arrow', body: `<div>${LIGHT_FIELD}${ICON('go')}<button type="button" aria-hidden="true">Sign in</button></div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  // 40 roots in the scope.
+  add({ name: '40 icon roots in the scope, a light arrow, no Sign in', body: `<div>${LIGHT_FIELD}${ICON('go')}${ICONS_40}</div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: '40 icon roots, a light eye, a Sign in component after them: the eye, as main', body: `<div>${LIGHT_FIELD}${ICON('eye')}${ICONS_40}<x-button>Sign in</x-button></div>`, field: '#p', click: '#eye', pr: 'submit', main: 'submit' });
+  // P1 to P4.
+  add({ name: 'P1: the page’s Sign in, an x-icon eye beside the field’s box', body: `<div><div class="row">${LIGHT_FIELD}<x-icon id="eye"></x-icon></div><button id="go" type="button">Sign in</button></div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: 'P1: …its x-icon eye', body: `<div><div class="row">${LIGHT_FIELD}<x-icon id="eye"></x-icon></div><button type="button">Sign in</button></div>`, field: '#p', click: '#eye >> #b', pr: 'none', main: 'none' });
+  add({ name: 'P2: a wordless button beside a lone field in its own box, the only button', body: `<div>${LIGHT_FIELD}${ICON('go')}</div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: 'P3: a slotted eye in the field component', body: `<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#eye >> #b', pr: 'none', main: 'none' });
+  add({ name: 'P3: …Sign in beside it', body: `<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="go" type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#go', pr: 'submit', main: 'none' });
+  add({ name: 'P4: a light eye beside a component field, Sign in beside it', body: `<div>${XTF_FIELD}${ICON('eye')}<button type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#eye', pr: 'none', main: 'none' });
+  add({ name: 'P4: …Sign in', body: `<div>${XTF_FIELD}${ICON('eye')}<button id="go" type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#go', pr: 'submit', main: 'none' });
+  add({ name: 'P4’s light twin (the page’s own field): the eye, as main', body: `<div>${LIGHT_FIELD}${ICON('eye')}<button type="button">Sign in</button></div>`, field: '#p', click: '#eye', pr: 'submit', main: 'submit' });
+  // The P4 eye beside each odd submit label, and the submit itself.
+  for (const [what, submit, itself] of ODD_SUBMITS) {
+    add({ name: `P4’s eye beside ${what}`, body: `<div>${XTF_FIELD}${ICON('eye')}${submit}</div>`, field: '#pw >> #i', click: '#eye', pr: 'none', main: 'none' });
+    add({ name: `P4: ${what} itself`, body: `<div>${XTF_FIELD}${ICON('eye')}${submit}</div>`, field: '#pw >> #i', click: '#go', pr: itself, main: 'none' });
+    add({ name: `P3’s slotted eye beside ${what}`, body: `<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf>${submit}</div>`, field: '#pw >> #i', click: '#eye >> #b', pr: 'none', main: 'none' });
+  }
+  // Probes 2, 2b and 2c, and the x-tf cookie probe, with their light twins: shells of their own, so once.
+  if (!shell) {
+  add({ name: 'probe 2 (inner shell): Accept cookies beside the field’s shell', body: `<div id="page"><x-app2 data-t="inner"></x-app2><button id="cookies" type="button">Accept cookies</button></div><template id="inner"><div class="row">${LIGHT_FIELD}<x-button>Sign in</x-button></div></template>`, field: '#p', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'probe 2b: a shell field, a div Sign in, Accept cookies beside the shell', body: `<div id="page"><x-app2 data-t="inner"></x-app2><button id="cookies" type="button">Accept cookies</button></div><template id="inner"><div class="row">${LIGHT_FIELD}<div role="none" tabindex="0">Sign in</div></div></template>`, field: '#p', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'probe 2c: a shell field (Enter only), Accept cookies beside the shell', body: `<div id="page"><x-app2 data-t="inner"></x-app2><button id="cookies" type="button">Accept cookies</button></div><template id="inner"><div class="row">${LIGHT_FIELD}</div></template>`, field: '#p', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'x-tf cookie probe: a component field, no button near, Accept cookies', body: `<div id="page"><div class="row">${XTF_FIELD}</div><button id="cookies" type="button">Accept cookies</button></div>`, field: '#pw >> #i', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'the x-tf cookie probe’s light twin: Accept cookies, as main', body: `<div id="page"><div class="row">${LIGHT_FIELD}</div><button id="cookies" type="button">Accept cookies</button></div>`, field: '#p', click: '#cookies', pr: 'submit', main: 'submit' });
+  add({ name: 'probe 2b’s light twin: Accept cookies, as main', body: `<div id="page"><div class="row">${LIGHT_FIELD}<div role="none" tabindex="0">Sign in</div></div><button id="cookies" type="button">Accept cookies</button></div>`, field: '#p', click: '#cookies', pr: 'submit', main: 'submit' });
+  }
+  // Should-fix 3.
+  add({ name: 'an eye labelled “Click to view password” beside a lone field', body: `<div>${LIGHT_FIELD}<button id="eye" type="button" aria-label="Click to view password"><svg width="12" height="12"></svg></button><button type="button">Sign in</button></div>`, field: '#p', click: '#eye', pr: 'none', main: 'none' });
+}
+
+/** The inner shell for probes 2 to 2c: an `x-app2` whose root is its template, defined so it upgrades in a shell too. */
+const INNER_SHELL = `<script>
+  customElements.define('x-app2', class extends HTMLElement { connectedCallback() { if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = document.getElementById(this.dataset.t).innerHTML; } });
+  customElements.define('x-ico', class extends HTMLElement { connectedCallback() { if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = '<svg width="1" height="1"></svg>'; } });
+</script>`;
+
+for (const row of TABLE) {
+  test(`round 3’s table, ${row.name}: ${row.pr}${row.pr === row.main ? ' (as main)' : ` (main: ${row.main})`}`, async ({ page }) => {
+    const a = await open(page, row.body + INNER_SHELL);
+    if (row.field === '#u') await page.fill('#u', 'ada@example.com');
+    else await typePassword(page, row.field);
+    await a.clear();
+    await page.click(row.click);
+    await a.settle();
+    const signals = (await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal']);
+    const steps = await a.of('step');
+    const got: Outcome = signals.includes('button') ? 'submit' : steps.length ? 'step' : 'none';
+    // CHORD_TABLE_MAIN=1, with main's scan and agent swapped in, checks the `main` column itself.
+    expect(got).toBe(process.env['CHORD_TABLE_MAIN'] ? row.main : row.pr);
+  });
+}
