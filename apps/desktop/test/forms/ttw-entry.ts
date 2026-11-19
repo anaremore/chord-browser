@@ -5,8 +5,8 @@
  * real fill path.
  */
 import { classifyPasswordForm, type PasswordFieldRole } from '@chord/core';
-import { startAgent } from '../../src/passwords/agent/agent';
-import { scanDocument } from '../../src/passwords/agent/scan';
+import { frameDocumentOf, MAX_FRAME_DEPTH, MAX_FRAMES, startAgents } from '../../src/passwords/agent/frames';
+import { framesIn, scanDocument } from '../../src/passwords/agent/scan';
 
 /** What a step expects, by selector: the username's and the current password's fields, or a negative step's one field (no role). */
 export interface Expected {
@@ -27,21 +27,49 @@ export interface CheckResult {
 }
 
 /**
- * A selector that may step into open shadow roots: `#username >>> input` is the `input` in the open root of
- * `#username` (ttw-pages.ts writes fields in roots so; Playwright's own CSS pierces open roots, so its calls take the
- * same selector with `>>>` read as a space).
+ * A selector that may step into open shadow roots and frames: `#username >>> input` is the `input` in the open root of
+ * `#username`, and `#test-iframe >>| #username` the `#username` in that frame's document (ttw-pages.ts writes fields so;
+ * Playwright's own CSS pierces open roots, so its calls take `>>>` as a space, and a frame as a frame locator).
  */
 function query(selector: string): Element | null {
-  const [first, ...rest] = selector.split(' >>> ');
-  let el = document.querySelector(first!);
-  for (const part of rest) el = el?.shadowRoot?.querySelector(part) ?? null;
+  let doc: Document | null = document;
+  const parts = selector.split(' >>| ');
+  let el: Element | null = null;
+  for (const [i, part] of parts.entries()) {
+    if (!doc) return null;
+    const [first, ...rest] = part.split(' >>> ');
+    el = doc.querySelector(first!);
+    for (const p of rest) el = el?.shadowRoot?.querySelector(p) ?? null;
+    if (i < parts.length - 1) doc = (el as HTMLIFrameElement | null)?.contentDocument ?? null;
+  }
   return el;
 }
 
-/** Every text-like field, in the document and its open shadow roots, in tree order (roots after their host). */
+/** The documents the agent may use (phase 3C, frames.ts's rules): the page's, then its allowed same-origin frames'. */
+function usableDocuments(): Document[] {
+  const out: Document[] = [document];
+  let seen = 0;
+  const walk = (doc: Document, depth: number) => {
+    if (depth >= MAX_FRAME_DEPTH) return;
+    for (const el of framesIn(doc, MAX_FRAMES)) {
+      if (++seen > MAX_FRAMES) return;
+      const frameDoc = frameDocumentOf(el, location.origin);
+      if (!frameDoc) continue;
+      out.push(frameDoc);
+      walk(frameDoc, depth + 1);
+    }
+  };
+  walk(document, 0);
+  return out;
+}
+
+/** Every text-like field, in the documents the agent may use and their open shadow roots, in tree order (roots after their host). */
+function allInputs(): Element[] {
+  return usableDocuments().flatMap((doc) => inputs(doc));
+}
 function inputs(root: Document | ShadowRoot = document): Element[] {
   const out: Element[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  const walker = (root.ownerDocument ?? (root as Document)).createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const el = n as Element;
     if (el.matches('input, textarea')) out.push(el);
@@ -71,7 +99,12 @@ function check(expected: Expected): CheckResult {
   const wrong: string[] = [];
   let kind: string | null = null;
   const seen = new Set<Element>();
-  for (const form of scanDocument(document)) {
+  // The documents the expected fields are in (the page's, or a frame's), as far as the agent may use them: every other
+  // field there must get no role. A field in a frame it may not use is never scanned.
+  const usable = new Set(usableDocuments());
+  const docs = new Set([...want.keys()].map((el) => el.ownerDocument).filter((d) => usable.has(d)));
+  if (!want.size) docs.add(document);
+  for (const form of [...docs].flatMap((doc) => scanDocument(doc))) {
     const classified = classifyPasswordForm(form.record, 'filling');
     form.elements.forEach((el, i) => {
       seen.add(el);
@@ -101,10 +134,10 @@ let onFill: ((payload: unknown) => void) | null = null;
   /** A field's value, by a selector that may step into roots. */
   valueOf: (selector: string) => (query(selector) as HTMLInputElement | null)?.value ?? null,
   /** Every text-like field's value, roots too, in tree order. */
-  values: () => inputs().map((el) => (el as HTMLInputElement).value),
+  values: () => allInputs().map((el) => (el as HTMLInputElement).value),
   /** Where the fields `selectors` name are among `values()`. */
   indexes: (selectors: readonly string[]) => {
-    const all = inputs();
+    const all = allInputs();
     return selectors.map((s) => all.indexOf(query(s)!));
   },
   /** The agent on this document, as the sentinel wakes it, with a bridge that records what it sends. */
@@ -112,7 +145,7 @@ let onFill: ((payload: unknown) => void) | null = null;
     stop?.();
     onFill = null;
     messages.length = 0;
-    stop = startAgent({
+    stop = startAgents({
       send: (channel, payload) => void messages.push([channel, structuredClone(payload) as Record<string, unknown>]),
       onFill: (listener) => void (onFill ??= listener),
     });

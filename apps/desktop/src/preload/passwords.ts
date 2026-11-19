@@ -8,7 +8,9 @@
  * It does nothing until the page shows a sign-in field: a password field once the document is
  * parsed or loaded, or focus or typing in a password field or one that reads as a username or
  * email, in an open shadow root too (phase 3B: the event's path, the focus's chain of roots; no
- * walk). Then, once, it asks main for the agent's script, exposes the agent's bridge in
+ * walk), or in a same-origin frame the agent may use (phase 3C: no `sandbox`, an http(s) address of the top's origin, 3
+ * levels and 20 frames at most), which it looks into at parse and load, listens in, and looks at again when a frame
+ * loads. Then, once, it asks main for the agent's script, exposes the agent's bridge in
  * isolated world 4440 (`contextBridge.exposeInIsolatedWorld`) and runs the agent there. Two
  * passive capturing listeners and a `querySelector` at each of two moments are its whole cost
  * on any other page (M0 §6: nothing measurable).
@@ -43,9 +45,23 @@ interface PageEvent {
   target: unknown;
   composedPath?(): unknown[];
 }
+interface PageDocument {
+  querySelector(selector: string): unknown;
+  querySelectorAll(selector: string): ArrayLike<PageFrame>;
+  addEventListener(type: string, fn: (event: PageEvent) => void, options: { once: boolean } | { capture: boolean; passive: boolean }): void;
+  readyState: string;
+  activeElement: unknown;
+  URL: string;
+  defaultView: PageGlobals | null;
+}
+interface PageFrame {
+  tagName: string;
+  hasAttribute(name: string): boolean;
+  contentDocument: PageDocument | null;
+}
 interface PageGlobals {
-  location: { protocol: string };
-  document: { querySelector(selector: string): unknown; addEventListener(type: string, fn: () => void, options: { once: boolean }): void; readyState: string; activeElement: unknown };
+  location: { protocol: string; origin: string };
+  document: PageDocument;
   addEventListener(type: string, fn: (event: PageEvent) => void, options: { capture: boolean; passive: boolean } | { once: boolean }): void;
   removeEventListener(type: string, fn: (event: PageEvent) => void, options: { capture: boolean }): void;
 }
@@ -93,8 +109,51 @@ const activeField = () => {
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement as Focused;
   return el;
 };
+/**
+ * The same-origin frames the agent may use (phase 3C, as frames.ts has them): no `sandbox`, an http(s) address of the
+ * top's origin, 3 levels and 20 frames at most. The preload runs in the top frame only, so it looks into them itself.
+ */
+const frameDocuments = () => {
+  const out: PageDocument[] = [];
+  let seen = 0;
+  const walk = (d: PageDocument, depth: number) => {
+    if (depth > 2) return;
+    for (const f of Array.from(d.querySelectorAll('iframe,frame'))) {
+      if (++seen > 20) return;
+      let fd: PageDocument | null;
+      try {
+        fd = f.hasAttribute('sandbox') ? null : f.contentDocument;
+        if (fd && (!/^https?:/.test(fd.URL) || new URL(fd.URL).origin !== page.location.origin)) fd = null;
+      } catch {
+        fd = null;
+      }
+      if (fd) {
+        out.push(fd);
+        walk(fd, depth + 1);
+      }
+    }
+  };
+  walk(page.document, 0);
+  return out;
+};
+const listened = new WeakSet<object>();
 const look = () => {
-  if (page.document.querySelector('input[type=password]') || signInField(activeField())) void wake();
+  if (page.document.querySelector('input[type=password]') || signInField(activeField())) return void wake();
+  // A frame's sign-in field, and focus or typing in one later (the frame's own window hears those).
+  for (const d of frameDocuments()) {
+    if (d.querySelector('input[type=password]') || signInField(d.activeElement)) return void wake();
+    const w = d.defaultView;
+    if (w && !listened.has(w)) {
+      listened.add(w);
+      w.addEventListener('focusin', onField, { capture: true, passive: true });
+      w.addEventListener('input', onField, { capture: true, passive: true });
+    }
+  }
+};
+/** A frame that loaded (added later, or navigated): looked into, once the agent isn't awake. */
+const onLoad = (event: PageEvent) => {
+  const t = event.target as { tagName?: string } | null;
+  if (!woken && (t?.tagName === 'IFRAME' || t?.tagName === 'FRAME')) look();
 };
 function stopListening(): void {
   page.removeEventListener('focusin', onField, { capture: true });
@@ -109,4 +168,5 @@ if (protocol === 'https:' || protocol === 'http:') {
   // Once parsed, and again once loaded: a framework may render the form in between (M0 §1: React 19 had by parse).
   page.document.addEventListener('DOMContentLoaded', look, { once: true });
   page.addEventListener('load', look, { once: true });
+  page.document.addEventListener('load', onLoad, { capture: true, passive: true });
 }

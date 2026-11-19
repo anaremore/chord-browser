@@ -147,7 +147,7 @@ Then Chord adds what Chromium gets from Google's server and Firefox does locally
 | Two-step sign-ins (Google, Microsoft, Okta) | Phase 3. Fill: the menu on the username step fills the username; the password step, a new document or a re-render, gets its own menu with the same account first. Save: the username you typed is remembered in main for that tab and site for a few minutes, as Chromium's `possible_usernames_` is ✅ (fill built in #46; save [built in 3A](#phase-3a-two-step-saving-and-formless-submits-built-2026-11-18)) | Medium-low without server hints. A by-hand list per provider |
 | Open shadow roots (Reddit's components ⚠) | Phase 3: walk `shadowRoot`s, as the assistant's read does ✅; events are read through `composedPath()` ([3B, built 2026-11-18](#phase-3b-open-shadow-roots-built-2026-11-18)) | Medium |
 | Closed shadow roots | **Not reachable.** Extensions get `chrome.dom.openOrClosedShadowRoot`; an isolated world doesn't ⚠ | A gap. Rare for sign-in ⚠ |
-| Same-site frames | Phase 3: the main frame's world can reach a same-origin frame's document ⚠ (to prove in the spike) | Medium |
+| Same-site frames | Phase 3: the main frame's world can reach a same-origin frame's document ✅ (M0 §2); [3C, built 2026-11-19](#phase-3c-same-origin-frames-built-2026-11-19): same origin only, never sandboxed, 3 levels and 20 frames | Medium |
 | Another site's frame (embedded sign-in, some banks, Apple ID ⚠) | Phase 4, and only if preloads in iframes are affordable (§8) | Open |
 | One-time codes | Never filled, never saved. Detected only so they aren't mistaken for passwords | High |
 | `type=text` password fields (a *show* toggle, or a custom mask) | A field that was `type=password` when first seen stays a password field for saving. Chord fills only while it is `type=password` | Medium |
@@ -170,7 +170,7 @@ Then Chord adds what Chromium gets from Google's server and Firefox does locally
 | Any | On Apple's shared-credentials list for this site (phase 4) | Listed last under *From [other site]*; a click fills. Never without that click |
 | Any | Something else | Only through *Other passwords…*, which searches the vault and asks: *This password was saved for x.com. Fill it on y.com?* |
 | A frame of another site (phase 4) | Matches the **frame's** origin | The menu names the frame's site, not the tab's: *This form is from pay.example. Fill x@y.z?* |
-| A sandboxed frame without `allow-same-origin`, `about:blank`, `data:`, `blob:` | — | Never |
+| A sandboxed frame (with `allow-same-origin` too, phase 3C), `about:blank`, `srcdoc`, `data:`, `blob:` | — | Never |
 | Chord's pages, extension pages, reader view, the PDF viewer | — | The agent never runs there |
 
 **Never on load.** Chromium fills on load only when none of a long list applies (cross-origin frame, PSL match, insecure page, incognito, a `webauthn` field, a prefilled password ✅), and still gets attacked through it: a script that runs in the page can read a field the moment it's filled. Filling on your choice costs a click or a key, removes the leak, and makes a wrong detection harmless. Safari and 1Password work this way ⚠.
@@ -1301,3 +1301,42 @@ The sentinel's look stays one `querySelectorAll` (0.02 ms) plus the active eleme
   - main's formless submits unchanged: `<button>Submit</button>`, *Go*, an icon-only button and `<input type=submit>` beside a lone password field, or a lone username's step.
 - **Test-the-web:** `login/shadow-root-inputs` (Material Web) is scored now. The closed-root page stays listed and skipped.
 - **Journey:** `e2e/passwords-shadow.spec.ts`. A form of web components is saved from the card, which offers the email, then filled by the menu through the roots, and the page's own script posts it.
+
+## Phase 3C: same-origin frames (built 2026-11-19)
+
+*Branch `feat/passwords-3c-frames`, after 3B (#61, #65) and 3A-2 (#62), as the planning thread approved it on 2026-11-19. No new interface: the menu, fill and cards are phase 1's, for a sign-in in a frame of the page's own origin.*
+
+**Built**, as M0 §2 found it must be:
+- **The preload runs in the top frame only** (Chord's tabs don't set `nodeIntegrationInSubFrames`), so the top frame's agent reaches into each frame it may use, from its own world, and runs an agent there (`passwords/agent/frames.ts`, `startAgents`). Each frame's agent is the top's own (`startAgent` with a `FrameContext`), on the frame's document.
+- **Which frames.** `<iframe>` and `<frame>` in the document and its open roots (a TreeWalker, as the scan's walk), 3 levels deep and 20 frames in all at most; past either, the rest are skipped quietly. A frame is used only while all of these hold:
+  - it has no `sandbox` attribute at all, `allow-same-origin` included;
+  - its document is reachable (`contentDocument`: another site's is null);
+  - that document's address is http(s): never `about:blank`, `about:srcdoc`, `data:` or `blob:`, which inherit or hide an origin;
+  - its origin is the top's exactly, and not opaque;
+  - every frame above it holds the same.
+- **Checked at every use**, never cached: each event (focus, typing, Enter, a click, a submit), the focus box, and a fill, right before anything is written. A frame that navigated, was given a `sandbox` attribute, went to another site or left the page answers nothing, sends no focus and gets no fill; its forms leave the page's report. A watch already running after a submit there ends as at the top: a frame that navigates after its submit is the form going (`gone`, from the old window's `pagehide`), with 3A-2's late window.
+- **Main is unchanged.** Every message comes from the top frame, whose origin main checks, and a frame's agent only ever touches a document of that same origin: a password for an origin only reaches a document of that origin.
+- **One bridge** (a hub in `frames.ts`): form ids from one counter; the forms of every agent as one report (main's reappeared-form check reads the page's whole set); a fill routed to the agent whose form it names; a `blur` dropped when another agent has sent `focus` since (focus moved into another frame).
+- **The focus box** is the field's, plus each frame's box, border and padding up to the top: the tab's CSS pixels, as main places the menu. A frame's field moves with every document above it, whose scrolls and resizes it hears.
+- **The top realm's getters and setters** for every read and the fill on a frame's nodes: a frame's elements are its own realm's, so `instanceof` fails on them, and a frame's script can patch its own prototypes (`HTMLInputElement.prototype.value`). Values are read and written with the top realm's native getter and setter, events dispatched with its `dispatchEvent`, and nodes told apart by `nodeType` and `tagName` through the prototypes.
+- **The sentinel** looks into the frames the agent may use (the same rules, in the page's tree) at parse and load, for a password field or the focused element, and listens for focus and typing in their windows. A frame that loads later (added, or navigated) is looked at then.
+- **Cost:** frames are found once at wake and after frames load (50 ms after the first of a batch), not at each scan; each frame's agent scans its own document on its own schedule.
+
+**How it differs from the plan:**
+- **The frame's HTTP status is a known gap.** Main's tracker follows main-frame navigations only, and nothing tells main which frame is a form's. So a frame's sign-in that navigates the frame is judged by the form going and its page's requests, not by the frame navigation's response code: an error status there isn't read. Main stays unchanged; a frame navigation's status would need `did-frame-navigate` matched to the form's frame.
+- **One agent per frame** rather than one agent walking every frame: each frame's document gets the top's whole agent (its scan, watch and fill), and the hub joins them.
+
+**Measured** (`test/forms/scan-cost.spec.ts`, Playwright's headless Chromium, medians of 15, two runs; main has no frame code, so its scan is the top document's alone):
+
+| Page | Top scan (main and this branch) | Frames: finding them and scanning each |
+|---|---:|---:|
+| ~4,200 elements, the form in the main tree, 30 other sites' ad frames | 0.38 ms | 0.26 ms (none used) |
+| ~4,200 elements, 5 same-origin frames, the sign-in in one | 0.28–0.30 ms | 0.42 ms (5 used) |
+| ~4,200 elements, no frame | 0.38 ms | 0.24 ms |
+
+The sentinel is 3,587 bytes built (main 2,367), held to 4,096 (perf.spec); its page load, on − off, stays within noise (−0.5 to 1.5 ms on the branch, 0.2 to 0.4 on main, of 2).
+
+**Tests:**
+- **`forms/frames.spec.ts`:** a same-origin frame's focus in the tab's pixels, its form in the one report, the fill (the frame's page sees `input` and `change`), the submit's values; a frame whose page patched its own `HTMLInputElement` value setter, still filled; another site's frame, a sandboxed one with and without `allow-same-origin`, `srcdoc`, `about:blank` and `data:`, none used; 2 and 3 levels used, 4 not; 20 frames used, the 21st not; a frame added later and one that navigates within the site; a formless frame's button; focus moving from the top's field into a frame's; a frame given a `sandbox` between focus and submit (no candidate), one sent to another site between the menu and the fill (nothing written), and one that navigates after its submit (`gone`); 30 ad frames beside the top's form.
+- **Test-the-web:** `login/iframe-login`, `login/nested-iframe-login` (two forms three frames deep) and `multi-step/iframe-formless-login` are scored now; `login/iframe-sandboxed-login` is a negative whose field must stay unscanned. Selectors step into a frame with ` >>| `.
+- **Journey:** `e2e/passwords-frames.spec.ts`. A page holding only a frame of its origin: the sentinel wakes on the frame's field, the sign-in typed there is saved from the card, and after a reload the menu under the frame's field fills both, which the frame's own script posts.

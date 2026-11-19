@@ -4,7 +4,8 @@
  * `webFrame.executeJavaScriptInIsolatedWorld(4440, …)`. The bridge is the global the sentinel
  * exposed in this world; nothing here is visible to the page's own scripts.
  */
-import { startAgent, type PasswordsBridge } from './agent';
+import type { PasswordsBridge } from './agent';
+import { startAgents } from './frames';
 
 declare const chordPasswords: PasswordsBridge | undefined;
 
@@ -13,5 +14,6 @@ const flag = '__chordPasswordsAgent';
 const world = globalThis as unknown as Record<string, unknown>;
 if (typeof chordPasswords !== 'undefined' && !world[flag]) {
   world[flag] = true;
-  startAgent(chordPasswords);
+  // The top document's agent, and one for each same-origin frame it may use (phase 3C).
+  startAgents(chordPasswords);
 }
