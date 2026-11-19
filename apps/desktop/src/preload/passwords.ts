@@ -7,10 +7,8 @@
  *
  * It does nothing until the page shows a sign-in field: a password field once the document is
  * parsed or loaded, or focus or typing in a password field or one that reads as a username or
- * email. A field in an open shadow root (a web component's) is seen through the event's
- * `composedPath()`, and one focused before the sentinel looked (autofocus in a component) through
- * the active element's chain of roots; nothing walks the page for roots (phase 3B: pages pay
- * nothing new). Then, once, it asks main for the agent's script, exposes the agent's bridge in
+ * email, in an open shadow root too (phase 3B: the event's path, the focus's chain of roots; no
+ * walk). Then, once, it asks main for the agent's script, exposes the agent's bridge in
  * isolated world 4440 (`contextBridge.exposeInIsolatedWorld`) and runs the agent there. Two
  * passive capturing listeners and a `querySelector` at each of two moments are its whole cost
  * on any other page (M0 §6: nothing measurable).
@@ -85,15 +83,14 @@ async function wake(): Promise<void> {
   await webFrame.executeJavaScriptInIsolatedWorld(WORLD, [{ code: source, url: 'chord://passwords/agent.js' }]).catch(() => undefined);
 }
 
-/** The field an event is about: inside an open shadow root, the event's target is the root's host, so its path is read. */
-const fieldOf = (event: PageEvent): unknown => (typeof event.composedPath === 'function' ? (event.composedPath()[0] ?? event.target) : event.target);
+const fieldOf = (event: PageEvent) => event.composedPath?.()[0] ?? event.target;
 const onField = (event: PageEvent) => {
   if (signInField(fieldOf(event))) void wake();
 };
-/** The element with focus, through open shadow roots: the document's is the host, each root's the next one in. */
-const activeField = (): unknown => {
-  let el = page.document.activeElement as { shadowRoot?: { activeElement?: unknown } | null } | null;
-  for (let depth = 0; el?.shadowRoot?.activeElement && depth < 32; depth++) el = el.shadowRoot.activeElement as typeof el;
+const activeField = () => {
+  type Focused = { shadowRoot?: { activeElement?: unknown } | null } | null;
+  let el = page.document.activeElement as Focused;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement as Focused;
   return el;
 };
 const look = () => {
