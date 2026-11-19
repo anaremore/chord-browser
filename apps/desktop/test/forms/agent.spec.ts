@@ -766,3 +766,276 @@ test("a plain div's submit made by the page's script (an untrusted click or Ente
   await a.settle();
   expect((await a.of('step')).map((m) => m['username'])).toEqual(['ada@example.com']);
 });
+
+/* ---------- Phase 3A-2: did a sign-in with no navigation work? (S17 §6 step 3) ---------- */
+
+const BOX = `<div id="box">${FIELDS}<button id="go">Sign in</button></div>`;
+/** Fields with no id or name: only their words say what they are. */
+const NAMELESS = '<div id="box"><input type="email" aria-label="Email"><input type="password" aria-label="Password"><button id="go">Sign in</button></div>';
+const IN_BOX = { user: '#box input[type=email]', pass: '#box input[type=password]' };
+/** A sign-in form and a sign-up form whose fields are named the same, with no ids. */
+const SIGN_IN_AND_UP = (tag: 'form' | 'div') =>
+  `<${tag} id="box"><input name="email" type="email" aria-label="Email"><input name="password" type="password" aria-label="Password"><button id="go" type="button">Sign in</button></${tag}>` +
+  `<${tag} id="signup"><h2>New here?</h2><input name="email" type="email" aria-label="Email"><input name="password" type="password" aria-label="Choose a password"><button type="button">Sign up</button></${tag}>`;
+/** What replaces `#box` after the click: one thing 50 ms on, or several, each that long after the last. */
+type Then = string | readonly (readonly [ms: number, html: string])[];
+/** A spinner standing in for the form while the request runs: `#box` again, so what follows replaces it. */
+const SPINNER = '<div id="box" class="spinner" role="status">Signing in…</div>';
+const afterSubmit: { name: string; start?: string; fields?: { user: string; pass: string }; then: Then; gone: boolean; add?: string }[] = [
+  { name: 'a wrong password: the form drawn again with an error banner', then: `<p role="alert">Wrong password</p>${BOX}`, gone: false },
+  { name: 'it worked: the form gone, a welcome in its place', then: '<h1>Welcome</h1>', gone: true },
+  { name: 'it worked: another page of the app, with a search box', then: '<h1>Inbox</h1><input type="search" name="q">', gone: true },
+  {
+    name: 'it worked, a sign-up form beside it stays shown, its password named the same',
+    start: SIGN_IN_AND_UP('form'),
+    fields: IN_BOX,
+    then: '<h1>Welcome</h1>',
+    gone: true,
+  },
+  {
+    name: 'it worked on a formless page, a sign-up panel beside it stays shown',
+    start: SIGN_IN_AND_UP('div'),
+    fields: IN_BOX,
+    then: '<h1>Welcome</h1>',
+    gone: true,
+  },
+  {
+    name: 'fields with no id or name: it worked, and the app’s next view has a password field of its own',
+    start: NAMELESS,
+    fields: IN_BOX,
+    then: '<h1>Security</h1><input type="password" aria-label="New password"><button>Change</button>',
+    gone: true,
+  },
+  { name: 'fields with no id or name: a wrong password, drawn again with the same words', start: NAMELESS, fields: IN_BOX, then: `<p role="alert">Wrong password</p>${NAMELESS}`, gone: false },
+  // Review round 2 of #59.
+  {
+    name: 'a wrong password, drawn again with a framework’s new generated ids (mat-input-1 to mat-input-3)',
+    then: `<p role="alert">Wrong password</p><div id="box"><input id="u3" name="email" type="email" aria-label="Email"><input id="p3" name="password" type="password" aria-label="Password"><button>Sign in</button></div>`,
+    gone: false,
+  },
+  {
+    name: 'a wrong password, drawn again with a new id and its name dropped',
+    then: `<p role="alert">Wrong password</p><div id="box"><input id="u3" type="email" aria-label="Email"><input id="p3" type="password" aria-label="Password"><button>Sign in</button></div>`,
+    gone: false,
+  },
+  {
+    name: 'a formless password field with no id, name or words, drawn again',
+    start: '<div id="box"><input type="email"><input type="password"><button id="go">Sign in</button></div>',
+    fields: IN_BOX,
+    then: '<p role="alert">Wrong password</p><div id="box"><input type="email"><input type="password"><button>Sign in</button></div>',
+    gone: false,
+  },
+  {
+    name: 'it worked, and a sign-up panel added after the last scan stays shown, its password described the same',
+    add: '<div id="signup"><h2>New here?</h2><input name="password" type="password" aria-label="Password"><button>Sign up</button></div>',
+    then: '<h1>Welcome</h1>',
+    gone: true,
+  },
+  { name: 'a spinner stands in for the form, then the form is back with Wrong password', then: [[50, SPINNER], [900, `<p role="alert">Wrong password</p>${BOX}`]], gone: false },
+  { name: 'a spinner stands in for the form, then the app’s dashboard', then: [[50, SPINNER], [900, '<h1>Dashboard</h1><p>Welcome back.</p>']], gone: true },
+];
+
+for (const c of afterSubmit) {
+  test(`after a submit: ${c.name}`, async ({ page }) => {
+    test.setTimeout(30_000);
+    const a = await open(page, c.start ?? BOX);
+    // Added by the page's script after the agent's last scan (nothing focused or typed since).
+    if (c.add) await page.evaluate((html) => document.body.insertAdjacentHTML('beforeend', html), c.add);
+    const steps = typeof c.then === 'string' ? [[50, c.then] as const] : c.then;
+    await page.evaluate((steps) => {
+      document.getElementById('go')!.addEventListener('click', () => {
+        let at = 0;
+        for (const [ms, html] of steps) setTimeout(() => (document.getElementById('box')!.outerHTML = html), (at += ms));
+      });
+    }, steps);
+    const fields = c.fields ?? { user: '#u', pass: '#p' };
+    await page.fill(fields.user, 'ada@example.com');
+    await page.fill(fields.pass, 'a pass');
+    await a.clear();
+    await page.click('#go');
+    // The submit was seen, so what follows is the watch's answer, not silence.
+    await expect.poll(async () => (await a.of('candidate')).filter((x) => x['signal'] !== 'blur').length, { timeout: 3000 }).toBe(1);
+    if (c.gone) {
+      // After the page has been quiet a while (GONE_QUIET_UNANSWERED_MS here: no request answered).
+      await expect.poll(() => a.of('gone'), { timeout: 6000 }).toHaveLength(1);
+      expect(await a.of('still')).toEqual([]);
+    } else {
+      // Not gone at the redraw (that would offer to save a failed sign-in), and still there at the watch's end.
+      await expect.poll(() => a.of('still'), { timeout: 12_000 }).toHaveLength(1);
+      expect(await a.of('gone')).toEqual([]);
+    }
+  });
+}
+
+/* ---------- Review round 3 of #59: requests, a <form> that stays, a page that never stops ---------- */
+
+/** The page's own requests, answered when and how the test says: the beacon at once, the sign-in later. */
+async function serveRequests(page: Page, routes: Record<string, { status: number; after: number }>) {
+  for (const [path, { status, after }] of Object.entries(routes))
+    await page.route(`${ORIGIN}${path}`, async (route) => {
+      await new Promise((done) => setTimeout(done, after));
+      await route.fulfill({ status, contentType: 'application/json', body: '{}' });
+    });
+}
+/** The click: the page's script empties `#box` (or puts `html` there) and makes its requests, reading each body (M0 Q7). */
+const onClick = (page: Page, html: string, requests: string[]) =>
+  page.evaluate(
+    ([html, requests]) => {
+      document.getElementById('go')!.addEventListener('click', () => {
+        setTimeout(() => (document.getElementById('box')!.outerHTML = html), 50);
+        for (const path of requests) void fetch(path, { method: 'POST' }).then((r) => r.text());
+      });
+    },
+    [html, requests] as const,
+  );
+/** The order the agent said things in: `hint:200`, `gone`… */
+const said = async (a: Awaited<ReturnType<typeof open>>) =>
+  (await a.messages()).filter(([c]) => c === 'hint' || c === 'gone' || c === 'still').map(([c, p]) => (c === 'hint' ? `hint:${String(p['status'])}` : c));
+
+test('a beacon answers 200 at once, the sign-in 401 at 1.2 s: the 401 reaches main before any gone, so main vetoes', async ({ page }) => {
+  test.setTimeout(30_000);
+  await serveRequests(page, { '/beacon': { status: 200, after: 0 }, '/auth': { status: 401, after: 1200 } });
+  const a = await open(page, BOX);
+  await onClick(page, '<div id="box"></div>', ['/beacon', '/auth']);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  await page.click('#go');
+  await expect.poll(() => said(a), { timeout: 8000 }).toContain('hint:401');
+  await page.waitForTimeout(2500);
+  const order = await said(a);
+  // The beacon's 200 didn't shorten the wait: whatever the watch says comes after the 401 (the tracker's veto).
+  expect(order.indexOf('hint:401')).toBeGreaterThan(order.indexOf('hint:200'));
+  if (order.includes('gone')) expect(order.indexOf('gone')).toBeGreaterThan(order.indexOf('hint:401'));
+});
+
+test('a sign-in slower than the quiet wait, behind a busy spinner: no gone while it runs, still once the form is back', async ({ page }) => {
+  test.setTimeout(30_000);
+  await serveRequests(page, { '/auth': { status: 401, after: 2500 } });
+  const a = await open(page, BOX);
+  await page.evaluate((box) => {
+    document.getElementById('go')!.addEventListener('click', () => {
+      setTimeout(() => (document.getElementById('box')!.outerHTML = '<div id="box" aria-busy="true">Signing in…</div>'), 50);
+      void fetch('/auth', { method: 'POST' })
+        .then((r) => r.text())
+        .then(() => (document.getElementById('box')!.outerHTML = `<p role="alert">Wrong password</p>${box}`));
+    });
+  }, BOX);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  await page.click('#go');
+  await page.waitForTimeout(2300);
+  expect(await said(a)).toEqual([]);
+  await expect.poll(() => said(a), { timeout: 12_000 }).toEqual(['hint:401', 'still']);
+});
+
+test('a sign-in slower than the quiet wait, with nothing shown while it runs: gone first, and the late 401 still goes to main', async ({ page }) => {
+  test.setTimeout(30_000);
+  await serveRequests(page, { '/auth': { status: 401, after: 2500 } });
+  const a = await open(page, BOX);
+  await onClick(page, '<div id="box"></div>', ['/auth']);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  await page.click('#go');
+  // The agent can't see a request until it's answered: it says gone after the quiet wait, then reports the 401,
+  // which main takes as the sign-in taken back (saving.ts, LATE_ERROR_MS).
+  await expect.poll(() => said(a), { timeout: 8000 }).toEqual(['gone', 'hint:401']);
+});
+
+const FORM_STAYS = (inside: string) => `<form id="f" onsubmit="return false"><div id="box">${inside}<button id="go" type="button">Sign in</button></div></form>`;
+const BARE = '<input type="email"><input type="password">';
+const formStays: { name: string; inside: string; fields?: { user: string; pass: string }; then: string; gone: boolean }[] = [
+  { name: 'fields with nothing to know them by, drawn again inside it', inside: BARE, fields: IN_BOX, then: `<p role="alert">Wrong password</p><div id="box">${BARE}<button>Sign in</button></div>`, gone: false },
+  { name: 'fields with nothing to know them by, then a new password’s view inside it', inside: BARE, fields: IN_BOX, then: '<div id="box"><h2>Choose a new password</h2><input type="password" autocomplete="new-password"><button>Save</button></div>', gone: true },
+  { name: 'a named field, then a new password’s view inside it with the same name', inside: FIELDS, then: '<div id="box"><input name="password" type="password" autocomplete="new-password" aria-label="New password"><button>Save</button></div>', gone: true },
+  { name: 'labelled fields, then another view inside it whose password is labelled otherwise', inside: '<input type="email" aria-label="Email"><input type="password" aria-label="Password">', fields: IN_BOX, then: '<div id="box"><input type="password" aria-label="Confirm your PIN"><button>Go</button></div>', gone: true },
+];
+
+for (const c of formStays) {
+  test(`after a submit, the <form> staying in the page: ${c.name}`, async ({ page }) => {
+    test.setTimeout(30_000);
+    const a = await open(page, FORM_STAYS(c.inside));
+    await onClick(page, c.then, []);
+    const fields = c.fields ?? { user: '#u', pass: '#p' };
+    await page.fill(fields.user, 'ada@example.com');
+    await page.fill(fields.pass, 'a pass');
+    await a.clear();
+    await page.click('#go');
+    await expect.poll(() => said(a), { timeout: 12_000 }).toEqual([c.gone ? 'gone' : 'still']);
+  });
+}
+
+test('a page that never stops changing after the form went: gone only at the watch’s end', async ({ page }) => {
+  test.setTimeout(30_000);
+  const a = await open(page, BOX);
+  await page.evaluate(() => {
+    document.getElementById('go')!.addEventListener('click', () => {
+      setTimeout(() => (document.getElementById('box')!.outerHTML = '<ul id="feed"></ul>'), 50);
+      setInterval(() => document.getElementById('feed')?.insertAdjacentHTML('beforeend', '<li>news</li>'), 200);
+    });
+  });
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  const at = Date.now();
+  await page.click('#go');
+  await expect.poll(() => said(a), { timeout: 15_000 }).toEqual(['gone']);
+  expect(Date.now() - at).toBeGreaterThan(9000);
+});
+
+/* ---------- Review round 4 of #59, as 3A-2's requirements ---------- */
+
+test('three of the page’s own answers (200s) before a late 401: the 401 still reaches main (errors have their own cap)', async ({ page }) => {
+  test.setTimeout(30_000);
+  await serveRequests(page, { '/a': { status: 200, after: 0 }, '/b': { status: 200, after: 50 }, '/c': { status: 200, after: 100 }, '/d': { status: 200, after: 150 }, '/auth': { status: 401, after: 900 } });
+  const a = await open(page, BOX);
+  await onClick(page, '<div id="box"></div>', ['/a', '/b', '/c', '/d', '/auth']);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  await page.click('#go');
+  await expect.poll(() => said(a), { timeout: 8000 }).toContain('hint:401');
+});
+
+test('a busy marker still shown at the watch’s end: still, not gone', async ({ page }) => {
+  test.setTimeout(30_000);
+  const a = await open(page, BOX);
+  await onClick(page, '<div id="box" aria-busy="true">Signing in…</div>', []);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  await page.click('#go');
+  await expect.poll(() => said(a), { timeout: 14_000 }).toEqual(['still']);
+});
+
+test('a poll that started before the submit and answers 401 after it: not this sign-in’s', async ({ page }) => {
+  test.setTimeout(30_000);
+  await serveRequests(page, { '/poll': { status: 401, after: 1200 } });
+  const a = await open(page, BOX);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await page.evaluate(() => void fetch('/poll').then((r) => r.text()));
+  await onClick(page, '<h1>Welcome</h1>', []);
+  await a.clear();
+  await page.click('#go');
+  await expect.poll(() => said(a), { timeout: 8000 }).toEqual(['gone']);
+  await page.waitForTimeout(1500);
+  expect(await said(a)).toEqual(['gone']);
+});
+
+test('after gone, a request the app starts once signed in, answered 401: not reported (only requests started before gone)', async ({ page }) => {
+  test.setTimeout(30_000);
+  await serveRequests(page, { '/profile': { status: 401, after: 0 } });
+  const a = await open(page, BOX);
+  await onClick(page, '<h1>Welcome</h1>', []);
+  await page.fill('#u', 'ada@example.com');
+  await page.fill('#p', 'a pass');
+  await a.clear();
+  await page.click('#go');
+  await expect.poll(() => said(a), { timeout: 8000 }).toEqual(['gone']);
+  await page.evaluate(() => void fetch('/profile').then((r) => r.text()));
+  await page.waitForTimeout(800);
+  expect(await said(a)).toEqual(['gone']);
+});

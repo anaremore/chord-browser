@@ -236,7 +236,8 @@ interface Card {
   readonly realm?: string;
   readonly site: string | null;
   readonly host: string;
-  kind: 'new' | 'update' | 'change' | 'saved';
+  /** `refused`: a generated password's saved card, after a late error took the sign-in back (the owner's design 3A). */
+  kind: 'new' | 'update' | 'change' | 'saved' | 'refused';
   /** A sign-up's save card: its own title. */
   signUp?: boolean;
   /** `change`: the accounts it asks between (the site's, or those with the form's current password); `update`: the one matched. */
@@ -255,6 +256,13 @@ interface Card {
   setup: boolean;
   /** What was typed, until the card goes. */
   values: CandidateValues | null;
+  /**
+   * A sign-in read from its form going (no navigation): until when a late request error can still take it back (the
+   * tracker's `lateUntil`). Save, Update and *Save as new* pressed before then wait (S17 §6, phase 3A-2).
+   */
+  lateUntil?: number | null;
+  /** What was pressed while the late window was open, and its timer: run when the window closes, unless a late error comes. */
+  waiting?: { readonly action: 'save' | 'new'; readonly details: { username?: string; passphrase?: string; account?: number }; timer: unknown } | null;
   busy: boolean;
   problem: 'io' | null;
   held: boolean;
@@ -322,6 +330,13 @@ export class PasswordAssist {
   private readonly quiet = new Map<WebContents, { formId: string; role: string; kind: string; generate: boolean }>();
   /** Each tab page's generated password, saved for a site (S17 §6). */
   private readonly presaves = new Map<WebContents, Presave>();
+  /** Each tab page's `failed` events, counted: a sign-in being offered checks it after each wait (review round 4 of #59). */
+  private readonly failures = new WeakMap<WebContents, number>();
+  /**
+   * A generated password's confirmation, waiting for the late window to close (S17 §6, phase 3A-2): its entry, what it
+   * takes, and the card that says it's saved. A late error leaves the entry *Not confirmed* and turns the card.
+   */
+  private readonly confirms = new Map<WebContents, { readonly id: string; readonly origin: string; readonly chordId: string | null; values: { username?: string; password: string } | null; card: Card | null; timer: unknown }>();
   /** Each tab page's last first step's username, by site (S17 §4, phase 3). */
   private readonly firstSteps = new Map<WebContents, Map<string, FirstStep>>();
   /** Rules each page asked for that can't be met (`makeFor`). */
@@ -349,7 +364,14 @@ export class PasswordAssist {
     events.on('signedIn', (e) => void this.signedIn(e));
     // A sign-in there that failed: what an earlier one left to save is no longer what you use.
     events.on('failed', (e) => {
-      this.dropCardsOf(e.contents);
+      // Counted, so a sign-in being offered while this came is dropped after its next wait (review round 4 of #59).
+      this.failures.set(e.contents, (this.failures.get(e.contents) ?? 0) + 1);
+      // A save or update pressed while the late window was open: cancelled, and the window's toast says why.
+      this.cancelWaiting(e.contents);
+      // A generated password whose confirmation was waiting on the window: never confirmed; its card says so.
+      this.refuseConfirm(e.contents);
+      // Every other card of the tab goes; the refused one is what tells.
+      for (const card of [...this.cards.values()]) if (card.contents === e.contents && card.kind !== 'refused') this.dropCard(card);
       // The first step's username was for this sign-in; a retry, or another account, doesn't get it.
       void this.takeFirstStep(e.contents, e.origin);
       // The site didn't take it: the tab's presave there is as if never submitted, so ↻ changes it rather than making
@@ -951,7 +973,9 @@ export class PasswordAssist {
     // The document the sign-in ended on, read before any wait: if the tab commits another meanwhile, the card would be
     // for a page you've left (and `leftSite`, which runs at that commit, found no card to drop yet).
     const doc = this.docs.get(e.contents) ?? 0;
-    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc;
+    // And no `failed` on the tab since (a late error that took this sign-in back while Chord waited; review round 4 of #59).
+    const failures = this.failures.get(e.contents) ?? 0;
+    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc && (this.failures.get(e.contents) ?? 0) === failures;
     const values = { ...e.values };
     // The first step's username goes with this sign-in, card or not, so the next account's password step can't get it.
     // A password step with no username of its own (a two-step sign-in's second page) takes it (S17 §4).
@@ -965,11 +989,20 @@ export class PasswordAssist {
     // and the saved card says so (the owner's design 5A), with *Delete it*.
     if (generated) {
       this.dropPresave(e.contents);
-      const done = await this.options.vault.presaved('confirm', generated.id, e.origin, tab.chordId, { ...(values.username ? { username: values.username } : {}), password: values.password }).catch(() => false);
-      if (!done || !here()) return;
+      const confirmWith = { ...(values.username ? { username: values.username } : {}), password: values.password };
+      // No navigation: confirmed only once the late window has closed, with no error (S17 §6, phase 3A-2).
+      if (e.lateUntil && e.lateUntil > this.now()) {
+        this.holdConfirm(e.contents, { id: generated.id, origin: e.origin, chordId: tab.chordId, values: confirmWith }, e.lateUntil);
+      } else {
+        const done = await this.options.vault.presaved('confirm', generated.id, e.origin, tab.chordId, confirmWith).catch(() => false);
+        if (!done) return;
+      }
+      if (!here()) return;
       const site = await this.siteOf(e.origin).catch(() => null);
-      if (e.contents.isDestroyed()) return;
+      if (!here()) return;
       this.showCard({ tab, contents: e.contents, origin: e.origin, site, kind: 'saved', locked: false, setup: false, values: { username: values.username, password: '' }, presaved: generated.id, until: this.now() + HOLD_MS });
+      const pending = this.confirms.get(e.contents);
+      if (pending && pending.id === generated.id) pending.card = this.cards.get(tab.nodeId) ?? null;
       return;
     }
     if (!SAVE_KINDS.has(e.kind)) return;
@@ -990,6 +1023,7 @@ export class PasswordAssist {
       setup: answer.kind === 'new' && answer.setup,
       values,
       until,
+      lateUntil: e.lateUntil,
       ...(e.kind === 'sign-up' ? { signUp: true } : {}),
     });
   }
@@ -1004,7 +1038,8 @@ export class PasswordAssist {
     const { vault } = this.options;
     const until = e.valuesUntil ?? this.now() + HOLD_MS;
     const doc = this.docs.get(e.contents) ?? 0;
-    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc && until > this.now();
+    const failures = this.failures.get(e.contents) ?? 0;
+    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc && (this.failures.get(e.contents) ?? 0) === failures && until > this.now();
     const found = await vault.changeAccounts(e.origin, tab.chordId, values.current ?? null).catch(() => ({ state: 'off' as const }));
     if (!here()) return;
     if (found.state === 'none' && !generated) return this.offerCard(e, tab, { username: values.username, password: values.password }, until, doc);
@@ -1014,7 +1049,7 @@ export class PasswordAssist {
     if (!here()) return;
     // A generated one is the tab's no longer: the card (or Settings, Not confirmed) has it now.
     if (generated) this.dropPresave(e.contents);
-    const base = { tab, contents: e.contents, origin: e.origin, site, setup: false, until, ...(generated ? { presaved: generated.id } : {}) };
+    const base = { tab, contents: e.contents, origin: e.origin, site, setup: false, until, lateUntil: e.lateUntil, ...(generated ? { presaved: generated.id } : {}) };
     if (found.state === 'locked') {
       // The update card, whose **Update** unlocks first and then finds the account (as phase 1's locked save does).
       // Titled by the site, not the form's username: which account it is waits for the unlock (review round 2 of #53).
@@ -1025,17 +1060,19 @@ export class PasswordAssist {
 
   /** The save or update card, as the vault decides it (S17 §6 step 5). */
   private async offerCard(e: PasswordDetectorEvents['signedIn'][0], tab: AssistTab, values: { username: string; password: string }, until: number, doc: number): Promise<void> {
-    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc;
+    const failures = this.failures.get(e.contents) ?? 0;
+    const here = () => !e.contents.isDestroyed() && (this.docs.get(e.contents) ?? 0) === doc && (this.failures.get(e.contents) ?? 0) === failures;
     const answer = await this.options.vault.candidateFor({ origin: e.origin, username: values.username, password: values.password, chordId: tab.chordId });
     if (!here()) return;
     if (answer.kind !== 'new' && answer.kind !== 'update' && answer.kind !== 'locked') return;
     const site = await this.siteOf(e.origin).catch(() => null);
     if (!here() || until <= this.now()) return;
-    this.showCard({ tab, contents: e.contents, origin: e.origin, site, kind: answer.kind === 'update' ? 'update' : 'new', locked: answer.kind === 'locked', setup: answer.kind === 'new' && answer.setup, values, until });
+    this.showCard({ tab, contents: e.contents, origin: e.origin, site, kind: answer.kind === 'update' ? 'update' : 'new', locked: answer.kind === 'locked', setup: answer.kind === 'new' && answer.setup, values, until, lateUntil: e.lateUntil });
   }
 
   private showCard(
-    made: Pick<Card, 'tab' | 'contents' | 'origin' | 'realm' | 'site' | 'kind' | 'locked' | 'setup' | 'values'> & Partial<Pick<Card, 'accounts' | 'presaved' | 'generated' | 'signUp' | 'change'>> & { until: number },
+    made: Pick<Card, 'tab' | 'contents' | 'origin' | 'realm' | 'site' | 'kind' | 'locked' | 'setup' | 'values'> &
+      Partial<Pick<Card, 'accounts' | 'presaved' | 'generated' | 'signUp' | 'change' | 'lateUntil'>> & { until: number },
   ): void {
     const { until, ...rest } = made;
     const before = this.cards.get(made.tab.nodeId);
@@ -1091,6 +1128,7 @@ export class PasswordAssist {
   /** The card goes, and what was typed with it. */
   private dropCard(card: Card, notify = true): void {
     for (const timer of [card.idle, card.expiry]) if (timer !== null) this.clearTimer(timer);
+    this.unwait(card);
     card.idle = card.expiry = null;
     card.values = null;
     // A locked change's current password goes with it (review round 2 of #53).
@@ -1148,6 +1186,7 @@ export class PasswordAssist {
       setup: card.setup,
       busy: card.busy,
       problem: card.problem,
+      ...(card.waiting ? { waiting: true } : {}),
       ...(card.kind === 'change' && card.accounts ? { accounts: card.accounts.map((a) => a.username) } : {}),
       // A locked change's card names no account yet: its title is the site's.
       ...(card.change && card.locked ? { username: '' } : {}),
@@ -1180,17 +1219,21 @@ export class PasswordAssist {
     details: { username?: string; passphrase?: string; account?: number } = {},
   ): Promise<void> {
     const card = this.cardById(windowId, id);
-    if (!card || (card.busy && action !== 'hold' && action !== 'release')) return;
-    // The saved card: **Done** (Save) and × close it; *Delete it* deletes what was saved. Nothing else is its.
-    if (card.kind === 'saved') {
+    if (!card || ((card.busy || card.waiting) && action !== 'hold' && action !== 'release' && action !== 'close')) return;
+    // The saved card: **Done** (Save) and × close it; *Delete it* deletes what was saved. Nothing else is its. The
+    // refused card (a generated password a late error took back) is answered the same way.
+    if (card.kind === 'saved' || card.kind === 'refused') {
       if (action === 'save' || action === 'close') return this.dropCard(card);
       if (action === 'delete') return this.deleteSaved(card);
       if (action !== 'hold' && action !== 'release') return;
     } else if (action === 'delete' || (action === 'new' && card.kind !== 'change')) return;
     switch (action) {
       case 'new':
+        if (this.wait(card, 'new', details)) return;
         return this.saveChange(card, details, true);
       case 'close':
+        // × while it waits cancels the save (the owner's design 1A).
+        this.unwait(card);
         // Hidden, not gone: the key in the address brings it back while the candidate lasts.
         return this.hideCard(card);
       case 'hold':
@@ -1200,8 +1243,91 @@ export class PasswordAssist {
       case 'never':
         return this.never(card);
       case 'save':
+        if (this.wait(card, 'save', details)) return;
         return this.save(card, details);
     }
+  }
+
+  /* ---------- the late window (S17 §6, phase 3A-2) ---------- */
+
+  /**
+   * Save, Update or *Save as new* pressed while a late error could still take the sign-in back: the card says
+   * *Saving…* (or *Updating…*) and the save runs when the window closes. Whether it waits.
+   */
+  private wait(card: Card, action: 'save' | 'new', details: { username?: string; passphrase?: string; account?: number }): boolean {
+    const left = (card.lateUntil ?? 0) - this.now();
+    if (left <= 0) return false;
+    // `change`'s **Update** with no account picked does nothing, now or later.
+    if (action === 'save' && card.kind === 'change' && details.account === undefined) return true;
+    const waiting = { action, details: { ...details }, timer: null as unknown };
+    waiting.timer = this.setTimer(() => {
+      if (card.waiting !== waiting || this.cards.get(card.tab.nodeId) !== card) return;
+      card.waiting = null;
+      card.lateUntil = null;
+      this.options.host.changed(this.windowOf(card));
+      void (action === 'new' ? this.saveChange(card, waiting.details, true) : this.save(card, waiting.details));
+    }, left);
+    card.waiting = waiting;
+    this.options.host.changed(this.windowOf(card));
+    return true;
+  }
+
+  /** A waiting save, cancelled: nothing is saved (× on the card, or the card going). */
+  private unwait(card: Card): void {
+    if (!card.waiting) return;
+    if (card.waiting.timer !== null) this.clearTimer(card.waiting.timer);
+    if (card.waiting.details.passphrase !== undefined) card.waiting.details.passphrase = '';
+    card.waiting = null;
+  }
+
+  /** A late error on the tab: a save or update that waited on it is cancelled, and the toast says so (the owner's design 2A). */
+  private cancelWaiting(contents: WebContents): void {
+    for (const card of [...this.cards.values()]) {
+      if (card.contents !== contents || !card.waiting) continue;
+      const updating = card.kind === 'update' || (card.kind === 'change' && card.waiting.action === 'save');
+      this.unwait(card);
+      this.options.host.toast(this.windowOf(card), 'passwords:refused', `The site didn’t accept that password, so Chord didn’t ${updating ? 'update' : 'save'} it.`);
+    }
+  }
+
+  /** A generated password's confirmation, held until the late window closes (S17 §6, phase 3A-2). */
+  private holdConfirm(contents: WebContents, held: { id: string; origin: string; chordId: string | null; values: { username?: string; password: string } }, until: number): void {
+    this.dropConfirm(contents);
+    const pending = { ...held, values: held.values as { username?: string; password: string } | null, card: null as Card | null, timer: null as unknown };
+    pending.timer = this.setTimer(() => {
+      if (this.confirms.get(contents) !== pending) return;
+      this.confirms.delete(contents);
+      const values = pending.values;
+      pending.values = null;
+      if (values) void this.options.vault.presaved('confirm', pending.id, pending.origin, pending.chordId, values).catch(() => false);
+    }, Math.max(0, until - this.now()));
+    this.confirms.set(contents, pending);
+  }
+
+  private dropConfirm(contents: WebContents): void {
+    const pending = this.confirms.get(contents);
+    if (!pending) return;
+    if (pending.timer !== null) this.clearTimer(pending.timer);
+    pending.values = null;
+    this.confirms.delete(contents);
+  }
+
+  /**
+   * A late error took the sign-in back: the generated password's entry stays *Not confirmed* (never lost), and its saved
+   * card, if it's there, says the site didn't take it, with *Delete it* and **Done** (the owner's design 3A).
+   */
+  private refuseConfirm(contents: WebContents): void {
+    const pending = this.confirms.get(contents);
+    if (!pending) return;
+    const card = pending.card;
+    this.dropConfirm(contents);
+    if (!card || this.cards.get(card.tab.nodeId) !== card) return;
+    card.kind = 'refused';
+    // Shown again if it was hidden: this is news.
+    if (!card.shown) this.options.host.offer(card.tab.nodeId, false);
+    card.shown = true;
+    this.startTimer(card);
+    this.options.host.changed(this.windowOf(card));
   }
 
   private async never(card: Card): Promise<void> {
@@ -1361,6 +1487,8 @@ export class PasswordAssist {
 
   /** The saved card's *Delete it*: the sign-in its generated password was saved as goes (chord-data keeps Undo for the session). */
   private async deleteSaved(card: Card): Promise<void> {
+    // A confirmation still waiting on the late window is for an entry being deleted: it never runs.
+    if (this.confirms.get(card.contents)?.id === card.presaved) this.dropConfirm(card.contents);
     if (!card.presaved) return this.dropCard(card);
     card.busy = true;
     this.options.host.changed(this.windowOf(card));

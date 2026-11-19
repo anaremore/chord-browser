@@ -269,7 +269,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
     });
     on('gone', (m) => emit(tracker.gone(m.formId)));
     on('still', (m) => emit(tracker.still(m.formId)));
-    on('hint', (m) => tracker.hint(m.formId, m.status));
+    on('hint', (m) => emit(tracker.hint(m.formId, m.status)));
     on('filled', (m) => events.emit('filled', { contents, formId: m.formId, ok: m.ok, ...(m.reason ? { reason: m.reason } : {}) }));
 
     contents.on('did-start-navigation', (details) => {

@@ -1,6 +1,6 @@
 import type { PasswordsCandidate, PasswordsForms } from '@chord/ipc';
 import { describe, expect, it } from 'vitest';
-import { HOLD_MS, SubmissionTracker, type SavingOutcome } from '../../src/main/passwords/saving';
+import { HOLD_MS, LATE_ERROR_MS, SubmissionTracker, type SavingOutcome } from '../../src/main/passwords/saving';
 
 const ORIGIN = 'https://example.com';
 const password = { type: 'password', id: 'p', name: 'password' };
@@ -28,7 +28,7 @@ type Step =
   | ['settled']
   | ['inPage']
   | ['gone' | 'still', string?]
-  | ['hint', number]
+  | ['hint', number, string?]
   | ['wait', number];
 
 /** Runs a journey and gives what it decided, as `type:detail` strings. */
@@ -66,7 +66,7 @@ function run(steps: Step[]): string[] {
         out.push(...t.still(step[1] ?? 'f1'));
         break;
       case 'hint':
-        t.hint('f1', step[1]);
+        out.push(...t.hint(step[2] ?? 'f1', step[1]));
         break;
       case 'wait':
         now += step[1];
@@ -115,6 +115,14 @@ describe('knowing you signed in (S17 §6)', () => {
     ['blur after submit keeps the submit', [['candidate'], ['candidate', { signal: 'blur' }], ['gone']], ['submitted:submit', 'signedIn:form-gone:-']],
     ['a `gone` while the page navigates waits for the new page', [['candidate'], ['start', true], ['gone'], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:submit', 'failed:reappeared']],
     ['a new password field matched by its new-password signature', [['candidate', { kind: 'sign-up', password: null, newPassword: password }], ['start', true], ['navigated', 200], ['forms', formsWith([{ ...signInForm, kind: 'sign-up', password: null, newPassword: password }])], ['settled']], ['submitted:submit', 'failed:reappeared']],
+    // Review round 3 of #59: a late error takes a sign-in read from its form going back.
+    ['the form went (signed in), then a slow 401 for it: taken back', [['candidate', { signal: 'button' }], ['gone'], ['wait', 2000], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
+    ['…a 200 after it: nothing', [['candidate', { signal: 'button' }], ['gone'], ['hint', 200]], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a 401 for another form: nothing', [['candidate', { signal: 'button' }], ['gone'], ['hint', 401, 'f2']], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a 401 after LATE_ERROR_MS: nothing', [['candidate', { signal: 'button' }], ['gone'], ['wait', LATE_ERROR_MS + 1], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…only once: a second 401 says nothing more', [['candidate', { signal: 'button' }], ['gone'], ['hint', 401], ['hint', 403]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
+    ['…a navigation since (a new document numbers its forms afresh): nothing', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a sign-in read from a navigation is never taken back by a hint', [['candidate'], ['start', true], ['navigated', 200], ['settled'], ['hint', 401]], ['submitted:submit', 'signedIn:navigation:-']],
   ])('%s', (_name, steps, expected) => {
     expect(run(steps)).toEqual(expected);
   });
@@ -131,7 +139,7 @@ describe('knowing you signed in (S17 §6)', () => {
     t.candidate(candidate(), 'https://real.example');
     t.navigationStarted(true);
     t.navigated(200);
-    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null, valuesUntil: null }]);
+    expect(t.settled()).toEqual([{ type: 'signedIn', formId: 'f1', kind: 'sign-in', origin: 'https://real.example', how: 'navigation', hint: null, values: null, valuesUntil: null, lateUntil: null }]);
   });
 });
 

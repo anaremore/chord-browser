@@ -34,6 +34,12 @@ import type { PasswordsCandidate, PasswordsFieldSignature, PasswordsForms } from
 
 /** How long a typed form is held (S17 §6, step 1). */
 export const HOLD_MS = 5 * 60_000;
+/**
+ * After a sign-in read from its form going (no navigation), how long a request error for that form still takes it back:
+ * the agent's watch (SUBMIT_WATCH_MS), whose hints go on after `gone`. A slow 401 the quiet wait didn't see coming
+ * mustn't leave a save card for a password the site refused (review round 3 of #59).
+ */
+export const LATE_ERROR_MS = 10_000;
 /** After the new page stops loading, how long its agent has to report its forms before the check runs. */
 export const SETTLE_MS = 1500;
 
@@ -48,7 +54,12 @@ export type SavingOutcome =
    * which leaves only with a sign-in that worked.
    */
   | { readonly type: 'submitted'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly signal: SubmitSignal; readonly values: { readonly username: string } | null }
-  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null }
+  | { readonly type: 'signedIn'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly how: 'navigation' | 'same-document' | 'form-gone'; readonly hint: ResponseHint; readonly values: CandidateValues | null; readonly valuesUntil: number | null;
+      /**
+       * A sign-in read from its form going (no navigation): until when a late request error can still take it back
+       * (`LATE_ERROR_MS`). The assist holds Save and Update until then (S17 §6, phase 3A-2). Null after a navigation.
+       */
+      readonly lateUntil: number | null }
   | { readonly type: 'failed'; readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly why: 'error-response' | 'reappeared' | 'still-shown' };
 
 interface Held {
@@ -115,6 +126,8 @@ const realTimers: TrackerTimers = {
 export class SubmissionTracker {
   private held: Held | null = null;
   private phase: Phase = { t: 'idle' };
+  /** The last sign-in read from its form going, while a late request error for it can still take it back. */
+  private lately: { readonly formId: string; readonly kind: PasswordsCandidate['kind']; readonly origin: string; readonly until: number } | null = null;
   /**
    * Runs at the earliest deadline of the copies that still hold values (the held form, and the one a navigation waits
    * on, each `HOLD_MS` after its own values came), and is set again for the next. (`#`: never in a JSON dump of the tracker.)
@@ -213,11 +226,23 @@ export class SubmissionTracker {
     return [{ type: 'submitted', formId: candidate.formId, kind: candidate.kind, origin, signal: candidate.signal, values: candidate.values ? { username: candidate.values.username } : null }];
   }
 
-  hint(formId: string, status: number): void {
+  /**
+   * A request to the page's own origin answered after a submit. Held: its status rides with the form, and an error
+   * vetoes a success. Just signed in by the form going (`lately`): an error takes the sign-in back (`failed`), so its
+   * save card goes.
+   */
+  hint(formId: string, status: number): SavingOutcome[] {
     const held = this.current();
-    if (!held || !held.submitted || held.candidate.formId !== formId) return;
-    held.status = status;
-    if (status >= 400) held.error = true;
+    if (held && held.submitted && held.candidate.formId === formId) {
+      held.status = status;
+      if (status >= 400) held.error = true;
+      return [];
+    }
+    const late = this.lately;
+    if (!late || late.formId !== formId || status < 400) return [];
+    this.lately = null;
+    if (this.now() > late.until) return [];
+    return [{ type: 'failed', formId, kind: late.kind, origin: late.origin, why: 'error-response' }];
   }
 
   /** The page's credential forms now: from the new document, for the reappeared-form check. */
@@ -231,6 +256,8 @@ export class SubmissionTracker {
    * It's the sign-in's answer only after a submit signal: a link you clicked after typing a password isn't one.
    */
   navigationStarted(byPage: boolean): SavingOutcome[] {
+    // A new document numbers its forms afresh: a late error from it isn't the last page's sign-in's.
+    this.lately = null;
     const held = this.current();
     if (!byPage || !held?.submitted) {
       // You went somewhere yourself, or the page did with nothing submitted: what was held belongs to the page left.
@@ -280,7 +307,7 @@ export class SubmissionTracker {
       return [{ type: 'failed', formId: c.formId, kind: c.kind, origin: held.origin, why: reappeared ? 'reappeared' : 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
+    return [{ type: 'signedIn', formId: c.formId, kind: c.kind, origin: held.origin, how: 'navigation', hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held), lateUntil: null }];
   }
 
   /** The main frame navigated within its document (`did-navigate-in-page`): an SPA's route change. */
@@ -307,7 +334,9 @@ export class SubmissionTracker {
       return [{ type: 'failed', formId, kind: held.candidate.kind, origin: held.origin, why: 'error-response' }];
     }
     this.held = null;
-    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held) }];
+    const lateUntil = this.now() + LATE_ERROR_MS;
+    this.lately = { formId, kind: held.candidate.kind, origin: held.origin, until: lateUntil };
+    return [{ type: 'signedIn', formId, kind: held.candidate.kind, origin: held.origin, how, hint: hintOf(held.status), values: valuesOf(held), valuesUntil: this.valuesUntil(held), lateUntil }];
   }
 
   /** After a submit signal, the form was still shown at the end of the agent's watch. */
@@ -339,6 +368,7 @@ export class SubmissionTracker {
   reset(): void {
     this.dropValues();
     this.held = null;
+    this.lately = null;
     this.phase = { t: 'idle' };
     this.scheduleValues();
   }

@@ -233,6 +233,15 @@ describe('events', () => {
     expect(priv.seen).toEqual([]);
   });
 
+  it('a sign-in read from its form going, then a late 401 for it: failed, so the save card goes (review round 3 of #59)', () => {
+    const { page, seen } = setup();
+    page.send('passwords:candidate', { ...CANDIDATE, signal: 'button', values: { username: 'ada@example.com', password: 'hunter2' } });
+    page.send('passwords:gone', { formId: 'f1' });
+    page.send('passwords:hint', { formId: 'f1', status: 401 });
+    expect(seen.map(([t]) => t)).toEqual(['submitted', 'signedIn', 'failed']);
+    expect(seen[2]![1]).toMatchObject({ formId: 'f1', why: 'error-response' });
+  });
+
   it("a private window's values are dropped as they arrive, and nothing is signed in", () => {
     const { page, seen } = setup({ isPrivate: true });
     page.send('passwords:candidate', { ...CANDIDATE, values: { username: 'ada@example.com', password: 'hunter2' } });

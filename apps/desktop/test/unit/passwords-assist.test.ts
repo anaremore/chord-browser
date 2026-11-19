@@ -2049,3 +2049,160 @@ describe("a first step's username is used once (review of 3A-1)", () => {
     expect(t.assist.cardFor('n1')).toBeNull();
   });
 });
+
+describe('the late window: a sign-in with no navigation, held until it closes (S17 §6, phase 3A-2; the owner’s designs 1A, 2A, 3A)', () => {
+  const LATE = 10_000;
+  /** A sign-in read from its form going: the tracker's `lateUntil` is LATE ahead. */
+  const formGone = (t: ReturnType<typeof setup>, over: Record<string, unknown> = {}) => t.signedIn({ how: 'form-gone', lateUntil: t.timers.now() + LATE, ...over });
+  const failed = async (t: ReturnType<typeof setup>) => {
+    t.events.emit('failed', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, why: 'error-response' } as never);
+    await settle();
+  };
+
+  it.each<[string, Parameters<typeof setup>[0], 'save' | 'update']>([
+    ['Save, pressed while the site could still say no: “Saving…”, saved once the window closes', {}, 'save'],
+    ['Update, the same: “Updating…”, then updated', { candidate: { kind: 'update', id: 'a1' } }, 'update'],
+  ])('%s', async (_name, options, kind) => {
+    const t = setup(options);
+    await formGone(t);
+    const card = t.assist.cardFor('n1')!;
+    expect(card.kind).toBe(kind === 'save' ? 'new' : 'update');
+    await t.assist.answer('w1', card.id, 'save', { username: VALUES.username });
+    expect(t.assist.cardFor('n1')).toMatchObject({ waiting: true });
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    // Pressed again while it waits: nothing more.
+    await t.assist.answer('w1', card.id, 'save', { username: VALUES.username });
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it.each<[string, Parameters<typeof setup>[0], string]>([
+    ['a late error after Save: nothing saved, and the toast says so', {}, 'The site didn’t accept that password, so Chord didn’t save it.'],
+    ['a late error after Update: nothing updated, and the toast says so', { candidate: { kind: 'update', id: 'a1' } }, 'The site didn’t accept that password, so Chord didn’t update it.'],
+  ])('%s', async (_name, options, toast) => {
+    const t = setup(options);
+    await formGone(t);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    await failed(t);
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:refused', toast);
+  });
+
+  it('a late error before anything was pressed: the card goes, with no toast', async () => {
+    const t = setup();
+    await formGone(t);
+    await failed(t);
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.toast).not.toHaveBeenCalledWith('w1', 'passwords:refused', expect.anything());
+  });
+
+  it('× while it waits cancels the save', async () => {
+    const t = setup();
+    await formGone(t);
+    const card = t.assist.cardFor('n1')!;
+    await t.assist.answer('w1', card.id, 'save', { username: VALUES.username });
+    await t.assist.answer('w1', card.id, 'close');
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+  });
+
+  it('a late error while the vault is asked (during candidateFor): no card at all', async () => {
+    const t = setup();
+    let answer: (a: CandidateAnswer) => void = () => {};
+    t.vault.candidateFor.mockImplementationOnce(() => new Promise<CandidateAnswer>((done) => (answer = done)));
+    t.events.emit('signedIn', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, how: 'form-gone', hint: null, values: { ...VALUES }, lateUntil: t.timers.now() + LATE } as never);
+    await flush();
+    await failed(t);
+    answer({ kind: 'new', setup: false });
+    await settle();
+    expect(t.assist.cardFor('n1')).toBeNull();
+  });
+
+  it('a sign-in that navigated (no late window): Save saves at once, as before', async () => {
+    const t = setup();
+    await t.signedIn({ how: 'navigation', lateUntil: null });
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('…and Save pressed after the window closed saves at once too', async () => {
+    const t = setup();
+    await formGone(t);
+    t.timers.advance(LATE);
+    await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save', { username: VALUES.username });
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a private window: no card, no waiting, and a late error says nothing', async () => {
+    const t = setup({ tab: { private: true } });
+    await formGone(t);
+    expect(t.assist.cardFor('n1')).toBeNull();
+    await failed(t);
+    expect(t.host.toast).not.toHaveBeenCalled();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+  });
+
+  describe('a generated password, confirmed only once the window closes', () => {
+    const generatedSignIn = async (t: ReturnType<typeof setup>) => {
+      await t.focus(NEW);
+      await settle(2);
+      t.timers.advance(500);
+      t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+      await settle();
+      t.blur();
+      t.vault.presaved.mockClear();
+      await formGone(t, { kind: 'sign-up', values: { username: 'ada@example.com', password: 'Gen-1' } });
+      await settle();
+    };
+    const confirmed = (t: ReturnType<typeof setup>) => t.vault.presaved.mock.calls.filter(([action]) => action === 'confirm');
+
+    it('the saved card at once; the entry confirmed when the window closes', async () => {
+      const t = setup();
+      await generatedSignIn(t);
+      expect(t.assist.cardFor('n1')).toMatchObject({ kind: 'saved' });
+      expect(confirmed(t)).toEqual([]);
+      t.timers.advance(LATE);
+      await settle();
+      expect(confirmed(t)).toEqual([['confirm', 'g1', ORIGIN, 'c1', { username: 'ada@example.com', password: 'Gen-1' }]]);
+    });
+
+    it('a late error: never confirmed (it stays Not confirmed), and the card says the site didn’t take it', async () => {
+      const t = setup();
+      await generatedSignIn(t);
+      await failed(t);
+      t.timers.advance(LATE);
+      await settle();
+      expect(confirmed(t)).toEqual([]);
+      expect(t.assist.cardFor('n1')).toMatchObject({ kind: 'refused' });
+      // *Delete it* deletes the entry; **Done** keeps it.
+      await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'delete');
+      expect(t.vault.deleteSaved).toHaveBeenCalledWith('g1', ORIGIN, 'c1');
+    });
+
+    it('*Delete it* while the window is open: deleted, and never confirmed after', async () => {
+      const t = setup();
+      await generatedSignIn(t);
+      await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'delete');
+      t.timers.advance(LATE);
+      await settle();
+      expect(t.vault.deleteSaved).toHaveBeenCalledWith('g1', ORIGIN, 'c1');
+      expect(confirmed(t)).toEqual([]);
+    });
+
+    it('**Done** while the window is open: the card goes, and the entry is still confirmed at the end', async () => {
+      const t = setup();
+      await generatedSignIn(t);
+      await t.assist.answer('w1', t.assist.cardFor('n1')!.id, 'save');
+      expect(t.assist.cardFor('n1')).toBeNull();
+      t.timers.advance(LATE);
+      await settle();
+      expect(confirmed(t)).toHaveLength(1);
+    });
+  });
+});
