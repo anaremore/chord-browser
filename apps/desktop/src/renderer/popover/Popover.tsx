@@ -878,7 +878,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
         <>
           <div className={styles.authChooser} role="listbox" aria-label={`Accounts on ${card.host}`}>
             {(card.accounts ?? []).map((name, i) => (
-              <button key={i} type="button" role="option" aria-selected={account === i} className={styles.authAccount} disabled={card.busy} onClick={() => setAccount(i)}>
+              <button key={i} type="button" role="option" aria-selected={account === i} className={styles.authAccount} disabled={card.busy || waiting} onClick={() => setAccount(i)}>
                 <span className={styles.menuIcon} aria-hidden>
                   {[...name.trim()][0]?.toUpperCase() || '·'}
                 </span>
@@ -932,7 +932,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
       </div>
       {card.setup && (
         <div className={styles.saveStep}>
-          <PassphraseStep value={passphrase} onChange={setPassphrase} />
+          <PassphraseStep value={passphrase} onChange={setPassphrase} readOnly={waiting} />
         </div>
       )}
       {card.problem && (

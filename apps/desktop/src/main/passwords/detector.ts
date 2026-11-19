@@ -114,6 +114,8 @@ export interface PasswordDetectorEvents {
   filled: [PasswordsFilledEvent];
   forms: [PasswordsFormsEvent];
   firstStep: [PasswordsFirstStepEvent];
+  /** A navigation the page made during a form-gone sign-in's late window was judged: no sign of a refusal (phase 3A-2). */
+  lateJudged: [Outcome<'lateJudged'>];
 }
 
 export interface PasswordDetectorOptions {
@@ -222,6 +224,7 @@ export function createPasswordDetector(options: PasswordDetectorOptions): Passwo
         // Private windows never save (S17 §7): nothing is offered there.
         else if (priv) continue;
         else if (type === 'signedIn') events.emit('signedIn', { ...(rest as Omit<Extract<SavingOutcome, { type: 'signedIn' }>, 'type'>), contents });
+        else if (type === 'lateJudged') events.emit('lateJudged', { ...(rest as Omit<Extract<SavingOutcome, { type: 'lateJudged' }>, 'type'>), contents });
         else events.emit('failed', { ...(rest as Omit<Extract<SavingOutcome, { type: 'failed' }>, 'type'>), contents });
       }
     };

@@ -2206,3 +2206,192 @@ describe('the late window: a sign-in with no navigation, held until it closes (S
     });
   });
 });
+
+describe('the late window and the page’s own navigations (review round 1 of #62)', () => {
+  const LATE = 10_000;
+  const formGone = (t: ReturnType<typeof setup>, over: Record<string, unknown> = {}) => t.signedIn({ how: 'form-gone', lateUntil: t.timers.now() + LATE, ...over });
+  const pageNavigates = (t: ReturnType<typeof setup>) => t.page.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: t.page.mainFrame });
+  const judged = (t: ReturnType<typeof setup>) => t.events.emit('lateJudged', { contents: t.contents, formId: 'f1', origin: ORIGIN } as never);
+  const failed = async (t: ReturnType<typeof setup>, why = 'reappeared') => {
+    t.events.emit('failed', { contents: t.contents, formId: 'f1', kind: 'sign-in', origin: ORIGIN, why } as never);
+    await settle();
+  };
+  const pressSave = async (t: ReturnType<typeof setup>, action: 'save' | 'new' = 'save', details: Record<string, unknown> = { username: VALUES.username }) =>
+    t.assist.answer('w1', t.assist.cardFor('n1')!.id, action, details);
+
+  it('Save, then the page navigates to the same sign-in form (reappeared): cancelled, with the toast', async () => {
+    const t = setup();
+    await formGone(t);
+    await pressSave(t);
+    pageNavigates(t);
+    await failed(t);
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:refused', 'The site didn’t accept that password, so Chord didn’t save it.');
+  });
+
+  it('Save, then the page navigates to a dashboard, judged before the window closes: saved when it closes', async () => {
+    const t = setup();
+    await formGone(t);
+    await pressSave(t);
+    pageNavigates(t);
+    t.timers.advance(3000);
+    judged(t);
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('Save, then the page navigates and the new page isn’t judged by the window’s end: nothing written, and the toast', async () => {
+    const t = setup();
+    await formGone(t);
+    await pressSave(t);
+    pageNavigates(t);
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:refused', 'The site didn’t accept that password, so Chord didn’t save it.');
+  });
+
+  it('…and Save pressed after the window, with the navigation still not judged: nothing written', async () => {
+    const t = setup();
+    await formGone(t);
+    pageNavigates(t);
+    t.timers.advance(LATE);
+    await pressSave(t);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+  });
+
+  it('Save as new, waiting, then a late error: cancelled, nothing saved', async () => {
+    const t = setup({ change: { state: 'open', matches: [], accounts: [{ id: 'a1', username: 'ada@acme.dev' }, { id: 'a2', username: 'ada.lovelace' }] } as never });
+    await formGone(t, { kind: 'change', values: { username: '', password: 'new pass', current: 'old pass' } });
+    expect(t.assist.cardFor('n1')?.kind).toBe('change');
+    await pressSave(t, 'new', {});
+    expect(t.assist.cardFor('n1')).toMatchObject({ waiting: true });
+    await failed(t, 'error-response');
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    expect(t.vault.changePassword).not.toHaveBeenCalled();
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:refused', 'The site didn’t accept that password, so Chord didn’t save it.');
+  });
+
+  it('the change path’s generated password, its Update waiting, then a late error: not applied, and the toast says update', async () => {
+    const t = setup({ change: { state: 'open', matches: [{ id: 'a1', username: 'ada@acme.dev' }], accounts: [] } as never });
+    await t.focus({ kind: 'change', role: 'new-password' });
+    await settle(2);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+    await formGone(t, { kind: 'change', values: { username: 'ada@acme.dev', password: 'Gen-1', current: 'old pass' } });
+    expect(t.assist.cardFor('n1')?.kind).toBe('update');
+    await pressSave(t, 'save', {});
+    await failed(t, 'error-response');
+    t.timers.advance(LATE);
+    await settle();
+    expect(t.vault.changePassword).not.toHaveBeenCalled();
+    expect(t.host.toast).toHaveBeenCalledWith('w1', 'passwords:refused', 'The site didn’t accept that password, so Chord didn’t update it.');
+  });
+
+  describe('a generated password’s confirmation, held', () => {
+    const generatedSignIn = async (t: ReturnType<typeof setup>) => {
+      await t.focus(NEW);
+      await settle(2);
+      t.timers.advance(500);
+      t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+      await settle();
+      t.blur();
+      t.vault.presaved.mockClear();
+      await formGone(t, { kind: 'sign-up', values: { username: 'ada@example.com', password: 'Gen-1' } });
+      await settle();
+    };
+    const confirmed = (t: ReturnType<typeof setup>) => t.vault.presaved.mock.calls.filter(([action]) => action === 'confirm');
+
+    it.each<[string, (t: ReturnType<typeof setup>) => void]>([
+      [
+        'the tab closes',
+        (t) => {
+          t.page.destroyed = true;
+          t.page.emit('destroyed');
+        },
+      ],
+      [
+        'passwords are turned off there',
+        (t) => {
+          t.host.passwordsOn.mockReturnValue(false);
+          t.assist.switched();
+        },
+      ],
+      ['a navigation of your own', (t) => t.page.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, initiator: null })],
+      ['the page navigates and the new page isn’t judged by the end', (t) => pageNavigates(t)],
+    ])('%s while it waits: never confirmed (it stays Not confirmed)', async (_name, meanwhile) => {
+      const t = setup();
+      await generatedSignIn(t);
+      meanwhile(t);
+      t.timers.advance(LATE);
+      await settle();
+      expect(confirmed(t)).toEqual([]);
+    });
+
+    it('…the page navigates, judged in time: confirmed at the end', async () => {
+      const t = setup();
+      await generatedSignIn(t);
+      pageNavigates(t);
+      judged(t);
+      t.timers.advance(LATE);
+      await settle();
+      expect(confirmed(t)).toHaveLength(1);
+    });
+
+    it('a late error while the site’s name is looked up on the generated path: no card, and never confirmed', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((done) => (release = done));
+      let holding = false;
+      const t = setup({
+        siteOf: async (origin: string) => {
+          if (holding) await gate;
+          return naiveSite(origin);
+        },
+      });
+      await t.focus(NEW);
+      await settle(2);
+      t.timers.advance(500);
+      t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+      await settle();
+      t.blur();
+      t.vault.presaved.mockClear();
+      holding = true;
+      t.events.emit('signedIn', { contents: t.contents, formId: 'f1', kind: 'sign-up', origin: ORIGIN, how: 'form-gone', hint: null, values: { username: 'ada@example.com', password: 'Gen-1' }, lateUntil: t.timers.now() + LATE } as never);
+      await flush();
+      await failed(t, 'error-response');
+      holding = false;
+      release();
+      await settle();
+      t.timers.advance(LATE);
+      await settle();
+      expect(t.assist.cardFor('n1')).toBeNull();
+      expect(confirmed(t)).toEqual([]);
+    });
+  });
+
+  it('a refused card, left unused for SAVE_CARD_MS, goes: the key in the address doesn’t bring it back', async () => {
+    const t = setup();
+    await t.focus(NEW);
+    await settle(2);
+    t.timers.advance(500);
+    t.assist.chooseRow('w1', t.assist.menuFor('w1')!.id, 0);
+    await settle();
+    t.blur();
+    await formGone(t, { kind: 'sign-up', values: { username: 'ada@example.com', password: 'Gen-1' } });
+    await settle();
+    await failed(t, 'error-response');
+    expect(t.assist.cardFor('n1')?.kind).toBe('refused');
+    t.timers.advance(SAVE_CARD_MS + 1);
+    expect(t.assist.cardFor('n1')).toBeNull();
+    expect(t.host.offer).not.toHaveBeenCalledWith('n1', true);
+  });
+});

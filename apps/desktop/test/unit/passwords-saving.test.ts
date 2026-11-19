@@ -73,7 +73,7 @@ function run(steps: Step[]): string[] {
         break;
     }
   }
-  return out.map((o) => (o.type === 'submitted' ? `submitted:${o.signal}` : o.type === 'signedIn' ? `signedIn:${o.how}:${o.hint ?? '-'}` : `failed:${o.why}`));
+  return out.map((o) => (o.type === 'submitted' ? `submitted:${o.signal}` : o.type === 'signedIn' ? `signedIn:${o.how}:${o.hint ?? '-'}` : o.type === 'lateJudged' ? 'lateJudged' : `failed:${o.why}`));
 }
 
 describe('knowing you signed in (S17 §6)', () => {
@@ -123,6 +123,13 @@ describe('knowing you signed in (S17 §6)', () => {
     ['…only once: a second 401 says nothing more', [['candidate', { signal: 'button' }], ['gone'], ['hint', 401], ['hint', 403]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
     ['…a navigation since (a new document numbers its forms afresh): nothing', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['hint', 401]], ['submitted:button', 'signedIn:form-gone:-']],
     ['…a sign-in read from a navigation is never taken back by a hint', [['candidate'], ['start', true], ['navigated', 200], ['settled'], ['hint', 401]], ['submitted:submit', 'signedIn:navigation:-']],
+    // Review round 1 of #62: a navigation the page made during the late window is judged.
+    ['…the page then navigates to the same sign-in form: taken back', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:button', 'signedIn:form-gone:-', 'failed:reappeared']],
+    ['…the page then navigates to a dashboard: judged, nothing taken back', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['navigated', 200], ['forms', formsWith([])], ['settled']], ['submitted:button', 'signedIn:form-gone:-', 'lateJudged']],
+    ['…the page then navigates to an error page: taken back', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['navigated', 401]], ['submitted:button', 'signedIn:form-gone:-', 'failed:error-response']],
+    ['…the page’s navigation never commits: judged (the page is as it was)', [['candidate', { signal: 'button' }], ['gone'], ['start', true], ['failedLoad']], ['submitted:button', 'signedIn:form-gone:-', 'lateJudged']],
+    ['…a navigation of your own: forgotten, never judged', [['candidate', { signal: 'button' }], ['gone'], ['start', false], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:button', 'signedIn:form-gone:-']],
+    ['…a navigation after the window closed: not judged', [['candidate', { signal: 'button' }], ['gone'], ['wait', LATE_ERROR_MS + 1], ['start', true], ['navigated', 200], ['forms', formsWith([signInForm])], ['settled']], ['submitted:button', 'signedIn:form-gone:-']],
   ])('%s', (_name, steps, expected) => {
     expect(run(steps)).toEqual(expected);
   });

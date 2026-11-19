@@ -24,8 +24,11 @@ const RIGHT = 'Zq9-late-Sekrit';
 const WRONG = 'Zq9-wrong-Sekrit';
 const PASSPHRASE = 'correct horse battery staple';
 const FIXTURE = readFileSync(resolve(import.meta.dirname, '../fixtures/passwords/formless-optimistic.html'), 'utf8');
-/** How long the server takes to answer: past the agent's quiet wait (1.5 s), so the card comes before the answer. */
-const ANSWER_MS = 2500;
+/**
+ * How long the server takes to answer: well past the agent's quiet wait (1.5 s), so the card comes, and Save is pressed,
+ * before the answer, even on a slow runner (review round 1 of #62).
+ */
+const ANSWER_MS = 5000;
 
 const isCards = (url: string) => isPopover(url) && !url.includes('#');
 
@@ -75,6 +78,8 @@ test('passwords: a sign-in with no navigation is saved after the late window, an
     const shell = await pageWhere(app, isShell);
     const page = await pageWhere(app, (u) => u.startsWith(`${site.origin}/login`));
     const popover = await pageWhere(app, isCards);
+    /** What the vault holds, from main (no usernames, no passwords). */
+    const vault = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { passwordsCount(): Promise<{ state: string; count: number }> } }).chordTestHooks.passwordsCount());
     const signIn = async (password: string) => {
       await page.fill('#email', USER);
       await page.fill('#password', password);
@@ -90,9 +95,14 @@ test('passwords: a sign-in with no navigation is saved after the late window, an
     await save.getByRole('button', { name: 'Save' }).click();
     await expect(save.getByRole('button', { name: 'Saving…' })).toBeDisabled();
     await expect(save.getByText(`Waiting a moment for ${site.host} to confirm the sign-in.`)).toBeVisible();
+    // What's shown is what will be saved: the passphrase can't change under the held save, nor be suggested afresh.
+    await expect(save.getByLabel('Passphrase', { exact: true })).toHaveAttribute('readonly', '');
+    await expect(save.getByRole('button', { name: 'Suggest one' })).toBeDisabled();
     await expect(shell.getByText('The site didn’t accept that password, so Chord didn’t save it.')).toBeVisible({ timeout: 15_000 });
     await expect(save).toHaveCount(0);
     await expect(page.getByRole('alert')).toHaveText('Wrong password.');
+    // Nothing written: not the sign-in, not even the vault its first save would have made.
+    expect(await vault()).toEqual({ state: 'none', count: 0 });
 
     // 1. The right one: Save waits, then it's saved (the first one chooses the passphrase).
     await page.goto(`${site.origin}/login`);
@@ -103,8 +113,9 @@ test('passwords: a sign-in with no navigation is saved after the late window, an
     await save.getByRole('button', { name: 'Save' }).click();
     await expect(save.getByRole('button', { name: 'Saving…' })).toBeDisabled();
     await expect(save.getByLabel('Username')).toHaveAttribute('readonly', '');
-    await expect(shell.getByText('Saved. It’s in Settings → Passwords.')).toBeVisible({ timeout: 20_000 });
+    await expect(shell.getByText('Saved. It’s in Settings → Passwords.')).toBeVisible({ timeout: 25_000 });
     await expect(save).toHaveCount(0);
+    expect(await vault()).toEqual({ state: 'open', count: 1 });
   } finally {
     await app.close();
   }
