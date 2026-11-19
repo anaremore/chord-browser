@@ -289,10 +289,13 @@ function previousText(el: Element): string {
   return '';
 }
 
+/** The top realm's box and visibility checks: a frame's own can be patched by its script (phase 3C). */
+const boxOf = (el: Element): DOMRect => elementProto.getBoundingClientRect.call(el);
+const checkVisibility = typeof elementProto.checkVisibility === 'function' ? elementProto.checkVisibility : null;
 /** On screen: rendered, opaque enough, at least 4 px each way (as the assistant's read and §5's fill check). */
 export function isShown(el: Element): boolean {
-  if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !fadedInComponent(el)) return false;
-  const r = el.getBoundingClientRect();
+  if (checkVisibility && !checkVisibility.call(el, { opacityProperty: true, visibilityProperty: true }) && !fadedInComponent(el)) return false;
+  const r = boxOf(el);
   return r.width >= 4 && r.height >= 4;
 }
 
@@ -313,20 +316,20 @@ function fadedInComponent(el: Element): boolean {
   if (valueOfControl(el) !== '') return false;
   // Counted to two of the fields a person types in, hidden ones left out of the count (review round 4 of #61, nit 3).
   if (allInComposed(root, CONTROLS, 2, isTypeable).length !== 1) return false;
-  if (!el.checkVisibility({ visibilityProperty: true })) return false;
+  if (checkVisibility && !checkVisibility.call(el, { visibilityProperty: true })) return false;
   // (4 px or more each way: `isShown` checks the size after this, for every field.)
-  const r = el.getBoundingClientRect();
+  const r = boxOf(el);
   let host: Element | null = hostGetter.call(root) as Element;
-  for (let depth = 0; host && depth < 8 && host.getClientRects().length === 0; depth++) host = composedParentOf(host);
-  if (!host || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
-  const h = host.getBoundingClientRect();
+  for (let depth = 0; host && depth < 8 && elementProto.getClientRects.call(host).length === 0; depth++) host = composedParentOf(host);
+  if (!host || (checkVisibility && !checkVisibility.call(host, { opacityProperty: true, visibilityProperty: true }))) return false;
+  const h = boxOf(host);
   return r.left >= h.left - 1 && r.top >= h.top - 1 && r.right <= h.right + 1 && r.bottom <= h.bottom + 1;
 }
 
 /** Blink's `IsFocusable`, roughly: rendered, not `visibility: hidden`, not disabled or inert. */
 function isFocusable(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): boolean {
   if (el.disabled || el.closest('[inert]')) return false;
-  return typeof el.checkVisibility !== 'function' || el.checkVisibility({ visibilityProperty: true });
+  return !checkVisibility || checkVisibility.call(el, { visibilityProperty: true });
 }
 
 /** A control's type as the classifier reads it: an input's, lower case, or its tag. */

@@ -156,8 +156,11 @@ const isTextField = (el: EventTarget | null | undefined): el is HTMLInputElement
  */
 export interface FrameContext {
   allowed(): boolean;
-  /** The frame's content box in the tab's CSS pixels, through every frame up to the top; null when it isn't allowed. */
-  offset(): { x: number; y: number } | null;
+  /**
+   * Where the frame's content is in the tab's CSS pixels, through every frame up to the top, and its scale there (a CSS
+   * transform or zoom on a frame): a field's box is `x + r.left * scale`. Null when it isn't allowed.
+   */
+  offset(): { x: number; y: number; scale: number } | null;
   /** The documents and windows above it, the top's last: their scrolls and resizes move its fields. */
   readonly ancestors: readonly { readonly document: Document; readonly window: Window }[];
 }
@@ -177,9 +180,27 @@ const inputReadOnly = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype
 const rectOf = (el: Element) => Element.prototype.getBoundingClientRect.call(el);
 const connected = Object.getOwnPropertyDescriptor(Node.prototype, 'isConnected')!.get!;
 const isConnectedNode = (n: Node) => connected.call(n) === true;
+/**
+ * An event's path, through the top realm's `composedPath` (a frame's own can be patched). The agent's own start-up
+ * stand-in for a focus (the field focused before it woke) isn't an Event: its own path, then.
+ */
+const pathOf = (event: Event): EventTarget[] => {
+  try {
+    return Event.prototype.composedPath.call(event);
+  } catch {
+    return event.composedPath();
+  }
+};
 
-/** Starts the agent on a document. Returns a stop function (tests; the agent otherwise lives as long as its document). */
-export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}): () => void {
+/**
+ * A running agent's stop function (tests; the agent otherwise lives as long as its document), and `release`: its
+ * listeners and timers go, and nothing is sent again but what a watch already running says as it ends (a frame's
+ * agent whose frame went: its `gone` still comes, phase 3C).
+ */
+export type AgentStop = (() => void) & { release(): void };
+
+/** Starts the agent on a document. */
+export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}): AgentStop {
   const doc = options.document ?? document;
   const win = options.window ?? window;
   const inFrame = options.frame ?? null;
@@ -187,7 +208,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   /** The top window: a frame's field must be on screen there too. */
   const top = inFrame?.ancestors.at(-1)?.window ?? win;
   /** Whether this document may still be used (a frame's, at every event; the top's always). */
-  const live = () => !inFrame || inFrame.allowed();
+  /** Released (its frame went): nothing more, but a running watch's end. */
+  let released = false;
+  const live = () => !released && (!inFrame || inFrame.allowed());
   const typed = new WeakSet<Element>();
   const filled = new WeakSet<Element>();
   /** Fields seen as `type=password` (S17 §4): one that's text now (a show-password toggle) means the form changed, for a generated password. */
@@ -220,7 +243,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   /** An event that started inside an open shadow root: its target is the host, its path's first entry the field. */
   const fromRoot = (event: Event) => {
     if (rootsSeen) return;
-    const first = event.composedPath()[0];
+    const first = pathOf(event)[0];
     if (first !== event.target && isElementNode(first) && isShadowRootNode(rootOf(first))) {
       rootsSeen = deep = true;
       // The field isn't known yet, and the last scan skipped roots: the next lookup scans again.
@@ -360,10 +383,10 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       bridge.send('forms', { forms });
     }
     const el = focused?.ref.deref();
-    const at = live() ? (inFrame ? inFrame.offset() : { x: 0, y: 0 }) : null;
+    const at = live() ? (inFrame ? inFrame.offset() : { x: 0, y: 0, scale: 1 }) : null;
     if (focused && el && isConnectedNode(el) && at) {
       const r = rectOf(el);
-      const rect = { x: r.left + at.x, y: r.top + at.y, width: r.width, height: r.height };
+      const rect = { x: at.x + r.left * at.scale, y: at.y + r.top * at.scale, width: r.width * at.scale, height: r.height * at.scale };
       const key = `${focused.formId} ${focused.kind} ${focused.role} ${rect.x},${rect.y},${rect.width},${rect.height}`;
       // The same field in the same place, of the same kind: main knows already (a carousel scrolling elsewhere moves nothing).
       if (told?.ref.deref() === el && told.key === key) return;
@@ -386,20 +409,21 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
   };
   function schedule(): void {
+    if (released) return;
     if (!frame) frame = clock.requestAnimationFrame(flush);
     if (!timer) timer = clock.setTimeout(flush, FLUSH_MS);
   }
   const onFocusIn = (event: FocusEvent) => {
     if (!live()) return;
     fromRoot(event);
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el)) return;
     focusOn(el);
     if (!focused && !byElement.has(el) && scanWanted) pending = new WeakRef(el);
     schedule();
   };
   const onFocusOut = (event: FocusEvent) => {
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el)) return;
     if (focused && focused.ref.deref() === el) {
       focused = null;
@@ -418,7 +442,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const onInput = (event: Event) => {
     if (!live()) return;
     fromRoot(event);
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el) || !event.isTrusted) return;
     typed.add(el);
     // Typing that made the page show its password field (a first step that's a sign-in after all).
@@ -435,7 +459,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const hasTypedPassword = (k: KnownForm) => k.scanned.elements.some((e) => controlType(e) === 'password' && (typed.has(e) || filled.has(e)));
   const onSubmit = (event: Event) => {
     if (!event.isTrusted || !live()) return;
-    const form = event.composedPath()[0];
+    const form = pathOf(event)[0];
     if (isTag(form, 'FORM')) {
       const k = known.find((x) => x.scanned.form === form);
       if (k) candidate(k, 'submit');
@@ -445,7 +469,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!live()) return;
     fromRoot(event);
     if (event.key !== 'Enter' || !event.isTrusted) return;
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el)) return;
     const k = byElement.get(el);
     if (k) candidate(k, 'enter');
@@ -454,7 +478,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!live()) return;
     fromRoot(event);
     if (!event.isTrusted) return;
-    const target = event.composedPath()[0];
+    const target = pathOf(event)[0];
     if (!isElementNode(target)) return;
     // A button that submits: in a <form>, its submit buttons; outside one, a button beside the fields; and an element
     // whose words say so (a script's `div`). Never a show-password toggle, a "Forgot password?" or one that wraps the
@@ -749,7 +773,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!(r.bottom > 0 && r.right > 0 && r.top < win.innerHeight && r.left < win.innerWidth)) return false;
     if (!inFrame) return true;
     const at = inFrame.offset();
-    return !!at && r.bottom + at.y > 0 && r.right + at.x > 0 && r.top + at.y < top.innerHeight && r.left + at.x < top.innerWidth;
+    return !!at && at.y + r.bottom * at.scale > 0 && at.x + r.right * at.scale > 0 && at.y + r.top * at.scale < top.innerHeight && at.x + r.left * at.scale < top.innerWidth;
   };
   /**
    * What typing sends, so React, Vue and Angular see the value (a framework's own setter lives in the page's world). The
@@ -897,11 +921,22 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const active = activeElementOf(doc);
   if (isTextField(active)) onFocusIn({ composedPath: () => [active] } as unknown as FocusEvent);
 
-  return () => {
-    for (const stop of stops) stop();
-    watching?.();
+  const release = () => {
+    released = true;
+    for (const stop of stops.splice(0)) stop();
     if (frame) clock.cancelAnimationFrame(frame);
     if (timer) clock.clearTimeout(timer);
     if (trailing) clock.clearTimeout(trailing);
+    frame = timer = trailing = 0;
+    known = [];
+    byElement = new WeakMap();
+    focused = told = pending = null;
   };
+  return Object.assign(
+    () => {
+      release();
+      watching?.();
+    },
+    { release },
+  );
 }

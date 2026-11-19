@@ -142,9 +142,10 @@ const look = () => {
   // A frame's sign-in field, and focus or typing in one later (the frame's own window hears those).
   for (const d of frameDocuments()) {
     if (d.querySelector('input[type=password]') || signInField(d.activeElement)) return void wake();
+    // By document: a frame's window is the same object across its navigations, its listeners not.
     const w = d.defaultView;
-    if (w && !listened.has(w)) {
-      listened.add(w);
+    if (w && !listened.has(d)) {
+      listened.add(d);
       w.addEventListener('focusin', onField, { capture: true, passive: true });
       w.addEventListener('input', onField, { capture: true, passive: true });
     }

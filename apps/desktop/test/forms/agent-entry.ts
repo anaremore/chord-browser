@@ -2,10 +2,10 @@
  * The agent with a fake bridge, for agent.spec.ts: every message it would send main, recorded
  * in the page (as structured clones, as the bridge copies them).
  */
-import { startAgents } from '../../src/passwords/agent/frames';
+import { startAgents, type AgentsStop } from '../../src/passwords/agent/frames';
 
 const messages: [string, unknown][] = [];
-let stop: (() => void) | null = null;
+let stop: AgentsStop | null = null;
 /** The listener the agent registered for main's fills (the sentinel's `onFill`). */
 let onFill: ((payload: unknown) => void) | null = null;
 
@@ -22,4 +22,6 @@ let onFill: ((payload: unknown) => void) | null = null;
   fill: (payload: unknown) => onFill?.(structuredClone(payload)),
   messages: () => messages.slice(),
   clear: () => void (messages.length = 0),
+  /** What the frames' hub holds: agents, forms reports, fill listeners and form owners (phase 3C). */
+  frames: () => stop?.stats() ?? null,
 };

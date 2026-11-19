@@ -191,13 +191,14 @@ test('a frame added after the agent started, and a frame that navigates to anoth
   await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<iframe id="fr" src="/login" style="width:400px;height:200px"></iframe>'));
   await page.frameLocator('#fr').locator('#p').waitFor();
   await page.frameLocator('#fr').locator('#p').click();
-  await a.settle();
+  // The frame's agent starts once its frame has loaded (a look 50 ms after), and sends the focus it finds then.
+  await expect.poll(async () => (await a.of('focus')).length).toBeGreaterThan(0);
   const first = (await a.of('focus')).at(-1)!['formId'];
   expect(first).toBeTruthy();
   await page.evaluate(() => ((document.getElementById('fr') as HTMLIFrameElement).src = '/login2'));
   await page.frameLocator('#fr').locator('form#g #p').waitFor();
   await page.frameLocator('#fr').locator('#p').click();
-  await a.settle();
+  await expect.poll(async () => (await a.of('focus')).filter((f) => f['formId'] !== first).length).toBeGreaterThan(0);
   const second = (await a.of('focus')).at(-1)!['formId'];
   expect(second).toBeTruthy();
   expect(second).not.toBe(first);
@@ -277,4 +278,128 @@ test('30 other sites’ ad frames beside the top’s sign-in: nothing of theirs,
   await a.settle();
   expect(await formIds(a)).toHaveLength(1);
   expect((await a.of('focus')).at(-1)).toMatchObject({ kind: 'sign-in' });
+});
+
+/* ---------- Review round 1 of #67 ---------- */
+
+/** What the frames' hub holds (agent-entry.ts). */
+const hubStats = (page: Page) => page.evaluate(() => (globalThis as unknown as { chordAgentTest: { frames(): { agents: number; forms: number; fills: number; owners: number } } }).chordAgentTest.frames());
+/** Loads frames at the top, one at a time, waiting for each: `where` is `afterbegin` or `beforeend`. */
+const addFrames = async (page: Page, from: number, to: number, where: 'afterbegin' | 'beforeend') => {
+  for (let i = from; i < to; i++) {
+    await page.evaluate(([n, at]) => {
+      document.body.insertAdjacentHTML(at as InsertPosition, `<iframe id="fr${n}" src="/login?${n}" style="width:300px;height:120px"></iframe>`);
+      return new Promise<void>((done) => document.getElementById(`fr${n}`)!.addEventListener('load', () => done(), { once: true }));
+    }, [i, where] as const);
+  }
+  await page.waitForTimeout(200);
+};
+
+test('B1: 20 frames used, then 10 more added before them: they keep their slots, the new ones are skipped', async ({ page }) => {
+  const a = await open(page, '<h1>Top</h1>', { '/login': SIGN_IN() });
+  await addFrames(page, 0, 20, 'beforeend');
+  expect((await hubStats(page))?.agents).toBe(20);
+  await addFrames(page, 20, 30, 'afterbegin');
+  await a.settle();
+  expect((await hubStats(page))?.agents).toBe(20);
+  // A frame added past 20 is never used; one of the first 20 still is.
+  await a.clear();
+  await page.frameLocator('#fr25').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+  await page.frameLocator('#fr5').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toHaveLength(1);
+});
+
+test('B2: an about:blank frame written with document.open() (its address becomes the page’s): never used', async ({ page }) => {
+  const a = await open(
+    page,
+    `<iframe id="fr" style="width:400px;height:200px"></iframe><script>
+      const d = document.getElementById('fr').contentDocument;
+      d.open();
+      d.write('${SIGN_IN()}');
+      d.close();
+    </script>`,
+  );
+  // The test's premise: the written document has the page's address.
+  expect(await page.evaluate(() => (document.getElementById('fr') as HTMLIFrameElement).contentDocument!.URL)).toBe(`${ORIGIN}/page`);
+  await a.clear();
+  await page.frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+  expect(await formIds(a)).toEqual([]);
+});
+
+test('B3: a frame loaded sandboxed, its attribute then removed (the flags stay till it navigates), and another frame loading: never used', async ({ page }) => {
+  const a = await open(page, frame('/login', 'sandbox="allow-same-origin allow-scripts allow-forms"'), { '/login': SIGN_IN(), '/other': '<p>Other</p>' });
+  await page.evaluate(() => document.getElementById('fr')!.removeAttribute('sandbox'));
+  await page.evaluate(() => {
+    document.body.insertAdjacentHTML('beforeend', '<iframe id="other" src="/other"></iframe>');
+    return new Promise<void>((done) => document.getElementById('other')!.addEventListener('load', () => done(), { once: true }));
+  });
+  await page.waitForTimeout(200);
+  await a.clear();
+  await page.frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+});
+
+test('B4: a frame reloaded within the site 10 times, then removed: its listeners, agents, forms and fills all go', async ({ page }) => {
+  // Counted on the top's document and window, from before the agent starts.
+  await page.addInitScript(() => {
+    const counts = { scroll: 0, resize: 0 };
+    (globalThis as unknown as { listenerCounts: typeof counts }).listenerCounts = counts;
+    const add = EventTarget.prototype.addEventListener;
+    const remove = EventTarget.prototype.removeEventListener;
+    const key = (target: EventTarget, type: string) => (target === document && type === 'scroll' ? 'scroll' : target === window && type === 'resize' ? 'resize' : null);
+    EventTarget.prototype.addEventListener = function (this: EventTarget, type: string, ...rest: unknown[]) {
+      const k = key(this, type);
+      if (k) counts[k]++;
+      return add.call(this, type, ...(rest as [EventListener]));
+    };
+    EventTarget.prototype.removeEventListener = function (this: EventTarget, type: string, ...rest: unknown[]) {
+      const k = key(this, type);
+      if (k) counts[k]--;
+      return remove.call(this, type, ...(rest as [EventListener]));
+    };
+  });
+  const a = await open(page, frame('/login'), { '/login': SIGN_IN() });
+  const counts = () => page.evaluate(() => ({ ...(globalThis as unknown as { listenerCounts: { scroll: number; resize: number } }).listenerCounts }));
+  await page.frameLocator('#fr').locator('#p').waitFor();
+  const withOne = await counts();
+  for (let i = 0; i < 10; i++) {
+    await page.evaluate((n) => {
+      const f = document.getElementById('fr') as HTMLIFrameElement;
+      f.src = `/login?${n}`;
+      return new Promise<void>((done) => f.addEventListener('load', () => done(), { once: true }));
+    }, i);
+  }
+  await page.waitForTimeout(200);
+  expect(await counts()).toEqual(withOne);
+  expect((await hubStats(page))?.agents).toBe(1);
+  await page.evaluate(() => document.getElementById('fr')!.remove());
+  await page.waitForTimeout(200);
+  await a.settle();
+  // The top's own agent's listeners only, and nothing of the frame's in the hub.
+  const left = await counts();
+  expect(left.scroll).toBe(withOne.scroll - 1);
+  expect(left.resize).toBe(withOne.resize - 1);
+  expect(await hubStats(page)).toMatchObject({ agents: 0, fills: 1 });
+  expect(await formIds(a)).toEqual([]);
+});
+
+test('a frame scaled by a CSS transform: the focus box is where the field is drawn', async ({ page }) => {
+  const a = await open(page, frame('/login', 'class="half"') + '<style>.half { transform: scale(0.5); transform-origin: 0 0; }</style>', { '/login': SIGN_IN() });
+  await page.frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  const rect = (await a.of('focus')).at(-1)!['rect'] as { x: number; y: number; width: number; height: number };
+  const want = await page.evaluate(() => {
+    const f = document.getElementById('fr') as HTMLIFrameElement;
+    const r = f.getBoundingClientRect();
+    const s = r.width / f.offsetWidth;
+    const p = f.contentDocument!.getElementById('p')!.getBoundingClientRect();
+    return { x: r.left + (3 + 5) * s + p.left * s, y: r.top + (3 + 5) * s + p.top * s, width: p.width * s, height: p.height * s };
+  });
+  for (const k of ['x', 'y', 'width', 'height'] as const) expect(rect[k]).toBeCloseTo(want[k], 1);
 });
