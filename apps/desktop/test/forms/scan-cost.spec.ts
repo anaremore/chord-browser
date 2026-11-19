@@ -34,6 +34,15 @@ const components = () => {
   return out;
 };
 
+/** 300 components each with a button in its root (chips with a remove button): every one is in the roots' index. */
+const buttonComponents = () => {
+  let out = '';
+  for (let i = 0; i < 300; i++) out += `<x-chip><template shadowrootmode="open"><span class="chip"><slot></slot><button aria-label="Remove">×</button></span></template>Tag ${i}</x-chip>`;
+  return out;
+};
+/** A button component labelled through its slot (Material's `md-filled-button`). */
+const buttonComponent = (label: string) => `<x-button><template shadowrootmode="open"><button><slot></slot></button></template>${label}</x-button>`;
+
 const PAGES: Record<string, string> = {
   'no roots, the form in the main tree': `${cards()}<form><label>Username <input name="username"></label><label>Password <input name="password" type="password"></label><button>Sign in</button></form>`,
   'the form’s fields in roots, 300 other components': `${cards()}${components()}<form>${field('username', 'text', 'Username')}${field('password', 'password', 'Password')}<button>Sign in</button></form>`,
@@ -42,6 +51,10 @@ const PAGES: Record<string, string> = {
   // each of the scope's levels holds the whole feed and finds none, formlessScope's worst case.
   'formless, no button near the field': `<main><div class="feed">${cards()}<div><input name="email" type="email"><input name="password" type="password"></div></div></main><button>Sign in</button>`,
   'formless, no button near the field, 300 components': `<main><div class="feed">${cards()}${components()}<div><input name="email" type="email"><input name="password" type="password"></div></div></main><button>Sign in</button>`,
+  // A lone password field in a component, under a feed of 300 components that each have a button in their root, and a
+  // button component outside the feed: the field's component, then each level's roots from the index (review round 4
+  // of #61, nit 2).
+  'formless, a lone field in a component, 300 button components, the button outside': `<main><div class="feed">${cards()}${buttonComponents()}<div>${field('password', 'password', 'Password')}</div></div></main>${buttonComponent('Next')}`,
 };
 
 test('the scan, and walking open shadow roots, on a heavy page', async ({ page }) => {
