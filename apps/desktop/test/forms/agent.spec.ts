@@ -1336,3 +1336,331 @@ for (const [name, button] of LONE_BUTTONS) {
     expect((await a.of('step')).map((x) => x['username'])).toEqual(['ada@example.com']);
   });
 }
+
+/* ---------- Formless sign-ins whose submit or field is a component (review round 4 of #61) ---------- */
+
+/**
+ * The page's components, defined by its script, so they upgrade anywhere (inside a shell's root too):
+ * - `x-tf`, a text field: its input in its root (type from `data-type`), and a slot (an eye goes there);
+ * - `x-tf-rm`, the same with a "Remember me" checkbox in its root;
+ * - `x-button`, a button component labelled through its slot (Material's `md-filled-button`);
+ * - `x-icon`, an icon button: a wordless `<button>` in its root (Material's `md-icon-button`, an eye);
+ * - `x-app`, an app shell: its root holds the `<template>` named by `data-t`.
+ */
+const COMPONENTS = `<script>
+  const def = (name, html) => customElements.define(name, class extends HTMLElement {
+    connectedCallback() { if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = html(this); }
+  });
+  const input = (host) => '<input id="i" type="' + host.dataset.type + '" name="' + host.id + '" aria-label="' + host.id + '">';
+  def('x-tf', (host) => input(host) + '<slot></slot>');
+  def('x-tf-rm', (host) => input(host) + '<label><input id="rm" type="checkbox"> Remember me</label><slot></slot>');
+  def('x-button', () => '<button id="b" type="button"><slot></slot></button>');
+  def('x-icon', () => '<button id="b" type="button"><svg width="12" height="12"></svg></button>');
+  def('x-app', (host) => document.getElementById(host.dataset.t).innerHTML);
+</script>`;
+/** `body` in an app shell's root (`shell`), or as it is. */
+const shelled = (body: string, shell: boolean) => (shell ? `<template id="app">${body}</template><x-app id="app-host" data-t="app"></x-app>` : body) + COMPONENTS;
+/** The password field of a page: in the `#pw` component's root, or the page's own `#p`. */
+const typePassword = async (page: Page, selector = '#pw >> #i') => {
+  await page.fill(selector, 'secret pass');
+  // Past the agent's 1 s for one submit, so a click before this one doesn't hide this one.
+  await page.waitForTimeout(1100);
+};
+
+for (const shell of [false, true]) {
+  const where = shell ? 'in an app shell' : 'with no shell';
+  test(`scenario A ${where}: a lone Material-like field, its eye slotted, and a component Sign in: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><x-button id="go">Sign in</x-button></div>', shell));
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+  });
+
+  test(`scenario B ${where}: a lone Material-like field, no eye, and a slot-labelled Next component: Next isn’t a submit: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"></x-tf><x-button id="go">Next</x-button></div>', shell));
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+  });
+
+  test(`a page’s own lone password field and a slot-labelled Next component beside it, ${where}: Next isn’t a submit: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, shelled('<div><div><input id="p" name="password" type="password" aria-label="Password"></div><x-button id="go">Next</x-button></div>', shell));
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+  });
+
+  test(`a lone field whose component holds a “Remember me” checkbox, its eye slotted, ${where}: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf-rm id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf-rm><button id="go" type="button">Sign in</button></div>', shell));
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
+  });
+
+  test(`several candidate buttons beside a lone field, ${where}: none is a submit, Sign in included: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(
+      page,
+      shelled('<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="forgot" type="button">Forgot password?</button><x-button id="help">Help</x-button><x-button id="go">Sign in</x-button></div>', shell),
+    );
+    await typePassword(page);
+    for (const not of ['#eye >> #b', '#forgot', '#help >> #b']) {
+      expect(await submitsAfterClick(page, a, not)).toEqual([]);
+      await page.waitForTimeout(1100);
+    }
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+  });
+}
+
+// As on main, in a shell: a button with words, or an icon with a label, beside a lone field in a box of its own.
+for (const [name, button] of LONE_BUTTONS) {
+  test(`a lone password field in an app shell with ${name} beside it: the click submits`, async ({ page }) => {
+    const a = await open(page, shelled(`<div><div class="field"><input id="p" name="password" type="password" aria-label="Password"></div>${button}</div>`, true));
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+}
+
+test('a lone password field directly in an app shell’s root, <button>Submit</button> in the same box: no submit, as main’s wrapper rule has it in the page’s tree', async ({ page }) => {
+  const a = await open(page, shelled('<input id="p" name="password" type="password" aria-label="Password"><button id="go" type="button">Submit</button>', true));
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
+});
+
+test('a form component whose own root holds a lone password field and its Next: Next isn’t a submit: main’s answer (component submits deferred, a known gap)', async ({ page }) => {
+  const a = await open(
+    page,
+    `<x-step id="step"></x-step><script>
+      document.getElementById('step').attachShadow({ mode: 'open' }).innerHTML = '<input id="i" type="password" name="password" aria-label="Password"><button id="b" type="button">Next</button>';
+    </script>`,
+  );
+  await typePassword(page, '#step >> #i');
+  expect(await submitsAfterClick(page, a, '#step >> #b')).toEqual([]);
+});
+
+/** A Material-like formless sign-in: each field an x-tf (input in its root), the password's with a slotted eye. */
+const MATERIAL_FORMLESS = (extraInRoot: string, nested: boolean) => `<div id="wrap"><x-m id="em" data-type="email"></x-m><x-m id="pw" data-type="password"><x-icon id="eye"></x-icon></x-m><button id="go" type="button">Sign in</button></div><script>
+  for (const host of document.querySelectorAll('x-m')) {
+    const input = '<input id="i" type="' + host.dataset.type + '" name="' + host.id + '" aria-label="' + host.id + '">';
+    host.attachShadow({ mode: 'open' }).innerHTML = ${nested ? `'<span class="text-field"><x-field id="field">' + input + '</x-field>${extraInRoot}</span><slot></slot>'` : `input + '${extraInRoot}<slot></slot>'`};
+    const field = host.shadowRoot.getElementById('field');
+    if (field) field.attachShadow({ mode: 'open' }).innerHTML = '<div class="content"><slot></slot></div>';
+  }
+</script>${COMPONENTS}`;
+
+for (const [name, extra, nested] of [
+  ['a hidden csrf input in the field component’s root', '<input type="hidden" name="csrf" value="x">', false],
+  ['Material’s real nesting (the input under a field element in the root, the eye slotted)', '', true],
+] as const) {
+  test(`a Material-like formless sign-in, ${name}: the eye isn’t a submit, nor is Sign in outside: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, MATERIAL_FORMLESS(extra, nested));
+    await page.fill('#em >> #i', 'ada@example.com');
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
+  });
+}
+
+test('deep scans off (a first scan with no root), then a Sign in component attached beside the fields: its click isn’t a submit: main’s answer (component submits deferred, a known gap)', async ({ page }) => {
+  const a = await open(page, `<div id="wrap"><input id="u" name="email" type="email" aria-label="Email"><input id="p" name="password" type="password" aria-label="Password"></div>${COMPONENTS}`);
+  await page.fill('#u', 'ada@example.com');
+  await typePassword(page, '#p');
+  await page.evaluate(() => {
+    const host = document.createElement('x-button');
+    host.id = 'go';
+    host.textContent = 'Sign in';
+    document.getElementById('wrap')!.append(host);
+  });
+  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+});
+
+/* ---------- Review round 1 of #65 ---------- */
+
+/** A wordless icon button, in the page's tree. */
+const ICON = (id: string) => `<button id="${id}" type="button"><svg width="12" height="12"></svg></button>`;
+
+test('P1, as on main: a wordless icon component beside the field’s box doesn’t shrink the scope, and the page’s Sign in submits', async ({ page }) => {
+  const a = await open(page, `<div><div class="row"><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div><x-icon id="eye"></x-icon></div><button id="go" type="button">Sign in</button></div>${COMPONENTS}`);
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+});
+
+for (const shell of [false, true]) {
+  const where = shell ? 'in an app shell' : 'in the page’s tree';
+  test(`P2, ${where}: a fully wordless icon button beside a lone field in its own box, the only button: it submits, as on main`, async ({ page }) => {
+    const a = await open(page, shelled(`<div><div class="field"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('go')}</div>`, shell));
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+
+  test(`P3, ${where}: an eye component beside a field component (not slotted), Sign in beside them: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf id="pw" data-type="password"></x-tf><x-icon id="eye"></x-icon><button id="go" type="button">Sign in</button></div>', shell));
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go')).toEqual([]);
+  });
+
+
+  test(`a two-field component sign-in, ${where}, the eye slotted in the password’s component: the eye isn’t a submit, nor is Sign in: main’s answer (component submits deferred, a known gap)`, async ({ page }) => {
+    const a = await open(page, shelled('<div><x-tf id="em" data-type="email"></x-tf><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><x-button id="go">Sign in</x-button></div>', shell));
+    await page.fill('#em >> #i', 'ada@example.com');
+    await typePassword(page);
+    expect(await submitsAfterClick(page, a, '#eye >> #b')).toEqual([]);
+    await page.waitForTimeout(1100);
+    expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+  });
+}
+
+test('a button component’s label that comes after the walk (none, then Sign in) gives no submit either way: main’s answer (component submits deferred, a known gap)', async ({ page }) => {
+  const a = await open(page, `<div><x-tf id="pw" data-type="password"></x-tf><x-button id="go"></x-button></div>${COMPONENTS}`);
+  await typePassword(page);
+  await page.evaluate(() => void (document.getElementById('go')!.textContent = 'Sign in'));
+  expect(await submitsAfterClick(page, a, '#go >> #b')).toEqual([]);
+});
+
+/* ---------- Review round 2 of #65 ---------- */
+
+// A wordless arrow beside a lone field still submits beside a button that isn't this form's own submit (as on main).
+for (const label of ['Create account', 'Sign up', 'Sign in another way', 'Sign-in options'] as const) {
+  for (const component of [false, true]) {
+    const other = component ? `<x-button id="other">${label}</x-button>` : `<button id="other" type="button">${label}</button>`;
+    test(`a wordless arrow beside a lone password field, ${component ? 'a component' : 'a button'} saying “${label}” beside it: the arrow submits`, async ({ page }) => {
+      const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('go')}${other}</div>${COMPONENTS}`);
+      await typePassword(page, '#p');
+      expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+    });
+  }
+}
+
+test('a first step’s wordless arrow, “Sign in another way” beside it: the arrow is its step', async ({ page }) => {
+  const a = await open(page, `<div><div class="box"><input id="u" name="email" type="email" aria-label="Email" autocomplete="username"></div>${ICON('go')}<button type="button">Sign in another way</button></div>`);
+  await page.fill('#u', 'ada@example.com');
+  await a.clear();
+  await page.click('#go');
+  await a.settle();
+  expect((await a.of('step')).map((x) => x['username'])).toEqual(['ada@example.com']);
+});
+
+test('a phone layout’s wordless arrow, the desktop Sign in hidden beside it: the arrow submits', async ({ page }) => {
+  const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>${ICON('go')}<button type="button" style="display: none">Sign in</button></div>`);
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+});
+
+for (const label of ['Sign back in', 'Sign in to view your account'] as const) {
+  test(`“${label}” beside a lone password field: a submit (back and view are a toggle’s or a link’s only as the first word)`, async ({ page }) => {
+    const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div><button id="go" type="button">${label}</button></div>`);
+    await typePassword(page, '#p');
+    expect(await submitsAfterClick(page, a, '#go')).toEqual(['button']);
+  });
+}
+
+test('…and a “‹ Back” or “View password” button beside the field still isn’t one', async ({ page }) => {
+  const a = await open(page, `<div><div class="box"><input id="p" name="password" type="password" aria-label="Password"></div><button id="back" type="button">‹ Back</button><button id="view" type="button">View password</button><button type="button">Sign in</button></div>`);
+  await typePassword(page, '#p');
+  expect(await submitsAfterClick(page, a, '#back')).toEqual([]);
+  await page.waitForTimeout(1100);
+  expect(await submitsAfterClick(page, a, '#view')).toEqual([]);
+});
+
+/* ---------- Review round 3 of #65: round 3's probe table, each row with what main gives ---------- */
+
+/** 40 icon components (Ionic's `ion-icon`, a ripple): roots with no button (`x-ico`, defined with the inner shell). */
+const ICONS_40 = '<x-ico></x-ico>'.repeat(40);
+const LIGHT_FIELD = '<div class="box"><input id="p" name="password" type="password" aria-label="Password"></div>';
+const LIGHT_EMAIL = '<div class="box"><input id="u" name="email" type="email" aria-label="Email" autocomplete="username"></div>';
+const XTF_FIELD = '<x-tf id="pw" data-type="password"></x-tf>';
+type Outcome = 'submit' | 'none' | 'step';
+interface TableRow {
+  readonly name: string;
+  readonly body: string;
+  /** The field typed in: `#p`, `#pw >> #i` (a component's), or `#u` for a first step. */
+  readonly field: string;
+  readonly click: string;
+  readonly pr: Outcome;
+  /** What main gives, with main's scan and agent (round 3's table): where main has a scope, `pr` must match it. */
+  readonly main: Outcome;
+}
+const OTHER_LABELS = ['Help', 'Forgot password?', 'Sign in with Google', 'Create account', 'Sign up', 'Sign in another way', 'Sign-in options'] as const;
+const ODD_SUBMITS = [
+  ['Submit', '<button id="go" type="button">Submit</button>', 'none'],
+  ['Done', '<button id="go" type="button">Done</button>', 'none'],
+  ['a 5-word Sign in', '<button id="go" type="button">Sign in to your account</button>', 'submit'],
+  ['Sign in in text, aria-label and title', '<button id="go" type="button" aria-label="Sign in" title="Sign in">Sign in</button>', 'submit'],
+  ['Sign in at opacity 0', '<button id="go" type="button" style="opacity: 0">Sign in</button>', 'submit'],
+  ['Log in to continue now', '<button id="go" type="button">Log in to continue now</button>', 'submit'],
+  ['Continue', '<button id="go" type="button">Continue</button>', 'submit'],
+] as const;
+
+const TABLE: TableRow[] = [];
+for (const shell of [false, true]) {
+  const w = shell ? 'shell' : 'light';
+  const add = (row: Omit<TableRow, 'body'> & { body: string }) => TABLE.push({ ...row, name: `${w}: ${row.name}`, body: shelled(row.body, shell) });
+  // The 28 arrow combinations: a wordless arrow beside each other-way label, as a button and as a component.
+  for (const label of OTHER_LABELS) {
+    for (const component of [false, true]) {
+      const other = component ? `<x-button>${label}</x-button>` : `<button type="button">${label}</button>`;
+      add({ name: `arrow beside ${component ? 'a component' : 'a button'} “${label}”`, body: `<div>${LIGHT_FIELD}${ICON('go')}${other}</div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+    }
+  }
+  // First steps.
+  for (const label of ['Sign in another way', 'Continue with phone', 'Continue with email'] as const) {
+    add({ name: `first step: arrow beside “${label}”`, body: `<div>${LIGHT_EMAIL}${ICON('go')}<button type="button">${label}</button></div>`, field: '#u', click: '#go', pr: 'step', main: 'step' });
+  }
+  add({ name: 'first step: the “Continue with email” button itself', body: `<div>${LIGHT_EMAIL}${ICON('arrow')}<button id="go" type="button">Continue with email</button></div>`, field: '#u', click: '#go', pr: 'step', main: 'step' });
+  // Hidden and aria-hidden buttons beside an arrow.
+  add({ name: 'a hidden desktop Sign in beside a phone’s arrow', body: `<div>${LIGHT_FIELD}${ICON('go')}<button type="button" style="display: none">Sign in</button></div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: 'an aria-hidden, visible Sign in beside an arrow', body: `<div>${LIGHT_FIELD}${ICON('go')}<button type="button" aria-hidden="true">Sign in</button></div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  // 40 roots in the scope.
+  add({ name: '40 icon roots in the scope, a light arrow, no Sign in', body: `<div>${LIGHT_FIELD}${ICON('go')}${ICONS_40}</div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: '40 icon roots, a light eye, a Sign in component after them: the eye, as main', body: `<div>${LIGHT_FIELD}${ICON('eye')}${ICONS_40}<x-button>Sign in</x-button></div>`, field: '#p', click: '#eye', pr: 'submit', main: 'submit' });
+  // P1 to P4.
+  add({ name: 'P1: the page’s Sign in, an x-icon eye beside the field’s box', body: `<div><div class="row">${LIGHT_FIELD}<x-icon id="eye"></x-icon></div><button id="go" type="button">Sign in</button></div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: 'P1: …its x-icon eye', body: `<div><div class="row">${LIGHT_FIELD}<x-icon id="eye"></x-icon></div><button type="button">Sign in</button></div>`, field: '#p', click: '#eye >> #b', pr: 'none', main: 'none' });
+  add({ name: 'P2: a wordless button beside a lone field in its own box, the only button', body: `<div>${LIGHT_FIELD}${ICON('go')}</div>`, field: '#p', click: '#go', pr: 'submit', main: 'submit' });
+  add({ name: 'P3: a slotted eye in the field component', body: `<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#eye >> #b', pr: 'none', main: 'none' });
+  add({ name: 'P3: …Sign in beside it', body: `<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf><button id="go" type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#go', pr: 'submit', main: 'none' });
+  add({ name: 'P4: a light eye beside a component field, Sign in beside it', body: `<div>${XTF_FIELD}${ICON('eye')}<button type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#eye', pr: 'none', main: 'none' });
+  add({ name: 'P4: …Sign in', body: `<div>${XTF_FIELD}${ICON('eye')}<button id="go" type="button">Sign in</button></div>`, field: '#pw >> #i', click: '#go', pr: 'submit', main: 'none' });
+  add({ name: 'P4’s light twin (the page’s own field): the eye, as main', body: `<div>${LIGHT_FIELD}${ICON('eye')}<button type="button">Sign in</button></div>`, field: '#p', click: '#eye', pr: 'submit', main: 'submit' });
+  // The P4 eye beside each odd submit label, and the submit itself.
+  for (const [what, submit, itself] of ODD_SUBMITS) {
+    add({ name: `P4’s eye beside ${what}`, body: `<div>${XTF_FIELD}${ICON('eye')}${submit}</div>`, field: '#pw >> #i', click: '#eye', pr: 'none', main: 'none' });
+    add({ name: `P4: ${what} itself`, body: `<div>${XTF_FIELD}${ICON('eye')}${submit}</div>`, field: '#pw >> #i', click: '#go', pr: itself, main: 'none' });
+    add({ name: `P3’s slotted eye beside ${what}`, body: `<div><x-tf id="pw" data-type="password"><x-icon id="eye"></x-icon></x-tf>${submit}</div>`, field: '#pw >> #i', click: '#eye >> #b', pr: 'none', main: 'none' });
+  }
+  // Probes 2, 2b and 2c, and the x-tf cookie probe, with their light twins: shells of their own, so once.
+  if (!shell) {
+  add({ name: 'probe 2 (inner shell): Accept cookies beside the field’s shell', body: `<div id="page"><x-app2 data-t="inner"></x-app2><button id="cookies" type="button">Accept cookies</button></div><template id="inner"><div class="row">${LIGHT_FIELD}<x-button>Sign in</x-button></div></template>`, field: '#p', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'probe 2b: a shell field, a div Sign in, Accept cookies beside the shell', body: `<div id="page"><x-app2 data-t="inner"></x-app2><button id="cookies" type="button">Accept cookies</button></div><template id="inner"><div class="row">${LIGHT_FIELD}<div role="none" tabindex="0">Sign in</div></div></template>`, field: '#p', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'probe 2c: a shell field (Enter only), Accept cookies beside the shell', body: `<div id="page"><x-app2 data-t="inner"></x-app2><button id="cookies" type="button">Accept cookies</button></div><template id="inner"><div class="row">${LIGHT_FIELD}</div></template>`, field: '#p', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'x-tf cookie probe: a component field, no button near, Accept cookies', body: `<div id="page"><div class="row">${XTF_FIELD}</div><button id="cookies" type="button">Accept cookies</button></div>`, field: '#pw >> #i', click: '#cookies', pr: 'none', main: 'none' });
+  add({ name: 'the x-tf cookie probe’s light twin: Accept cookies, as main', body: `<div id="page"><div class="row">${LIGHT_FIELD}</div><button id="cookies" type="button">Accept cookies</button></div>`, field: '#p', click: '#cookies', pr: 'submit', main: 'submit' });
+  add({ name: 'probe 2b’s light twin: Accept cookies, as main', body: `<div id="page"><div class="row">${LIGHT_FIELD}<div role="none" tabindex="0">Sign in</div></div><button id="cookies" type="button">Accept cookies</button></div>`, field: '#p', click: '#cookies', pr: 'submit', main: 'submit' });
+  }
+  // Should-fix 3.
+  add({ name: 'an eye labelled “Click to view password” beside a lone field', body: `<div>${LIGHT_FIELD}<button id="eye" type="button" aria-label="Click to view password"><svg width="12" height="12"></svg></button><button type="button">Sign in</button></div>`, field: '#p', click: '#eye', pr: 'none', main: 'none' });
+}
+
+/** The inner shell for probes 2 to 2c: an `x-app2` whose root is its template, defined so it upgrades in a shell too. */
+const INNER_SHELL = `<script>
+  customElements.define('x-app2', class extends HTMLElement { connectedCallback() { if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = document.getElementById(this.dataset.t).innerHTML; } });
+  customElements.define('x-ico', class extends HTMLElement { connectedCallback() { if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = '<svg width="1" height="1"></svg>'; } });
+</script>`;
+
+for (const row of TABLE) {
+  test(`round 3’s table, ${row.name}: ${row.main}, as main${row.pr === row.main ? '' : ` (deferred: ${row.pr}, a known gap)`}`, async ({ page }) => {
+    const a = await open(page, row.body + INNER_SHELL);
+    if (row.field === '#u') await page.fill('#u', 'ada@example.com');
+    else await typePassword(page, row.field);
+    await a.clear();
+    await page.click(row.click);
+    await a.settle();
+    const signals = (await a.of('candidate')).filter((c) => c['signal'] !== 'blur').map((c) => c['signal']);
+    const steps = await a.of('step');
+    const got: Outcome = signals.includes('button') ? 'submit' : steps.length ? 'step' : 'none';
+    // Main's answer everywhere (the owner's fallback for #65): `pr` is what the deferred component submits would give.
+    expect(got).toBe(row.main);
+  });
+}

@@ -71,7 +71,8 @@ function measure(): ScanCost {
     walkTreeMs: time(() => rootsByWalker(document)),
     deepLookMs: time(() => document.querySelector('input[type=password]') ?? rootsByWalker(document).find((r) => r.querySelector('input[type=password]'))),
     scopeMs: (() => {
-      const field = document.querySelector('input[type=password]');
+      // In the page's tree, or in a component's root (a lone field's text field).
+      const field = document.querySelector('input[type=password]') ?? rootsByWalker(document).map((r) => r.querySelector('input[type=password]')).find((f) => f) ?? null;
       return field ? time(() => formlessScope(field), 20) : 0;
     })(),
   };

@@ -85,20 +85,22 @@ export const activeElementOf = (doc: Document): Element | null => {
 };
 const contains = (outer: Node, inner: Node): boolean => nodeProto.contains.call(outer, inner);
 /**
- * `querySelectorAll` in `el`, its own open root, and the open roots inside them (a component's own button), at most
- * `max`. It returns as soon as it has `max`, so a scope with a button of its own costs one query.
+ * `querySelectorAll` in `el`, its own open root, and the open roots inside them, at most `max` of those `keep` takes.
+ * It returns as soon as it has `max`; what `keep` leaves out (hidden inputs) doesn't count toward `max` (review round 4
+ * of #61, nit 3).
  */
-const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64, depth = 0): Element[] => {
-  const out: Element[] = [...(el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector))];
+const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64, keep: (el: Element) => boolean = () => true, depth = 0): Element[] => {
+  const out: Element[] = [];
+  for (const found of el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector)) if (keep(found)) out.push(found);
   // Roots inside roots, 64 deep at most (review round 2 of #61): a page can't overflow the stack with them.
   if (out.length >= max || depth >= 64) return out;
   const own = el instanceof ShadowRoot ? null : shadowOf(el);
-  if (own) out.push(...allInComposed(own, selector, max - out.length, depth + 1));
+  if (own) out.push(...allInComposed(own, selector, max - out.length, keep, depth + 1));
   const all = el instanceof ShadowRoot ? el.querySelectorAll('*') : elementProto.querySelectorAll.call(el, '*');
   for (const n of all) {
     if (out.length >= max) break;
     const inner = shadowOf(n);
-    if (inner) out.push(...allInComposed(inner, selector, max - out.length, depth + 1));
+    if (inner) out.push(...allInComposed(inner, selector, max - out.length, keep, depth + 1));
   }
   return out;
 };
@@ -107,11 +109,7 @@ const CONTROLS = 'input, select, textarea';
  * Fields a person types in, among `found`: never a hidden one (a csrf token), a checkbox or a button (review round 3 of
  * #61). Filtered here rather than by a `:not()` selector, which cost every root's query more than the few matches do.
  */
-const typeable = (found: Iterable<Element>): number => {
-  let n = 0;
-  for (const el of found) if (!SKIP_TYPES.has(controlType(el))) n++;
-  return n;
-};
+const isTypeable = (el: Element) => !SKIP_TYPES.has(controlType(el));
 const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
 const shadowRootGetter = getter(elementProto, 'shadowRoot');
@@ -254,7 +252,8 @@ function fadedInComponent(el: Element): boolean {
   const root = nodeProto.getRootNode.call(el);
   if (!(root instanceof ShadowRoot)) return false;
   if ((el as HTMLInputElement).value !== '') return false;
-  if (typeable(allInComposed(root, CONTROLS, 8)) !== 1) return false;
+  // Counted to two of the fields a person types in, hidden ones left out of the count (review round 4 of #61, nit 3).
+  if (allInComposed(root, CONTROLS, 2, isTypeable).length !== 1) return false;
   if (!el.checkVisibility({ visibilityProperty: true })) return false;
   // (4 px or more each way: `isShown` checks the size after this, for every field.)
   const r = el.getBoundingClientRect();
@@ -344,6 +343,15 @@ export const isSubmit = (b: Element) => (tagOf(b) === 'BUTTON' ? ((b as HTMLButt
 /** Words on a button that isn't the form's submit: a password's show or hide toggle, help and recovery links, cancel, signing in with another site, and signing in with single sign-on or a passkey (no password: review of 3A-1). */
 const NOT_SUBMIT =
   /\b(show|hide|reveal|toggle|view|forgot|forgotten|cancel|close|back|help)\b|\beye\b|\bwith (google|apple|facebook|microsoft|github|twitter|x|linkedin)\b|\b(sso|passkeys?)\b|\bsingle[ -]?sign[ -]?on\b/i;
+/** The same, without *back* and *view*: for a label that starts by saying sign in (*Sign back in*, *Sign in to view your account*). */
+const NOT_SUBMIT_AFTER_SIGN_IN =
+  /\b(show|hide|reveal|toggle|forgot|forgotten|cancel|close|help)\b|\beye\b|\bwith (google|apple|facebook|microsoft|github|twitter|x|linkedin)\b|\b(sso|passkeys?)\b|\bsingle[ -]?sign[ -]?on\b/i;
+const LEADS_WITH_SIGN_IN = /^[^a-z]*(sign|log)[ -]?(back[ -]?)?(in|on)\b/i;
+/**
+ * Words that read as a toggle's, help's or another way in (`NOT_SUBMIT`). *Back* and *view* count anywhere (*Click to
+ * view password* is an eye), except after a leading sign-in phrase (review round 3 of #65).
+ */
+const notSubmit = (words: string) => (LEADS_WITH_SIGN_IN.test(words) ? NOT_SUBMIT_AFTER_SIGN_IN : NOT_SUBMIT).test(words);
 
 /** The most characters, and words, a plain element may say to count as a button: a label, not a sentence. */
 const PLAIN_WORDS_MAX = 40;
@@ -373,7 +381,7 @@ function plainSubmit(target: Element, kind: string | null): Element | null {
     const text = words(el, PLAIN_WORDS_MAX + 1);
     if (!text) continue;
     if (text.length > PLAIN_WORDS_MAX || text.split(' ').length > PLAIN_WORD_COUNT_MAX || text.includes('?')) return null;
-    if (NOT_SUBMIT.test(`${text} ${attrOf(el, 'aria-label') ?? ''}`) || !pressable(el)) return null;
+    if (notSubmit(`${text} ${attrOf(el, 'aria-label') ?? ''}`) || !pressable(el)) return null;
     const says = submitWords(text);
     const fits = says === 'next' || (says === 'sign-in' && kind !== 'sign-up') || (says === 'sign-up' && kind === 'sign-up');
     return fits ? el : null;
@@ -407,7 +415,7 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
     return plain;
   }
   const words = `${buttonText(button)} ${attrOf(button, 'aria-label') ?? ''} ${attrOf(button, 'title') ?? ''}`;
-  if (NOT_SUBMIT.test(words) || button.hasAttribute('aria-pressed')) return null;
+  if (notSubmit(words) || button.hasAttribute('aria-pressed')) return null;
   // In a <form>: its submit buttons, and a plain button that a script signs in with (React apps, banks):
   // one whose words say sign in, sign up, Next or Continue, or the form's only button.
   if (form && !isSubmit(button) && !readsAsSubmit(words) && allIn(form, ANY_BUTTON).length !== 1) return null;
