@@ -538,7 +538,8 @@ test("memory: Chord's own processes, idle with one window and one page", async (
 test('passwords: the sentinel on a page without a sign-in field, and the agent woken on one', async () => {
   test.setTimeout(180_000);
   cpuBusy = await measureCpuBusy();
-  const sizeKb = round(statSync(resolve(appDir, 'out', 'preload', 'passwords.cjs')).size / 1024);
+  // Held in bytes (4 KB is 4,096 of them, not 4,147 rounded down to 4.0), shown in KB (review of 3B).
+  const sizeBytes = statSync(resolve(appDir, 'out', 'preload', 'passwords.cjs')).size;
   const app = await launch({});
   try {
     await launchTimings(app);
@@ -579,7 +580,7 @@ test('passwords: the sentinel on a page without a sign-in field, and the agent w
       motion: null,
       locked: null,
       checks: [
-        check('preload size', sizeKb, SENTINEL.sizeKb, { locked: null, unit: 'KB' }),
+        { ...check('preload size', sizeBytes, SENTINEL.sizeKb * 1024, { locked: null, unit: 'KB' }), value: round(sizeBytes / 1024), limit: SENTINEL.sizeKb },
         check('page memory, on − off', memoryDelta, SENTINEL.pageMemoryMb, { locked: null, unit: 'MB' }),
         check('page load, on − off', loadDelta, SENTINEL.pageLoadMs, { locked: null }),
       ],

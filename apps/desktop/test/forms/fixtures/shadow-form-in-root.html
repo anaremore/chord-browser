@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Phase 3B: a whole sign-in form, its button too, inside one component's open shadow root. -->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<x-login><template shadowrootmode="open">
+  <h2>Log in</h2>
+  <form action="/session" method="post">
+    <label for="email">Email</label> <input id="email" name="email" type="email" data-chord-expect="username">
+    <label for="pw">Password</label> <input id="pw" name="password" type="password" data-chord-expect="current-password">
+    <button>Log in</button>
+  </form>
+</template></x-login>
+</body></html>

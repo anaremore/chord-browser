@@ -1,0 +1,14 @@
+<!doctype html>
+<!--
+  Phase 3B: a <form> of web components, as a design system's text fields are built: each field's
+  label and input in the component's open shadow root (declared, so no script runs), the form and
+  its button in the page's own tree. The inputs belong to the form through their hosts.
+-->
+<html><head><meta charset="utf-8"><title>Example</title><meta name="chord-kind" content="sign-in"></head><body>
+<h1>Sign in to Example</h1>
+<form action="/session" method="post">
+  <x-text-field id="username"><template shadowrootmode="open"><label for="i">Username</label><input id="i" name="username" autocomplete="username" data-chord-expect="username"></template></x-text-field>
+  <x-text-field id="password"><template shadowrootmode="open"><label for="i">Password</label><input id="i" name="password" type="password" data-chord-expect="current-password"></template></x-text-field>
+  <button>Sign in</button>
+</form>
+</body></html>

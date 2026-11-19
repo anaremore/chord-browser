@@ -128,6 +128,8 @@ test("Chord's own fixtures, every field right", async ({ page }) => {
   for (const name of names) {
     const html = readFileSync(join(dir, name), 'utf8');
     const result = await scanPage(page, html, name);
+    // A field with an expectation must have been scanned at all (one in a shadow root too), or its expectation says nothing.
+    for (const u of result.unscanned) if (!u.endsWith(': none')) problems.push(`${name}: ${u} wasn't scanned`);
     for (const f of result.fields) {
       if (f.expect === null) continue;
       const want = f.expect === 'none' ? null : f.expect;
