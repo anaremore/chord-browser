@@ -2,6 +2,24 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.13.0 · preview · 2026-11-20
+
+0.12.0 was never published: everything in its entry below (importing and exporting passwords, the password generator, sign-up and change-password forms, and 0.11.1's sign-in box) comes in this release.
+
+- **Passwords on harder sign-in pages.** More of the sign-ins you actually meet now get the menu, the fill and the save card.
+  - **Two-step sign-ins save.** When the email comes on one step and the password on the next, the save card has both. The password step's menu lists that account first.
+  - **Sign-ins with no new page.** When a site signs you in without loading a new page, Chord waits a moment for it to settle before calling the sign-in good. Press Save in that moment and the card says *Saving…* until the site has had its say. If the site turns the password down after all, nothing is saved: *The site didn't accept that password, so Chord didn't save it.* A generated password is marked confirmed only then too.
+  - **Sign-in buttons that aren't buttons.** A *Next*, *Continue* or *Sign in* that's only styled text counts as the submit, when its words fit the form. *Sign back in* and *Sign in to view your account* count too.
+  - **Fields inside a page's own components** (open shadow roots) fill and save as any other field.
+  - **Sign-in forms in a frame from the same site** fill and save. A frame from another site, or a sandboxed one, still gets nothing.
+  - **Google, Microsoft, Okta and Auth0.** Chord knows where their sign-in fields and buttons are, so a small redesign doesn't lose them; Google's *Next* now saves your email for the password step.
+  - **A code typed after the password.** A few sites take a 6-digit code typed right after your password. On those (Apple's list), the first save leaves the code off and says so: *This site takes a sign-in code after the password, so Chord left off the last 6 digits.* **Keep them** saves it as you typed it. The eye shows exactly what will be saved, and a password you already have is never shortened.
+- **No more "Today".** The tabs below Pinned are now simply unpinned tabs. Peek's button says *Open as tab*, the command is *Clear unpinned tabs* (searching "today" still finds it), and Settings says *Archive unpinned tabs after*. Nothing about how they behave has changed.
+- **Generated passwords never use look-alike characters** (`0 O o 1 l I |`), even when a site's rules are tight. When a site's rules leave too little room without them, the password is made longer; when it can't be, it's offered as it is and called weak.
+- **The sign-in box closes with its request.** If the page that asked for it removes the frame or stops loading, the box goes too. A held Enter or Space can no longer answer it before its half-second delay ends.
+- **Peek, right after Chord starts.** In Peek's first moments, Ctrl+W (⌘W) closes it, reload and back act on its page, and the password menu shows over it.
+- Not there yet: sign-in forms in another site's frame, and a component's own button submitting a field outside any form.
+
 ## 0.12.0 · preview · 2026-11-17
 
 0.11.1 was never published: its changes come in this release.

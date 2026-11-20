@@ -1348,7 +1348,7 @@ The sentinel's look stays one `querySelectorAll` (0.02 ms) plus the active eleme
 | ~4,200 elements, 5 same-origin frames, the sign-in in one | 0.28–0.30 ms | 0.42 ms (5 used) |
 | ~4,200 elements, no frame | 0.38 ms | 0.24 ms |
 
-The sentinel is 4,070 bytes built (main 2,367), held to 4,096 (perf.spec). Its sandbox observer costs about 50 ns an attribute change on a page that changes thousands, and nothing measurable otherwise; its page load, on − off, is within the runners' noise, which main's own runs show (macOS x64 from −4 to 6.3 ms, of 2).
+The sentinel is 4,090 bytes built at 0.13.0 (main 2,367), held to 4,096 (perf.spec). Its sandbox observer costs about 50 ns an attribute change on a page that changes thousands, and nothing measurable otherwise; its page load, on − off, is within the runners' noise, which main's own runs show (macOS x64 from −4 to 6.3 ms, of 2).
 
 **Tests:**
 - **`forms/frames.spec.ts`:** a same-origin frame's focus in the tab's pixels, its form in the one report, the fill (the frame's page sees `input` and `change`), the submit's values; a frame whose page patched its own `HTMLInputElement` value setter, still filled; another site's frame, a sandboxed one with and without `allow-same-origin`, `srcdoc`, `about:blank` and `data:`, none used; 2 and 3 levels used, 4 not; 20 frames used, the 21st not; a frame added later and one that navigates within the site; a formless frame's button; focus moving from the top's field into a frame's; a frame given a `sandbox` between focus and submit (no candidate), one sent to another site between the menu and the fill (nothing written), and one that navigates after its submit (`gone`); 30 ad frames beside the top's form.
