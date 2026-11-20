@@ -649,8 +649,8 @@ export class PasswordService {
     // *Never for this site* is about offers to save; *Remember*, ticked in the sign-in box, is you asking.
     if (page.realm === undefined && (await this.data({ op: 'isNever', origin: page.origin }).catch(() => ({}) as PasswordResult)).never) return { kind: 'never' };
     // A site that takes a one-time code after the password (Apple's list, S17 §6 phase 3D): the code is no new password.
-    // The list is loaded the first time a sign-in is submitted, never at launch.
-    const appendsCode = page.realm === undefined && (await import('@chord/core/password-quirks')).appendsCodeToPassword(page.origin) ? { appendsCode: true } : {};
+    // The list is loaded only for a password that ends in 6 to 8 digits, never at launch: no code can be there otherwise.
+    const appendsCode = page.realm === undefined && /[0-9]{6}$/.test(page.password) && (await import('@chord/core/password-quirks')).appendsCodeToPassword(page.origin) ? { appendsCode: true } : {};
     const { candidate } = await this.data({ op: 'compare', origin: page.origin, username: page.username, password: page.password, ...realm, ...appendsCode }).catch(() => ({}) as PasswordResult);
     if (!candidate) return { kind: 'locked' };
     // Exactly what's saved: no card, and its last use moves (S17 §6).
