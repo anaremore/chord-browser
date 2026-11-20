@@ -510,6 +510,31 @@ describe('the API agreed with the detector (origin from senderFrame, a chord id)
     expect(await service.saveCandidate({ ...at, origin: 'https://example.com' })).toEqual({ ok: false, problem: 'never' });
   });
 
+  describe('a code left off the end (S17 §6 phase 3D; review round 1 of #70): decided as an open vault would have', () => {
+    const LISTED = 'https://www.usaa.com';
+    const saved = async () => (await service.view()).logins.length;
+    it.each<[string, { username: string; password: string } | null, { password: string; typed: string }, 'same' | 'new' | 'update', string]>([
+      // A card offered while locked, its line shown: once unlocked, nothing shortens a password that ends in digits.
+      ['locked, the exact saved password (it ends in 6 digits): nothing written', { username: 'ada', password: 'Sekrit-pass123456' }, { password: 'Sekrit-pass', typed: 'Sekrit-pass123456' }, 'same', 'Sekrit-pass123456'],
+      ['locked, the saved password with a code after it: nothing written', { username: 'ada', password: 'Sekrit-pass' }, { password: 'Sekrit-pass', typed: 'Sekrit-pass654321' }, 'same', 'Sekrit-pass'],
+      ['locked, a new password with a code: new, saved without it', null, { password: 'New-pass', typed: 'New-pass654321' }, 'new', 'New-pass'],
+      ['locked, a changed password with digits: an update keeps what was typed', { username: 'ada', password: 'Old-pass' }, { password: 'New-pass', typed: 'New-pass654321' }, 'update', 'New-pass654321'],
+    ])('%s', async (_name, before, sent, kind, after) => {
+      expect((await service.setup(PASSPHRASE)).ok).toBe(true);
+      if (before) expect((await service.add({ origin: LISTED, ...before, note: '' })).ok).toBe(true);
+      const count = await saved();
+      await service.lock();
+      const at = { origin: LISTED, username: 'ada', chordId: 'work', ...sent };
+      expect(await service.saveCandidate(at)).toEqual({ ok: false, problem: 'locked' });
+      expect((await service.unlock(PASSPHRASE)).ok).toBe(true);
+      const answer = await service.saveCandidate(at);
+      expect(answer).toMatchObject({ ok: true, kind });
+      expect(await saved()).toBe(kind === 'new' ? count + 1 : count);
+      const login = (await service.view()).logins.find((l) => l.username === 'ada')!;
+      expect(await service.passwordFor(login.id, LISTED, 'work')).toBe(after);
+    });
+  });
+
   it('neverFor: the save card’s Never, for the frame’s origin; never from a private window, an unknown chord, or while locked', async () => {
     await oneLogin();
     expect(await service.neverFor('https://example.com', 'priv')).toBe(false);

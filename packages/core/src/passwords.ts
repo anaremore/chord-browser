@@ -75,8 +75,9 @@ export const withAppendedCode = (saved: string, submitted: string): boolean =>
  * (a password that's all digits, or a long number, is the password). Unchanged otherwise.
  */
 export function trimAppendedCode(password: string): string {
+  if (/^\d+$/.test(password)) return password;
   const digits = /\d+$/.exec(password)?.[0].length ?? 0;
-  return digits >= 6 && digits <= 8 && password.length > 6 ? password.slice(0, -6) : password;
+  return digits >= 6 && digits <= 8 ? password.slice(0, -6) : password;
 }
 
 /**

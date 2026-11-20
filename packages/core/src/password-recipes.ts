@@ -71,8 +71,9 @@ export const PASSWORD_RECIPES: readonly PasswordRecipe[] = [
 /** Whether `host` is one of a recipe's hosts. */
 export const recipeHostMatches = (pattern: string, host: string): boolean => (pattern.startsWith('*.') ? host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1 : host === pattern);
 
-/** The recipe for a document's host, or null. */
+/** The recipe for a document's host, or null. A host with an empty label (`a..okta.com`) is no host. */
 export function recipeFor(host: string, recipes: readonly PasswordRecipe[] = PASSWORD_RECIPES): PasswordRecipe | null {
   const h = host.toLowerCase().replace(/\.$/, '');
+  if (!h || h.split('.').some((label) => !label)) return null;
   return recipes.find((r) => r.hosts.some((p) => recipeHostMatches(p, h))) ?? null;
 }

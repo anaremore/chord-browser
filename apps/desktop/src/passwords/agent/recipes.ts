@@ -4,16 +4,19 @@
  * didn't take. A recipe only adds: its roles go only to fields its selectors match, never to a sign-up's, change's or
  * reset's form; its submit is refused for the same words, states and places the click rule refuses (`safeSubmit`).
  */
-import { recipeFor, type PasswordFieldRole, type PasswordFormClassification, type PasswordRecipe } from '@chord/core';
+import { recipeFor, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordRecipe } from '@chord/core';
 import { controlType, safeSubmit, type ScannedForm } from './scan';
 
 const urlOf = Object.getOwnPropertyDescriptor(Document.prototype, 'URL')!.get!;
 
-/** The recipe for a document, by its own address's host (a frame's own: a frame's agent runs on its document). */
+/**
+ * The recipe for a document, by its own address's host (a frame's own: a frame's agent runs on its document). Over
+ * `https:` only: the providers' pages are (review round 1 of #70).
+ */
 export function recipeOf(doc: Document): PasswordRecipe | null {
   try {
     const url = new URL(String(urlOf.call(doc)));
-    return url.protocol === 'https:' || url.protocol === 'http:' ? recipeFor(url.hostname) : null;
+    return url.protocol === 'https:' ? recipeFor(url.hostname) : null;
   } catch {
     return null;
   }
@@ -35,24 +38,34 @@ export const holdsRecipeField = (scanned: ScannedForm, recipe: PasswordRecipe): 
 /** Kinds a recipe never changes: a recipe is for signing in. */
 const NOT_SIGN_IN = new Set(['sign-up', 'change', 'reset']);
 
+/** A field you can see, or typed in or had filled: the classifier's own test for a usable one. */
+const shownOrUsed = (f: PasswordField) => f.visible || f.userTyped || f.autofilled;
+/** A password field you could type in now (as the agent's `usable` and the classifier's `usablePassword` say). */
+const usablePassword = (f: PasswordField) => shownOrUsed(f) && (!f.readOnly || f.userTyped || f.autofilled);
+
 /**
- * The classifier's result for `scanned`, with the recipe's fields given their roles: its username, and its password
- * when that's a `type=password` field. Shown, the password makes it a sign-in; without one shown, the username makes it
- * a first step. Any other field holding those roles loses them. Nothing the recipe doesn't match changes.
+ * The classifier's result for `scanned`, with the recipe's fields given their roles: its username (shown, or carried
+ * hidden into a password step), and its password when that's a `type=password` field you could type in now (review
+ * round 1 of #70: a hidden one is a later step's, or a decoy). With that password, the form is a sign-in; without it,
+ * a shown username makes it a first step. Any other field holding those roles loses them. Nothing the recipe doesn't
+ * match changes, and a recipe that finds only a hidden field changes nothing.
  */
 export function withRecipe(scanned: ScannedForm, base: PasswordFormClassification | null, recipe: PasswordRecipe | null): PasswordFormClassification | null {
   if (!recipe || (base && NOT_SIGN_IN.has(base.kind))) return base;
   let user = -1;
   let pass = -1;
+  const fields = scanned.record.fields;
   scanned.elements.forEach((el, i) => {
     if (user < 0 && matches(el, recipe.username)) user = i;
-    if (pass < 0 && controlType(el) === 'password' && matches(el, recipe.password)) pass = i;
+    if (pass < 0 && controlType(el) === 'password' && matches(el, recipe.password) && fields[i] && usablePassword(fields[i])) pass = i;
   });
-  if (user < 0 && pass < 0) return base;
-  const fields = scanned.record.fields;
   const username = user >= 0 ? fields[user]! : (base?.username ?? null);
-  const password = pass >= 0 ? fields[pass]! : (base?.password ?? null);
-  const kind = password?.visible ? 'sign-in' : username ? 'username-only' : (base?.kind ?? 'sign-in');
+  // The recipe's own password; else the classifier's, where it read a sign-in; else a first step, by a shown username.
+  const password = pass >= 0 ? fields[pass]! : base?.kind === 'sign-in' ? base.password : null;
+  let kind: PasswordFormClassification['kind'];
+  if (password && (pass >= 0 || user >= 0)) kind = 'sign-in';
+  else if (!password && user >= 0 && shownOrUsed(fields[user]!)) kind = 'username-only';
+  else return base;
   const roles = new Map<number, PasswordFieldRole>(base?.roles ?? []);
   for (const [key, role] of roles) {
     if (key === username?.key || key === password?.key || role === 'username' || (role === 'current-password' && password)) roles.delete(key);

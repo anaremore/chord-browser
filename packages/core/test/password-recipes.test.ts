@@ -27,6 +27,10 @@ describe('recipes by host', () => {
     ['auth0.com.example', null],
     ['login.microsoftonline.com.example', null],
     ['', null],
+    // An empty label is no host (review round 1 of #70).
+    ['a..okta.com', null],
+    ['.okta.com', null],
+    ['accounts..google.com', null],
   ])('%s → %s', (host, name) => {
     expect(recipeFor(host)?.name ?? null).toBe(name);
   });
@@ -56,17 +60,23 @@ describe('recipes by host', () => {
 
 describe('a one-time code typed after the password', () => {
   it.each([
-    // Apple's list, by its hosts and their subdomains, down to the registrable domain.
+    // Apple's list, by registrable domain (review round 1 of #70): a listed host covers its whole site.
     ['https://usaa.com', true],
     ['https://www.usaa.com', true],
+    ['https://USAA.com.', true],
     ['https://auth.redhat.com', true],
     ['https://sso.auth.redhat.com', true],
-    // Not a listed host's parent, another site, a look-alike, or no web address.
-    ['https://redhat.com', false],
-    ['https://www.redhat.com', false],
+    ['https://sso.redhat.com', true],
+    ['https://redhat.com', true],
+    ['https://www.redhat.com', true],
+    ['http://usaa.com', true],
+    // Another site: by the Public Suffix List, a look-alike, another suffix, or no web address.
     ['https://example.com', false],
     ['https://usaa.com.example', false],
     ['https://notusaa.com', false],
+    ['https://evil-usaa.com', false],
+    ['https://usaa.co.uk', false],
+    ['https://redhat.com.evil.example', false],
     ['file:///usaa.com', false],
     ['not a url', false],
   ])('%s → %s', (origin, want) => {
@@ -99,7 +109,13 @@ describe('a one-time code typed after the password', () => {
     ['Sekrit-pass12345', 'Sekrit-pass12345'],
     ['Sekrit-pass123456789', 'Sekrit-pass123456789'],
     ['Sekrit-pass', 'Sekrit-pass'],
+    // Nothing but digits is the password (review round 1 of #70), however many.
     ['123456', '123456'],
+    ['1234567', '1234567'],
+    ['12345678', '12345678'],
+    ['123456789', '123456789'],
+    // One character before the code: that character.
+    ['a123456', 'a'],
   ])('a new password %s is saved as %s', (password, want) => {
     expect(trimAppendedCode(password)).toBe(want);
   });

@@ -1302,7 +1302,8 @@ export class PasswordAssist {
         return this.never(card);
       case 'code':
         // *Keep them* and *Leave off the code*: which password Save saves, and the eye shows. Nothing is saved here.
-        if (!card.values || !card.code) return;
+        // Never while a Save waits on the late window or runs: what it saves was settled when it was pressed.
+        if (!card.values || !card.code || card.waiting || card.busy) return;
         card.code.kept = !card.code.kept;
         card.values = { ...card.values, password: card.code.kept ? card.code.typed : card.code.trimmed };
         return this.options.host.changed(this.windowOf(card));
@@ -1476,6 +1477,9 @@ export class PasswordAssist {
         origin: card.origin,
         username,
         password: values.password,
+        // Without the code: what was typed too, so the vault decides as it would have with the vault open (a password
+        // saved as typed, or with a code after it, is the same; an update keeps what was typed; review round 1 of #70).
+        ...(card.code && !card.code.kept ? { typed: card.code.typed } : {}),
         chordId: card.tab.chordId,
         ...(card.realm !== undefined ? { realm: card.realm } : {}),
         ...(card.setup && details.passphrase !== undefined ? { passphrase: details.passphrase } : {}),

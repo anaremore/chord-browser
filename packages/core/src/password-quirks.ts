@@ -29,7 +29,8 @@ declare const URL: new (url: string, base?: string) => { protocol: string; hostn
 
 const RULES = rules as Record<string, { 'password-rules'?: string }>;
 const CHANGE_URLS = changeUrls as Record<string, string>;
-const APPENDS_CODE: ReadonlySet<string> = new Set((appendsCode as string[]).map((h) => h.toLowerCase()));
+/** Apple's sites that take a code after the password, by registrable domain (`auth.example.com` → `example.com`). */
+const APPENDS_CODE: ReadonlySet<string> = new Set((appendsCode as string[]).map((h) => getDomain(h.toLowerCase(), { allowPrivateDomains: true }) ?? h.toLowerCase()));
 
 /** The host and its parents, longest first, down to its registrable domain; the host alone for an IP address, `localhost` or a public suffix. */
 function hostsOf(host: string): string[] {
@@ -85,11 +86,14 @@ export function changePasswordUrlFor(origin: string): string | null {
 }
 
 /**
- * Whether a page's origin is a site that takes a one-time code typed after the password (Apple's list): the host or a
- * parent down to its registrable domain listed (`www.example.com` for `example.com`; `sso.auth.example.com` for
- * `auth.example.com`, never `example.com` for it).
+ * Whether a page's origin is a site that takes a one-time code typed after the password (Apple's list), by registrable
+ * domain, as the plan said (review round 1 of #70): a listed `auth.example.com` covers `example.com`, `sso.example.com`
+ * and every host under it. By the Public Suffix List, so `example.co.uk` is never `example.com`'s, nor
+ * `evil-example.com`. The effect is gentle: a code after the saved password is no new password, and a first save says
+ * it left one off, with *Keep them*.
  */
 export function appendsCodeToPassword(origin: string): boolean {
-  const host = hostOf(origin);
-  return !!host && hostsOf(host).some((h) => APPENDS_CODE.has(h));
+  const host = hostOf(origin)?.toLowerCase().replace(/\.$/, '');
+  const site = host ? getDomain(host, { allowPrivateDomains: true }) : null;
+  return !!site && APPENDS_CODE.has(site);
 }

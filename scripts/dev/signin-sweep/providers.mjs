@@ -10,7 +10,7 @@
 // presses Next or submits anything. No account is used. Results and screenshots stay in <dir>; only the selectors a
 // recipe needs go into the repo.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 /** The providers' own public sign-in pages: the identifier step each starts with. */
@@ -35,6 +35,13 @@ if (i < 0 || !args[i + 1]) {
   process.exit(2);
 }
 const dir = resolve(args[i + 1]);
+// The repo's own tree is never the sweep's folder: what the providers' pages hold stays out of it (review round 1 of #70).
+const repo = resolve(import.meta.dirname, '..', '..', '..');
+const inside = relative(repo, dir);
+if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
+  console.error(`--dir ${dir} is inside the repo (${repo}): use a folder outside it, such as a scratch folder.`);
+  process.exit(2);
+}
 mkdirSync(dir, { recursive: true });
 writeFileSync(join(dir, 'sites.txt'), `${PROVIDER_PAGES.join('\n')}\n`);
 writeFileSync(join(dir, 'read-only'), 'Load and look only: no fill, no Next, nothing submitted.\n');

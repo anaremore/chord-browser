@@ -754,7 +754,14 @@ export class PasswordService {
    * passphrase (`passphrase`, from the card's step). Never from a private
    * window, for a proxy, or on a site you said never to save for.
    */
-  async saveCandidate(candidate: { origin: string; username: string; password: string; chordId: string | null; passphrase?: string; proxy?: boolean; realm?: string }): Promise<SaveAnswer> {
+  /**
+   * A card's Save: new, an update, or the same as saved (nothing written). `typed`: the save card left a code off the
+   * end of `password` (S17 §6 phase 3D, the owner's design 1A), and this is what was typed. It's decided as an open
+   * vault would have decided before showing the card (review round 1 of #70): if either is the same as a saved sign-in
+   * (with a code after it or not), nothing is written; an update keeps what was typed; only a new one is saved without
+   * the code. A card offered while locked thus never shortens a saved password that really ends in digits.
+   */
+  async saveCandidate(candidate: { origin: string; username: string; password: string; typed?: string; chordId: string | null; passphrase?: string; proxy?: boolean; realm?: string }): Promise<SaveAnswer> {
     const page = this.pageOf(candidate.origin, candidate.chordId);
     if (!page) return { ok: false, problem: 'off' };
     const extensions = this.installed();
@@ -766,7 +773,16 @@ export class PasswordService {
       ...(candidate.proxy ? { proxy: true } : {}),
       ...(candidate.realm !== undefined ? { realm: candidate.realm } : {}),
     };
-    const kind = await this.candidate(request, extensions);
+    let kind = await this.candidate(request, extensions);
+    if (candidate.typed !== undefined && candidate.typed !== candidate.password && candidate.realm === undefined && (kind.kind === 'new' || kind.kind === 'update')) {
+      const typed = await this.candidate({ ...request, password: candidate.typed }, extensions);
+      if (typed.kind === 'same') kind = typed;
+      // An update, either way: it keeps what was typed.
+      else if (kind.kind === 'update' || typed.kind === 'update') {
+        request.password = candidate.typed;
+        if (typed.kind === 'update') kind = typed;
+      } else if (typed.kind !== 'new') kind = typed;
+    }
     switch (kind.kind) {
       case 'refused':
       case 'off':

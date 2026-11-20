@@ -105,7 +105,8 @@ test('Google’s password step: the password’s role, and Next submits it with 
 });
 
 test('the same markup on a host without a recipe, or one that only ends like Google’s: Next is not a submit', async ({ page }) => {
-  for (const url of ['https://sign-in.example/identifier', 'https://accounts.google.com.example/identifier', 'https://notaccounts.google.com/identifier']) {
+  // Over http, the provider's host gets no recipe either: its pages are https (review round 1 of #70).
+  for (const url of ['https://sign-in.example/identifier', 'https://accounts.google.com.example/identifier', 'https://notaccounts.google.com/identifier', 'http://accounts.google.com/identifier']) {
     const a = await open(page, url, GOOGLE_IDENTIFIER);
     await page.locator('#identifierId').fill('ada@example.com');
     await a.clear();
@@ -141,6 +142,30 @@ test('a recipe’s submit that reads as a toggle, is pressed, or is the password
   await page.locator('#idSIButton9').click();
   await a.settle();
   expect(await submits(a)).toEqual([]);
+});
+
+test('a recipe’s password you couldn’t type in now: the recipe adds nothing to the generic reading (review round 1 of #70)', async ({ page }) => {
+  /** The kinds the page's forms report says, at a host. */
+  const kindsAt = async (url: string, body: string) => {
+    const a = await open(page, url, body);
+    await page.locator('input[name="q"]').click();
+    await a.settle();
+    return {
+      forms: (await a.of('forms')).flatMap((m) => (m['forms'] as { kind: string }[]).map((f) => f.kind)),
+      focus: (await a.of('focus')).map((f) => f['kind']),
+    };
+  };
+  const search = '<input type="search" name="q" aria-label="Search">';
+  // Read only, beside a search box: no sign-in at all (round 0's recipe made it one).
+  const readOnly = `<form id="f" onsubmit="return false">${search}<input type="password" name="Passwd" readonly></form>`;
+  const at = await kindsAt('https://accounts.google.com/search', readOnly);
+  expect(at.forms).not.toContain('sign-in');
+  expect(at.focus).not.toContain('sign-in');
+  // Hidden, or shown as nothing: what the generic detector reads, and no more (its report holds a hidden step's form).
+  for (const pw of ['<input type="password" name="Passwd" style="display:none">', '<input type="password" name="Passwd" hidden>', '<input type="password" name="Passwd" style="opacity:0;position:absolute">']) {
+    const body = `<form id="f" onsubmit="return false">${search}${pw}</form>`;
+    expect(await kindsAt('https://accounts.google.com/search', body), pw).toEqual(await kindsAt('https://sign-in.example/search', body));
+  }
 });
 
 test('a recipe never makes a sign-up a sign-in: a new password and its confirmation keep their roles', async ({ page }) => {
