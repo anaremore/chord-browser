@@ -13,31 +13,21 @@ import {
   children,
   ASSISTANT_MAX_IMAGES,
   ASSISTANT_MAX_PROCESSES,
-  ASSISTANT_PDF_MAX_PAGES,
   ASSISTANT_PROCESS_IDLE_MS,
   ASSISTANT_PROVIDERS,
   ASSISTANT_TOOLS,
-  diagnosticsEntries,
-  diagnosticsResult,
-  diagnosticsSummary,
   assistantInstructions,
   assistantPruneBefore,
-  assistantTool,
   fieldCount,
   fillChangedNote,
   fillWrites,
-  formRead,
-  formResult,
   isNeverReadable,
-  proposedFill,
   samePage,
   nameTabs,
-  pageResult,
   pdfPageOf,
   pdfPageUrl,
-  pdfText,
   screenshotFilename,
-  readNeedsApproval,
+  TabRefs,
   attachesTabOnScreen,
   earlierTurns,
   splitCitations,
@@ -57,13 +47,11 @@ import {
   type AssistantTabName,
   type AssistantContextUsage,
   type AssistantFillCard,
-  type AssistantFormRead,
   type AssistantMessage,
   type AssistantMessageBody,
   type AssistantProvider,
   type AssistantScope,
   type AssistantThread,
-  type AssistantToolName,
   type AssistantToolSpec,
   type NodeId,
   type TabNode,
@@ -81,12 +69,14 @@ import type { AssistantSession, MadeImage, ProviderError, SessionImage, ToolOutp
 import { ClaudeSession } from './claude';
 import { CodexSession } from './codex';
 import { claudeConfigDir, claudeProjectFolder, detect, detectInWsl, mayBeInWsl, notInstalled, openSignIn, rememberedInWsl, type Detected, type Launch, type ProviderStatus } from './detect';
-import { readDiagnostics } from './diagnostics';
-import { readPage, screenshot, type PageRead } from './extract';
-import { fillFormPage, readFormPage, undoFillPage, type FillOutcome } from './forms';
+import { ControlAgent, type ControlCard } from '../control/gate';
+import { controlPage } from '../control/page';
+import type { FillOutcome } from '../control/forms';
+import type { ControlScope } from '../control/scope';
+import { runControlTool } from '../control/tools';
 import { AssistantImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
-import { extractPdf, fetchPdf, PdfError, pdfProblemCopy } from './pdf';
+import { duetScope, type DuetChat } from './scope';
 
 type Decision = 'once' | 'thread' | 'denied';
 
@@ -106,41 +96,31 @@ interface PendingImage {
   thumb: Buffer;
 }
 
-interface ThreadState {
-  chordId: string;
-  /** Null until the first message is sent: a fresh thread isn't saved before then. */
-  thread: AssistantThread | null;
+/**
+ * A chat. As the control layer's agent (DuetChat), it has its refs, attached
+ * tabs, gate (grants, cards, Stop) and what its tools remember (PDFs read, the
+ * last form, tabs read: a badge in the sidebar while it's open).
+ */
+interface ThreadState extends DuetChat {
   messages: AssistantMessage[];
-  /** Opaque tab handles ("t3") ↔ node ids, so the model never sees titles or URLs it didn't ask for. */
-  refs: Map<string, NodeId>;
-  /** Tabs attached to any message in the thread: readable without asking. */
-  attached: Set<NodeId>;
-  /** "Allow for this chat": tool names the user said yes to for the rest of the thread. */
-  grants: Set<string>;
-  /** Tabs the assistant read in this thread: a badge in the sidebar while it's open. */
-  read: Set<NodeId>;
   queue: string[];
   streaming: AssistantMessage | null;
   startedAt: number | null;
-  windowId: WindowId | null;
+  /** Approval cards in the chat, by message id: the gate's card, answered from the panel. */
   pending: Map<string, (decision: Decision) => void>;
   /** Shown between messages after a resume fell back to a summary, or the provider changed. */
   pendingDivider: string | null;
   lastError: ProviderError | null;
   /** How full the provider's context is, as its CLI last reported (the panel's meter). */
   context: AssistantContextUsage | null;
-  /** PDFs read in this chat, per tab: later ranges reuse them, and citations find their page in them. */
-  pdfs: Map<NodeId, PdfRead>;
   /** Images Codex made that are still being written: the reply is kept only once they're on disk. */
   saving: Set<Promise<void>>;
-  /** The last form the assistant read in this chat (read_form): its fields by Chord's ids, and the page's token for that read. */
-  form: { nodeId: NodeId; token: string; read: AssistantFormRead } | null;
   /** Fill cards waiting for you, by message id: the read they're for (the card in the panel holds the values). */
-  fills: Map<string, { nodeId: NodeId; token: string; read: AssistantFormRead }>;
-  /** Chord's next field id in this chat: ids never repeat, so one from an earlier read is caught, not taken for another field. */
-  nextField: number;
+  fills: Map<string, NonNullable<DuetChat['form']>>;
   /** The reply that showed a fill card: one card for each message you send. */
   fillTurn: string | null;
+  /** Its scope in the control layer, made once. */
+  scope: ControlScope | null;
 }
 
 /** A fill's Undo, by its toast's token. */
@@ -155,7 +135,7 @@ interface FillUndo {
 /** Undo tokens kept for fill toasts. */
 const FILL_UNDOS = 30;
 
-/** Why Fill wrote nothing (fillFormPage's answers), as the card says it. */
+/** Why Fill wrote nothing (the page adapter's fillForm answers), as the card says it. */
 const FILL_PROBLEMS: Record<Exclude<FillOutcome, { ok: true }>['why'], string> = {
   navigated: 'The page moved on since the form was read, so nothing was filled. Ask again.',
   gone: 'The form isn’t on the page any more, so nothing was filled.',
@@ -173,13 +153,6 @@ function saved(message: AssistantMessage): AssistantMessage {
 /** Where the assistant's images go when you save one: Downloads, listed as a finished download. */
 export interface AssistantFiles {
   save(filename: string, bytes: Uint8Array, mime: string): Promise<void>;
-}
-
-interface PdfRead {
-  url: string;
-  pages: string[];
-  totalPages: number;
-  text: string;
 }
 
 /** WSL installs as panel.json keeps them, so a WSL-only setup is ready at launch without starting WSL. */
@@ -201,8 +174,6 @@ interface Live {
 const THREADS_IN_MENU = 12;
 /** What a chat's links may open: web pages, nothing else. */
 const WEB_PAGE = /^https?:\/\/[^\s/]/i;
-/** PDFs kept per chat for later ranges and citations; the oldest goes first. */
-const PDFS_KEPT = 3;
 /** Development and tests: a shorter idle window, so "start fresh, offer Continue" can be seen. */
 const IDLE_MS = (!app.isPackaged && Number(process.env['CHORD_ASSISTANT_IDLE_MS'])) || undefined;
 const PUSH_MS = 33;
@@ -359,13 +330,14 @@ export class AssistantService {
   }
 
   private blank(chordId: string, thread: AssistantThread | null): ThreadState {
-    return {
+    const state: ThreadState = {
       chordId,
       thread,
       messages: [],
-      refs: new Map(),
+      refs: new TabRefs<NodeId>('t'),
       attached: new Set(),
-      grants: new Set(),
+      // The chat is the agent; its cards are approval messages in the chat.
+      control: new ControlAgent(`duet:${randomUUID()}`, (card, signal) => this.showCard(state, card, signal)),
       read: new Set(),
       queue: [],
       streaming: null,
@@ -381,7 +353,9 @@ export class AssistantService {
       fills: new Map(),
       nextField: 1,
       fillTurn: null,
+      scope: null,
     };
+    return state;
   }
 
   private async load(threadId: string, chordId: string): Promise<ThreadState> {
@@ -398,10 +372,9 @@ export class AssistantService {
       if (m.body.role === 'user') {
         for (const a of m.body.attachments) {
           const node = this.nodeByUrl(chordId, a.url);
-          if (node) {
-            state.refs.set(a.ref, node);
-            state.attached.add(node);
-          }
+          // A tab that has closed since keeps its handle, which now reads as closed.
+          state.refs.restore(a.ref, node);
+          if (node) state.attached.add(node);
         }
       }
       // A reply cut off by quitting stays as it was, marked interrupted (with Retry).
@@ -510,7 +483,7 @@ export class AssistantService {
       else if (m.body.role === 'assistant') for (const c of m.body.citations) if (c.url) names[c.ref] = { title: c.title || c.url, url: c.url };
     }
     const current = this.browser.store.state;
-    for (const [ref, id] of state.refs) {
+    for (const [ref, id] of state.refs.entries()) {
       const node = nodeOf(current, id);
       if (node?.kind === 'tab') names[ref] = { title: node.title || node.url, url: node.url };
     }
@@ -801,6 +774,8 @@ export class AssistantService {
         return this.send(windowId, state, action.text);
       case 'stop':
         state.queue = [];
+        // Through the gate: a tool call in flight answers at once, and its card goes. The next message lets it go on.
+        state.control.stop();
         if (state.thread) this.live.get(state.thread.id)?.session.stop();
         return;
       case 'reuseImages': {
@@ -940,6 +915,8 @@ export class AssistantService {
       state.queue.push(trimmed);
       return;
     }
+    // A new message lets the chat go on after Stop (the gate refused its tools until now).
+    state.control.resume();
     const provider = state.thread?.provider ?? this.settings.provider;
     if (!provider) return;
     const now = Date.now();
@@ -970,7 +947,7 @@ export class AssistantService {
     state.lastError = null;
 
     const nothing = this.settings.readsNothing;
-    const attachments: AssistantAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: this.refFor(state, node.id), url: node.url, title: node.title || node.url })));
+    const attachments: AssistantAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url })));
     for (const a of attachments) {
       const node = state.refs.get(a.ref);
       if (node) state.attached.add(node);
@@ -1015,13 +992,6 @@ export class AssistantService {
       if (bytes) out.push({ mime: image.mime, data: bytes.toString('base64') });
     }
     return out;
-  }
-
-  private refFor(state: ThreadState, nodeId: NodeId): string {
-    for (const [ref, id] of state.refs) if (id === nodeId) return ref;
-    const ref = `t${state.refs.size + 1}`;
-    state.refs.set(ref, nodeId);
-    return ref;
   }
 
   private async sessionFor(state: ThreadState): Promise<AssistantSession | null> {
@@ -1157,8 +1127,8 @@ export class AssistantService {
     if (!streaming || streaming.body.role !== 'assistant') return;
     state.streaming = null;
     state.startedAt = null;
-    for (const resolve of state.pending.values()) resolve('denied');
-    state.pending.clear();
+    // Cards still waiting go with the turn, each answered no.
+    state.control.cancelCards();
     const text = streaming.body.text;
     const citations: AssistantCitation[] = [];
     for (const seg of splitCitations(text)) {
@@ -1222,167 +1192,86 @@ export class AssistantService {
     this.schedulePush();
   }
 
-  /* ---------- Tools ---------- */
+  /* ---------- Tools: the shared control layer (main/control/), with this chat as its agent ---------- */
 
-  /** Ask in the thread (an approval card), and keep the answer as a record. */
-  private async ask(state: ThreadState, tool: string, description: string, target: string[]): Promise<{ decision: Decision; message: AssistantMessage }> {
-    const message = await this.addMessage(state, { role: 'approval', tool, description, target, decision: 'pending' });
-    const decision = await new Promise<Decision>((resolve) => state.pending.set(message.id, resolve));
-    if (decision === 'thread') state.grants.add(tool);
+  /** A tool call from the chat's provider: the control layer answers it, within the chat's scope. */
+  private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
+    if (!state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
+    return runControlTool(this.scopeOf(state), this.browser, name, args);
+  }
+
+  /** The chat's ControlScope (assistant/scope.ts), made the first time a tool is called. */
+  private scopeOf(state: ThreadState): ControlScope {
+    state.scope ??= duetScope(state, {
+      browser: this.browser,
+      settings: () => this.settings,
+      readable: (node) => this.readable(node),
+      activeTab: (windowId) => this.activeTab(windowId),
+      activity: (chat, tool, summary, detail, ok) => this.activity(chat as ThreadState, tool, summary, detail, ok),
+      search: (chat, tool, query) => this.searchFor(chat as ThreadState, tool, query),
+      fills: (chat) => {
+        const s = chat as ThreadState;
+        return {
+          refuse: () => (s.streaming && s.fillTurn === s.streaming.id ? 'You already showed the user values for this message. Wait for their answer.' : null),
+          show: async (node, card, form) => {
+            // A newer card takes the place of one still waiting.
+            for (const m of s.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(s, m, 'expired', 'Newer values are below.');
+            s.fillTurn = s.streaming?.id ?? null;
+            const message = await this.addMessage(s, { role: 'tool', tool: 'propose_fill', summary: `Suggested values for ${fieldCount(card.fields.length)} in “${card.title}”`, detail: card.site, ok: true, fill: card });
+            s.fills.set(message.id, { nodeId: node.id, token: form.token, read: form.read });
+          },
+        };
+      },
+    });
+    return state.scope;
+  }
+
+  /**
+   * The gate's card, as the chat shows it: an approval message, kept as a
+   * record of the answer. Stop or the turn ending takes it down, as a no.
+   */
+  private async showCard(state: ThreadState, card: ControlCard, signal: AbortSignal): Promise<'once' | 'always' | 'deny'> {
+    const message = await this.addMessage(state, { role: 'approval', tool: card.tool, description: card.description, target: card.target, decision: 'pending' });
+    const decision = await new Promise<Decision>((resolve) => {
+      if (signal.aborted) return resolve('denied');
+      state.pending.set(message.id, resolve);
+      signal.addEventListener(
+        'abort',
+        () => {
+          if (state.pending.get(message.id) !== resolve) return;
+          state.pending.delete(message.id);
+          resolve('denied');
+        },
+        { once: true },
+      );
+    });
     if (message.body.role === 'approval') await this.updateMessage(message, { ...message.body, decision });
-    return { decision, message };
+    return decision === 'thread' ? 'always' : decision === 'once' ? 'once' : 'deny';
   }
 
   private async activity(state: ThreadState, tool: string, summary: string, detail = '', ok = true): Promise<void> {
     await this.addMessage(state, { role: 'tool', tool, summary, detail, ok });
   }
 
-  private resolveTab(state: ThreadState, ref: unknown): TabNode | null {
-    const id = typeof ref === 'string' ? state.refs.get(ref) : undefined;
-    const node = id ? nodeOf(this.browser.store.state, id) : undefined;
-    return node?.kind === 'tab' ? node : null;
-  }
-
-  private tabsInScope(state: ThreadState): TabNode[] {
-    const scope: AssistantScope = state.thread?.scope ?? 'ask';
-    const nodes = nodeList(this.browser.store.state).filter((n): n is TabNode => n.kind === 'tab' && this.readable(n));
-    return scope === 'all' ? nodes : nodes.filter((n) => n.chordId === state.chordId);
-  }
-
-  private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
-    const spec = assistantTool(name);
-    if (!spec || !state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
-    if (this.settings.readsNothing) return { text: toolResult({ refused: 'The user set you to read nothing, in Settings → Assistant.' }, false), isError: true };
-    try {
-      if (spec.name === 'read_form' || spec.name === 'propose_fill') return await this.formTool(state, spec.name, args);
-      if (spec.name === 'page_diagnostics') return await this.diagnosticsTool(state, args);
-      return await this.readTool(state, spec.name, args);
-    } catch (error) {
-      return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
-    }
-  }
-
-  private async readTool(state: ThreadState, tool: AssistantToolName, args: Record<string, unknown>): Promise<ToolOutput> {
-    const thread = state.thread!;
-    const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
-    if (tool === 'list_tabs' || tool === 'search_history' || tool === 'search_archive') {
-      if (readNeedsApproval({ scope: thread.scope, attached: false, sameChord: true, tool, granted: state.grants.has(tool) })) {
-        const what = tool === 'list_tabs' ? 'See the list of your tabs' : tool === 'search_history' ? `Search your history for “${String(args['query'] ?? '')}”` : `Search your archive for “${String(args['query'] ?? '')}”`;
-        const { decision } = await this.ask(state, tool, what, []);
-        if (decision === 'denied') return refuse('The user said no to this. Carry on without it, or ask them.');
-      }
-      if (tool === 'list_tabs') {
-        const tabs = this.tabsInScope(state).map((n) => ({ tab_id: this.refFor(state, n.id), title: n.title, site: safeHost(n.url), attached: state.attached.has(n.id) }));
-        await this.activity(state, tool, `Listed ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`);
-        return { text: toolResult({ tabs }) };
-      }
-      const query = String(args['query'] ?? '').slice(0, 200);
-      // Sites on the Never list stay out of search results too, as do chords where the assistant is off.
-      const allowed = (url: string, chordId?: string) =>
-        !isNeverReadable(url, this.settings.neverSites) && !(chordId && (this.settings.offChords.includes(chordId) || this.isPrivateChord(chordId)));
-      if (tool === 'search_history') {
-        const result = await this.persistence.search(query, state.chordId);
-        const hits = result.history
-          .filter((h) => allowed(h.url))
-          .slice(0, 20)
-          .map((h) => ({ title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() }));
-        await this.activity(state, tool, `Searched history for “${query}”`, `${hits.length} found`);
-        return { text: toolResult({ results: hits }) };
-      }
-      const page = await this.persistence.archiveList(query, 40);
-      const hits = page.items
-        .filter((a) => allowed(a.url, a.chordId))
+  /** search_history and search_archive: sites on the Never list stay out of the results, as do chords where the assistant is off. */
+  private async searchFor(state: ThreadState, tool: 'search_history' | 'search_archive', query: string): Promise<Record<string, string>[]> {
+    const allowed = (url: string, chordId?: string) =>
+      !isNeverReadable(url, this.settings.neverSites) && !(chordId && (this.settings.offChords.includes(chordId) || this.isPrivateChord(chordId)));
+    if (tool === 'search_history') {
+      const result = await this.persistence.search(query, state.chordId);
+      return result.history
+        .filter((h) => allowed(h.url))
         .slice(0, 20)
-        .map((a) => ({ title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() }));
-      await this.activity(state, tool, `Searched the archive for “${query}”`, `${hits.length} found`);
-      return { text: toolResult({ results: hits }) };
+        .map((h) => ({ title: h.title, url: h.url, last_visit: new Date(h.lastVisitAt).toISOString() }));
     }
-
-    // read_tab, read_selection, tab_screenshot
-    const node = tool === 'read_selection' && args['tab_id'] === undefined ? this.firstAttached(state) : this.resolveTab(state, args['tab_id']);
-    if (!node) return refuse('No such tab. Use list_tabs or an attached tab id.');
-    if (!this.readable(node)) return refuse('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
-    const needs = readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool, granted: state.grants.has(`read:${node.id}`) || state.grants.has(tool) });
-    if (needs) {
-      const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
-      const { decision } = await this.ask(state, tool, `${verb} “${node.title || safeHost(node.url)}”`, [node.url]);
-      if (decision === 'denied') return refuse('The user said no to reading that tab. Carry on without it, or ask them.');
-      if (decision === 'thread') state.grants.add(tool);
-    }
-    const contents = await this.loadedContents(node.id);
-    if (!contents) return refuse('That tab could not be loaded.');
-    state.read.add(node.id);
-    const ref = this.refFor(state, node.id);
-    if (tool === 'tab_screenshot') {
-      // What's on screen: a tab in reader view shows its article (its page waits, detached, where no picture can be taken).
-      const shot = await screenshot(pageOf(this.browser.readers.viewFor(node.id)) ?? contents);
-      await this.activity(state, tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
-      return shot ? { image: shot } : refuse('Could not take the picture.');
-    }
-    const page = await readPage(contents);
-    if (isPdf(page, contents.getURL())) {
-      if (tool === 'read_selection') return refuse('What’s selected inside a PDF can’t be seen. Read the PDF with read_tab instead.');
-      return this.readPdf(state, node, contents, ref, args);
-    }
-    if (!page) return refuse('That page could not be read.');
-    if (tool === 'read_selection') {
-      await this.activity(state, tool, `Read your selection in “${node.title || safeHost(node.url)}”`, node.url);
-      return { text: pageResult({ ref, url: page.url, text: page.selection, retrievedAt: Date.now() }) };
-    }
-    const start = typeof args['start'] === 'number' ? args['start'] : 0;
-    const length = typeof args['length'] === 'number' ? args['length'] : undefined;
-    const text = pageResult({ ref, url: page.url, text: page.text, start, ...(length ? { length } : {}), retrievedAt: Date.now() });
-    await this.activity(state, tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
-    return { text };
+    const page = await this.persistence.archiveList(query, 40);
+    return page.items
+      .filter((a) => allowed(a.url, a.chordId))
+      .slice(0, 20)
+      .map((a) => ({ title: a.title, url: a.url, archived: new Date(a.archivedAt).toISOString() }));
   }
 
-  /**
-   * A PDF in Chromium's viewer: its bytes through the tab's own session, its
-   * text from pdf.js in a utility process, with [Page n] markers. Reading on
-   * from `start` reuses the same read; a new read fetches it again.
-   */
-  private async readPdf(state: ThreadState, node: TabNode, contents: WebContents, ref: string, args: Record<string, unknown>): Promise<ToolOutput> {
-    const title = node.title || safeHost(node.url);
-    const url = contents.getURL();
-    const start = typeof args['start'] === 'number' ? args['start'] : 0;
-    const length = typeof args['length'] === 'number' ? args['length'] : undefined;
-    let pdf = state.pdfs.get(node.id);
-    if (!pdf || pdf.url !== url || start === 0) {
-      try {
-        // The address the tab shows now, and where the download ends up, must both be readable.
-        const readable = (address: string) => !isNeverReadable(address, this.settings.neverSites);
-        if (!readable(url)) throw new PdfError('never');
-        const bytes = await fetchPdf(contents, url, readable);
-        const { pages, totalPages } = await extractPdf(bytes, ASSISTANT_PDF_MAX_PAGES);
-        pdf = { url, pages, totalPages, text: pdfText(pages) };
-      } catch (error) {
-        const why = error instanceof PdfError ? pdfProblemCopy(error.problem, error.detail) : pdfProblemCopy('crashed');
-        await this.activity(state, 'read_tab', `Couldn’t read “${title}”`, why, false);
-        return { text: toolResult({ refused: `Couldn’t read this PDF: ${why}.` }, false), isError: true };
-      }
-      state.pdfs.delete(node.id);
-      state.pdfs.set(node.id, pdf);
-      if (state.pdfs.size > PDFS_KEPT) state.pdfs.delete(state.pdfs.keys().next().value!);
-    }
-    const read = pdf.pages.length;
-    const notes = [
-      pdf.totalPages > read ? `This PDF has ${pdf.totalPages} pages; pages 1–${read} were read, the most Chord reads.` : '',
-      pdf.pages.every((p) => !p.trim()) ? 'This PDF has no text to read (it may be scanned pages); tab_screenshot shows the page on screen.' : '',
-    ].filter(Boolean);
-    const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}) });
-    await this.activity(state, 'read_tab', `Read “${title}”`, pdf.totalPages > read ? `PDF, pages 1–${read} of ${pdf.totalPages}` : `PDF, ${pdf.totalPages} page${pdf.totalPages === 1 ? '' : 's'}`);
-    return { text };
-  }
-
-  private firstAttached(state: ThreadState): TabNode | null {
-    for (const id of state.attached) {
-      const node = nodeOf(this.browser.store.state, id);
-      if (node?.kind === 'tab') return node;
-    }
-    return null;
-  }
-
-  /** The tab's page, loading it if it's asleep or wasn't opened since launch. */
+  /** The tab's page, loading it if it's asleep or wasn't opened since launch (a citation's tab). */
   private async loadedContents(nodeId: NodeId) {
     // A view whose page is gone (its renderer died) has none to wait on.
     const contents = pageOf(this.browser.tabs.ensure(nodeId));
@@ -1399,122 +1288,7 @@ export class AssistantService {
     return contents.isDestroyed() ? null : contents;
   }
 
-  /**
-   * page_diagnostics (ARCHITECTURE.md §11.3): the problems Chromium kept of the
-   * tab on screen in the window the message came from, and only where the
-   * assistant may read. The chat's scope applies as for read_tab (a card under
-   * Ask every time). Only this tab's debugger is attached, and only now.
-   */
-  private async diagnosticsTool(state: ThreadState, args: Record<string, unknown>): Promise<ToolOutput> {
-    const refuse = (why: string) => ({ text: toolResult({ refused: why }, false), isError: true });
-    const never = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
-    const offScreen = "Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again.";
-    const node = this.resolveTab(state, args['tab_id']);
-    if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
-    const windowId = state.windowId;
-    const contents = pageOf(this.browser.tabs.get(node.id));
-    /**
-     * Every rule, as things are now: asked before reading, after the approval card (the user may have moved on
-     * while it waited), and after the read (the page may have gone somewhere else meanwhile). `at`: the address
-     * it must still be at.
-     */
-    const blocked = (at?: string): string | null => {
-      const now = nodeOf(this.browser.store.state, node.id);
-      if (now?.kind !== 'tab' || !this.readable(now)) return never;
-      if (!windowId || this.activeTab(windowId)?.id !== node.id) return offScreen;
-      if (!contents || contents.isDestroyed()) return 'That tab could not be read.';
-      // Where the page is, which can be ahead of the tab's saved address.
-      if (isNeverReadable(contents.getURL(), this.settings.neverSites)) return never;
-      if (at !== undefined && contents.getURL() !== at) return 'The page went to another address while Chord was reading it. Ask the user to ask again once it has loaded.';
-      return null;
-    };
-    const before = blocked();
-    if (before || !contents) return refuse(before ?? 'That tab could not be read.');
-    const title = node.title || safeHost(node.url);
-    const thread = state.thread!;
-    if (readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool: 'page_diagnostics', granted: state.grants.has(`read:${node.id}`) || state.grants.has('page_diagnostics') })) {
-      const { decision } = await this.ask(state, 'page_diagnostics', `Read the problems on “${title}”`, [node.url]);
-      if (decision === 'denied') return refuse('The user said no to reading that page’s problems. Carry on without it, or ask them.');
-    }
-    const asked = blocked();
-    if (asked) return refuse(asked);
-    const url = contents.getURL();
-    const read = await readDiagnostics(contents);
-    if (!read.ok) {
-      await this.activity(state, 'page_diagnostics', `Couldn’t check “${title}” for problems`, read.why, false);
-      return refuse(read.why);
-    }
-    // What was read belongs to the page that was asked about, still on screen and still readable.
-    const after = blocked(url);
-    if (after) return refuse(after);
-    // A frame of a *Never read* site inside the page (mail.example.com in www.example.com): its problems are left out.
-    const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: this.settings.neverSites, contexts: read.contexts, page: url });
-    state.read.add(node.id);
-    const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
-    await this.activity(state, 'page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));
-    return { text: diagnosticsResult({ ref: this.refFor(state, node.id), url, retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}) }) };
-  }
-
   /* ---------- Filling forms (D16, ARCHITECTURE.md §11.6) ---------- */
-
-  /**
-   * read_form and propose_fill. Only the tab on screen in the window the
-   * message came from, and only where the assistant may read (never a private window, a
-   * chord where it's off, a Never site or a Chord page), never in reader view.
-   * Reading follows the chat's scope as read_tab does (a card under Ask every
-   * time). A proposal shows one card for each message you send, for fields of
-   * the last read only, on a page still at the address it was read at.
-   */
-  private async formTool(state: ThreadState, tool: 'read_form' | 'propose_fill', args: Record<string, unknown>): Promise<ToolOutput> {
-    const refuse = (why: string, problems?: string[]) => ({ text: toolResult({ refused: why, ...(problems ? { problems } : {}) }, false), isError: true });
-    const node = this.resolveTab(state, args['tab_id']);
-    if (!node) return refuse('No such tab. Use the tab id from "Attached:".');
-    if (!this.readable(node)) return refuse('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
-    if (!state.windowId || this.activeTab(state.windowId)?.id !== node.id) return refuse('Forms are filled only on the tab on screen. Ask the user to switch to it, then to ask again.');
-    if (this.browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its form. Ask the user to close reader view first.');
-    const title = node.title || safeHost(node.url);
-    if (tool === 'read_form') {
-      const thread = state.thread!;
-      if (readNeedsApproval({ scope: thread.scope, attached: state.attached.has(node.id), sameChord: node.chordId === state.chordId, tool, granted: state.grants.has(`read:${node.id}`) || state.grants.has(tool) })) {
-        const { decision } = await this.ask(state, tool, `Read the form on “${title}”`, [node.url]);
-        if (decision === 'denied') return refuse('The user said no to reading that form. Carry on without it, or ask them.');
-      }
-      const contents = await this.loadedContents(node.id);
-      const token = randomBytes(12).toString('hex');
-      const page = contents ? await readFormPage(contents, token) : null;
-      if (!page) return refuse('That page could not be read.');
-      const read = formRead(page, state.nextField);
-      state.nextField += read.fields.length;
-      state.form = { nodeId: node.id, token, read };
-      state.read.add(node.id);
-      await this.activity(state, tool, `Read the form on “${title}”`, `${fieldCount(read.fields.length)}${read.leftOut.length ? ` · ${read.leftOut.length} left out` : ''}`);
-      return { text: formResult(read, { ref: this.refFor(state, node.id), retrievedAt: Date.now() }) };
-    }
-    const form = state.form;
-    if (!form) return refuse('Read the form with read_form first.');
-    if (form.nodeId !== node.id) return refuse('That isn’t the tab whose form you read. Read its form first.');
-    if (state.streaming && state.fillTurn === state.streaming.id) return refuse('You already showed the user values for this message. Wait for their answer.');
-    const contents = pageOf(this.browser.tabs.get(node.id));
-    if (!contents || contents.isDestroyed()) return refuse('That tab could not be read.');
-    const mapped = proposedFill(form.read, args, contents.getURL());
-    if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
-    // A newer card takes the place of one still waiting.
-    for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') await this.endFill(state, m, 'expired', 'Newer values are below.');
-    state.fillTurn = state.streaming?.id ?? null;
-    const card: AssistantFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
-    const message = await this.addMessage(state, { role: 'tool', tool, summary: `Suggested values for ${fieldCount(card.fields.length)} in “${title}”`, detail: card.site, ok: true, fill: card });
-    state.fills.set(message.id, { nodeId: node.id, token: form.token, read: form.read });
-    return {
-      text: toolResult(
-        {
-          shown: true,
-          fields: card.fields.length,
-          note: 'The user now checks these in a card in this chat, changes or leaves out what they like, and presses Fill themselves. Nothing is in the page yet, and Chord never submits: tell them to check the card, and that they send the form with the page’s own button.',
-        },
-        false,
-      ),
-    };
-  }
 
   /**
    * A card's Fill: your values, checked again here against what Chord read,
@@ -1551,7 +1325,7 @@ export class AssistantService {
     if (checked.writes.length === 0) return this.noteFill(message, 'Choose at least one field to fill.');
     const undo = randomBytes(12).toString('hex');
     const highlight = { color: this.browser.accentOf(node.id) ?? 'Highlight', ms: durations.fillHighlight, stagger: durations.stagger, easing: easing.standard };
-    const outcome = await fillFormPage(contents, { token: meta.token, writes: checked.writes, undo, highlight });
+    const outcome = await controlPage(contents).fillForm({ token: meta.token, writes: checked.writes, undo, highlight });
     if (!outcome.ok) return this.endFill(state, message, 'expired', FILL_PROBLEMS[outcome.why]);
     // Fields that changed as the others went in (a country's states) were left as they were: the card names them.
     const note = fillChangedNote(meta.read.fields.filter((f) => outcome.skipped.includes(f.key)).map((f) => f.label));
@@ -1567,7 +1341,7 @@ export class AssistantService {
     if (!u) return;
     this.fillUndos.delete(token);
     const contents = pageOf(this.browser.tabs.get(u.nodeId));
-    const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await undoFillPage(contents, token) : null;
+    const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await controlPage(contents).undoFill(token) : null;
     if (!result) return this.toast(u.windowId, { id: `assistant-fill:${u.messageId}`, message: 'Couldn’t undo: the page has moved on' });
     const message = u.state.messages.find((m) => m.id === u.messageId);
     if (message) await this.endFill(u.state, message, 'undone', result.kept ? `${fieldCount(result.kept)} you changed since stayed as you left ${result.kept === 1 ? 'it' : 'them'}.` : undefined);
@@ -1860,20 +1634,3 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
   });
 }
 
-/** Chromium's PDF viewer: the page's own document says application/pdf (and the extractor sees only the viewer). */
-function isPdf(page: PageRead | null, url: string): boolean {
-  if (page) return page.contentType === 'application/pdf';
-  try {
-    return /\.pdf$/i.test(new URL(url).pathname);
-  } catch {
-    return false;
-  }
-}
-
-function safeHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return '';
-  }
-}

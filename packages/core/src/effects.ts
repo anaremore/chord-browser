@@ -12,7 +12,7 @@
  * The sanitizer, which every stylesheet goes through before it's used, lives
  * with its worker in main (`main/effects/sanitize.ts`).
  */
-import type { AssistantToolSpec } from './assistant';
+import type { AssistantToolSpec } from './control-tools';
 import type { DataRecord } from './records';
 import type { Stamp } from './stamps';
 
@@ -314,6 +314,7 @@ export function effectsFromRecord(r: DataRecord, newId: () => string, now = Date
 export const EFFECTS_OUTLINE_TOOL: AssistantToolSpec = {
   name: 'read_page_outline',
   tier: 0,
+  level: 'read',
   description: "An outline of the page the user wants restyled: its elements' tags, ids, classes, roles and sizes, a few headings, and the Effects already on the site. Untrusted JSON from the page.",
   inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
 };

@@ -7,14 +7,11 @@
  */
 import { execFile } from 'node:child_process';
 import type { AssistantContextUsage, AssistantProvider, AssistantToolSpec } from '@chord/core';
+import type { ToolOutput } from '../control/scope';
 import type { Launch } from './detect';
 
-export interface ToolOutput {
-  text?: string;
-  /** Screenshots, for providers that take images through their CLI. */
-  image?: { data: string; mimeType: string };
-  isError?: boolean;
-}
+/** A tool's answer: the control layer's (main/control/scope.ts). */
+export type { ToolOutput } from '../control/scope';
 
 export type ProviderErrorKind = 'signed-out' | 'usage-limit' | 'rate-limit' | 'overloaded' | 'model' | 'resume-failed' | 'tripwire' | 'crashed' | 'other';
 
