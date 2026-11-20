@@ -25,6 +25,11 @@ import type { ProbeField, ProbeSnapshot } from './probe';
 const SHARE = process.env['CHORD_E2E_SHARE'] ?? process.env['CHORD_SWEEP_DIR'] ?? '';
 const sites = SHARE && existsSync(join(SHARE, 'sites.txt')) ? [...new Set(readFileSync(join(SHARE, 'sites.txt'), 'utf8').split(/\r?\n/).map((l) => l.trim()).filter((l) => /^https?:\/\//.test(l)))] : [];
 const RESULTS = join(SHARE, 'results');
+/**
+ * A `read-only` file in the sweep's folder (providers.mjs writes one): load and look only. No fill (nothing typed into a
+ * page) and no Next (nothing submitted), as the owner approved the providers' sweep (S17, phase 3D).
+ */
+const READ_ONLY = !!SHARE && existsSync(join(SHARE, 'read-only'));
 const SHOTS = join(SHARE, 'shots');
 
 export const FAKE = { username: 'sweep.nobody@example.com', password: 'Sweep-not-a-real-password-7' };
@@ -66,7 +71,7 @@ export interface SiteResult {
   notes: string[];
   status?: number;
   followed?: string;
-  next?: 'pressed' | 'skipped (sends a code or link)' | 'no button';
+  next?: 'pressed' | 'skipped (sends a code or link)' | 'skipped (read only)' | 'no button';
   frames?: { src: string; passwords: number; usernames: number }[];
   steps: StepReport[];
   ms: number;
@@ -208,6 +213,8 @@ async function sweepStep(app: ElectronApplication, id: number, page: Page, snap:
     return step;
   }
 
+  // Read only: the menu would open; nothing is filled.
+  if (READ_ONLY) return step;
   // The fill, as main sends it (assist.ts): no password for a first step.
   const withPassword = menu.kind !== 'username-only';
   const payload = { formId: menu.formId, username: FAKE.username, ...(withPassword ? { password: FAKE.password } : {}), highlight: { color: 'Highlight', ms: 600, stagger: 60, easing: 'ease' } };
@@ -348,7 +355,8 @@ async function sweepSite(app: ElectronApplication, url: string, index: number, r
 
     // 5. A first step: Next once, unless the page would send a code or a link.
     const firstStep = first.fill?.kind === 'username-only' && first.fill.filled?.['ok'] === true;
-    if (firstStep) {
+    if (READ_ONLY) r.next = 'skipped (read only)';
+    else if (firstStep) {
       const userField = snap.fields.find((f) => f.visible && f.role === 'username');
       const button = userField ? await world<{ x: number; y: number; text: string }>(app, id, `chordSweep.nextButton(${userField.i})`) : null;
       if (SENDS_CODE.test(snap.text)) r.next = 'skipped (sends a code or link)';

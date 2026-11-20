@@ -38,6 +38,7 @@
  */
 import { classifyPasswordForm, PASSWORD_LIMITS, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature, PasswordsFill } from '@chord/ipc';
+import { recipeOf, recipeSubmit, withRecipe } from './recipes';
 import { activeElementOf, controlType, isElementNode, isShadowRootNode, isShown, isTag, MAX_REPORTED_FORMS, rootOf, scanDocument, setControlValue, SKIP_TYPES, submittedBy, valueOfControl, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
@@ -232,6 +233,10 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   let lastForms = '';
   const stops: (() => void)[] = [];
 
+  /** The provider's recipe for this document's host (S17, phase 3D), or null: read once, as the document's address is. */
+  const recipe = recipeOf(doc);
+  /** The classifier's result, with the recipe's fields given their roles. */
+  const classify = (s: ScannedForm, mode: 'filling' | 'saving') => withRecipe(s, classifyPasswordForm(s.record, mode), recipe);
   const idOf = (key: FormKey) => {
     let id = formIds.get(key);
     if (!id) formIds.set(key, (id = `f${ids.value++}`));
@@ -266,7 +271,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     // after a walk that went all the way: one cut short (the cap, the deadline) proves nothing (review round 2 of #61).
     if (deep && roots.count === 0 && !roots.stopped && !rootsSeen) deep = false;
     else if (roots.count > 0) rootsSeen = true;
-    known = scanned.map((s) => ({ id: idOf(s.form ?? doc), scanned: s, classified: classifyPasswordForm(s.record, 'filling') }));
+    known = scanned.map((s) => ({ id: idOf(s.form ?? doc), scanned: s, classified: classify(s, 'filling') }));
     for (const s of scanned) for (const el of s.elements) if (controlType(el) === 'password') wasPassword.add(el);
     byElement = new WeakMap();
     for (const k of known) for (const el of k.scanned.elements) byElement.set(el, k);
@@ -497,6 +502,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       rescan();
       k = submittedBy(target, known, anchorOf);
     }
+    // A provider's own submit the click rule doesn't see (its recipe, S17 phase 3D): through the click rule's refusals.
+    if (!k) k = recipeSubmit(target, recipe, known, anchorOf);
     if (k) candidate(k, 'button');
   };
 
@@ -517,7 +524,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (signal === 'blur') changed.delete(k.id);
     // Saving mode, with values, for this form's own fields only: they're compared here and never sent.
     const fresh = scanDocument(doc, { values: true, typed, filled, keys, nextKey, only: k.scanned.elements })[0];
-    const saving = fresh ? classifyPasswordForm(fresh.record, 'saving') : null;
+    const saving = fresh ? classify(fresh, 'saving') : null;
     const c = saving ?? k.classified;
     if (!c) return;
     const valueOf = (f: PasswordField | null) => (f ? (fresh?.record.fields.find((x) => x.key === f.key)?.value ?? '') : '');
@@ -562,7 +569,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const last = sentAt.get(key);
     if (last !== undefined && now - last < ONE_SUBMIT_MS) return;
     const fresh = scanDocument(doc, { values: true, typed, filled, keys, nextKey, only: k.scanned.elements })[0];
-    const saving = fresh ? classifyPasswordForm(fresh.record, 'saving') : null;
+    const saving = fresh ? classify(fresh, 'saving') : null;
     if (saving?.kind !== 'username-only' || !saving.username) return;
     const username = (fresh!.record.fields.find((f) => f.key === saving.username!.key)?.value ?? '').trim();
     if (!username || /^\d{1,2}$/.test(username) || username.length > PASSWORD_LIMITS.username) return;

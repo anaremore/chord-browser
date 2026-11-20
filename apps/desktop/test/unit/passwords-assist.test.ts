@@ -505,6 +505,87 @@ describe('the save and update cards: which sign-in gets one', () => {
   });
 });
 
+describe('a code typed after the password (S17 §6 phase 3D, the owner’s design 1A)', () => {
+  const LISTED = 'https://www.usaa.com';
+  /** The card, once it's come: a password ending in digits loads Apple's list first (a dynamic import). */
+  const cardOf = async (t: ReturnType<typeof setup>) => vi.waitFor(() => t.assist.cardFor('n1') ?? Promise.reject(new Error('no card yet')));
+  it.each<[string, Parameters<typeof setup>[0], Record<string, unknown>, 'trimmed' | null, string]>([
+    ['a new sign-in on a listed site, 6 digits after: saved without them', {}, { origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456' } }, 'trimmed', 'Sekrit-pass'],
+    ['8 digits: the last 6 off', {}, { origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass12123456' } }, 'trimmed', 'Sekrit-pass12'],
+    ['5 digits: as typed, no line', {}, { origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass12345' } }, null, 'Sekrit-pass12345'],
+    ['9 digits: as typed, no line', {}, { origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456789' } }, null, 'Sekrit-pass123456789'],
+    ['an unlisted site: as typed, no line', {}, { values: { username: 'ada', password: 'Sekrit-pass123456' } }, null, 'Sekrit-pass123456'],
+    ['an update: as typed, no line', { candidate: { kind: 'update', id: 'a1' } }, { origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456' } }, null, 'Sekrit-pass123456'],
+    ['a sign-up: as typed, no line', {}, { origin: LISTED, kind: 'sign-up', values: { username: 'ada', password: 'Sekrit-pass123456' } }, null, 'Sekrit-pass123456'],
+  ])('%s', async (_name, options, event, code, saved) => {
+    const t = setup(options);
+    await t.signedIn(event);
+    const card = await cardOf(t);
+    expect(card.code ?? null).toBe(code);
+    // The eye shows what Save saves.
+    expect(t.assist.reveal('w1', card.id)).toEqual({ password: saved });
+    await t.assist.answer('w1', card.id, 'save', {});
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ password: saved }));
+  });
+
+  it('Keep them: as typed, and the eye says so; Leave off the code: back without it; nothing saved till Save', async () => {
+    const t = setup();
+    await t.signedIn({ origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456' } });
+    const id = (await cardOf(t)).id;
+    await t.assist.answer('w1', id, 'code');
+    expect(t.assist.cardFor('n1')).toMatchObject({ code: 'kept' });
+    expect(t.assist.reveal('w1', id)).toEqual({ password: 'Sekrit-pass123456' });
+    await t.assist.answer('w1', id, 'code');
+    expect(t.assist.cardFor('n1')).toMatchObject({ code: 'trimmed' });
+    expect(t.assist.reveal('w1', id)).toEqual({ password: 'Sekrit-pass' });
+    await t.assist.answer('w1', id, 'code');
+    expect(t.vault.saveCandidate).not.toHaveBeenCalled();
+    await t.assist.answer('w1', id, 'save', {});
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ password: 'Sekrit-pass123456' }));
+  });
+
+  it('locked: the line, and Save sends what was typed too, for the vault to decide once open (review round 1 of #70)', async () => {
+    const t = setup({ candidate: { kind: 'locked' } });
+    await t.signedIn({ origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456' } });
+    const card = await cardOf(t);
+    expect(card.code).toBe('trimmed');
+    await t.assist.answer('w1', card.id, 'save', {});
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ password: 'Sekrit-pass', typed: 'Sekrit-pass123456' }));
+  });
+
+  it('Keep them: Save sends what was typed alone', async () => {
+    const t = setup();
+    await t.signedIn({ origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456' } });
+    const id = (await cardOf(t)).id;
+    await t.assist.answer('w1', id, 'code');
+    await t.assist.answer('w1', id, 'save', {});
+    expect((t.vault.saveCandidate.mock.calls as unknown as [Record<string, unknown>][])[0]![0]).not.toHaveProperty('typed');
+  });
+
+  it('the code action while a Save waits on the late window: refused by main, what waits is unchanged', async () => {
+    const t = setup();
+    await t.signedIn({ origin: LISTED, values: { username: 'ada', password: 'Sekrit-pass123456' }, how: 'form-gone', lateUntil: t.timers.now() + 5000 });
+    const id = (await cardOf(t)).id;
+    await t.assist.answer('w1', id, 'save', {});
+    expect(t.assist.cardFor('n1')).toMatchObject({ waiting: true, code: 'trimmed' });
+    await t.assist.answer('w1', id, 'code');
+    expect(t.assist.cardFor('n1')).toMatchObject({ code: 'trimmed' });
+    expect(t.assist.reveal('w1', id)).toEqual({ password: 'Sekrit-pass' });
+    t.timers.advance(6000);
+    await vi.waitFor(() => expect(t.vault.saveCandidate).toHaveBeenCalled());
+    expect(t.vault.saveCandidate).toHaveBeenCalledWith(expect.objectContaining({ password: 'Sekrit-pass', typed: 'Sekrit-pass123456' }));
+  });
+
+  it('the code action on a card without the line does nothing', async () => {
+    const t = setup();
+    await t.signedIn({ values: { username: 'ada', password: 'Sekrit-pass123456' } });
+    const id = (await cardOf(t)).id;
+    await t.assist.answer('w1', id, 'code');
+    expect(t.assist.cardFor('n1')).not.toHaveProperty('code');
+    expect(t.assist.reveal('w1', id)).toEqual({ password: 'Sekrit-pass123456' });
+  });
+});
+
 describe('the cards’ buttons', () => {
   const offered = async (options: Parameters<typeof setup>[0] = {}) => {
     const t = setup(options);

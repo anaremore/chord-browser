@@ -648,7 +648,10 @@ export class PasswordService {
     if (state === 'locked') return { kind: 'locked' };
     // *Never for this site* is about offers to save; *Remember*, ticked in the sign-in box, is you asking.
     if (page.realm === undefined && (await this.data({ op: 'isNever', origin: page.origin }).catch(() => ({}) as PasswordResult)).never) return { kind: 'never' };
-    const { candidate } = await this.data({ op: 'compare', origin: page.origin, username: page.username, password: page.password, ...realm }).catch(() => ({}) as PasswordResult);
+    // A site that takes a one-time code after the password (Apple's list, S17 §6 phase 3D): the code is no new password.
+    // The list is loaded the first time a sign-in is submitted, never at launch.
+    const appendsCode = page.realm === undefined && (await import('@chord/core/password-quirks')).appendsCodeToPassword(page.origin) ? { appendsCode: true } : {};
+    const { candidate } = await this.data({ op: 'compare', origin: page.origin, username: page.username, password: page.password, ...realm, ...appendsCode }).catch(() => ({}) as PasswordResult);
     if (!candidate) return { kind: 'locked' };
     // Exactly what's saved: no card, and its last use moves (S17 §6).
     if (candidate.kind === 'same' && page.chord) await this.data({ op: 'used', id: candidate.id, chordId: page.chord.id }).catch(() => undefined);
@@ -751,7 +754,14 @@ export class PasswordService {
    * passphrase (`passphrase`, from the card's step). Never from a private
    * window, for a proxy, or on a site you said never to save for.
    */
-  async saveCandidate(candidate: { origin: string; username: string; password: string; chordId: string | null; passphrase?: string; proxy?: boolean; realm?: string }): Promise<SaveAnswer> {
+  /**
+   * A card's Save: new, an update, or the same as saved (nothing written). `typed`: the save card left a code off the
+   * end of `password` (S17 §6 phase 3D, the owner's design 1A), and this is what was typed. It's decided as an open
+   * vault would have decided before showing the card (review round 1 of #70): if either is the same as a saved sign-in
+   * (with a code after it or not), nothing is written; an update keeps what was typed; only a new one is saved without
+   * the code. A card offered while locked thus never shortens a saved password that really ends in digits.
+   */
+  async saveCandidate(candidate: { origin: string; username: string; password: string; typed?: string; chordId: string | null; passphrase?: string; proxy?: boolean; realm?: string }): Promise<SaveAnswer> {
     const page = this.pageOf(candidate.origin, candidate.chordId);
     if (!page) return { ok: false, problem: 'off' };
     const extensions = this.installed();
@@ -763,7 +773,16 @@ export class PasswordService {
       ...(candidate.proxy ? { proxy: true } : {}),
       ...(candidate.realm !== undefined ? { realm: candidate.realm } : {}),
     };
-    const kind = await this.candidate(request, extensions);
+    let kind = await this.candidate(request, extensions);
+    if (candidate.typed !== undefined && candidate.typed !== candidate.password && candidate.realm === undefined && (kind.kind === 'new' || kind.kind === 'update')) {
+      const typed = await this.candidate({ ...request, password: candidate.typed }, extensions);
+      if (typed.kind === 'same') kind = typed;
+      // An update, either way: it keeps what was typed.
+      else if (kind.kind === 'update' || typed.kind === 'update') {
+        request.password = candidate.typed;
+        if (typed.kind === 'update') kind = typed;
+      } else if (typed.kind !== 'new') kind = typed;
+    }
     switch (kind.kind) {
       case 'refused':
       case 'off':
