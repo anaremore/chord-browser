@@ -8,7 +8,9 @@
  * It does nothing until the page shows a sign-in field: a password field once the document is
  * parsed or loaded, or focus or typing in a password field or one that reads as a username or
  * email, in an open shadow root too (phase 3B: the event's path, the focus's chain of roots; no
- * walk). Then, once, it asks main for the agent's script, exposes the agent's bridge in
+ * walk), or in a same-origin frame the agent may use (phase 3C: no `sandbox`, an http(s) address of the top's origin, 3
+ * levels and 20 frames at most), which it looks into at parse and load, listens in, and looks at again when a frame
+ * loads. Then, once, it asks main for the agent's script, exposes the agent's bridge in
  * isolated world 4440 (`contextBridge.exposeInIsolatedWorld`) and runs the agent there. Two
  * passive capturing listeners and a `querySelector` at each of two moments are its whole cost
  * on any other page (M0 §6: nothing measurable).
@@ -41,11 +43,27 @@ interface Field {
 /** An event as the sentinel reads it: its first target through open shadow roots, where the page gives one. */
 interface PageEvent {
   target: unknown;
+  isTrusted: boolean;
   composedPath?(): unknown[];
 }
+interface PageDocument {
+  querySelector(selector: string): unknown;
+  querySelectorAll(selector: string): ArrayLike<PageFrame>;
+  addEventListener(type: string, fn: (event: PageEvent) => void, options: { once: boolean } | { capture: boolean; passive: boolean }): void;
+  readyState: string;
+  activeElement: unknown;
+  URL: string;
+  defaultView: PageGlobals | null;
+}
+interface PageFrame {
+  tagName: string;
+  hasAttribute(name: string): boolean;
+  contentDocument: PageDocument | null;
+}
 interface PageGlobals {
-  location: { protocol: string };
-  document: { querySelector(selector: string): unknown; addEventListener(type: string, fn: () => void, options: { once: boolean }): void; readyState: string; activeElement: unknown };
+  location: { protocol: string; origin: string };
+  document: PageDocument;
+  MutationObserver: new (fn: (records: { target: object }[]) => void) => { observe(node: unknown, options: object): void };
   addEventListener(type: string, fn: (event: PageEvent) => void, options: { capture: boolean; passive: boolean } | { once: boolean }): void;
   removeEventListener(type: string, fn: (event: PageEvent) => void, options: { capture: boolean }): void;
 }
@@ -78,6 +96,8 @@ async function wake(): Promise<void> {
     onFill: (listener: unknown) => {
       if (!onFill && typeof listener === 'function') onFill = listener as (payload: unknown) => void;
     },
+    // Whether this document's frame may be used: never sandboxed, its document's load seen here (phase 3C).
+    vouched,
   });
   webFrame.setIsolatedWorldInfo(WORLD, { name: 'Chord passwords' });
   await webFrame.executeJavaScriptInIsolatedWorld(WORLD, [{ code: source, url: 'chord://passwords/agent.js' }]).catch(() => undefined);
@@ -93,8 +113,73 @@ const activeField = () => {
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement as Focused;
   return el;
 };
+/**
+ * The frames of this document that ever had a `sandbox` attribute: the flags last until a frame's next navigation, so
+ * one whose attribute went is still sandboxed. Watched from the document's start (this preload runs then), for the
+ * agent to ask (`vouched`; review round 2 of #67). An attribute-only observer: it costs a page nothing else.
+ */
+const everSandboxed = new WeakSet<object>();
+const watcher = new page.MutationObserver((records) => {
+  for (const r of records) everSandboxed.add(r.target);
+});
+/**
+ * Each frame's document as of its last `load` heard here. A frame's `load` isn't composed: this document hears it only
+ * while the frame is in its own tree, never in a shadow root, whose attributes nothing watches (review round 3 of #67).
+ */
+const loaded = new WeakMap<object, unknown>();
+/** A frame the agent may use: never sandboxed, and its current document's load heard in this document's own tree. */
+// (A frame with no document reachable is refused where it's used.)
+const vouched = (f: PageFrame) => !everSandboxed.has(f) && !f.hasAttribute('sandbox') && loaded.get(f) === f.contentDocument;
+/**
+ * The same-origin frames the agent may use (phase 3C, as frames.ts has them): never sandboxed, an http(s) address of the
+ * top's origin, 3 levels and 20 such frames at most, 100 looked at. The preload runs in the top frame only, so it looks
+ * into them itself.
+ */
+const frameDocuments = () => {
+  const out: PageDocument[] = [];
+  let seen = 0;
+  const walk = (d: PageDocument, depth: number) => {
+    if (depth > 2) return;
+    for (const f of Array.from(d.querySelectorAll('iframe,frame'))) {
+      if (++seen > 100 || out.length >= 20) return;
+      let fd: PageDocument | null;
+      try {
+        fd = vouched(f) ? f.contentDocument : null;
+        if (fd && (!/^https?:/.test(fd.URL) || new URL(fd.URL).origin !== page.location.origin)) fd = null;
+      } catch {
+        fd = null;
+      }
+      if (fd) {
+        out.push(fd);
+        walk(fd, depth + 1);
+      }
+    }
+  };
+  walk(page.document, 0);
+  return out;
+};
+const listened = new WeakSet<object>();
 const look = () => {
-  if (page.document.querySelector('input[type=password]') || signInField(activeField())) void wake();
+  if (page.document.querySelector('input[type=password]') || signInField(activeField())) return void wake();
+  // A frame's sign-in field, and focus or typing in one later (the frame's own window hears those).
+  for (const d of frameDocuments()) {
+    if (d.querySelector('input[type=password]') || signInField(d.activeElement)) return void wake();
+    // By document: a frame's window is the same object across its navigations, its listeners not.
+    const w = d.defaultView;
+    if (w && !listened.has(d)) {
+      listened.add(d);
+      w.addEventListener('focusin', onField, { capture: true, passive: true });
+      w.addEventListener('input', onField, { capture: true, passive: true });
+    }
+  }
+};
+/** A frame that loaded (added later, or navigated): looked into, once the agent isn't awake. */
+const onLoad = (event: PageEvent) => {
+  const t = event.target as PageFrame | null;
+  // A page's own `dispatchEvent` reaches every world: only the browser's load counts (review of #67).
+  if (!event.isTrusted || (t?.tagName !== 'IFRAME' && t?.tagName !== 'FRAME')) return;
+  loaded.set(t, t.contentDocument);
+  if (!woken) look();
 };
 function stopListening(): void {
   page.removeEventListener('focusin', onField, { capture: true });
@@ -104,9 +189,11 @@ function stopListening(): void {
 // Web pages only: not an extension's pages, which share the session, nor a blank frame's.
 const { protocol } = page.location;
 if (protocol === 'https:' || protocol === 'http:') {
+  watcher.observe(page.document, { attributes: true, attributeFilter: ['sandbox'], subtree: true });
   page.addEventListener('focusin', onField, { capture: true, passive: true });
   page.addEventListener('input', onField, { capture: true, passive: true });
   // Once parsed, and again once loaded: a framework may render the form in between (M0 §1: React 19 had by parse).
   page.document.addEventListener('DOMContentLoaded', look, { once: true });
   page.addEventListener('load', look, { once: true });
+  page.document.addEventListener('load', onLoad, { capture: true, passive: true });
 }

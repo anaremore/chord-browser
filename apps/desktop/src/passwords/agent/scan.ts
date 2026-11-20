@@ -64,6 +64,40 @@ const tagGetter = getter(elementProto, 'tagName');
 const textGetter = getter(nodeProto, 'textContent');
 const attrOf = (el: Element, name: string): string | null => elementProto.getAttribute.call(el, name);
 const documentProto = Document.prototype;
+/**
+ * Realm-free checks (phase 3C): a same-origin frame's nodes are its own realm's, so the top's `instanceof` fails on them,
+ * and a frame's script can patch its own prototypes. The top realm's getters work on any same-origin node: they're what
+ * the agent reads through.
+ */
+const nodeTypeGetter = getter(nodeProto, 'nodeType');
+const hostGetter = getter(ShadowRoot.prototype, 'host');
+export const isElementNode = (n: unknown): n is Element => typeof n === 'object' && n !== null && (() => { try { return Number(nodeTypeGetter.call(n)) === 1; } catch { return false; } })();
+export const isDocumentNode = (n: unknown): n is Document => typeof n === 'object' && n !== null && (() => { try { return Number(nodeTypeGetter.call(n)) === 9; } catch { return false; } })();
+/** A shadow root, of any realm: a document fragment with a host. */
+export const isShadowRootNode = (n: unknown): n is ShadowRoot => {
+  if (typeof n !== 'object' || n === null) return false;
+  try {
+    return Number(nodeTypeGetter.call(n)) === 11 && !!hostGetter.call(n);
+  } catch {
+    return false;
+  }
+};
+export const isTag = (n: unknown, tag: string): n is Element => isElementNode(n) && String(getter(elementProto, 'tagName').call(n)) === tag;
+const inputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!;
+const textAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!;
+const selectValue = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!;
+const inputType = getter(HTMLInputElement.prototype, 'type');
+const inputForm = getter(HTMLInputElement.prototype, 'form');
+const textAreaForm = getter(HTMLTextAreaElement.prototype, 'form');
+const selectForm = getter(HTMLSelectElement.prototype, 'form');
+const descriptorFor = (el: Element) => {
+  const tag = String(getter(elementProto, 'tagName').call(el));
+  return tag === 'INPUT' ? inputValue : tag === 'TEXTAREA' ? textAreaValue : tag === 'SELECT' ? selectValue : null;
+};
+/** A control's value, through the top realm's getter (a frame's script can't patch it). */
+export const valueOfControl = (el: Element): string => String(descriptorFor(el)?.get?.call(el) ?? '');
+/** Sets a control's value with the top realm's native setter, as typing does. */
+export const setControlValue = (el: Element, value: string): void => void descriptorFor(el)?.set?.call(el, value);
 const bodyGetter = getter(documentProto, 'body');
 const titleGetter = getter(documentProto, 'title');
 const activeGetter = getter(documentProto, 'activeElement');
@@ -91,12 +125,12 @@ const contains = (outer: Node, inner: Node): boolean => nodeProto.contains.call(
  */
 const allInComposed = (el: Element | ShadowRoot, selector: string, max = 64, keep: (el: Element) => boolean = () => true, depth = 0): Element[] => {
   const out: Element[] = [];
-  for (const found of el instanceof ShadowRoot ? el.querySelectorAll(selector) : elementProto.querySelectorAll.call(el, selector)) if (keep(found)) out.push(found);
+  for (const found of isShadowRootNode(el) ? shadowQuery(el, selector) : elementProto.querySelectorAll.call(el, selector)) if (keep(found)) out.push(found);
   // Roots inside roots, 64 deep at most (review round 2 of #61): a page can't overflow the stack with them.
   if (out.length >= max || depth >= 64) return out;
-  const own = el instanceof ShadowRoot ? null : shadowOf(el);
+  const own = isShadowRootNode(el) ? null : shadowOf(el);
   if (own) out.push(...allInComposed(own, selector, max - out.length, keep, depth + 1));
-  const all = el instanceof ShadowRoot ? el.querySelectorAll('*') : elementProto.querySelectorAll.call(el, '*');
+  const all = isShadowRootNode(el) ? shadowQuery(el, '*') : elementProto.querySelectorAll.call(el, '*');
   for (const n of all) {
     if (out.length >= max) break;
     const inner = shadowOf(n);
@@ -110,7 +144,9 @@ const CONTROLS = 'input, select, textarea';
  * #61). Filtered here rather than by a `:not()` selector, which cost every root's query more than the few matches do.
  */
 const isTypeable = (el: Element) => !SKIP_TYPES.has(controlType(el));
-const allIn = (el: Element | Document, selector: string): Element[] => [...(el instanceof Document ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
+const allIn = (el: Element | Document, selector: string): Element[] => [...(isDocumentNode(el) ? documentProto.querySelectorAll.call(el, selector) : elementProto.querySelectorAll.call(el, selector))];
+/** `querySelectorAll` in a shadow root, through the prototype. */
+const shadowQuery = (root: ShadowRoot, selector: string): NodeListOf<Element> => DocumentFragment.prototype.querySelectorAll.call(root, selector);
 const parentOf = (el: Element): Element | null => parentGetter.call(el) as Element | null;
 const shadowRootGetter = getter(elementProto, 'shadowRoot');
 /** An element's open shadow root, read through the prototype (`<input name="shadowRoot">` clobbers a form's own). */
@@ -123,7 +159,7 @@ export const composedParentOf = (el: Element): Element | null => {
   const parent = parentOf(el);
   if (parent) return parent;
   const root = rootOf(el);
-  return root instanceof ShadowRoot ? root.host : null;
+  return isShadowRootNode(root) ? (hostGetter.call(root) as Element) : null;
 };
 /** `closest`, on through the hosts of the shadow roots `el` is in. */
 export function composedClosest(el: Element, selector: string): Element | null {
@@ -131,17 +167,41 @@ export function composedClosest(el: Element, selector: string): Element | null {
     const found = elementProto.closest.call(node, selector);
     if (found) return found;
     const root = rootOf(node);
-    node = root instanceof ShadowRoot ? root.host : null;
+    node = isShadowRootNode(root) ? (hostGetter.call(root) as Element) : null;
   }
   return null;
 }
 /** The `<form>` a control belongs to: its own, or, in a shadow root with none, the one its host (or its host's) is in. */
 export function formOfControl(el: Element): HTMLFormElement | null {
-  const own = (el as HTMLInputElement).form;
-  if (own instanceof HTMLFormElement) return own;
-  if (!(rootOf(el) instanceof ShadowRoot)) return null;
+  const tag = String(getter(elementProto, 'tagName').call(el));
+  const own: unknown = (tag === 'INPUT' ? inputForm : tag === 'TEXTAREA' ? textAreaForm : tag === 'SELECT' ? selectForm : null)?.call(el) ?? null;
+  if (isTag(own, 'FORM')) return own as HTMLFormElement;
+  if (!isShadowRootNode(rootOf(el))) return null;
   const form = composedClosest(el, 'form');
-  return form instanceof HTMLFormElement ? form : null;
+  return isTag(form, 'FORM') ? (form as HTMLFormElement) : null;
+}
+/**
+ * The `<iframe>`s and `<frame>`s of a document, in it and its open roots (at most `MAX_ROOTS`), in tree order, at most
+ * `max` (phase 3C). A TreeWalker, as the scan's walk: a page with no frame pays one pass, no query per element.
+ */
+export function framesIn(doc: Document, max: number): Element[] {
+  const out: Element[] = [];
+  let roots = 0;
+  const walk = (root: Document | ShadowRoot) => {
+    const walker = createWalker.call(doc, root, NodeFilter.SHOW_ELEMENT);
+    for (let n = walker.nextNode(); n && out.length < max; n = walker.nextNode()) {
+      const el = n as Element;
+      const tag = tagOf(el);
+      if (tag === 'IFRAME' || tag === 'FRAME') out.push(el);
+      const inner = shadowOf(el);
+      if (inner && roots < MAX_ROOTS) {
+        roots++;
+        walk(inner);
+      }
+    }
+  };
+  walk(doc);
+  return out;
 }
 /** The most open shadow roots the scan walks into: a page of thousands of components still costs a bounded walk. */
 export const MAX_ROOTS = 1000;
@@ -184,7 +244,6 @@ export function deepControls(
 const tagOf = (el: Element): string => String(tagGetter.call(el));
 const textOf = (el: Element): string => String(textGetter.call(el) ?? '');
 const childNodesGetter = getter(nodeProto, 'childNodes');
-const nodeTypeGetter = getter(nodeProto, 'nodeType');
 const previousSiblingGetter = getter(nodeProto, 'previousSibling');
 const childrenOf = (n: Node): NodeListOf<ChildNode> => childNodesGetter.call(n) as NodeListOf<ChildNode>;
 const nodeTypeOf = (n: Node): number => Number(nodeTypeGetter.call(n));
@@ -230,10 +289,13 @@ function previousText(el: Element): string {
   return '';
 }
 
+/** The top realm's box and visibility checks: a frame's own can be patched by its script (phase 3C). */
+const boxOf = (el: Element): DOMRect => elementProto.getBoundingClientRect.call(el);
+const checkVisibility = typeof elementProto.checkVisibility === 'function' ? elementProto.checkVisibility : null;
 /** On screen: rendered, opaque enough, at least 4 px each way (as the assistant's read and §5's fill check). */
 export function isShown(el: Element): boolean {
-  if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !fadedInComponent(el)) return false;
-  const r = el.getBoundingClientRect();
+  if (checkVisibility && !checkVisibility.call(el, { opacityProperty: true, visibilityProperty: true }) && !fadedInComponent(el)) return false;
+  const r = boxOf(el);
   return r.width >= 4 && r.height >= 4;
 }
 
@@ -250,30 +312,30 @@ export function isShown(el: Element): boolean {
  */
 function fadedInComponent(el: Element): boolean {
   const root = nodeProto.getRootNode.call(el);
-  if (!(root instanceof ShadowRoot)) return false;
-  if ((el as HTMLInputElement).value !== '') return false;
+  if (!isShadowRootNode(root)) return false;
+  if (valueOfControl(el) !== '') return false;
   // Counted to two of the fields a person types in, hidden ones left out of the count (review round 4 of #61, nit 3).
   if (allInComposed(root, CONTROLS, 2, isTypeable).length !== 1) return false;
-  if (!el.checkVisibility({ visibilityProperty: true })) return false;
+  if (checkVisibility && !checkVisibility.call(el, { visibilityProperty: true })) return false;
   // (4 px or more each way: `isShown` checks the size after this, for every field.)
-  const r = el.getBoundingClientRect();
-  let host: Element | null = root.host;
-  for (let depth = 0; host && depth < 8 && host.getClientRects().length === 0; depth++) host = composedParentOf(host);
-  if (!host || !host.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
-  const h = host.getBoundingClientRect();
+  const r = boxOf(el);
+  let host: Element | null = hostGetter.call(root) as Element;
+  for (let depth = 0; host && depth < 8 && elementProto.getClientRects.call(host).length === 0; depth++) host = composedParentOf(host);
+  if (!host || (checkVisibility && !checkVisibility.call(host, { opacityProperty: true, visibilityProperty: true }))) return false;
+  const h = boxOf(host);
   return r.left >= h.left - 1 && r.top >= h.top - 1 && r.right <= h.right + 1 && r.bottom <= h.bottom + 1;
 }
 
 /** Blink's `IsFocusable`, roughly: rendered, not `visibility: hidden`, not disabled or inert. */
 function isFocusable(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): boolean {
   if (el.disabled || el.closest('[inert]')) return false;
-  return typeof el.checkVisibility !== 'function' || el.checkVisibility({ visibilityProperty: true });
+  return !checkVisibility || checkVisibility.call(el, { visibilityProperty: true });
 }
 
 /** A control's type as the classifier reads it: an input's, lower case, or its tag. */
 export function controlType(el: Element): string {
-  const tag = el.tagName.toLowerCase();
-  return tag === 'input' ? String((el as HTMLInputElement).type || 'text').toLowerCase() : tag;
+  const tag = String(getter(elementProto, 'tagName').call(el)).toLowerCase();
+  return tag === 'input' ? String(inputType.call(el) || 'text').toLowerCase() : tag;
 }
 
 /**
@@ -287,7 +349,7 @@ function labeller(): (el: HTMLElement) => string {
     let byFor = byTree.get(root);
     if (!byFor) {
       byFor = new Map();
-      for (const l of (root instanceof Document ? allIn(root, 'label[for]') : [...root.querySelectorAll('label[for]')]) as HTMLLabelElement[]) {
+      for (const l of (isDocumentNode(root) ? allIn(root, 'label[for]') : [...shadowQuery(root, 'label[for]')]) as HTMLLabelElement[]) {
         const id = l.htmlFor;
         const list = byFor.get(id);
         if (list) list.push(l);
@@ -298,7 +360,7 @@ function labeller(): (el: HTMLElement) => string {
     // A `label[for]` labels the first element with that id, as the browser has it, and only from outside any form or
     // from the field's own: a page whose sign-in and sign-up forms reuse ids (`password` in both) mustn't give the
     // sign-in field the sign-up's "Choose a password".
-    const owner = el.id ? (root instanceof Document ? documentProto.getElementById.call(root, el.id) : root.getElementById(el.id)) : null;
+    const owner = el.id ? (isDocumentNode(root) ? documentProto.getElementById.call(root, el.id) : DocumentFragment.prototype.getElementById.call(root, el.id)) : null;
     const ownForm = (el as HTMLInputElement).form ?? null;
     const labels = owner === el ? (byFor.get(el.id) ?? []).filter((l) => (l.closest('form') ?? ownForm) === ownForm) : [];
     const around = el.parentElement?.closest('label');
@@ -311,7 +373,7 @@ function labeller(): (el: HTMLElement) => string {
       .slice(0, 4);
     const by = clip(
       ids
-        .map((id) => (root instanceof Document ? documentProto.getElementById.call(root, id) : root.getElementById(id)))
+        .map((id) => (isDocumentNode(root) ? documentProto.getElementById.call(root, id) : DocumentFragment.prototype.getElementById.call(root, id)))
         .filter((n): n is HTMLElement => n !== null)
         .map((n) => words(n, 100))
         .join(' '),
@@ -546,7 +608,7 @@ export function scanDocument(doc: Document, options: ScanOptions = {}): ScannedF
       visible: isShown(el),
       userTyped: options.typed?.has(el) ?? false,
       autofilled: options.filled?.has(el) ?? false,
-      value: options.values ? String(el.value ?? '') : '',
+      value: options.values ? valueOfControl(el) : '',
     });
     group.elements.push(el);
   }

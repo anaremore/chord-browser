@@ -4,7 +4,8 @@
  * frames), each timed in the page. Nothing here is the agent's code but `scanDocument`.
  */
 import { classifyPasswordForm } from '@chord/core';
-import { formlessScope, scanDocument } from '../../src/passwords/agent/scan';
+import { frameDocumentOf, MAX_FRAME_DEPTH, MAX_FRAMES } from '../../src/passwords/agent/frames';
+import { formlessScope, framesIn, scanDocument } from '../../src/passwords/agent/scan';
 
 export interface ScanCost {
   readonly elements: number;
@@ -23,6 +24,29 @@ export interface ScanCost {
   readonly deepLookMs: number;
   /** `formlessScope` from the page's password field in its own tree: the scan's words and the click rule pay it. */
   readonly scopeMs: number;
+  /** Same-origin frames the agent may use (phase 3C), and what finding them and scanning each costs on top of `scanMs`. */
+  readonly frames: number;
+  readonly framesMs: number;
+}
+
+/** The frames' part of a page's scan (phase 3C): finding the frames the agent may use, as frames.ts does, and scanning each. */
+function scanFrames(): number {
+  let used = 0;
+  let seen = 0;
+  const walk = (doc: Document, depth: number) => {
+    if (depth >= MAX_FRAME_DEPTH) return;
+    for (const el of framesIn(doc, MAX_FRAMES)) {
+      if (++seen > MAX_FRAMES) return;
+      // Cost only: every frame counts as never sandboxed here (the agent asks the sentinel's record).
+      const frameDoc = frameDocumentOf(el, location.origin, () => false);
+      if (!frameDoc) continue;
+      used++;
+      for (const f of scanDocument(frameDoc)) classifyPasswordForm(f.record, 'filling');
+      walk(frameDoc, depth + 1);
+    }
+  };
+  walk(document, 0);
+  return used;
 }
 
 /** Every open shadow root under `root`, roots inside roots too, by visiting every element. */
@@ -70,6 +94,8 @@ function measure(): ScanCost {
     walkAllMs: time(() => rootsByAll(document)),
     walkTreeMs: time(() => rootsByWalker(document)),
     deepLookMs: time(() => document.querySelector('input[type=password]') ?? rootsByWalker(document).find((r) => r.querySelector('input[type=password]'))),
+    frames: scanFrames(),
+    framesMs: time(scanFrames),
     scopeMs: (() => {
       // In the page's tree, or in a component's root (a lone field's text field).
       const field = document.querySelector('input[type=password]') ?? rootsByWalker(document).map((r) => r.querySelector('input[type=password]')).find((f) => f) ?? null;

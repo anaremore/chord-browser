@@ -38,13 +38,19 @@
  */
 import { classifyPasswordForm, PASSWORD_LIMITS, type PasswordField, type PasswordFieldRole, type PasswordFormClassification, type PasswordFormKind } from '@chord/core';
 import type { PasswordsAgentChannel, PasswordsAgentMessage, PasswordsFieldSignature, PasswordsFill } from '@chord/ipc';
-import { activeElementOf, controlType, isShown, MAX_REPORTED_FORMS, rootOf, scanDocument, SKIP_TYPES, submittedBy, type ScannedForm } from './scan';
+import { activeElementOf, controlType, isElementNode, isShadowRootNode, isShown, isTag, MAX_REPORTED_FORMS, rootOf, scanDocument, setControlValue, SKIP_TYPES, submittedBy, valueOfControl, type ScannedForm } from './scan';
 
 /** What the sentinel exposes in this world (contextBridge.exposeInIsolatedWorld). */
 export interface PasswordsBridge {
   send<C extends PasswordsAgentChannel>(channel: C, payload: PasswordsAgentMessage<C>): void;
   /** Main's fill: the sentinel calls this listener (registered once) with what main sent. */
   onFill?(listener: (payload: unknown) => void): void;
+  /**
+   * Whether a frame element of the top document may be used (phase 3C): the sentinel, watching from the document's
+   * start, saw no `sandbox` attribute on it ever, and heard its current document's `load` in the document's own tree
+   * (never in a shadow root, whose attributes nothing watches). Absent: no frame is used.
+   */
+  vouched?(el: Element): boolean;
 }
 
 /** How long after a submit signal the agent watches for the form to go, and for the page's requests (S17 §6, step 3). */
@@ -85,7 +91,7 @@ const FLUSH_MS = 100;
  */
 const FOCUS_GAP_MS = 100;
 /** `forms` is cut to stay within this many JSON characters: well under the channel's limit (PASSWORDS_MESSAGE_MAX). */
-const FORMS_JSON_MAX = 12_000;
+export const FORMS_JSON_MAX = 12_000;
 
 interface KnownForm {
   readonly id: string;
@@ -135,7 +141,8 @@ const plain = (s: string, n: number) =>
     .join('')
     .slice(0, n);
 const signature = (f: PasswordField | null): PasswordsFieldSignature | null => (f ? { type: plain(f.type, 20), id: plain(f.id, 80), name: plain(f.name, 80) } : null);
-const isField = (el: EventTarget | null | undefined): el is HTMLInputElement => el instanceof HTMLInputElement;
+/** An `<input>`, of any realm (a same-origin frame's own, phase 3C). */
+const isField = (el: EventTarget | null | undefined): el is HTMLInputElement => isTag(el, 'INPUT');
 /** The roles a generated password goes into (S17 §6). */
 const NEW_ROLES: ReadonlySet<PasswordFieldRole> = new Set(['new-password', 'confirmation-password']);
 const getAttribute = Element.prototype.getAttribute;
@@ -148,15 +155,68 @@ const rulesOf = (el: HTMLInputElement) => ({
 /** A text-like field: never a checkbox, radio, button or file input, which never hold a credential. */
 const isTextField = (el: EventTarget | null | undefined): el is HTMLInputElement => isField(el) && !SKIP_TYPES.has(controlType(el));
 
+/**
+ * A same-origin frame's document, run by its own agent from the top frame's world (phase 3C). Checked at every use:
+ * `allowed` is false once the frame isn't the one it was (navigated, sandboxed, another origin, gone), and then the agent
+ * answers no event, sends no focus and fills nothing; a watch already running ends as at the top (the late window holds).
+ */
+export interface FrameContext {
+  allowed(): boolean;
+  /**
+   * Where the frame's content is in the tab's CSS pixels, through every frame up to the top, and its scale there (a CSS
+   * transform or zoom on a frame): a field's box is `x + r.left * scale`. Null when it isn't allowed.
+   */
+  offset(): { x: number; y: number; scale: number } | null;
+  /** The documents and windows above it, the top's last: their scrolls and resizes move its fields. */
+  readonly ancestors: readonly { readonly document: Document; readonly window: Window }[];
+}
+
 export interface AgentOptions {
   readonly document?: Document;
   readonly window?: Window;
+  /** A same-origin frame's: see FrameContext. */
+  readonly frame?: FrameContext;
+  /** Form ids shared by the top's agent and its frames': one id space, so main can tell forms apart. */
+  readonly ids?: { value: number };
+  /** Whose timers to use: the top window's, so a frame that navigates away doesn't take a watch's timers with it. */
+  readonly timers?: Window;
 }
+const inputDisabled = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'disabled')!.get!;
+const inputReadOnly = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'readOnly')!.get!;
+const rectOf = (el: Element) => Element.prototype.getBoundingClientRect.call(el);
+const connected = Object.getOwnPropertyDescriptor(Node.prototype, 'isConnected')!.get!;
+const isConnectedNode = (n: Node) => connected.call(n) === true;
+/**
+ * An event's path, through the top realm's `composedPath` (a frame's own can be patched). The agent's own start-up
+ * stand-in for a focus (the field focused before it woke) isn't an Event: its own path, then.
+ */
+const pathOf = (event: Event): EventTarget[] => {
+  try {
+    return Event.prototype.composedPath.call(event);
+  } catch {
+    return event.composedPath();
+  }
+};
 
-/** Starts the agent on a document. Returns a stop function (tests; the agent otherwise lives as long as its document). */
-export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}): () => void {
+/**
+ * A running agent's stop function (tests; the agent otherwise lives as long as its document), and `release`: its
+ * listeners and timers go, and nothing is sent again but what a watch already running says as it ends (a frame's
+ * agent whose frame went: its `gone` still comes, phase 3C).
+ */
+export type AgentStop = (() => void) & { release(): void };
+
+/** Starts the agent on a document. */
+export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}): AgentStop {
   const doc = options.document ?? document;
   const win = options.window ?? window;
+  const inFrame = options.frame ?? null;
+  const clock = options.timers ?? win;
+  /** The top window: a frame's field must be on screen there too. */
+  const top = inFrame?.ancestors.at(-1)?.window ?? win;
+  /** Whether this document may still be used (a frame's, at every event; the top's always). */
+  /** Released (its frame went): nothing more, but a running watch's end. */
+  let released = false;
+  const live = () => !released && (!inFrame || inFrame.allowed());
   const typed = new WeakSet<Element>();
   const filled = new WeakSet<Element>();
   /** Fields seen as `type=password` (S17 §4): one that's text now (a show-password toggle) means the form changed, for a generated password. */
@@ -164,7 +224,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const keys = new WeakMap<Element, number>();
   const nextKey = { value: 1 };
   const formIds = new WeakMap<FormKey, string>();
-  let nextForm = 1;
+  const ids = options.ids ?? { value: 1 };
   let known: KnownForm[] = [];
   let byElement = new WeakMap<Element, KnownForm>();
   /** Fields a scan was run for already: one that isn't in any form isn't looked for again on each focus or keystroke. */
@@ -174,7 +234,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
 
   const idOf = (key: FormKey) => {
     let id = formIds.get(key);
-    if (!id) formIds.set(key, (id = `f${nextForm++}`));
+    if (!id) formIds.set(key, (id = `f${ids.value++}`));
     return id;
   };
 
@@ -189,8 +249,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   /** An event that started inside an open shadow root: its target is the host, its path's first entry the field. */
   const fromRoot = (event: Event) => {
     if (rootsSeen) return;
-    const first = event.composedPath()[0];
-    if (first !== event.target && first instanceof Node && rootOf(first) instanceof ShadowRoot) {
+    const first = pathOf(event)[0];
+    if (first !== event.target && isElementNode(first) && isShadowRootNode(rootOf(first))) {
       rootsSeen = deep = true;
       // The field isn't known yet, and the last scan skipped roots: the next lookup scans again.
       scanWanted = true;
@@ -213,7 +273,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     // A form inside an open shadow root: its `submit` doesn't cross the root, so the agent listens there too (phase 3B).
     for (const s of scanned) {
       const root = s.form ? rootOf(s.form) : null;
-      if (root instanceof ShadowRoot && !listenedRoots.has(root)) {
+      if (root && isShadowRootNode(root) && !listenedRoots.has(root)) {
         listenedRoots.add(root);
         EventTarget.prototype.addEventListener.call(root, 'submit', onSubmit as EventListener, { capture: true, passive: true });
         stops.push(() => EventTarget.prototype.removeEventListener.call(root, 'submit', onSubmit as EventListener, { capture: true }));
@@ -275,7 +335,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
    * A password field of `k` the last scan saw hidden and the page has shown since (on the email's focus, or as you
    * type): the form's kind may have changed (a first step is a sign-in now). Only those fields are looked at.
    */
-  const revealed = (k: KnownForm | undefined) => !!k && k.scanned.elements.some((e, i) => hiddenAt(k, i) && controlType(e) === 'password' && e.isConnected && isShown(e));
+  const revealed = (k: KnownForm | undefined) => !!k && k.scanned.elements.some((e, i) => hiddenAt(k, i) && controlType(e) === 'password' && isConnectedNode(e) && isShown(e));
   /** A scan now, or at the next flush if one just ran. */
   const rescanSoon = () => {
     if (performance.now() - scannedAt >= SCAN_GAP_MS) rescan();
@@ -311,8 +371,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     focused = k && role && k.classified ? { ref: new WeakRef(el), formId: k.id, kind: k.classified.kind, role } : null;
   };
   const flush = () => {
-    if (frame) win.cancelAnimationFrame(frame);
-    if (timer) win.clearTimeout(timer);
+    if (frame) clock.cancelAnimationFrame(frame);
+    if (timer) clock.clearTimeout(timer);
     frame = timer = 0;
     if (scanWanted) rescan();
     const waiting = pending?.deref();
@@ -329,9 +389,10 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       bridge.send('forms', { forms });
     }
     const el = focused?.ref.deref();
-    if (focused && el && el.isConnected) {
-      const r = el.getBoundingClientRect();
-      const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
+    const at = live() ? (inFrame ? inFrame.offset() : { x: 0, y: 0, scale: 1 }) : null;
+    if (focused && el && isConnectedNode(el) && at) {
+      const r = rectOf(el);
+      const rect = { x: at.x + r.left * at.scale, y: at.y + r.top * at.scale, width: r.width * at.scale, height: r.height * at.scale };
       const key = `${focused.formId} ${focused.kind} ${focused.role} ${rect.x},${rect.y},${rect.width},${rect.height}`;
       // The same field in the same place, of the same kind: main knows already (a carousel scrolling elsewhere moves nothing).
       if (told?.ref.deref() === el && told.key === key) return;
@@ -339,7 +400,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       const wait = FOCUS_GAP_MS - (performance.now() - focusSentAt);
       if (wait > 0) {
         if (!trailing)
-          trailing = win.setTimeout(() => {
+          trailing = clock.setTimeout(() => {
             trailing = 0;
             flush();
           }, wait);
@@ -354,19 +415,21 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
   };
   function schedule(): void {
-    if (!frame) frame = win.requestAnimationFrame(flush);
-    if (!timer) timer = win.setTimeout(flush, FLUSH_MS);
+    if (released) return;
+    if (!frame) frame = clock.requestAnimationFrame(flush);
+    if (!timer) timer = clock.setTimeout(flush, FLUSH_MS);
   }
   const onFocusIn = (event: FocusEvent) => {
+    if (!live()) return;
     fromRoot(event);
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el)) return;
     focusOn(el);
     if (!focused && !byElement.has(el) && scanWanted) pending = new WeakRef(el);
     schedule();
   };
   const onFocusOut = (event: FocusEvent) => {
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el)) return;
     if (focused && focused.ref.deref() === el) {
       focused = null;
@@ -374,7 +437,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
     // Leaving a password field you typed in since: main holds the form in case it's submitted next (S17 §6, step 1).
     const k = byElement.get(el);
-    if (k && el.type === 'password' && changed.has(k.id)) candidate(k, 'blur');
+    if (k && live() && controlType(el) === 'password' && changed.has(k.id)) candidate(k, 'blur');
   };
   // Scroll and resize may move the field: its box again at the flush, sent only if it moved.
   const onMove = () => {
@@ -383,13 +446,14 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
 
   // ----- Typing -----
   const onInput = (event: Event) => {
+    if (!live()) return;
     fromRoot(event);
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el) || !event.isTrusted) return;
     typed.add(el);
     // Typing that made the page show its password field (a first step that's a sign-in after all).
     if (revealed(byElement.get(el))) rescanSoon();
-    if (el.type !== 'password') return;
+    if (controlType(el) !== 'password') return;
     const k = knownFor(el);
     if (k) changed.add(k.id);
   };
@@ -400,26 +464,28 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   const anchorOf = (k: KnownForm) => passwordOf(k) ?? (k.classified?.kind === 'username-only' ? elementOf(k, k.classified.username) : null);
   const hasTypedPassword = (k: KnownForm) => k.scanned.elements.some((e) => controlType(e) === 'password' && (typed.has(e) || filled.has(e)));
   const onSubmit = (event: Event) => {
-    if (!event.isTrusted) return;
-    const form = event.composedPath()[0];
-    if (form instanceof HTMLFormElement) {
+    if (!event.isTrusted || !live()) return;
+    const form = pathOf(event)[0];
+    if (isTag(form, 'FORM')) {
       const k = known.find((x) => x.scanned.form === form);
       if (k) candidate(k, 'submit');
     }
   };
   const onKeyDown = (event: KeyboardEvent) => {
+    if (!live()) return;
     fromRoot(event);
     if (event.key !== 'Enter' || !event.isTrusted) return;
-    const el = event.composedPath()[0];
+    const el = pathOf(event)[0];
     if (!isTextField(el)) return;
     const k = byElement.get(el);
     if (k) candidate(k, 'enter');
   };
   const onClick = (event: MouseEvent) => {
+    if (!live()) return;
     fromRoot(event);
     if (!event.isTrusted) return;
-    const target = event.composedPath()[0];
-    if (!(target instanceof Element)) return;
+    const target = pathOf(event)[0];
+    if (!isElementNode(target)) return;
     // A button that submits: in a <form>, its submit buttons; outside one, a button beside the fields; and an element
     // whose words say so (a script's `div`). Never a show-password toggle, a "Forgot password?" or one that wraps the
     // field (submitButtonFor).
@@ -427,7 +493,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     // Nothing known for a click inside an open root: a component added since the last scan (or with deep scans off) may
     // hold its form. Scanned afresh once and asked again, only then, and not right after a scan (review rounds 3 and 4
     // of #61).
-    if (!k && rootOf(target) instanceof ShadowRoot && performance.now() - scannedAt >= SCAN_GAP_MS) {
+    if (!k && isShadowRootNode(rootOf(target)) && performance.now() - scannedAt >= SCAN_GAP_MS) {
       rescan();
       k = submittedBy(target, known, anchorOf);
     }
@@ -520,7 +586,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     // when the sign-in works; review rounds 1 and 2 of #59).
     rescan();
     const before = new WeakSet<Element>();
-    for (const x of known) x.scanned.elements.forEach((e) => controlType(e) === 'password' && e.isConnected && isShown(e) && before.add(e));
+    for (const x of known) x.scanned.elements.forEach((e) => controlType(e) === 'password' && isConnectedNode(e) && isShown(e) && before.add(e));
     // The submitted <form>, for a field that has nothing else to be known by.
     const formRef = k.scanned.form ? new WeakRef(k.scanned.form) : null;
     const formless = !k.scanned.form;
@@ -534,7 +600,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const shown = () =>
       passwords.some((r) => {
         const el = r.deref();
-        return !!el && el.isConnected && isShown(el);
+        return !!el && isConnectedNode(el) && isShown(el);
       });
     /**
      * The held password field drawn again in a new element (a framework re-rendering the form after a wrong password,
@@ -553,7 +619,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       if (hasWords && h.autocomplete === f.autocomplete && h.label === f.label && h.placeholder === f.placeholder) return true;
       if (h.id !== '' || h.name !== '' || hasWords) return false;
       const form = formRef?.deref();
-      return form ? form.isConnected && form.contains(el) : formless;
+      return form ? isConnectedNode(form) && form.contains(el) : formless;
     };
     const redrawn = (): WeakRef<HTMLElement>[] => {
       scannedAt = performance.now();
@@ -563,14 +629,14 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       for (const x of known)
         x.scanned.elements.forEach((e, i) => {
           const f = x.scanned.record.fields[i]!;
-          if (f.type !== 'password' || before.has(e) || !e.isConnected || !isShown(e)) return;
+          if (f.type !== 'password' || before.has(e) || !isConnectedNode(e) || !isShown(e)) return;
           if (held.some((h) => sameAs(h, f, e))) out.push(new WeakRef(e));
         });
       return out;
     };
     const busy = () => allShown(doc, BUSY);
     const unquiet = () => {
-      if (quiet) win.clearTimeout(quiet);
+      if (quiet) clock.clearTimeout(quiet);
       quiet = 0;
     };
     /**
@@ -580,7 +646,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
      */
     const settle = () => {
       unquiet();
-      quiet = win.setTimeout(() => {
+      quiet = clock.setTimeout(() => {
         quiet = 0;
         if (done || shown()) return;
         if (busy()) return settle();
@@ -598,7 +664,7 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       if (inputsAdded) {
         const wait = REDRAW_SCAN_GAP_MS - (performance.now() - scannedAt);
         if (wait > 0) {
-          timer = win.setTimeout(check, wait);
+          timer = clock.setTimeout(check, wait);
           return settle();
         }
         const again = redrawn();
@@ -610,18 +676,24 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       settle();
     };
     const addsInput = (records: MutationRecord[]) =>
-      records.some((r) => [...r.addedNodes].some((n) => n instanceof Element && (n.tagName === 'INPUT' || !!n.querySelector('input'))));
+      records.some((r) => [...r.addedNodes].some((n) => isElementNode(n) && (isTag(n, 'INPUT') || !!Element.prototype.querySelector.call(n, 'input'))));
     const observer = new MutationObserver((records) => {
       if (addsInput(records)) inputsAdded = true;
-      if (!timer) timer = win.setTimeout(check, 100);
+      if (!timer) timer = clock.setTimeout(check, 100);
     });
     const watched = { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] };
     observer.observe(doc, watched);
+    // A frame's page that goes (the frame navigated after the submit): no mutation comes from a document that's gone, so
+    // its going starts the check, and the quiet wait decides as for any form gone (phase 3C).
+    const onHide = () => {
+      if (!timer && !done) timer = clock.setTimeout(check, 100);
+    };
+    if (inFrame) win.addEventListener('pagehide', onHide);
     // A field in an open shadow root: the document's observer doesn't see inside it, so each root it's in is watched too.
     for (const r of passwords) {
       const el = r.deref();
       let root = el ? rootOf(el) : null;
-      for (let depth = 0; root instanceof ShadowRoot && depth < 32; depth++, root = rootOf(root.host)) observer.observe(root, watched);
+      for (let depth = 0; root && isShadowRootNode(root) && depth < 32; depth++, root = rootOf(root.host)) observer.observe(root, watched);
     }
     // A request to the page's own origin finishing: a hint (M0 Q7: seen only once its body is read). Any answer is
     // activity, which starts the quiet wait again. Hints keep coming after `gone` until the deadline, so a late error (a
@@ -633,7 +705,9 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     let goneAt: number | null = null;
     let resources: PerformanceObserver | null = null;
     try {
-      resources = new PerformanceObserver((list) => {
+      // A frame's requests are in its own window's timeline.
+      const Observer = (inFrame ? (win as unknown as { PerformanceObserver: typeof PerformanceObserver }).PerformanceObserver : PerformanceObserver) ?? PerformanceObserver;
+      resources = new Observer((list) => {
         for (const e of list.getEntries() as PerformanceResourceTiming[]) {
           if (e.initiatorType !== 'fetch' && e.initiatorType !== 'xmlhttprequest') continue;
           // Only requests started at or after the submit (a poll that began before it says nothing of the sign-in), and,
@@ -658,21 +732,21 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
       resources = null;
     }
     let tail = 0;
-    const deadline = win.setTimeout(() => {
+    const deadline = clock.setTimeout(() => {
       if (done) return end();
       // The deadline decides: the field still there (or drawn again), or a busy marker still shown (the request may not
       // have answered), is no sign-in (review round 4 of #59).
       const how = shown() || redrawn().length || busy() ? 'still' : 'gone';
       finish(how);
       // A `gone` decided here: the page's errors are reported a little longer, for a request that answers just after.
-      if (how === 'gone') tail = win.setTimeout(end, DEADLINE_TAIL_MS);
+      if (how === 'gone') tail = clock.setTimeout(end, DEADLINE_TAIL_MS);
     }, SUBMIT_WATCH_MS);
     function finish(how: 'gone' | 'still'): void {
       if (done) return;
       done = true;
       if (how === 'gone') goneAt = performance.now();
       observer.disconnect();
-      if (timer) win.clearTimeout(timer);
+      if (timer) clock.clearTimeout(timer);
       unquiet();
       bridge.send(how, { formId: k.id });
       // `still` is the end; after `gone`, only the hints go on, until the deadline (or its tail).
@@ -680,11 +754,12 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     }
     function end(): void {
       done = true;
+      if (inFrame) win.removeEventListener('pagehide', onHide);
       observer.disconnect();
       resources?.disconnect();
-      win.clearTimeout(deadline);
-      if (tail) win.clearTimeout(tail);
-      if (timer) win.clearTimeout(timer);
+      clock.clearTimeout(deadline);
+      if (tail) clock.clearTimeout(tail);
+      if (timer) clock.clearTimeout(timer);
       unquiet();
       if (watching === end) watching = null;
     }
@@ -697,17 +772,23 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const i = k.scanned.record.fields.findIndex((x) => x.key === f.key);
     return i >= 0 ? (k.scanned.elements[i] ?? null) : null;
   };
-  const usable = (el: HTMLElement | null): el is HTMLInputElement => isTextField(el) && el.isConnected && !el.disabled && !el.readOnly && isShown(el);
+  const usable = (el: HTMLElement | null): el is HTMLInputElement => isTextField(el) && isConnectedNode(el) && !inputDisabled.call(el) && !inputReadOnly.call(el) && isShown(el);
+  /** In its own viewport and, for a frame's field, in the tab's too (its box offset through the frames above). */
   const onScreen = (el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    return r.bottom > 0 && r.right > 0 && r.top < win.innerHeight && r.left < win.innerWidth;
+    const r = rectOf(el);
+    if (!(r.bottom > 0 && r.right > 0 && r.top < win.innerHeight && r.left < win.innerWidth)) return false;
+    if (!inFrame) return true;
+    const at = inFrame.offset();
+    return !!at && at.y + r.bottom * at.scale > 0 && at.x + r.right * at.scale > 0 && at.y + r.top * at.scale < top.innerHeight && at.x + r.left * at.scale < top.innerWidth;
   };
-  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-  /** What typing sends, so React, Vue and Angular see the value (a framework's own setter lives in the page's world). */
+  /**
+   * What typing sends, so React, Vue and Angular see the value (a framework's own setter lives in the page's world). The
+   * top realm's native setter and `dispatchEvent`, for a frame's field too: a frame's script can patch its own (phase 3C).
+   */
   const put = (el: HTMLInputElement, value: string) => {
-    valueSetter.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    setControlValue(el, value);
+    EventTarget.prototype.dispatchEvent.call(el, new Event('input', { bubbles: true, composed: true }));
+    EventTarget.prototype.dispatchEvent.call(el, new Event('change', { bubbles: true }));
     filled.add(el);
   };
   /** Why a fill wrote nothing (PasswordsFilled's `reason`). */
@@ -759,8 +840,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     const pass = elementOf(k, c.password);
     // A password step that carries the username from the step before, read-only or hidden, already holding the
     // account you picked: only the password goes in. Holding another account, the form isn't this account's.
-    const carried = !!named && !!pass && !usable(named) && (named as HTMLInputElement).value !== '' && ((named as HTMLInputElement).readOnly || !isShown(named));
-    if (carried && (named as HTMLInputElement).value.trim().toLowerCase() !== p.username.trim().toLowerCase()) return 'changed';
+    const carried = !!named && !!pass && !usable(named) && valueOfControl(named) !== '' && ((isField(named) && inputReadOnly.call(named) === true) || !isShown(named));
+    if (carried && valueOfControl(named).trim().toLowerCase() !== p.username.trim().toLowerCase()) return 'changed';
     const user = carried ? null : named;
     // No current password's field, and the account picked in the menu of the new password's field itself (`intoNew`:
     // a sign-in read as a sign-up, S17 §9): its password goes into that field and its confirmation, visible
@@ -809,7 +890,8 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
     if (!h || typeof h.color !== 'string' || typeof h.ms !== 'number' || typeof h.stagger !== 'number' || typeof h.easing !== 'string') return;
     let done: true | Refused;
     try {
-      done = fill(p as PasswordsFill);
+      // A frame's: checked again right before anything is written (navigated, sandboxed or another origin since the menu).
+      done = live() ? fill(p as PasswordsFill) : 'changed';
     } catch {
       done = 'changed';
     }
@@ -832,16 +914,35 @@ export function startAgent(bridge: PasswordsBridge, options: AgentOptions = {}):
   listen('scroll', onMove);
   win.addEventListener('resize', onMove, { passive: true });
   stops.push(() => win.removeEventListener('resize', onMove));
+  for (const up of inFrame?.ancestors ?? []) {
+    EventTarget.prototype.addEventListener.call(up.document, 'scroll', onMove, { capture: true, passive: true });
+    EventTarget.prototype.addEventListener.call(up.window, 'resize', onMove, { passive: true });
+    stops.push(() => {
+      EventTarget.prototype.removeEventListener.call(up.document, 'scroll', onMove, { capture: true });
+      EventTarget.prototype.removeEventListener.call(up.window, 'resize', onMove);
+    });
+  }
   rescan();
   // A field focused before the agent woke (the sentinel wakes on that focus).
   const active = activeElementOf(doc);
   if (isTextField(active)) onFocusIn({ composedPath: () => [active] } as unknown as FocusEvent);
 
-  return () => {
-    for (const stop of stops) stop();
-    watching?.();
-    if (frame) win.cancelAnimationFrame(frame);
-    if (timer) win.clearTimeout(timer);
-    if (trailing) win.clearTimeout(trailing);
+  const release = () => {
+    released = true;
+    for (const stop of stops.splice(0)) stop();
+    if (frame) clock.cancelAnimationFrame(frame);
+    if (timer) clock.clearTimeout(timer);
+    if (trailing) clock.clearTimeout(trailing);
+    frame = timer = trailing = 0;
+    known = [];
+    byElement = new WeakMap();
+    focused = told = pending = null;
   };
+  return Object.assign(
+    () => {
+      release();
+      watching?.();
+    },
+    { release },
+  );
 }

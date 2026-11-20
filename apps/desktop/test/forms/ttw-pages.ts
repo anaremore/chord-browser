@@ -43,6 +43,8 @@ export interface SignInStep extends BaseStep {
 export interface NegativeStep extends BaseStep {
   readonly kind: null;
   readonly field: string;
+  /** The field is on the page, in a frame the agent may never use (a sandboxed one): it must stay unscanned. */
+  readonly unreached?: true;
 }
 
 export type Step = SignInStep | NegativeStep;
@@ -58,6 +60,10 @@ export interface SitePage {
 }
 
 const NEXT: Action = { click: 'button[type=submit]' };
+/** The site's frame of its sign-in pages (` >>| ` steps into a frame's document: ttw-entry.ts's `query`). */
+const FRAME = '#test-iframe >>|';
+/** The nested page's two frames in, at its default depth of 3: the side-by-side forms' frames are a third level. */
+const NESTED = '#test-iframe >>| #test-iframe >>|';
 const SIGN_IN = (username: string, password: string): SignInStep => ({ name: 'sign in', kind: 'sign-in', username, password });
 
 export const PAGES: readonly SitePage[] = [
@@ -163,7 +169,7 @@ export const PAGES: readonly SitePage[] = [
       { name: 'question', kind: null, field: '#security-question', actions: [NEXT, { waitFor: '#security-question' }] },
     ],
   },
-  // Not scored: closed shadow roots (out of reach), and frames (phase 3C; S17 §15).
+  // Not scored: closed shadow roots (out of reach). Frames are phase 3C's: a same-origin frame is used, a sandboxed one never.
   // Material Web's text fields: each one's <input> in the component's open root, the form in the page's tree (S17 phase 3B).
   {
     path: 'login/shadow-root-inputs',
@@ -171,9 +177,30 @@ export const PAGES: readonly SitePage[] = [
     steps: [SIGN_IN('#username >>> input', '#password >>> input')],
   },
   { path: 'login/shadow-root-inputs-closed', what: 'a sign-in form in an open root whose fields are in closed shadow roots', steps: [], skip: 'closed shadow roots are out of any page script’s reach, the agent’s too (S17 §4)' },
-  { path: 'login/iframe-login', what: 'a sign-in form in a frame', steps: [], skip: 'frames: phase 1 is the main frame only' },
-  { path: 'login/iframe-sandboxed-login', what: 'a sign-in form in a sandboxed frame', steps: [], skip: 'frames: phase 1 is the main frame only' },
-  { path: 'login/nested-iframe-login', what: 'two sign-in forms in frames within frames', steps: [], skip: 'frames: phase 1 is the main frame only' },
-  { path: 'multi-step/iframe-formless-login', what: 'a formless sign-in in steps, in a frame', steps: [], skip: 'frames: phase 1 is the main frame only' },
+  { path: 'login/iframe-login', what: 'a sign-in form in a same-origin frame', steps: [SIGN_IN(`${FRAME} #username`, `${FRAME} #password`)] },
+  {
+    path: 'login/iframe-sandboxed-login',
+    what: 'a sign-in form in a sandboxed frame (allow-same-origin too): never used',
+    steps: [{ name: 'out of reach', kind: null, field: `${FRAME} #password`, unreached: true }],
+  },
+  // The inner frames load before the frame above them is in use, so their sandbox history wasn't watched: never used,
+  // failing closed (review round 2 of #67). A nested frame added once the one above is in use is (frames.spec.ts).
+  {
+    path: 'login/nested-iframe-login',
+    what: 'two sign-in forms side by side, three frames deep, there before the agent woke: never used',
+    steps: [
+      { name: 'with a username, out of reach', kind: null, field: `${NESTED} #form-iframe-1 >>| #password`, unreached: true },
+      { name: 'with an email, out of reach', kind: null, field: `${NESTED} #form-iframe-2 >>| #password`, unreached: true },
+    ],
+  },
+  {
+    path: 'multi-step/iframe-formless-login',
+    what: 'a username, then an email, then the password, with no <form>, in a frame',
+    steps: [
+      { name: 'username', kind: 'username-only', username: `${FRAME} #username` },
+      { name: 'email', kind: 'username-only', username: `${FRAME} #email`, actions: [{ click: `${FRAME} button[type=submit]` }, { waitFor: `${FRAME} #email` }] },
+      { name: 'password', kind: 'sign-in', password: `${FRAME} #password`, actions: [{ click: `${FRAME} button[type=submit]` }, { waitFor: `${FRAME} #password` }] },
+    ],
+  },
   { path: 'login/basic-auth-login', what: 'HTTP basic authentication', steps: [], skip: 'the browser’s own sign-in prompt, not a form' },
 ];

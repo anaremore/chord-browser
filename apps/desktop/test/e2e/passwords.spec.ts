@@ -12,7 +12,8 @@
  *   form goes after its `fetch` is `signedIn`, with the request's status as a hint;
  * - a show-password toggle and a "Forgot password?" button aren't submits, and one submit
  *   (a click that submits the form) is one `submitted`;
- * - a sign-in form inside a frame gets no agent and sends nothing (phase 1 is the main frame);
+ * - a sign-in form inside a same-origin frame wakes the top frame's agent, which reports its submit (phase 3C;
+ *   passwords-frames.spec.ts saves and fills one);
  * - a forged message (an origin or a value in the payload) is refused;
  * - **no event carries a value**: the username and password typed never reach main.
  */
@@ -23,8 +24,6 @@ import { failOnMainErrors } from './main-errors';
 failOnMainErrors();
 
 const USER = 'ada@example.com';
-/** Longer than main waits after a page stops loading to decide a sign-in (saving.ts, SETTLE_MS). */
-const SETTLE_WAIT_MS = 2000;
 const SECRET = 'correct horse battery staple';
 
 const signIn = (action: string) =>
@@ -147,17 +146,17 @@ test('passwords: the agent wakes only on sign-in pages, adds nothing, and tells 
     await expect.poll(() => types(app), { timeout: 10_000 }).toContain('signedIn');
     expect((await types(app)).filter((t) => t === 'submitted')).toEqual(['submitted']);
 
-    // A sign-in form in a frame: no agent in the page (its preload doesn't run in frames), nothing reported.
+    // A sign-in form in a same-origin frame (phase 3C): the preload runs in the top frame only, but looks into the
+    // frame at load and wakes the agent there, which reports the frame's submit (with no value: `events` holds none).
     await clear(app);
     await page.goto(`${site.origin}/framed`);
+    await expect.poll(() => inAgentWorld(app, `${site.origin}/framed`, 'typeof chordPasswords')).toBe('object');
     const frame = page.frameLocator('#frame');
     await frame.locator('#u').fill(USER);
     await frame.locator('#p').fill(SECRET);
     await frame.locator('#p').press('Enter');
     await expect(frame.locator('p')).toHaveText('Signed in.');
-    await page.waitForTimeout(SETTLE_WAIT_MS);
-    expect(await inAgentWorld(app, `${site.origin}/framed`, 'typeof chordPasswords')).toBe('undefined');
-    expect(await events(app)).toEqual([]);
+    await expect.poll(() => types(app), { timeout: 10_000 }).toContain('submitted');
 
     // Forged payloads from the agent's own world: an origin of the page's choosing, a value. Both refused.
     await page.goto(`${site.origin}/plain`);

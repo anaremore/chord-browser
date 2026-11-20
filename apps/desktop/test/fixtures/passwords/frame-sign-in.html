@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in (frame)</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 12px; }
+      label { display: block; margin: 8px 0 4px; }
+    </style>
+  </head>
+  <body>
+    <!--
+      A sign-in form in a same-origin frame (S17 phase 3C), as an embedded sign-in widget has it: the frame's own script
+      reads the fields, posts them, and sends the whole tab on to the signed-in page.
+    -->
+    <form id="f">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" />
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" />
+      <button id="go" type="submit">Sign in</button>
+    </form>
+    <script>
+      document.getElementById('f').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const body = new URLSearchParams({ email: document.getElementById('email').value, password: document.getElementById('password').value });
+        await fetch('/session', { method: 'POST', body });
+        top.location.href = '/home';
+      });
+    </script>
+  </body>
+</html>

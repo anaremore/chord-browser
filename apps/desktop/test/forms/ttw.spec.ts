@@ -27,7 +27,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
 import { bundleAgent } from '../../src/passwords/build';
 import { compareBaseline } from './score';
 import { SITE_COMMIT, ensureSite } from './ttw';
@@ -72,10 +72,17 @@ const settle = (page: Page) => page.evaluate(() => new Promise<void>((done) => r
 
 /** A ttw-pages.ts selector for Playwright, whose CSS steps into open shadow roots itself: `>>>` is a descendant there. */
 const pw = (selector: string) => selector.replaceAll(' >>> ', ' ');
+/** The element a ttw-pages.ts selector names, through frames (` >>| `) as frame locators. */
+const loc = (page: Page, selector: string): Locator => {
+  const parts = selector.split(' >>| ');
+  let scope: Page | FrameLocator = page;
+  for (const part of parts.slice(0, -1)) scope = scope.frameLocator(pw(part));
+  return scope.locator(pw(parts.at(-1)!)).first();
+};
 
 async function act(page: Page, action: Action) {
-  if ('click' in action) await page.click(pw(action.click), { timeout: 5000 });
-  else await page.waitForSelector(pw(action.waitFor), { state: 'visible', timeout: 5000 });
+  if ('click' in action) await loc(page, action.click).click({ timeout: 5000 });
+  else await loc(page, action.waitFor).waitFor({ state: 'visible', timeout: 5000 });
 }
 
 /** Every text-like field's value (open shadow roots too), by its place among the page's inputs: what a fill may and may not change. */
@@ -90,7 +97,7 @@ async function fillStep(page: Page, step: SignInStep): Promise<string[]> {
   if (active) await page.waitForTimeout(600);
   else {
     await call(page, 'clear');
-    await page.click(pw(target), { timeout: 5000 });
+    await loc(page, target).click({ timeout: 5000 });
   }
   await settle(page);
   // The menu shows for the agent's last `focus` (with the field focused already, the one it sent then).
@@ -122,7 +129,7 @@ async function fillStep(page: Page, step: SignInStep): Promise<string[]> {
 /** A negative step's field clicked, as a person would: the agent's `focus` must open no menu. */
 async function noMenu(page: Page, step: NegativeStep): Promise<string[]> {
   await call(page, 'clear');
-  await page.click(pw(step.field), { timeout: 5000 });
+  await loc(page, step.field).click({ timeout: 5000 });
   await settle(page);
   const focus = await lastOf(page, 'focus');
   return focus && MENU_KINDS.has(String(focus['kind'])) ? [`menu: clicking ${step.field} opens one (${String(focus['kind'])}, ${String(focus['role'])})`] : [];
@@ -140,6 +147,8 @@ test('test-the-web, held to its baseline', async ({ page, context }) => {
     return;
   }
   await serveSite(context, site.siteDir);
+  // The sentinel's sandbox record, from each document's start, as the preload keeps it (phase 3C).
+  await context.addInitScript({ content: await bundleAgent({ entry: join(here, 'sandbox-recorder.ts'), minify: true }) });
   await page.setViewportSize({ width: 1280, height: 900 });
   const script = await bundleAgent({ entry: join(here, 'ttw-entry.ts'), minify: false });
 
@@ -169,9 +178,15 @@ test('test-the-web, held to its baseline', async ({ page, context }) => {
         for (const action of step.actions ?? []) await act(page, action);
         await settle(page);
         const result = await call(page, 'check', step.kind === null ? { field: step.field } : { username: step.username, password: step.password });
-        if (!result.scanned) wrong.push('the scan saw no fields (the page didn’t render?)');
+        // A field in a frame the agent may never use: on the page, and never scanned (phase 3C).
+        const unreached = step.kind === null && step.unreached;
+        if (!result.scanned && !unreached) wrong.push('the scan saw no fields (the page didn’t render?)');
         for (const sel of result.notFound) wrong.push(`no field matches ${sel}`);
-        wrong.push(...result.wrong);
+        if (unreached) {
+          const out = result.wrong.filter((w) => w.endsWith('→ not scanned'));
+          if (!out.length && !result.notFound.length) wrong.push(`${step.field} was scanned, in a frame the agent may never use`);
+          wrong.push(...result.wrong.filter((w) => !w.endsWith('→ not scanned')));
+        } else wrong.push(...result.wrong);
         if (step.kind === null) {
           negatives++;
           const menu = result.notFound.length ? [] : await noMenu(page, step);
