@@ -17,7 +17,11 @@ failOnMainErrors();
 const appDir = resolve(import.meta.dirname, '../..');
 
 type Hooks = { chordTestHooks: { agents(): Promise<{ serving: string | null; connections: number; restricted: number | null }>; agentsStopAll(): void } };
-const agents = (app: ElectronApplication) => app.evaluate(() => (globalThis as unknown as Hooks).chordTestHooks.agents());
+/** The hooks are set once main has started its services: wait for them. */
+const agents = async (app: ElectronApplication) => {
+  await expect.poll(() => app.evaluate(() => Boolean((globalThis as unknown as Partial<Hooks>).chordTestHooks))).toBe(true);
+  return app.evaluate(() => (globalThis as unknown as Hooks).chordTestHooks.agents());
+};
 
 async function launch(profile: string, env: Record<string, string>): Promise<ElectronApplication> {
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, CHORD_E2E_HOOKS: '1', ...env };

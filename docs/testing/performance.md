@@ -26,7 +26,7 @@ Before an enforced run:
 
 | Budget | Measured | Held |
 |---|---|---|
-| Launch < 1.5 s | Main's first line to the sidebar's first commit with its handlers attached (`ready`), and to its first painted frame. Fresh profile and 200 restored tabs, three runs each; the worst run counts. | `ready` always; painted when unlocked |
+| Launch < 1.5 s | Main's first line to the sidebar's first commit with its handlers attached (`ready`), and to its first painted frame. Fresh profile and 200 restored tabs, three runs each; the worst run counts. Outside agents (S18): the fresh profile's runs check that Agents off (the default) serves no endpoint and writes nothing, and three more run with Agents on (`CHORD_AGENTS=1`: one pipe and its token file, no connection, no helper), held to the same budget. | `ready` always; painted when unlocked |
 | Command bar open < 50 ms | The request in main to the overlay's first frame (its `requestAnimationFrame`), and on to the paint. Ten openings, including the first since launch. | First frame always; paint when unlocked |
 | Pinned rows mounted ≤ 80 | With 5,000 pinned tabs: the most of Pinned's rows in the DOM, at launch, after the wheel and drags, and after switching back to the chord. | Always |
 | Keystroke, open tabs and actions | Their rows are in the DOM before the keystroke's frame begins (`late` must be 0). | Always |

@@ -277,29 +277,54 @@ function processInfo(pid: number): { mb: number; children: number } {
   return { mb: kb / 1024, children };
 }
 
-test('Chord mcp: the relay answers with no window, no lock and nothing in the profile; a packaged Chord never serves agents', async () => {
+test('Chord mcp: the relay alone answers fast, in one process, with no window and nothing written to the profile', async () => {
   const executable = packagedExecutable();
   const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
-  const started = performance.now();
+  const hello = { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '2.1.328' } };
+  // Start to the initialize answer, as M0 measured it: one start to warm up (a new build's first is the OS scanning it), then the median of five.
+  const times: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    const t0 = performance.now();
+    const run = mcpClient(executable, profile);
+    await run.request('initialize', hello);
+    if (i > 0) times.push(performance.now() - t0);
+    run.child.stdin!.end();
+    await run.exited;
+  }
+  const initializeMs = times.sort((a, b) => a - b)[2]!;
   const mcp = mcpClient(executable, profile);
   try {
-    const init = await mcp.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '2.1.328' } });
-    const initializeMs = performance.now() - started;
+    const init = await mcp.request('initialize', hello);
     expect(init.result).toMatchObject({ protocolVersion: '2025-11-25', serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
     expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(7);
     // Settled: one process (GPU and network service in-process), within its memory budget.
     await new Promise((done) => setTimeout(done, 1000));
     const { mb, children } = processInfo(mcp.child.pid!);
-    console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms, ${Math.round(mb)} MB, ${children} child processes`);
+    console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms (median of ${times.map(Math.round).join(', ')}), ${Math.round(mb)} MB, ${children} child processes`);
     expect(children).toBe(0);
     expect(mb).toBeLessThanOrEqual(90);
     // The budget is CI Windows' (S18 M1 plan): elsewhere it's reported.
     if (process.env['CI'] && process.platform === 'win32') expect(initializeMs).toBeLessThanOrEqual(250);
-    // Nothing written to the profile it reads, and no window.
+    const call = await mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
+    expect(call.result).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' }] });
+    // Nothing written to the profile it reads.
     expect(readdirSync(profile)).toEqual([]);
+    mcp.child.stdin!.end();
+    expect(await mcp.exited).toBe(0);
+  } finally {
+    mcp.child.kill();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
 
-    // No lock: a Chord starts on that profile as if the relay weren't there. Packaged, it never serves agents,
-    // even when asked to (CHORD_AGENTS is development-only): no endpoint file, and the relay still finds no Chord.
+test('Chord mcp holds no lock, and a packaged Chord never serves agents, even asked to', async () => {
+  const executable = packagedExecutable();
+  const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
+  const mcp = mcpClient(executable, profile);
+  try {
+    await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } });
+    // No lock: a Chord starts on that profile as if the relay weren't there. Packaged, it never serves agents
+    // (CHORD_AGENTS is development-only): no endpoint file, and the relay still finds no Chord.
     process.env['CHORD_AGENTS'] = '1';
     const app = await start(executable, profile).finally(() => delete process.env['CHORD_AGENTS']);
     try {
@@ -313,8 +338,6 @@ test('Chord mcp: the relay answers with no window, no lock and nothing in the pr
       app.child.kill();
       throw error;
     }
-    mcp.child.stdin!.end();
-    expect(await mcp.exited).toBe(0);
   } finally {
     mcp.child.kill();
     rmSync(profile, { recursive: true, force: true });
