@@ -10,19 +10,20 @@ Windows, macOS, and Linux (X11 and Wayland) are all first-class.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/public/images/chord-dark-2880.webp">
-  <img src="site/public/images/chord-light-2880.webp" alt="Chord: a sidebar tinted in the chord's colors, with pinned tabs, a folder and today's tabs, beside a Wikipedia article">
+  <img src="site/public/images/chord-light-2880.webp" alt="Chord: a sidebar tinted in the chord's colors, with pinned tabs, a folder and open tabs, beside a Wikipedia article">
 </picture>
 
 ## What's in it
 
 Everything here works on `main` today and comes with the latest preview.
 
-- **Vertical sidebar:** pinned tabs that remember their home page, Today tabs that tidy themselves into an archive, nestable folders, and drag-and-drop everywhere.
+- **Vertical sidebar:** pinned tabs that remember their home page, other tabs that tidy themselves into an archive, nestable folders, and drag-and-drop everywhere.
 - **Chords:** separate sets of tabs, each with its own color theme and, optionally, separate sign-ins. Switch with ⌘/Ctrl+1–9 or a swipe.
 - **Command bar** (⌘/Ctrl+T): one place to search open tabs, pinned tabs, history, the archive, and actions.
 - **Minimal mode:** collapse the sidebar and Chord shrinks to one slim bar.
 - **Split view:** two to four tabs side by side, kept together in the sidebar.
 - **Peek and the mini window:** links from pinned tabs open in a Peek over the page, and links from other apps in a small window you can move into a chord.
+- **Passwords:** a vault on your computer, locked with a passphrase only you know. It fills and saves sign-ins (two-step ones and Google's, Microsoft's, Okta's and Auth0's included), makes strong passwords for sign-ups, and brings passwords in from other browsers and managers, or takes them out. Never synced.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
 - **Safe Browsing:** a warning before suspected phishing and malware sites and downloads, from Google's lists, checked on your computer. Release builds only (it needs Chord's API key); off in Google-free mode.
