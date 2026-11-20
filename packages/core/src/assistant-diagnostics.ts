@@ -7,7 +7,7 @@
  * cut to its origin and path. Requests' headers, cookies and bodies are never
  * asked for (no Network domain), so they can't be here.
  */
-import { cleanPageText, isNeverReadable } from './assistant';
+import { cleanPageText, isNeverReadable, pageIdField } from './control-tools';
 import { hostOf, siteOf } from './links';
 
 /** Core runs without DOM types. */
@@ -433,7 +433,7 @@ export function diagnosticsSummary(entries: readonly DiagnosticsEntry[]): string
 }
 
 /** The tool's result: untrusted page data with its provenance, as read_tab's is. */
-export function diagnosticsResult(page: { ref: string; url: string; retrievedAt: number; entries: readonly DiagnosticsEntry[]; total: number; note?: string }): string {
+export function diagnosticsResult(page: { ref: string; url: string; retrievedAt: number; entries: readonly DiagnosticsEntry[]; total: number; note?: string; pageId?: string }): string {
   let origin: string;
   try {
     origin = new URL(page.url).origin;
@@ -443,6 +443,7 @@ export function diagnosticsResult(page: { ref: string; url: string; retrievedAt:
   return JSON.stringify({
     source: 'page_diagnostics',
     tab_id: page.ref,
+    ...pageIdField(page.pageId),
     origin,
     url: redactAddress(page.url),
     retrieved_at: new Date(page.retrievedAt).toISOString(),

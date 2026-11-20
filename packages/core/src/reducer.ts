@@ -8,7 +8,7 @@ import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import { blockingSite, cleanOffSites } from './ad-blocking';
 import { cleanCountSites, countSite } from './tab-counts';
-import { cleanNeverSites } from './assistant';
+import { cleanNeverSites } from './control-tools';
 import { cleanKeys } from './bindings';
 import { cleanDevtoolsSettings } from './devtools';
 import { isInternalUrl, visibleTabs } from './idle';

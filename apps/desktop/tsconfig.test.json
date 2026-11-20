@@ -28,6 +28,8 @@
     "src/renderer/env.d.ts",
     "src/main/assistant/extract.ts",
     "src/main/assistant/forms.ts",
+    "src/main/control/extract.ts",
+    "src/main/control/forms.ts",
     "src/main/page-call.ts",
     "src/main/safe-browsing/database.ts",
     "src/main/safe-browsing/proto.ts",

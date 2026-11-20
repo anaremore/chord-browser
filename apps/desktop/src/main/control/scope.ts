@@ -1,0 +1,71 @@
+/**
+ * What a front door gives the control layer (S18 M1a): who the agent is (its
+ * gate), the tabs it can see, its refs for them, and its rules for reading.
+ * The assistant's is assistant/scope.ts (a chat's scope, its attached tabs and
+ * readNeedsApproval); outside agents' comes in M1's later slices (their Agent
+ * chord and the tabs shared with them).
+ */
+import type { AssistantFillCard, AssistantFormRead, AssistantToolName, NodeId, TabNode, TabRefs } from '@chord/core';
+import type { ControlAgent } from './gate';
+
+/** A tool's answer to the model. */
+export interface ToolOutput {
+  text?: string;
+  /** Screenshots, for providers that take images through their CLI. */
+  image?: { data: string; mimeType: string };
+  isError?: boolean;
+}
+
+/** A PDF read for an agent: later ranges reuse it, and the assistant's citations find their page in it. */
+export interface PdfRead {
+  url: string;
+  pages: string[];
+  totalPages: number;
+  text: string;
+}
+
+/** What an agent's tools remember between calls. */
+export interface ToolMemory {
+  /** PDFs read, per tab, oldest first. */
+  pdfs: Map<NodeId, PdfRead>;
+  /** The last form read (read_form): its fields by Chord's ids, and the page's token for that read. */
+  form: { nodeId: NodeId; token: string; read: AssistantFormRead } | null;
+  /** Chord's next field id: ids never repeat, so one from an earlier read is caught, not taken for another field. */
+  nextField: number;
+  /** Tabs it read: the assistant shows a badge on them in the sidebar. */
+  read: Set<NodeId>;
+}
+
+/** propose_fill's card, which only a front door with a place to show it offers. */
+export interface FillProposals {
+  /** Why no card can be shown now (one was this turn already), or null. */
+  refuse(): string | null;
+  show(node: TabNode, card: AssistantFillCard, form: NonNullable<ToolMemory['form']>): Promise<void>;
+}
+
+export interface ControlScope {
+  /** The agent's gate: its states, grants, cards and Stop. */
+  readonly agent: ControlAgent;
+  readonly refs: TabRefs<NodeId>;
+  readonly memory: ToolMemory;
+  /** Every tool refused, and why (the assistant reading nothing), or null. */
+  off(): string | null;
+  /** The tabs it can see (list_tabs), and whether each was given to it (attached, shared). */
+  tabs(): { node: TabNode; given: boolean }[];
+  /** read_selection's tab when none is named. */
+  defaultTab(): TabNode | null;
+  /** A tab may be read at all: never a private window, a Chord page or a *Never* site. */
+  readable(node: TabNode): boolean;
+  /** The *Never* list, for addresses a read ends up at (a PDF's redirects, a frame inside the page). */
+  neverSites(): readonly string[];
+  /** This read needs the user's yes first (`node` null: list_tabs and searches). */
+  needsCard(tool: AssistantToolName, node: TabNode | null): boolean;
+  /** The tab on screen where the agent's requests come from: forms and diagnostics work only there. */
+  onScreen(): NodeId | null;
+  /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */
+  activity(tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
+  /** search_history and search_archive, already kept to what may be read; absent, they're not offered. */
+  search?(tool: 'search_history' | 'search_archive', query: string): Promise<Record<string, string>[]>;
+  /** propose_fill; absent, it's not offered. */
+  fills?: FillProposals;
+}

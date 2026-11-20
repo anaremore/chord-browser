@@ -5,7 +5,8 @@
  * chords or tabs are dropped, settings fill in from defaults, and there is
  * always at least one chord and one window.
  */
-import { cleanNeverSites, isAssistantScope } from './assistant';
+import { isAssistantScope } from './assistant';
+import { cleanNeverSites } from './control-tools';
 import {
   DEFAULT_PROFILE,
   defaultSettings,

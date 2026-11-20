@@ -252,7 +252,7 @@ export const samePage = (a: string, b: string): boolean => pageAddress(a) === pa
  * what was left out (never which, or why beyond the kind); at most
  * RESULT_MAX characters, cut at a field, saying so.
  */
-export function formResult(read: AssistantFormRead, page: { ref: string; retrievedAt: number }): string {
+export function formResult(read: AssistantFormRead, page: { ref: string; retrievedAt: number; pageId?: string }): string {
   let origin = '';
   try {
     origin = new URL(read.url).origin;
@@ -265,6 +265,7 @@ export function formResult(read: AssistantFormRead, page: { ref: string; retriev
   const head = {
     source: 'web_form',
     tab_id: page.ref,
+    ...(page.pageId ? { page_id: page.pageId } : {}),
     origin,
     url: read.url,
     retrieved_at: new Date(page.retrievedAt).toISOString(),
