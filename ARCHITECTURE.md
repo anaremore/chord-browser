@@ -125,7 +125,8 @@ chord-browser/
 │  │  ├─ popover/               hover previews, permission prompts
 │  │  └─ pages/                 chord://settings, chord://archive
 │  ├─ src/data/                 "chord-data" utility process: SQLite, search, favicons
-│  ├─ src/main/assistant/            the assistant: CLI adapters, its tools, page extraction and form filling (in main, §11.2, §11.6)
+│  ├─ src/main/assistant/            the assistant: CLI adapters, its chats, and its scope in the control layer (in main, §11.2)
+│  ├─ src/main/control/              the shared control layer: tools, the gate, the page adapter, page reading, PDFs, forms, diagnostics (§11.3, §11.6)
 │  ├─ src/main/reader/          reader view: Readability's scripts for the page, the view and its images; cleaning in a worker (§9)
 │  ├─ src/main/effects/         Effects: the service, the sanitizer and its worker, the outline and picker scripts (§9)
 │  ├─ src/pdf/                  the assistant's PDF reader: pdf.js in a utility process, one per PDF read (§11.4)
@@ -1076,7 +1077,7 @@ sequenceDiagram
   M-->>U: assistant:state (throttled to 33 ms)
 ```
 
-There is no `chord-agent` process. `AssistantService` (`main/assistant/service.ts`) owns threads, approvals, tool calls and the CLI processes; the adapters (`claude.ts`, `codex.ts`) are thin stdio translators. Heavy work happens in the CLIs.
+There is no `chord-agent` process. `AssistantService` (`main/assistant/service.ts`) owns threads, approval cards and the CLI processes, and hands each tool call to the shared control layer (§11.3); the adapters (`claude.ts`, `codex.ts`) are thin stdio translators. Heavy work happens in the CLIs.
 
 **Processes:** one CLI per active thread, at most **3** (the least recently used is closed), each killed after **10 minutes** idle. Every exit kills the whole process tree (`taskkill /T` on Windows; Codex starts a helper). On quit, a reply in progress is saved as *Interrupted* with **Retry**.
 
@@ -1128,6 +1129,8 @@ codex app-server --disable shell_tool --disable unified_exec --disable view_imag
 - The meter is per chat, in memory: it appears after the first answer, and resets when the provider changes or a session continues from a summary.
 
 ### 11.3 Tools and reading scope
+
+*The shared control layer (S18 M1a, 2026-11-20).* The tools, their handlers and the gate are shared with outside agents (docs/decisions/S18-agent-mcp.md): `main/control/` (`tools.ts` the handlers, `gate.ts` the agent's calls, cards, grants and Stop, `page.ts` the page adapter, and the page reading, PDF, form and diagnostics modules), with the pure parts in core (`control-tools.ts`, `control-gate.ts`, `control-refs.ts`). A front door gives it a `ControlScope`: the assistant's is `main/assistant/scope.ts`, the chat's scope, attached tabs and `readNeedsApproval` below. The chat is the agent: Stop goes through its gate, so a tool call in flight answers at once; its approval cards are the chat's. Tab refs are per chat and never reused; a closed tab's ref is refused as closed. Every read's result carries `page_id`, which changes with each main-frame navigation.
 
 All tools are **read-only** and named in snake_case (the Claude API's and Codex's name rules); Claude Code also sees them marked `readOnlyHint`. `propose_fill` changes nothing either: it shows a card, and only your Fill writes into the page (§11.6).
 
