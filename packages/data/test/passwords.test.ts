@@ -436,6 +436,20 @@ describe('the API the menu and the save card call', () => {
     if (found!.kind !== 'new') expect(found!.id).toBe(id);
   });
 
+  it.each([
+    // A site that takes a code after the password (main says so, from Apple's list): the code is no new password.
+    ['Sekrit-pass', 'Sekrit-pass123456', true, 'same'],
+    ['pass2024', 'pass2024123456', true, 'same'],
+    ['Sekrit-pass', 'Sekrit-pass12345', true, 'update'],
+    ['Sekrit-pass', 'Sekrit-pass123456789', true, 'update'],
+    // Any other site: 6 digits after it is another password, and the Update card shows.
+    ['Sekrit-pass', 'Sekrit-pass123456', false, 'update'],
+  ] as const)('saved %s, submitted %s, appendsCode %s → %s', async (saved, submitted, appendsCode, kind) => {
+    const id = await withLogin('https://www.example.com', 'ada', saved);
+    const { candidate: found } = await run({ op: 'compare', origin: 'https://www.example.com', username: 'ada', password: submitted, ...(appendsCode ? { appendsCode } : {}) });
+    expect(found).toEqual({ kind, id });
+  });
+
   it('saves a new sign-in, and updates one keeping the password before it; an http one moves to https', async () => {
     const id = await withLogin('http://github.com', 'ada');
     const saved = await run({ op: 'save', origin: 'https://github.com', username: 'ada', password: 'new-password', chordId: 'work', replace: id }, 5000);

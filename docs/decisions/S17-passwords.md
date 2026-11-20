@@ -1354,3 +1354,30 @@ The sentinel is 4,070 bytes built (main 2,367), held to 4,096 (perf.spec). Its s
 - **`forms/frames.spec.ts`:** a same-origin frame's focus in the tab's pixels, its form in the one report, the fill (the frame's page sees `input` and `change`), the submit's values; a frame whose page patched its own `HTMLInputElement` value setter, still filled; another site's frame, a sandboxed one with and without `allow-same-origin`, `srcdoc`, `about:blank` and `data:`, none used; 2 and 3 levels used, 4 not; 20 frames used, the 21st not; a frame added later and one that navigates within the site; a formless frame's button; focus moving from the top's field into a frame's; a frame given a `sandbox` between focus and submit (no candidate), one sent to another site between the menu and the fill (nothing written), and one that navigates after its submit (`gone`); 30 ad frames beside the top's form.
 - **Test-the-web:** `login/iframe-login`, `login/nested-iframe-login` (two forms three frames deep) and `multi-step/iframe-formless-login` are scored now; `login/iframe-sandboxed-login` is a negative whose field must stay unscanned. Selectors step into a frame with ` >>| `.
 - **Journey:** `e2e/passwords-frames.spec.ts`. A page holding only a frame of its origin: the sentinel wakes on the frame's field, the sign-in typed there is saved from the card, and after a reload the menu under the frame's field fills both, which the frame's own script posts.
+
+## Phase 3D: providers' recipes and codes after the password (built 2026-11-19)
+
+*Branch `feat/passwords-3d-recipes`. The plan was approved by the planning thread on 2026-11-19. The card line for a trimmed code waits on the owner's choice of its mock (`passwords-3d-code.html`); until then, a new save keeps what was typed.*
+
+**Recipes** (`core/password-recipes.ts`, applied in the agent by `agent/recipes.ts`) cover Google, Microsoft (work or school, and personal), Okta (the Identity Engine's widget and the classic one) and Auth0's Universal Login. A recipe applies to the agent's own document's host only: a host the recipe names, or under one of its `*.` patterns, never the bare domain. It only adds:
+- **Fields.** The field its `username` selector matches is the username. The field its `password` selector matches is the current password, but only on a `type=password` field. With the password shown, the form is a sign-in; without it, a first step. Any other field that held those roles loses them. A sign-up, change or reset form is never touched.
+- **Submits.** The element its `submits` selector matches, or one inside it, submits the form holding the recipe's fields when the click rule takes nothing. It goes through the click rule's own refusals (`safeSubmit` in `scan.ts`): never a toggle's, help's or another way in's words, never a pressed button, one holding or controlling the field, or the password's own wrapper's eye.
+- **Never frames.** A frame is used or not before any recipe runs. A sandboxed frame at a provider's host, or another site's frame of it, is never used.
+- **A redesign.** A selector that matches nothing changes nothing, so the generic detector reads the page.
+
+**The read-only sweep** of the providers' public sign-in pages (`scripts/dev/signin-sweep/providers.mjs`, by hand, never in CI) loads each identifier step, reads its fields and focuses them. It never types, presses Next or submits; no account is used. Results stay outside the repo. Only the selectors a recipe needs came from it, and each recipe's `verified` date is when they last matched. On 2026-11-19:
+- **Google:** the email is found, but Next is a button after the `<form>`, in its own wrapper, so the click rule never took it. The recipe adds it.
+- **Microsoft (both hosts), Okta (both widgets) and Auth0:** the generic detector already reads their identifier steps and Next. Their recipes hold the fields and buttons in place if a redesign moves them.
+- **Password steps** can't be reached without submitting an identifier, so their selectors are the providers' documented field names (`Passwd`, `passwd`, `credentials.passcode`, `password`). The rows check them on Chord's own markup.
+- **Known false submits on first steps, low harm:** Microsoft's *Sign-in options*, live.com's *Create an account* and Okta's *Okta FastPass* read as submits. A first step's submit only carries its username to the next step's card, so nothing is saved by them. Left as they are.
+
+**A one-time code typed after the password** (Apple's `websites-that-append-2fa-to-password.json`, vendored at the same commit as the other two files):
+- **Matching.** `appendsCodeToPassword` in `password-quirks.ts` matches the origin's host or a parent, down to its registrable domain: `www.example.com` for `example.com`, never `example.com` for `auth.example.com`. Main loads the list the first time a sign-in is submitted and tells chord-data's `compare` (`appendsCode`).
+- **On a listed site,** the saved password followed by 6 to 8 digits is the same password: no Update card for a code (`withAppendedCode`). 5 or 9 digits are another password. On any other site, 6 digits after the saved password are a new password, as before.
+- **Trimming.** `trimAppendedCode` takes 6 digits off a new password that ends in 6 to 8 of them. It's built and tested, but not wired: a new save trims only with the card line that says so, which waits on the mock.
+
+**Tests:**
+- core: the hosts table, the patterns and the recipes' shape; the list's hosts; codes after a password, and trimming;
+- chord-data: `compare` with and without `appendsCode`;
+- the forms project (`test/forms/recipes.spec.ts`): each provider's step on Chord's own markup, served at the provider's host, and the same markup on other hosts;
+- refusals: a recipe's submit that reads as *Show password*, is pressed, or is the password's own eye; a sign-up left alone; frames.

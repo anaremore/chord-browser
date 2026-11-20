@@ -498,6 +498,21 @@ export function submitButtonFor(target: Element, anchor: Element | null, form: H
 }
 
 /**
+ * Whether a button may submit the form of `anchor` (its password field, or a first step's username) by the click rule's
+ * own refusals: never one whose words read as a toggle, help or another way in, a pressed one, one holding the field or
+ * naming it in `aria-controls`, or a button in the password field's own wrapper (its eye). A provider's recipe asks
+ * this of its submit (S17, phase 3D).
+ */
+export function safeSubmit(button: Element, anchor: Element): boolean {
+  const words = `${buttonText(button)} ${attrOf(button, 'aria-label') ?? ''} ${attrOf(button, 'title') ?? ''}`;
+  if (notSubmit(words) || button.hasAttribute('aria-pressed') || contains(button, anchor)) return false;
+  const controls = (attrOf(button, 'aria-controls') ?? '').split(/\s+/);
+  if (anchor.id && controls.includes(anchor.id)) return false;
+  const wrapper = controlType(anchor) === 'password' ? parentOf(anchor) : null;
+  return !(wrapper && tagOf(wrapper) !== 'FORM' && contains(wrapper, button) && allIn(wrapper, 'input, select, textarea').length === 1);
+}
+
+/**
  * The form a click on `target` submits, or null (S17 §6, step 2): its `<form>`'s, or the formless fields' whose scope
  * holds the button. `anchorOf` gives each form's password field, or its username's for a first step. The agent's
  * click listener and the corpus's measure of false submit signals both use this.

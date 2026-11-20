@@ -9,9 +9,11 @@
  * `vendor/apple-password-manager-resources` (its README says how to update):
  *
  * - `password-rules.json`: a site's password rules, for the generator when the field has none of its own;
- * - `change-password-URLs.json`: where a site changes a password, for Settings → Passwords.
+ * - `change-password-URLs.json`: where a site changes a password, for Settings → Passwords;
+ * - `websites-that-append-2fa-to-password.json`: sites that take a one-time code typed after the password, in the same
+ *   field (S17 §6, phase 3D), so the code is no new password.
  *
- * About 125 KB together, so this is a subpath of core (`@chord/core/password-quirks`) that main imports the first time
+ * About 127 KB together, so this is a subpath of core (`@chord/core/password-quirks`) that main imports the first time
  * it needs one, never at launch and never in a renderer (performance rule 1).
  *
  * A host is looked up as itself, then each parent domain down to its registrable domain (`login.example.co.uk`,
@@ -20,12 +22,14 @@
 import changeUrls from '../vendor/apple-password-manager-resources/change-password-URLs.json';
 import { getDomain } from 'tldts';
 import rules from '../vendor/apple-password-manager-resources/password-rules.json';
+import appendsCode from '../vendor/apple-password-manager-resources/websites-that-append-2fa-to-password.json';
 
 /** Core has no DOM or Node types: the WHATWG URL, as main and chord-data have it (as in password-sites.ts). */
 declare const URL: new (url: string, base?: string) => { protocol: string; hostname: string; href: string };
 
 const RULES = rules as Record<string, { 'password-rules'?: string }>;
 const CHANGE_URLS = changeUrls as Record<string, string>;
+const APPENDS_CODE: ReadonlySet<string> = new Set((appendsCode as string[]).map((h) => h.toLowerCase()));
 
 /** The host and its parents, longest first, down to its registrable domain; the host alone for an IP address, `localhost` or a public suffix. */
 function hostsOf(host: string): string[] {
@@ -78,4 +82,14 @@ export function changePasswordUrlFor(origin: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether a page's origin is a site that takes a one-time code typed after the password (Apple's list): the host or a
+ * parent down to its registrable domain listed (`www.example.com` for `example.com`; `sso.auth.example.com` for
+ * `auth.example.com`, never `example.com` for it).
+ */
+export function appendsCodeToPassword(origin: string): boolean {
+  const host = hostOf(origin);
+  return !!host && hostsOf(host).some((h) => APPENDS_CODE.has(h));
 }

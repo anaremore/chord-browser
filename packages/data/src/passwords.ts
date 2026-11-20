@@ -22,7 +22,7 @@
  */
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { StatementSync } from 'node:sqlite';
-import { loginProblem, normalizePassphrase, passphraseProblem, SCRYPT, type LoginSecret, type LoginSummary, type ScryptParams } from '@chord/core';
+import { loginProblem, normalizePassphrase, passphraseProblem, SCRYPT, withAppendedCode, type LoginSecret, type LoginSummary, type ScryptParams } from '@chord/core';
 import type * as Sites from '@chord/core/password-sites';
 import { nodeCrypto } from './crypto';
 import { PasswordTransfer, type StoredLogin, type TransferOp, type TransferResult, type VaultAccess } from './password-transfer';
@@ -116,7 +116,11 @@ export type PasswordOp =
   /** Deleted, and kept sealed in memory for its Undo until chord-data quits. */
   | { op: 'delete'; id: string }
   | { op: 'undelete'; id: string }
-  | { op: 'compare'; origin: string; username: string; password: string; realm?: string }
+  /**
+   * What a submitted sign-in is to the vault. `appendsCode`: the site takes a one-time code typed after the password
+   * (Apple's list, which main reads): the saved password and 6 to 8 digits after it is the same (S17 §6, phase 3D).
+   */
+  | { op: 'compare'; origin: string; username: string; password: string; realm?: string; appendsCode?: boolean }
   /** A page's sign-in saved (or, with `realm`, the sign-in box's): new, or in place of `replace`'s password. */
   | { op: 'save'; origin: string; username: string; password: string; chordId: string | null; replace?: string; realm?: string }
   /**
@@ -801,7 +805,8 @@ export class PasswordStore {
           if (!secret || secret.username !== op.username || !this.fits(secret, op.origin, op.realm)) continue;
           const match = matchLogin(op.origin, secret.origin);
           if (!match) continue;
-          const found = { id: str(row['id']), same: secret.password === op.password, exact: match !== 'site' };
+          const same = secret.password === op.password || (op.appendsCode === true && withAppendedCode(secret.password, op.password));
+          const found = { id: str(row['id']), same, exact: match !== 'site' };
           // The page's own origin over the rest of its site; a sign-in that already has this password over one that doesn't.
           if (!best || (found.exact && !best.exact) || (found.exact === best.exact && found.same && !best.same)) best = found;
         }

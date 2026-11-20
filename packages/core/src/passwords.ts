@@ -62,6 +62,24 @@ export function lockAfterText(lockAfter: PasswordLockAfter): string {
 }
 
 /**
+ * A one-time code typed after the password (S17 §6, phase 3D): some sites sign in with the password and the code in one
+ * field (Apple's `websites-that-append-2fa-to-password.json`, `appendsCodeToPassword` in password-quirks.ts). On those
+ * sites, the saved password followed by 6 to 8 digits is the saved password: no Update card for a code.
+ */
+export const withAppendedCode = (saved: string, submitted: string): boolean =>
+  saved.length > 0 && submitted.length > saved.length && submitted.startsWith(saved) && /^\d{6,8}$/.test(submitted.slice(saved.length));
+
+/**
+ * A new sign-in's password on one of those sites, without the code typed after it: 6 digits off the end when it ends in
+ * 6 to 8 of them (a code is most often 6; the password may end in digits of its own). Never 5 or fewer, nor 9 or more
+ * (a password that's all digits, or a long number, is the password). Unchanged otherwise.
+ */
+export function trimAppendedCode(password: string): string {
+  const digits = /\d+$/.exec(password)?.[0].length ?? 0;
+  return digits >= 6 && digits <= 8 && password.length > 6 ? password.slice(0, -6) : password;
+}
+
+/**
  * One saved sign-in, as it's sealed (never stored or sent whole anywhere
  * else): S17 §7's blob. `previous` is the one password before this one, to
  * recover from a wrong update.
