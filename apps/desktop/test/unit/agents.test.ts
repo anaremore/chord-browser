@@ -387,8 +387,9 @@ describe('Who can reach the endpoint', () => {
     await expect.poll(() => service.restricted, { timeout: 5000 }).not.toBeNull();
     expect(await service.restricted).toBe(0);
     const after = dacl();
-    expect(after).toMatch(/^D:P\(D;;FA;;;NU\)\(A;;FA;;;SY\)\(A;;FA;;;S-1-5-[-\d]+\)$/);
-    expect(after).not.toMatch(/WD|AN|BA/);
+    // The user by SID, or by its SDDL alias where it has one (CI runs as the built-in Administrator: LA).
+    expect(after).toMatch(/^D:P\(D;;FA;;;NU\)\(A;;FA;;;SY\)\(A;;FA;;;(S-1-5-[-\d]+|[A-Z]{2})\)$/);
+    expect(after).not.toMatch(/;(WD|AN|BA|BU|AU)\)/);
     // A client of the user's own still gets through.
     const c = client(ud);
     await c.initialize();
