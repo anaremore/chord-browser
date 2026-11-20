@@ -9,7 +9,7 @@
  * Plain Node, no Electron: the units run it as it is.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -26,18 +26,39 @@ export function endpointPath(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, 
   return join(base, `chord-agent-${id}`, 's');
 }
 
-/** Line-delimited JSON over a stream. */
-export function lines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
+/** Lines a peer may send before its hello (the token and a client's initialize fit easily). */
+export const HELLO_MAX = 64 * 1024;
+/** Lines after it: a tool call and its arguments. */
+export const MESSAGE_MAX = 4 * 1024 * 1024;
+/** Lines from Chord to the relay: a screenshot is the largest answer. */
+export const ANSWER_MAX = 64 * 1024 * 1024;
+
+/**
+ * Line-delimited JSON over a stream. A line longer than `max()` characters
+ * (finished or not) stops the reading and calls `overflow`, where the caller
+ * hangs up: a peer can't make Chord or the relay hold an endless line.
+ */
+export function lines(stream: NodeJS.ReadableStream, onLine: (line: string) => void, max: () => number = () => MESSAGE_MAX, overflow: () => void = () => undefined): void {
   let buffer = '';
+  let over = false;
+  const stop = () => {
+    over = true;
+    buffer = '';
+    overflow();
+  };
   (stream as { setEncoding?: (e: string) => void }).setEncoding?.('utf8');
   stream.on('data', (chunk: string | Buffer) => {
+    if (over) return;
     buffer += chunk.toString();
     let i: number;
     while ((i = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, i).replace(/\r$/, '');
       buffer = buffer.slice(i + 1);
+      if (line.length > max()) return stop();
       if (line.trim()) onLine(line);
+      if (over) return;
     }
+    if (buffer.length > max()) stop();
   });
 }
 
@@ -98,25 +119,35 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
       handler?.closed?.();
     });
     socket.on('error', () => undefined);
-    lines(socket, (line) => {
-      let message: Record<string, unknown>;
-      try {
-        message = JSON.parse(line) as Record<string, unknown>;
-      } catch {
+    lines(
+      socket,
+      (line) => {
+        let message: Record<string, unknown>;
+        try {
+          message = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          socket.destroy();
+          return;
+        }
+        if (handler) return handler.message(message);
+        clearTimeout(timer);
+        // Constant-time: how much of a wrong token matched says nothing.
+        const given = Buffer.from(typeof message['token'] === 'string' ? message['token'] : '', 'hex');
+        if (message['type'] !== 'hello' || given.length !== token.length || !timingSafeEqual(given, token)) {
+          log('agent endpoint: refused a connection without the token');
+          socket.destroy();
+          return;
+        }
+        send({ type: 'welcome' });
+        handler = options.onConnection(message as unknown as AgentHello, send, socket);
+      },
+      // 64 KB until the token's in; a few MB a message after.
+      () => (handler ? MESSAGE_MAX : HELLO_MAX),
+      () => {
+        log('agent endpoint: a line too long, hung up');
         socket.destroy();
-        return;
-      }
-      if (handler) return handler.message(message);
-      clearTimeout(timer);
-      const given = Buffer.from(typeof message['token'] === 'string' ? message['token'] : '', 'hex');
-      if (message['type'] !== 'hello' || given.length !== token.length || !timingSafeEqual(given, token)) {
-        log('agent endpoint: refused a connection without the token');
-        socket.destroy();
-        return;
-      }
-      send({ type: 'welcome' });
-      handler = options.onConnection(message as unknown as AgentHello, send, socket);
-    });
+      },
+    );
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -126,7 +157,7 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
   const file = join(options.userData, AGENT_ENDPOINT_FILE);
   mkdirSync(options.userData, { recursive: true });
   const info: AgentEndpointInfo = { path, token: token.toString('hex'), pid: process.pid };
-  writeFileSync(file, JSON.stringify(info), { mode: 0o600 });
+  writeTokenFile(file, JSON.stringify(info));
   return {
     path,
     file,
@@ -137,6 +168,22 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
       if (platform !== 'win32') rmSync(dirname(path), { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * The token file, 0600 from its first byte: an old one goes first (writeFileSync's mode
+ * applies only to a new file, so an old file another mode would keep it), and the new
+ * one is written beside it and renamed over, so no reader sees half a file.
+ */
+export function writeTokenFile(file: string, text: string): void {
+  rmSync(file, { force: true });
+  const temp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(temp, text, { mode: 0o600, flag: 'wx' });
+    renameSync(temp, file);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 /** The endpoint file's contents, or null (no Chord running for this profile, or a file that isn't one). */

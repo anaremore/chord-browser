@@ -102,7 +102,7 @@ describe('ControlAgent', () => {
       else call.abort();
       await expect(asked).resolves.toBe('deny');
       expect(shown[0]!.signal.aborted).toBe(end !== 'signal');
-      expect(agent.hasOpenCard('read', 'read_tab')).toBe(end === 'signal');
+      expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(end === 'signal');
       // Nothing was kept for good.
       expect(agent.granted('read', 'read_tab')).toBeUndefined();
     }
@@ -309,7 +309,7 @@ describe('The tools, review items from #75', () => {
     expect(refusal(await call('read_tab', { tab_id: ref })).refused).toBe(CONTROL_REFUSALS.waiting);
     expect(refusal(await call('read_tab', { tab_id: ref })).refused).toBe(CONTROL_REFUSALS.waiting);
     expect(cards).toHaveLength(1);
-    expect(agent.hasOpenCard('read', 'read_tab')).toBe(true);
+    expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(true);
     // A different subject is a card of its own.
     expect(refusal(await call('tab_screenshot', { tab_id: ref })).refused).toBe(CONTROL_REFUSALS.waiting);
     expect(cards).toHaveLength(2);
@@ -319,5 +319,55 @@ describe('The tools, review items from #75', () => {
     const { scope, call } = setup();
     expect(refusal(await call('read_form', { tab_id: scope.refs.refFor('n3') })).refused).toBe('Not that one.');
     expect(refusal(await call('page_diagnostics', { tab_id: scope.refs.refFor('n3') })).refused).toBe('Not that one.');
+  });
+});
+
+describe('Cards, review 1 of #76', () => {
+  it('two reads of different tabs at once get a card each, and Allow once on one never reads the other', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const a = agent.ask(card({ tab: 'n1', description: 'Read “A”' }), new AbortController().signal);
+    const b = agent.ask(card({ tab: 'n2', description: 'Read “B”' }), new AbortController().signal);
+    await tick();
+    expect(shown.map((s) => [s.card.tab, s.card.description])).toEqual([
+      ['n1', 'Read “A”'],
+      ['n2', 'Read “B”'],
+    ]);
+    shown[0]!.answer('once');
+    await expect(a).resolves.toBe('once');
+    // B's card is still up, unanswered.
+    expect(agent.hasOpenCard('read', 'read_tab', 'n2')).toBe(true);
+    shown[1]!.answer('deny');
+    await expect(b).resolves.toBe('deny');
+    // Allow for this chat still covers the tool on every tab.
+    const c = agent.ask(card({ tab: 'n3' }), new AbortController().signal);
+    await tick();
+    shown[2]!.answer('always');
+    await c;
+    await expect(agent.ask(card({ tab: 'n4' }), new AbortController().signal)).resolves.toBe('always');
+    expect(shown).toHaveLength(3);
+  });
+
+  it('the same tab’s retry shares the card, and a once given after the waiting answer is kept for that retry, once', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    await expect(agent.ask(card(), new AbortController().signal, 20)).resolves.toBe('waiting');
+    expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(true);
+    // The user allows it once, after the call already answered waiting.
+    shown[0]!.answer('once');
+    await tick();
+    expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(false);
+    await expect(agent.ask(card(), new AbortController().signal, 20)).resolves.toBe('once');
+    expect(shown).toHaveLength(1);
+    // Used once: the next read asks again.
+    void agent.ask(card(), new AbortController().signal, 20);
+    await tick();
+    expect(shown).toHaveLength(2);
+    // Another tab never takes it.
+    shown[1]!.answer('once');
+    await tick();
+    void agent.ask(card({ tab: 'n2' }), new AbortController().signal, 20);
+    await tick();
+    expect(shown).toHaveLength(3);
   });
 });

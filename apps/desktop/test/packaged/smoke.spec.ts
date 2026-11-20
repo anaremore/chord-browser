@@ -12,11 +12,12 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
 /** electron-builder's unpacked output for this OS and arch. */
@@ -265,6 +266,15 @@ function mcpClient(executable: string, profile: string) {
   return { child, exited, request };
 }
 
+/** Where a packaged `Chord mcp` keeps its own files (main/agents/relay-folder.ts). */
+function relayFolderFor(): string {
+  const env = process.env;
+  if (process.platform === 'win32') return join(env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local'), 'Chord MCP');
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Caches', 'Chord MCP');
+  if (env['XDG_RUNTIME_DIR']) return join(env['XDG_RUNTIME_DIR'], 'chord-mcp');
+  return join(env['XDG_CACHE_HOME'] || join(homedir(), '.cache'), 'Chord MCP');
+}
+
 /** A process's memory (MB: Windows' working set, Linux's resident set, macOS's RSS) and how many children it has. */
 function processInfo(pid: number): { mb: number; children: number } {
   if (process.platform === 'win32') {
@@ -307,8 +317,11 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
     if (process.env['CI'] && process.platform === 'win32') expect(initializeMs).toBeLessThanOrEqual(250);
     const call = await mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
     expect(call.result).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' }] });
-    // Nothing written to the profile it reads.
+    // Nothing written to the profile it reads: its own files go in a folder of the user's own, never a shared one in /tmp.
     expect(readdirSync(profile)).toEqual([]);
+    const own = relayFolderFor();
+    expect(existsSync(own), own).toBe(true);
+    if (process.platform !== 'win32') expect(statSync(own).mode & 0o777).toBe(0o700);
     mcp.child.stdin!.end();
     expect(await mcp.exited).toBe(0);
   } finally {
@@ -317,9 +330,27 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
   }
 });
 
-test('Chord mcp holds no lock, and a packaged Chord never serves agents, even asked to', async () => {
+test('Chord mcp holds no lock, and a packaged Chord never serves agents, even with the setting on and asked to', async () => {
   const executable = packagedExecutable();
   const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
+  // A profile with Agents switched on in its settings, as Settings → Agents will save it (M1d).
+  const first = await start(executable, profile);
+  try {
+    await quit(first, await pageWhere(first.browser, isShell));
+  } catch (error) {
+    first.child.kill();
+    throw error;
+  }
+  const agentsSetting = (value?: string) => {
+    const db = new DatabaseSync(join(profile, 'chord.db'));
+    try {
+      if (value) db.prepare("INSERT INTO setting (key, value, updated_at) VALUES ('agentsEnabled', ?, 0) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
+      return (db.prepare("SELECT value FROM setting WHERE key = 'agentsEnabled'").get() as { value: string } | undefined)?.value;
+    } finally {
+      db.close();
+    }
+  };
+  expect(agentsSetting('true')).toBe('true');
   const mcp = mcpClient(executable, profile);
   try {
     await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } });
@@ -338,6 +369,8 @@ test('Chord mcp holds no lock, and a packaged Chord never serves agents, even as
       app.child.kill();
       throw error;
     }
+    // The setting was read and kept as it was: it's ignored, not lost.
+    expect(agentsSetting()).toBe('true');
   } finally {
     mcp.child.kill();
     rmSync(profile, { recursive: true, force: true });

@@ -27,7 +27,7 @@ export interface ConnectionDeps {
 }
 
 /** The client's name as it gives it (`clientInfo.title`, else `name`): a hint, never proof (S18 §3). */
-export function clientName(hello: AgentHello): string {
+export function clientName(hello: Pick<AgentHello, 'initialize'>): string {
   const info = hello.initialize?.['clientInfo'] as { title?: unknown; name?: unknown } | undefined;
   const name = typeof info?.title === 'string' && info.title.trim() ? info.title : typeof info?.name === 'string' ? info.name : '';
   return name.trim().slice(0, 60) || 'An agent';
@@ -60,7 +60,7 @@ export interface AgentConnection {
   closed(): void;
 }
 
-export function agentConnection(hello: AgentHello, send: Send, deps: ConnectionDeps): AgentConnection {
+export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, deps: ConnectionDeps): AgentConnection {
   const name = clientName(hello);
   const agent = new ControlAgent(`agent:${++lastAgent}`, deps.present);
   const scope = stubScope(agent);

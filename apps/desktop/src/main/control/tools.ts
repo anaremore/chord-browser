@@ -169,16 +169,20 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   // The page read, taken before reading (which starts following its navigations): one that moved on meanwhile has no id.
   const pageId = page.id;
-  scope.memory.read.add(node.id);
   const ref = scope.refs.refFor(node.id);
   if (tool === 'tab_screenshot') {
     // What's on screen: a tab in reader view shows its article (its page waits, detached, where no picture can be taken).
     const reader = pageOf(browser.readers.viewFor(node.id));
     const shot = await (reader ? controlPage(reader) : page).screenshot();
+    // Kept only once the picture is taken, and never after Stop (as diagnostics and read_form do).
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+    scope.memory.read.add(node.id);
     await call.activity(tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
     return shot ? { image: shot } : refuse('Could not take the picture.');
   }
   const read = await page.read();
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  scope.memory.read.add(node.id);
   if (isPdf(read, page.url())) {
     if (tool === 'read_selection') return refuse('What’s selected inside a PDF can’t be seen. Read the PDF with read_tab instead.');
     return readPdf(call, node, page, ref, args, pageId);

@@ -9,11 +9,11 @@
  */
 import { createReadStream } from 'node:fs';
 import { Socket } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { app } from 'electron';
 import { userDataOverride } from '../user-data';
 import { runBridge } from './bridge';
+import { relayFolder, relayUserData, userCache } from './relay-folder';
 
 const name = app.isPackaged ? 'Chord' : 'Chord Dev';
 
@@ -30,8 +30,10 @@ const profile = profileFolder();
 app.disableHardwareAcceleration();
 for (const s of ['disable-gpu', 'disable-software-rasterizer', 'in-process-gpu', 'disable-gpu-shader-disk-cache']) app.commandLine.appendSwitch(s);
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
-// Chromium's own: whatever --user-data-dir said (that's the profile to find), the bridge's files go here.
-app.setPath('userData', join(tmpdir(), `${name} MCP`));
+// Chromium's own files: whatever --user-data-dir said (that's the profile to find), they go in a folder of the user's own
+// (relay-folder.ts), never a shared path in /tmp.
+const scratch = relayUserData(relayFolder(process.platform, process.env, userCache(process.platform, process.env, app.getPath('home')), app.isPackaged));
+app.setPath('userData', scratch.path);
 app.dock?.hide();
 
 // Electron's main has no working process.stdin on Windows (a stub that ends at once), but fd 0 is the client's pipe.
@@ -47,5 +49,8 @@ runBridge({
   // stdout is a SyncWriteStream in Electron's main: each line goes out whole, at once.
   output: process.stdout,
   version: app.getVersion(),
-  onEnd: () => app.exit(0),
+  onEnd: () => {
+    scratch.dispose();
+    app.exit(0);
+  },
 });

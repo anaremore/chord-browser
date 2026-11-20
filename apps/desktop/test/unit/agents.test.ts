@@ -7,7 +7,7 @@
  * Linux, another user refused.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -27,6 +27,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import { runBridge } from '../../src/main/agents/bridge';
 import { connectEndpoint, endpointPath, lines, readEndpoint } from '../../src/main/agents/endpoint';
+import { privateFolder, relayFolder, relayUserData, userCache } from '../../src/main/agents/relay-folder';
 import { AgentService, devApproval, devPresenter } from '../../src/main/agents/service';
 import { watchAgents } from '../../src/main/agents/switch';
 import type { CardPresenter } from '../../src/main/control/gate';
@@ -216,6 +217,21 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect(service.connections.size).toBe(0);
   }, 10_000);
 
+  it('a line too long hangs up: past 64 KB before the token', async () => {
+    const ud = profile();
+    const service = await chord(ud);
+    const got = await new Promise<string>((done) => {
+      let bytes = '';
+      const s = connect(service.serving!.path);
+      s.on('connect', () => s.write('x'.repeat(70 * 1024)));
+      s.on('data', (d) => (bytes += d));
+      s.on('close', () => done(bytes));
+      s.on('error', () => done(bytes));
+    });
+    expect(got).toBe('');
+    expect(service.connections.size).toBe(0);
+  });
+
   it('the client going ends the bridge', async () => {
     const ud = profile();
     const c = client(ud);
@@ -336,6 +352,8 @@ describe('Zero cost, and off in packaged builds', () => {
     const [held] = [...service.connections];
     expect(held!.parent).not.toBeNull();
     expect(held!.hello).toMatchObject({ bridgePid: process.pid, parentPid: process.pid, cwd: ud, toolsVersion: agentToolsVersion() });
+    // The token stays with the endpoint.
+    expect(held!.hello).not.toHaveProperty('token');
   });
 
   // [argv after the executable (and, in development, the app's folder), is it chord mcp?]
@@ -353,9 +371,11 @@ describe('Zero cost, and off in packaged builds', () => {
 });
 
 describe('Who can reach the endpoint', () => {
-  it.skipIf(process.platform === 'win32')('the socket is in a 0700 folder, and the token file is 0600', async () => {
+  it.skipIf(process.platform === 'win32')('the socket is in a 0700 folder, and the token file is 0600, even over an old one that wasn’t', async () => {
     const ud = profile();
+    writeFileSync(join(ud, AGENT_ENDPOINT_FILE), '{}', { mode: 0o644 });
     const service = await chord(ud);
+    expect(readdirSync(ud)).toEqual([AGENT_ENDPOINT_FILE]);
     expect(statSync(dirname(service.serving!.path)).mode & 0o777).toBe(0o700);
     expect(statSync(join(ud, AGENT_ENDPOINT_FILE)).mode & 0o777).toBe(0o600);
     expect(endpointPath('linux', { XDG_RUNTIME_DIR: '/run/user/1000', FLATPAK_ID: 'io.github.anaremore.chord-browser' }, 'ab')).toBe('/run/user/1000/app/io.github.anaremore.chord-browser/chord-agent-ab/s');
@@ -395,4 +415,45 @@ describe('Who can reach the endpoint', () => {
     await c.initialize();
     expect((await c.call('list_tabs')).error).toBe(false);
   }, 30_000);
+});
+
+/** Windows' path separator, as join writes it there. */
+const SEP = String.fromCharCode(92);
+
+describe('chord mcp’s own folder (review 1 of #76)', () => {
+  // [platform, env, cache, packaged, folder]
+  const table: [NodeJS.Platform, NodeJS.ProcessEnv, string, boolean, string][] = [
+    ['linux', { XDG_RUNTIME_DIR: '/run/user/1000' }, '/home/u/.cache', true, '/run/user/1000/chord-mcp'],
+    ['linux', { XDG_RUNTIME_DIR: '/run/user/1000' }, '/home/u/.cache', false, '/run/user/1000/chord-dev-mcp'],
+    ['linux', {}, '/home/u/.cache', true, '/home/u/.cache/Chord MCP'],
+    ['darwin', { XDG_RUNTIME_DIR: '/x' }, '/Users/u/Library/Caches', true, '/Users/u/Library/Caches/Chord MCP'],
+  ];
+  it.each(table)('%s %j → %s', (platform, env, cache, packaged, folder) => expect(relayFolder(platform, env, cache, packaged).replaceAll(SEP, '/')).toBe(folder));
+
+  it('the cache folder is the user’s own on each OS', () => {
+    expect(userCache('linux', {}, '/home/u').replaceAll(SEP, '/')).toBe('/home/u/.cache');
+    expect(userCache('linux', { XDG_CACHE_HOME: '/c' }, '/home/u')).toBe('/c');
+    expect(userCache('darwin', {}, '/Users/u').replaceAll(SEP, '/')).toBe('/Users/u/Library/Caches');
+    expect(userCache('win32', { LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, 'C:\\Users\\u')).toBe('C:\\Users\\u\\AppData\\Local');
+  });
+
+  it('a folder of the user’s own is used, made 0700 on POSIX', () => {
+    const folder = join(profile(), 'Chord MCP');
+    expect(privateFolder(folder)).toBe(true);
+    if (process.platform !== 'win32') expect(statSync(folder).mode & 0o777).toBe(0o700);
+    expect(relayUserData(folder).path).toBe(folder);
+  });
+
+  it.skipIf(process.platform === 'win32')('a link where the folder should be is refused, and the run gets a fresh private folder, removed after', () => {
+    const base = profile();
+    const target = join(base, 'elsewhere');
+    mkdirSync(target);
+    symlinkSync(target, join(base, 'Chord MCP'));
+    expect(privateFolder(join(base, 'Chord MCP'))).toBe(false);
+    const scratch = relayUserData(join(base, 'Chord MCP'));
+    expect(scratch.path).not.toBe(join(base, 'Chord MCP'));
+    expect(statSync(scratch.path).mode & 0o777).toBe(0o700);
+    scratch.dispose();
+    expect(existsSync(scratch.path)).toBe(false);
+  });
 });

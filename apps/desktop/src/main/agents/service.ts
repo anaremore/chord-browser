@@ -53,7 +53,8 @@ export interface AgentServiceDeps {
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
 export interface HeldConnection {
   connection: AgentConnection;
-  hello: AgentHello;
+  /** Its hello, without the token: nothing keeps the token but the endpoint. */
+  hello: Omit<AgentHello, 'token'>;
   parent: Promise<ProcessInfo[]> | null;
 }
 
@@ -80,7 +81,7 @@ export class AgentService {
         onFirstConnection: () => {
           if (process.platform === 'win32' && this.deps.helper && this.endpoint) this.restricted = restrictPipe(this.deps.helper, this.endpoint.path);
         },
-        onConnection: (hello, send) => {
+        onConnection: ({ token: _token, ...hello }, send, socket) => {
           // The connection's code loads with the first one; messages that come meanwhile wait.
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
@@ -100,6 +101,11 @@ export class AgentService {
             held = { connection, hello, parent: null };
             this.connections.add(held);
             for (const m of queued.splice(0)) connection.message(m);
+          }).catch((error: unknown) => {
+            // The connection's code didn't load: hang up, so the relay says Chord isn't open rather than waiting forever.
+            this.deps.log?.('agents: a connection couldn’t start:', error);
+            console.warn('[chord] agents: a connection couldn’t start:', error instanceof Error ? error.message : error);
+            socket.destroy();
           });
           return {
             message: (m) => (held ? held.connection.message(m) : void queued.push(m)),

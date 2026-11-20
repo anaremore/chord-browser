@@ -13,7 +13,7 @@
  */
 import type { Socket } from 'node:net';
 import { AGENT_NOT_OPEN, agentInitializeResult, agentRefusal, agentToolList, agentToolsVersion } from '@chord/core/agent-tools';
-import { connectEndpoint, lines } from './endpoint';
+import { ANSWER_MAX, connectEndpoint, lines, MESSAGE_MAX } from './endpoint';
 
 export interface BridgeOptions {
   /** The profile folder whose Chord it talks to. */
@@ -54,7 +54,7 @@ export function runBridge(options: BridgeOptions): { close(): void } {
       if (!socket) return null;
       return new Promise<Socket | null>((resolve) => {
         let welcomed = false;
-        lines(socket, (line) => {
+        const fromChord = (line: string) => {
           let m: Message;
           try {
             m = JSON.parse(line) as Message;
@@ -72,7 +72,9 @@ export function runBridge(options: BridgeOptions): { close(): void } {
           if (m.id !== undefined && !m.method) {
             if (pending.delete(m.id)) out(m);
           } else if (m.method) out(m);
-        });
+        };
+        // An answer past ANSWER_MAX: Chord isn't speaking the protocol, so the relay lets it go.
+        lines(socket, fromChord, () => ANSWER_MAX, () => socket.destroy());
         socket.on('close', () => {
           if (!welcomed) resolve(null);
           chord = null;
@@ -93,7 +95,7 @@ export function runBridge(options: BridgeOptions): { close(): void } {
     socket.write(`${line}\n`);
   };
 
-  lines(options.input, (line) => {
+  const fromClient = (line: string) => {
     let m: Message;
     try {
       m = JSON.parse(line) as Message;
@@ -119,6 +121,12 @@ export function runBridge(options: BridgeOptions): { close(): void } {
       default:
         if (m.id !== undefined && m.method) out({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `Unknown method ${m.method}` } });
     }
+  };
+  // A client line past a few MB ends the relay, as the client going would.
+  lines(options.input, fromClient, () => MESSAGE_MAX, () => {
+    log('a line too long from the client');
+    close();
+    options.onEnd();
   });
   const close = () => {
     (chord as Socket | null)?.end();
