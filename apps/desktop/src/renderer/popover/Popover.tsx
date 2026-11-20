@@ -791,7 +791,7 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
   const [passphrase, setPassphrase] = useState<PassphraseValue>(EMPTY_PASSPHRASE);
   const [shown, setShown] = useState<string | null>(null);
   const [account, setAccount] = useState<number | null>(null);
-  const act = (action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete', details?: { username?: string; passphrase?: string; account?: number }) =>
+  const act = (action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete' | 'code', details?: { username?: string; passphrase?: string; account?: number }) =>
     void api.passwords.card(card.id, action, details);
   const update = card.kind === 'update';
   const change = card.kind === 'change';
@@ -812,6 +812,18 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
     const revealed = await api.passwords.reveal(card.id);
     setShown(revealed?.password ?? null);
   };
+  // *Keep them* or *Leave off the code* changed what Save saves: a revealed password shows the new one (S17 §6, 3D).
+  const code = card.code;
+  const revealedRef = useRef(shown);
+  revealedRef.current = shown;
+  useEffect(() => {
+    if (!code || revealedRef.current === null) return;
+    let live = true;
+    void api.passwords.reveal(card.id).then((r) => live && setShown(r?.password ?? null));
+    return () => {
+      live = false;
+    };
+  }, [code, card.id]);
   return (
     <form
       className={styles.card}
@@ -930,6 +942,14 @@ function SavePasswordCardView({ card }: { card: PasswordSaveCard }) {
           </>
         )}
       </div>
+      {code && !update && !change && !saved && (
+        <p className={styles.offerNotice}>
+          {code === 'trimmed' ? 'This site takes a sign-in code after the password, so Chord left off the last 6 digits. ' : 'Chord will save the password as you typed it. '}
+          <button type="button" className={styles.inlineLink} disabled={card.busy || waiting} onClick={() => act('code')}>
+            {code === 'trimmed' ? 'Keep them' : 'Leave off the code'}
+          </button>
+        </p>
+      )}
       {card.setup && (
         <div className={styles.saveStep}>
           <PassphraseStep value={passphrase} onChange={setPassphrase} readOnly={waiting} />

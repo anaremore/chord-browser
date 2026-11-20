@@ -899,6 +899,12 @@ export interface PasswordSaveCard {
    * (*Updating…*), the fields read-only, until the window closes. × cancels it.
    */
   waiting?: boolean;
+  /**
+   * A new sign-in on a site that takes a one-time code after the password (Apple's list, S17 §6 phase 3D; the owner's
+   * design 1A): `trimmed`, the card will save the password without its last 6 digits; `kept`, as typed. The card's
+   * `code` action switches between them, and the eye shows the one Save will save.
+   */
+  code?: 'trimmed' | 'kept';
 }
 
 export interface PopoverState {
@@ -1612,7 +1618,7 @@ export const invokeChannels = {
     roles: ['popover'],
     request: z.strictObject({
       id: z.number().int().min(1),
-      action: z.enum(['save', 'never', 'close', 'hold', 'release', 'new', 'delete']),
+      action: z.enum(['save', 'never', 'close', 'hold', 'release', 'new', 'delete', 'code']),
       username: z.string().max(500).optional(),
       passphrase: newPassphrase.optional(),
       /** A `change` card's account: its index in `accounts`. */
@@ -2436,7 +2442,7 @@ export interface PopoverApi {
     choose(id: number, index: number): Promise<void>;
     /** The menu's ↻: another generated password. */
     regenerate(id: number): Promise<void>;
-    card(id: number, action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete', details?: { username?: string; passphrase?: string; account?: number }): Promise<void>;
+    card(id: number, action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete' | 'code', details?: { username?: string; passphrase?: string; account?: number }): Promise<void>;
     reveal(id: number): Promise<{ password: string } | null>;
   };
   /** The one-time offer: turn Safe Browsing on, or not now (either way it isn't offered again). */

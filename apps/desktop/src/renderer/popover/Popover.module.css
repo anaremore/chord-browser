@@ -180,6 +180,23 @@
   color: var(--color-accent);
 }
 
+/* A line's own small action, inline in its words (the code's *Keep them*, S17 §6 phase 3D). */
+.inlineLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: var(--text-small);
+  text-decoration: underline;
+  text-underline-offset: var(--size-focus-ring);
+}
+
+.inlineLink:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+  border-radius: var(--radius-xs);
+}
+
 .offerNotice {
   margin: var(--space-2) 0 0;
   padding: 0 var(--space-4);

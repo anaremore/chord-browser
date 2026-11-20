@@ -1357,7 +1357,7 @@ The sentinel is 4,070 bytes built (main 2,367), held to 4,096 (perf.spec). Its s
 
 ## Phase 3D: providers' recipes and codes after the password (built 2026-11-19)
 
-*Branch `feat/passwords-3d-recipes`. The plan was approved by the planning thread on 2026-11-19. The card line for a trimmed code waits on the owner's choice of its mock (`passwords-3d-code.html`); until then, a new save keeps what was typed.*
+*Branch `feat/passwords-3d-recipes`. The plan was approved by the planning thread on 2026-11-19. The card line for a trimmed code is the owner's choice of 2026-11-19, option 1A of `passwords-3d-code.html` (§1A and §2).*
 
 **Recipes** (`core/password-recipes.ts`, applied in the agent by `agent/recipes.ts`) cover Google, Microsoft (work or school, and personal), Okta (the Identity Engine's widget and the classic one) and Auth0's Universal Login. A recipe applies to the agent's own document's host only: a host the recipe names, or under one of its `*.` patterns, never the bare domain. It only adds:
 - **Fields.** The field its `username` selector matches is the username. The field its `password` selector matches is the current password, but only on a `type=password` field. With the password shown, the form is a sign-in; without it, a first step. Any other field that held those roles loses them. A sign-up, change or reset form is never touched.
@@ -1374,10 +1374,15 @@ The sentinel is 4,070 bytes built (main 2,367), held to 4,096 (perf.spec). Its s
 **A one-time code typed after the password** (Apple's `websites-that-append-2fa-to-password.json`, vendored at the same commit as the other two files):
 - **Matching.** `appendsCodeToPassword` in `password-quirks.ts` matches the origin's host or a parent, down to its registrable domain: `www.example.com` for `example.com`, never `example.com` for `auth.example.com`. Main loads the list the first time a sign-in is submitted and tells chord-data's `compare` (`appendsCode`).
 - **On a listed site,** the saved password followed by 6 to 8 digits is the same password: no Update card for a code (`withAppendedCode`). 5 or 9 digits are another password. On any other site, 6 digits after the saved password are a new password, as before.
-- **Trimming.** `trimAppendedCode` takes 6 digits off a new password that ends in 6 to 8 of them. It's built and tested, but not wired: a new save trims only with the card line that says so, which waits on the mock.
+- **Trimming** (the owner's design 1A). On a listed site, a new sign-in's save card (or a locked one's, which the vault decides at Save) whose password ends in 6 to 8 digits saves it without the last 6 (`trimAppendedCode`). A sign-up's, an update's, a generated password's and the sign-in box's never do. Main holds both passwords and which one the card will save.
+  - The card's muted line says *This site takes a sign-in code after the password, so Chord left off the last 6 digits.*, and its inline *Keep them* switches to *Chord will save the password as you typed it.*, with *Leave off the code*.
+  - Nothing is saved until Save, and the eye shows exactly the password Save will save; a revealed password follows the switch. While Save waits on the late window, the switch is disabled.
+  - Main loads Apple's list only for a password that ends in 6 to 8 digits.
 
 **Tests:**
 - core: the hosts table, the patterns and the recipes' shape; the list's hosts; codes after a password, and trimming;
 - chord-data: `compare` with and without `appendsCode`;
+- main (`passwords-assist.test.ts`): which cards get the line (new and locked on a listed site, 6 and 8 digits; never 5 or 9 digits, an unlisted site, an update or a sign-up), what the eye shows and Save saves, *Keep them* and *Leave off the code*;
+- journey (`e2e/passwords-code.spec.ts`, at a listed host on this machine): the first save, trimmed, then filled without the code; the same password with the next code, no card; another account's password that really ends in 6 digits, the eye before and after *Keep them*, then filled as typed;
 - the forms project (`test/forms/recipes.spec.ts`): each provider's step on Chord's own markup, served at the provider's host, and the same markup on other hosts;
 - refusals: a recipe's submit that reads as *Show password*, is pressed, or is the password's own eye; a sign-up left alone; frames.

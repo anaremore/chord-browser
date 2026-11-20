@@ -49,7 +49,7 @@
  * from a page that isn't a tab's. Nothing here logs a value.
  */
 import type { EventEmitter } from 'node:events';
-import type { WindowId } from '@chord/core';
+import { trimAppendedCode, type WindowId } from '@chord/core';
 import { PASSWORDS_FILL, type PasswordMenu, type PasswordSaveCard, type PasswordsFill } from '@chord/ipc';
 import { durations, easing } from '@chord/tokens';
 import type { Input, WebContents, WebFrameMain } from 'electron';
@@ -258,6 +258,12 @@ interface Card {
   setup: boolean;
   /** What was typed, until the card goes. */
   values: CandidateValues | null;
+  /**
+   * A new sign-in on a site that takes a code after the password (S17 §6 phase 3D, the owner's design 1A): the
+   * password as typed and the one without the code, and which `values` holds (what Save saves and the eye shows).
+   * Held only as long as the card, as `values` is.
+   */
+  code?: { typed: string; trimmed: string; kept: boolean } | null;
   /**
    * A sign-in read from its form going (no navigation): until when a late request error can still take it back (the
    * tracker's `lateUntil`). Save, Update and *Save as new* pressed before then wait (S17 §6, phase 3A-2).
@@ -1040,6 +1046,8 @@ export class PasswordAssist {
     if (answer.kind !== 'new' && answer.kind !== 'update' && answer.kind !== 'locked') return;
     const site = await this.siteOf(e.origin).catch(() => null);
     if (!here() || until <= this.now()) return;
+    const code = answer.kind !== 'update' && e.kind !== 'sign-up' ? await this.codeOf(e.origin, values.password) : null;
+    if (!here() || until <= this.now()) return;
     this.showCard({
       tab,
       contents: e.contents,
@@ -1048,11 +1056,24 @@ export class PasswordAssist {
       kind: answer.kind === 'update' ? 'update' : 'new',
       locked: answer.kind === 'locked',
       setup: answer.kind === 'new' && answer.setup,
-      values,
+      values: code ? { ...values, password: code.trimmed } : values,
+      ...(code ? { code } : {}),
       until,
       lateUntil: e.lateUntil,
       ...(e.kind === 'sign-up' ? { signUp: true } : {}),
     });
+  }
+
+  /**
+   * A new sign-in's code typed after its password (S17 §6 phase 3D, the owner's design 1A): on a site of Apple's list,
+   * a password ending in 6 to 8 digits is saved without the last 6 unless you say *Keep them*. Apple's list is loaded
+   * only for a password that ends so.
+   */
+  private async codeOf(origin: string, password: string): Promise<{ typed: string; trimmed: string; kept: boolean } | null> {
+    const trimmed = trimAppendedCode(password);
+    if (trimmed === password) return null;
+    const { appendsCodeToPassword } = await import('@chord/core/password-quirks');
+    return appendsCodeToPassword(origin) ? { typed: password, trimmed, kept: false } : null;
   }
 
   /**
@@ -1099,7 +1120,7 @@ export class PasswordAssist {
 
   private showCard(
     made: Pick<Card, 'tab' | 'contents' | 'origin' | 'realm' | 'site' | 'kind' | 'locked' | 'setup' | 'values'> &
-      Partial<Pick<Card, 'accounts' | 'presaved' | 'generated' | 'signUp' | 'change' | 'lateUntil'>> & { until: number },
+      Partial<Pick<Card, 'accounts' | 'presaved' | 'generated' | 'signUp' | 'change' | 'lateUntil' | 'code'>> & { until: number },
   ): void {
     const { until, ...rest } = made;
     const before = this.cards.get(made.tab.nodeId);
@@ -1159,6 +1180,7 @@ export class PasswordAssist {
     this.unwait(card);
     card.idle = card.expiry = null;
     card.values = null;
+    card.code = null;
     // A locked change's current password goes with it (review round 2 of #53).
     if (card.change) card.change.current = null;
     delete card.change;
@@ -1227,6 +1249,7 @@ export class PasswordAssist {
       ...(card.change && card.locked ? { username: '' } : {}),
       ...(card.generated ? { generated: true } : {}),
       ...(card.signUp ? { signUp: true } : {}),
+      ...(card.code && card.kind === 'new' ? { code: card.code.kept ? ('kept' as const) : ('trimmed' as const) } : {}),
     };
   }
 
@@ -1250,7 +1273,7 @@ export class PasswordAssist {
   async answer(
     windowId: WindowId,
     id: number,
-    action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete',
+    action: 'save' | 'never' | 'close' | 'hold' | 'release' | 'new' | 'delete' | 'code',
     details: { username?: string; passphrase?: string; account?: number } = {},
   ): Promise<void> {
     const card = this.cardById(windowId, id);
@@ -1261,7 +1284,7 @@ export class PasswordAssist {
       if (action === 'save' || action === 'close') return this.dropCard(card);
       if (action === 'delete') return this.deleteSaved(card);
       if (action !== 'hold' && action !== 'release') return;
-    } else if (action === 'delete' || (action === 'new' && card.kind !== 'change')) return;
+    } else if (action === 'delete' || (action === 'new' && card.kind !== 'change') || (action === 'code' && !(card.code && card.kind === 'new'))) return;
     switch (action) {
       case 'new':
         if (this.wait(card, 'new', details)) return;
@@ -1277,6 +1300,12 @@ export class PasswordAssist {
         return this.startTimer(card);
       case 'never':
         return this.never(card);
+      case 'code':
+        // *Keep them* and *Leave off the code*: which password Save saves, and the eye shows. Nothing is saved here.
+        if (!card.values || !card.code) return;
+        card.code.kept = !card.code.kept;
+        card.values = { ...card.values, password: card.code.kept ? card.code.typed : card.code.trimmed };
+        return this.options.host.changed(this.windowOf(card));
       case 'save':
         if (this.wait(card, 'save', details)) return;
         return this.save(card, details);
