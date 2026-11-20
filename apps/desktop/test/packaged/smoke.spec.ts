@@ -12,11 +12,12 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
 /** electron-builder's unpacked output for this OS and arch. */
@@ -232,5 +233,146 @@ test('macOS: a build the keychain has never seen loads pages without asking', as
     }
   } finally {
     rmSync(dirname(copy), { recursive: true, force: true });
+  }
+});
+
+/* ---------- Outside agents (S18 M1b) ---------- */
+
+/** `Chord mcp` as an agent starts it: its stdio, one JSON-RPC message a line (Electron may write a blank line first). */
+function mcpClient(executable: string, profile: string) {
+  const args = [`--user-data-dir=${profile}`, ...(process.platform === 'linux' ? ['--ozone-platform=headless'] : []), 'mcp'];
+  const child = spawn(executable, args, { env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+  const waiting = new Map<number, (m: { result: Record<string, unknown> }) => void>();
+  let buffer = '';
+  child.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
+    buffer += chunk;
+    let i: number;
+    while ((i = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, i).trim();
+      buffer = buffer.slice(i + 1);
+      if (!line) continue;
+      const m = JSON.parse(line) as { id: number; result: Record<string, unknown> };
+      waiting.get(m.id)?.(m);
+    }
+  });
+  const exited = new Promise<number | null>((done) => child.once('exit', (code) => done(code)));
+  let id = 0;
+  const request = (method: string, params: unknown) =>
+    new Promise<{ result: Record<string, unknown> }>((done) => {
+      const n = ++id;
+      waiting.set(n, done);
+      child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id: n, method, params })}\n`);
+    });
+  return { child, exited, request };
+}
+
+/** Where a packaged `Chord mcp` keeps its own files (main/agents/relay-folder.ts). */
+function relayFolderFor(): string {
+  const env = process.env;
+  if (process.platform === 'win32') return join(env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local'), 'Chord MCP');
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Caches', 'Chord MCP');
+  if (env['XDG_RUNTIME_DIR']) return join(env['XDG_RUNTIME_DIR'], 'chord-mcp');
+  return join(env['XDG_CACHE_HOME'] || join(homedir(), '.cache'), 'Chord MCP');
+}
+
+/** A process's memory (MB: Windows' working set, Linux's resident set, macOS's RSS) and how many children it has. */
+function processInfo(pid: number): { mb: number; children: number } {
+  if (process.platform === 'win32') {
+    const ps = `$p = Get-Process -Id ${pid}; $c = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}").Count; "$($p.WorkingSet64) $c"`;
+    const [bytes, children] = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8' }).trim().split(' ').map(Number);
+    return { mb: bytes! / 2 ** 20, children: children! };
+  }
+  const kb = process.platform === 'linux' ? Number(/^VmRSS:\s+(\d+)/m.exec(execFileSync('cat', [`/proc/${pid}/status`], { encoding: 'utf8' }))?.[1]) : Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim());
+  const children = execFileSync('ps', ['-A', '-o', 'ppid='], { encoding: 'utf8' }).split('\n').filter((l) => Number(l.trim()) === pid).length;
+  return { mb: kb / 1024, children };
+}
+
+test('Chord mcp: the relay alone answers fast, in one process, with no window and nothing written to the profile', async () => {
+  const executable = packagedExecutable();
+  const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
+  const hello = { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '2.1.328' } };
+  // Start to the initialize answer, as M0 measured it: one start to warm up (a new build's first is the OS scanning it), then the median of five.
+  const times: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    const t0 = performance.now();
+    const run = mcpClient(executable, profile);
+    await run.request('initialize', hello);
+    if (i > 0) times.push(performance.now() - t0);
+    run.child.stdin!.end();
+    await run.exited;
+  }
+  const initializeMs = times.sort((a, b) => a - b)[2]!;
+  const mcp = mcpClient(executable, profile);
+  try {
+    const init = await mcp.request('initialize', hello);
+    expect(init.result).toMatchObject({ protocolVersion: '2025-11-25', serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
+    expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(7);
+    // Settled: one process (GPU and network service in-process), within its memory budget.
+    await new Promise((done) => setTimeout(done, 1000));
+    const { mb, children } = processInfo(mcp.child.pid!);
+    console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms (median of ${times.map(Math.round).join(', ')}), ${Math.round(mb)} MB, ${children} child processes`);
+    expect(children).toBe(0);
+    expect(mb).toBeLessThanOrEqual(90);
+    // The budget is CI Windows' (S18 M1 plan): elsewhere it's reported.
+    if (process.env['CI'] && process.platform === 'win32') expect(initializeMs).toBeLessThanOrEqual(250);
+    const call = await mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
+    expect(call.result).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' }] });
+    // Nothing written to the profile it reads: its own files go in a folder of the user's own, never a shared one in /tmp.
+    expect(readdirSync(profile)).toEqual([]);
+    const own = relayFolderFor();
+    expect(existsSync(own), own).toBe(true);
+    if (process.platform !== 'win32') expect(statSync(own).mode & 0o777).toBe(0o700);
+    mcp.child.stdin!.end();
+    expect(await mcp.exited).toBe(0);
+  } finally {
+    mcp.child.kill();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('Chord mcp holds no lock, and a packaged Chord never serves agents, even with the setting on and asked to', async () => {
+  const executable = packagedExecutable();
+  const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
+  // A profile with Agents switched on in its settings, as Settings → Agents will save it (M1d).
+  const first = await start(executable, profile);
+  try {
+    await quit(first, await pageWhere(first.browser, isShell));
+  } catch (error) {
+    first.child.kill();
+    throw error;
+  }
+  const agentsSetting = (value?: string) => {
+    const db = new DatabaseSync(join(profile, 'chord.db'));
+    try {
+      if (value) db.prepare("INSERT INTO setting (key, value, updated_at) VALUES ('agentsEnabled', ?, 0) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(value);
+      return (db.prepare("SELECT value FROM setting WHERE key = 'agentsEnabled'").get() as { value: string } | undefined)?.value;
+    } finally {
+      db.close();
+    }
+  };
+  expect(agentsSetting('true')).toBe('true');
+  const mcp = mcpClient(executable, profile);
+  try {
+    await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } });
+    // No lock: a Chord starts on that profile as if the relay weren't there. Packaged, it never serves agents
+    // (CHORD_AGENTS is development-only): no endpoint file, and the relay still finds no Chord.
+    process.env['CHORD_AGENTS'] = '1';
+    const app = await start(executable, profile).finally(() => delete process.env['CHORD_AGENTS']);
+    try {
+      const shell = await pageWhere(app.browser, isShell);
+      await expect(shell.getByText('Personal')).toBeVisible();
+      expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
+      const call = await mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
+      expect(call.result).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' }] });
+      await quit(app, shell);
+    } catch (error) {
+      app.child.kill();
+      throw error;
+    }
+    // The setting was read and kept as it was: it's ignored, not lost.
+    expect(agentsSetting()).toBe('true');
+  } finally {
+    mcp.child.kill();
+    rmSync(profile, { recursive: true, force: true });
   }
 });

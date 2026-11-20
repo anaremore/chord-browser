@@ -62,7 +62,10 @@ export default defineConfig({
       externalizeDeps: false,
       rolldownOptions: {
         input: {
-          index: src('main/index.ts'),
+          // Main's entry: a few lines that choose between `chord mcp` (S18's relay for outside agents) and the
+          // browser, which is `app` (main/index.ts), loaded only when it's the browser.
+          index: src('main/entry.ts'),
+          app: src('main/index.ts'),
           data: src('data/worker.ts'),
           pdf: src('pdf/worker.ts'),
           'safe-browsing': src('main/safe-browsing/worker.ts'),

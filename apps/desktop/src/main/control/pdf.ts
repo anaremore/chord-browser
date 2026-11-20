@@ -11,7 +11,7 @@
  */
 import { join } from 'node:path';
 import { ASSISTANT_PDF_MAX_BYTES } from '@chord/core';
-import { utilityProcess, type WebContents } from 'electron';
+import { app, utilityProcess, type WebContents } from 'electron';
 import type { PdfReply } from '../../pdf/worker';
 
 export type PdfProblem = 'too-big' | 'not-pdf' | 'unreachable' | 'never' | 'password' | 'invalid' | 'timeout' | 'crashed';
@@ -115,7 +115,9 @@ export async function fetchPdf(contents: WebContents, url: string, readable: (fi
 /** Each page's text, read by pdf.js in a utility process that's thrown away afterwards. */
 export function extractPdf(bytes: Uint8Array, maxPages: number, timeoutMs = 30_000): Promise<{ pages: string[]; totalPages: number }> {
   return new Promise((resolve, reject) => {
-    const child = utilityProcess.fork(join(import.meta.dirname, 'pdf.js'), [], { serviceName: 'Chord PDF reader', stdio: 'ignore' });
+    // From the app's folder, not this file's: the control layer is shared with lazily loaded code (S18's agents), so the
+    // bundler may put it in out/main/chunks/, where import.meta.dirname isn't out/main.
+    const child = utilityProcess.fork(join(app.getAppPath(), 'out', 'main', 'pdf.js'), [], { serviceName: 'Chord PDF reader', stdio: 'ignore' });
     let settled = false;
     const finish = (outcome: () => void) => {
       if (settled) return;

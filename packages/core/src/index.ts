@@ -6,6 +6,7 @@ export * from './assistant-diagnostics';
 export * from './control-tools';
 export * from './control-gate';
 export * from './control-refs';
+export * from './agent-tools';
 export * from './effects';
 export * from './ids';
 export * from './import';

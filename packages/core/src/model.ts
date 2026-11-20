@@ -372,6 +372,12 @@ export interface Settings {
   searchSuggestions: boolean;
   /** Installed builds ask GitHub Releases once a day whether a newer Chord is out; nothing installs by itself. */
   checkForUpdates: boolean;
+  /**
+   * Outside agents (Claude Code, Codex) may connect to Chord through `chord mcp` (docs/decisions/S18-agent-mcp.md):
+   * on, Chord serves its local endpoint; off (the default), nothing is served and nothing is written.
+   * Development builds only until Settings → Agents (S18 M1d); packaged builds ignore it.
+   */
+  agentsEnabled: boolean;
   /** New chords keep their own sign-ins (a profile of their own) instead of sharing everyone's. */
   separateSignIns: boolean;
   /** First run is done (DESIGN.md §8.1). Only a brand-new profile starts without it. */
@@ -517,6 +523,7 @@ export const DEFAULT_SETTINGS: Settings = {
   extensionButtons: 'sidebar',
   searchSuggestions: true,
   checkForUpdates: true,
+  agentsEnabled: false,
   separateSignIns: false,
   onboarded: true,
   archiveAfter: '12h',
@@ -585,6 +592,7 @@ export interface SettingsPatch {
   extensionButtons?: ExtensionButtons;
   searchSuggestions?: boolean;
   checkForUpdates?: boolean;
+  agentsEnabled?: boolean;
   separateSignIns?: boolean;
   onboarded?: boolean;
   archiveAfter?: ArchiveAfter;

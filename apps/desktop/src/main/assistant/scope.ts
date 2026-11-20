@@ -58,6 +58,7 @@ export function duetScope(chat: DuetChat, host: DuetHost): ControlScope {
     },
     readable: (node) => host.readable(node),
     neverSites: () => host.settings().neverSites,
+    // The chat's grants are per tool ("Allow for this chat"), as they always were.
     needsCard: (tool, node) =>
       readNeedsApproval({
         scope: chat.thread?.scope ?? 'ask',
@@ -65,8 +66,18 @@ export function duetScope(chat: DuetChat, host: DuetHost): ControlScope {
         sameChord: node ? node.chordId === chat.chordId : true,
         tool,
         granted: granted(tool),
-      }),
-    onScreen: () => (chat.windowId ? (host.activeTab(chat.windowId)?.id ?? null) : null),
+      })
+        ? { kind: 'read', subject: tool }
+        : null,
+    // The tab on screen is read live, at each check (before the card, after it, after the read), never kept: the user may
+    // switch tabs while a card waits, and only what's on screen at that moment may be inspected.
+    mayInspect: (node, tool) => {
+      const onScreen = chat.windowId ? host.activeTab(chat.windowId)?.id : undefined;
+      if (onScreen === node.id) return null;
+      return tool === 'page_diagnostics'
+        ? "Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again."
+        : 'Forms are filled only on the tab on screen. Ask the user to switch to it, then to ask again.';
+    },
     activity: (tool, summary, detail, ok) => host.activity(chat, tool, summary, detail, ok),
     search: (tool, query) => host.search(chat, tool, query),
     fills: host.fills(chat),

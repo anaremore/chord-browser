@@ -195,7 +195,7 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
   const archiveAfter = saved['archiveAfter'];
   if (typeof archiveAfter === 'string' && archiveAfter in ARCHIVE_AFTER_MS) settings.archiveAfter = archiveAfter as ArchiveAfter;
   if (typeof saved['sleepTabs'] === 'boolean') settings.sleepTabs = saved['sleepTabs'];
-  for (const key of ['searchSuggestions', 'checkForUpdates'] as const) {
+  for (const key of ['searchSuggestions', 'checkForUpdates', 'agentsEnabled'] as const) {
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];

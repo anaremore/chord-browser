@@ -5,7 +5,7 @@
  * readNeedsApproval); outside agents' comes in M1's later slices (their Agent
  * chord and the tabs shared with them).
  */
-import type { AssistantFillCard, AssistantFormRead, AssistantToolName, NodeId, TabNode, TabRefs } from '@chord/core';
+import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, NodeId, TabNode, TabRefs } from '@chord/core';
 import type { ControlAgent } from './gate';
 
 /** A tool's answer to the model. */
@@ -58,10 +58,18 @@ export interface ControlScope {
   readable(node: TabNode): boolean;
   /** The *Never* list, for addresses a read ends up at (a PDF's redirects, a frame inside the page). */
   neverSites(): readonly string[];
-  /** This read needs the user's yes first (`node` null: list_tabs and searches). */
-  needsCard(tool: AssistantToolName, node: TabNode | null): boolean;
-  /** The tab on screen where the agent's requests come from: forms and diagnostics work only there. */
-  onScreen(): NodeId | null;
+  /**
+   * The card this read needs first, or null (`node` null: list_tabs and searches). The scope
+   * decides its kind and its subject, what an *always* answer covers.
+   */
+  needsCard(tool: AssistantToolName, node: TabNode | null): { kind: ApprovalKind; subject: string } | null;
+  /**
+   * Whether forms and diagnostics may look at this tab now: null, or the refusal. The assistant
+   * allows only the tab on screen where the message came from; outside agents their own and shared tabs.
+   */
+  mayInspect(node: TabNode, tool: 'read_form' | 'propose_fill' | 'page_diagnostics'): string | null;
+  /** How long a call waits on a card before it answers *waiting* (outside agents: CONTROL_WAIT_MS); absent, as long as it takes. */
+  readonly cardWaitMs?: number;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */
   activity(tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
   /** search_history and search_archive, already kept to what may be read; absent, they're not offered. */

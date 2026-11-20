@@ -157,6 +157,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Outside agents' transport (S18) on every OS: the endpoint, the relay, the gate, and on Windows the pipe's DACL
+      # (window-owner.exe, just built), on Linux another user refused. pnpm test runs them on Linux too.
+      - name: Agents' transport
+        run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/control.test.ts
 
       # E2E's spelling dictionary: a pinned, hash-checked download served to Chord from this machine
       # (apps/desktop/test/dictionaries.ts), so no test downloads one from Google.

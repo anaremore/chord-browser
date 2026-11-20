@@ -90,7 +90,7 @@ describe('ControlAgent', () => {
     expect(agent.granted('connection', 'claude')).toBe('deny');
   });
 
-  it('takes cards down as a no on Stop, on cancelCards, and when the call’s own signal aborts', async () => {
+  it('takes cards down as a no on Stop and on cancelCards; a call whose own signal aborts answers no and leaves the card up', async () => {
     for (const end of ['stop', 'cancel', 'signal'] as const) {
       const { shown, present } = presenter();
       const agent = new ControlAgent('a', present);
@@ -101,7 +101,8 @@ describe('ControlAgent', () => {
       else if (end === 'cancel') agent.cancelCards();
       else call.abort();
       await expect(asked).resolves.toBe('deny');
-      expect(shown[0]!.signal.aborted).toBe(true);
+      expect(shown[0]!.signal.aborted).toBe(end !== 'signal');
+      expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(end === 'signal');
       // Nothing was kept for good.
       expect(agent.granted('read', 'read_tab')).toBeUndefined();
     }
@@ -134,8 +135,10 @@ function stateWith(nodes: TabNode[]): State {
   return { nodes: buckets } as unknown as State;
 }
 
-/** A page that answers the extractor with `read`, or never (`hang`). */
-function fakePage(url: string, read: 'hang' | { text: string }) {
+type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) => Promise<unknown>);
+
+/** A page that answers the extractor with `read`, never (`hang`), or as a test's function does. */
+function fakePage(url: string, read: Answer) {
   const events = new EventEmitter();
   const contents = {
     isDestroyed: () => false,
@@ -144,13 +147,17 @@ function fakePage(url: string, read: 'hang' | { text: string }) {
     on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
     once: (e: string, f: (...a: unknown[]) => void) => events.once(e, f),
     off: (e: string, f: (...a: unknown[]) => void) => events.off(e, f),
-    executeJavaScriptInIsolatedWorld: () =>
-      read === 'hang' ? new Promise(() => undefined) : Promise.resolve({ title: 'Article', url, contentType: 'text/html', text: read.text, selection: '' }),
+    executeJavaScriptInIsolatedWorld: (_world: number, [script]: { code: string }[]) =>
+      typeof read === 'function'
+        ? read(script!.code, events)
+        : read === 'hang'
+          ? new Promise(() => undefined)
+          : Promise.resolve({ title: 'Article', url, contentType: 'text/html', text: read.text, selection: '' }),
   };
   return { contents: contents as unknown as WebContents, events };
 }
 
-function setup(opts: { needsCard?: boolean; answer?: Grant; read?: 'hang' | { text: string } } = {}) {
+function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answer; cardWaitMs?: number } = {}) {
   const nodes = [tab('n1', 'https://news.test/a'), tab('n2', 'https://private.test/'), tab('n3', 'https://news.test/b')];
   let state = stateWith(nodes);
   const pages = new Map<NodeId, ReturnType<typeof fakePage>>(nodes.map((n) => [n.id, fakePage(n.url, opts.read ?? { text: `Text of ${n.id}` })]));
@@ -165,7 +172,11 @@ function setup(opts: { needsCard?: boolean; answer?: Grant; read?: 'hang' | { te
     readers: { viewFor: () => undefined },
   };
   const cards: ControlCard[] = [];
-  const agent = new ControlAgent('test', async (c) => (cards.push(c), opts.answer ?? 'once'));
+  const agent = new ControlAgent('test', (c, signal) => {
+    cards.push(c);
+    if (opts.answer !== 'hold') return Promise.resolve(opts.answer ?? 'once');
+    return new Promise<Grant>((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
+  });
   const activity: string[] = [];
   const memory: ToolMemory = { pdfs: new Map(), form: null, nextField: 1, read: new Set() };
   const scope: ControlScope = {
@@ -177,8 +188,9 @@ function setup(opts: { needsCard?: boolean; answer?: Grant; read?: 'hang' | { te
     defaultTab: () => nodes[0]!,
     readable: (node) => !node.url.includes('private.test'),
     neverSites: () => ['private.test'],
-    needsCard: () => Boolean(opts.needsCard),
-    onScreen: () => 'n1',
+    needsCard: (tool) => (opts.needsCard ? { kind: 'read', subject: tool } : null),
+    mayInspect: (node) => (node.id === 'n1' ? null : 'Not that one.'),
+    ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
     activity: async (_tool, summary) => void activity.push(summary),
   };
   const call = (name: string, args: Record<string, unknown> = {}) => runControlTool(scope, browser, name, args);
@@ -261,5 +273,101 @@ describe('The tools, through the gate', () => {
     expect(activity).toEqual([]);
     agent.resume();
     expect((await call('list_tabs')).isError).toBeUndefined();
+  });
+});
+
+describe('The tools, review items from #75', () => {
+  it('leave page_id out when the page navigated during the read, and follow navigations from before the first read', async () => {
+    const { scope, call } = setup({
+      read: async (_code, events) => {
+        events.emit('did-navigate');
+        return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'moved', selection: '' };
+      },
+    });
+    const out = JSON.parse((await call('read_tab', { tab_id: scope.refs.refFor('n1') })).text!) as Record<string, unknown>;
+    expect(out['content']).toBe('moved');
+    expect(out).not.toHaveProperty('page_id');
+  });
+
+  it('keep nothing in the agent’s memory from a call cut off by Stop', async () => {
+    let answer!: (v: unknown) => void;
+    const { scope, agent, call } = setup({ read: () => new Promise((r) => (answer = r)) });
+    const reading = call('read_form', { tab_id: scope.refs.refFor('n1') });
+    await tick();
+    agent.stop();
+    expect(refusal(await reading).refused).toBe(CONTROL_REFUSALS.stopped);
+    // The page answers after Stop: nothing of it is kept.
+    answer({ url: 'https://news.test/a', forms: [], controls: [], truncated: false });
+    await tick();
+    expect(scope.memory.form).toBeNull();
+    expect(scope.memory.nextField).toBe(1);
+  });
+
+  it('answer waiting after the scope’s wait, and a retry waits on the same card', async () => {
+    const { scope, call, cards, agent } = setup({ needsCard: true, answer: 'hold', cardWaitMs: 20 });
+    const ref = scope.refs.refFor('n1');
+    expect(refusal(await call('read_tab', { tab_id: ref })).refused).toBe(CONTROL_REFUSALS.waiting);
+    expect(refusal(await call('read_tab', { tab_id: ref })).refused).toBe(CONTROL_REFUSALS.waiting);
+    expect(cards).toHaveLength(1);
+    expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(true);
+    // A different subject is a card of its own.
+    expect(refusal(await call('tab_screenshot', { tab_id: ref })).refused).toBe(CONTROL_REFUSALS.waiting);
+    expect(cards).toHaveLength(2);
+  });
+
+  it('let the scope decide where forms and diagnostics may look', async () => {
+    const { scope, call } = setup();
+    expect(refusal(await call('read_form', { tab_id: scope.refs.refFor('n3') })).refused).toBe('Not that one.');
+    expect(refusal(await call('page_diagnostics', { tab_id: scope.refs.refFor('n3') })).refused).toBe('Not that one.');
+  });
+});
+
+describe('Cards, review 1 of #76', () => {
+  it('two reads of different tabs at once get a card each, and Allow once on one never reads the other', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const a = agent.ask(card({ tab: 'n1', description: 'Read “A”' }), new AbortController().signal);
+    const b = agent.ask(card({ tab: 'n2', description: 'Read “B”' }), new AbortController().signal);
+    await tick();
+    expect(shown.map((s) => [s.card.tab, s.card.description])).toEqual([
+      ['n1', 'Read “A”'],
+      ['n2', 'Read “B”'],
+    ]);
+    shown[0]!.answer('once');
+    await expect(a).resolves.toBe('once');
+    // B's card is still up, unanswered.
+    expect(agent.hasOpenCard('read', 'read_tab', 'n2')).toBe(true);
+    shown[1]!.answer('deny');
+    await expect(b).resolves.toBe('deny');
+    // Allow for this chat still covers the tool on every tab.
+    const c = agent.ask(card({ tab: 'n3' }), new AbortController().signal);
+    await tick();
+    shown[2]!.answer('always');
+    await c;
+    await expect(agent.ask(card({ tab: 'n4' }), new AbortController().signal)).resolves.toBe('always');
+    expect(shown).toHaveLength(3);
+  });
+
+  it('the same tab’s retry shares the card, and a once given after the waiting answer is kept for that retry, once', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    await expect(agent.ask(card(), new AbortController().signal, 20)).resolves.toBe('waiting');
+    expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(true);
+    // The user allows it once, after the call already answered waiting.
+    shown[0]!.answer('once');
+    await tick();
+    expect(agent.hasOpenCard('read', 'read_tab', 'n1')).toBe(false);
+    await expect(agent.ask(card(), new AbortController().signal, 20)).resolves.toBe('once');
+    expect(shown).toHaveLength(1);
+    // Used once: the next read asks again.
+    void agent.ask(card(), new AbortController().signal, 20);
+    await tick();
+    expect(shown).toHaveLength(2);
+    // Another tab never takes it.
+    shown[1]!.answer('once');
+    await tick();
+    void agent.ask(card({ tab: 'n2' }), new AbortController().signal, 20);
+    await tick();
+    expect(shown).toHaveLength(3);
   });
 });

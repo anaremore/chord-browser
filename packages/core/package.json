@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./password-sites": "./src/password-sites.ts",
     "./password-generator": "./src/password-generator.ts",
-    "./password-quirks": "./src/password-quirks.ts"
+    "./password-quirks": "./src/password-quirks.ts",
+    "./agent-tools": "./src/agent-tools.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

@@ -127,7 +127,7 @@ const config: Configuration = {
   // Chord's licenses travel with every copy: MIT, plus MPL-2.0 for core/rank.ts (adapted from Crest)
   // and Ghostery's adblocker engine (out/main/ad-blocking.js), GPL-3.0 for the extensions library and
   // EasyList (out/main/ad-blocking), and Apache-2.0 for pdf.js (the assistant's PDF reader, out/main/pdf.js) and
-  // Readability (reader view's article finder, in out/main/index.js).
+  // Readability (reader view's article finder, in out/main/app.js).
   extraResources: [
     { from: '../../LICENSE', to: 'licenses/LICENSE' },
     { from: '../../LICENSES', to: 'licenses' },

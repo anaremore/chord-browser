@@ -32,6 +32,12 @@ The spike is `spikes/s18-agent-mcp/` (README there). It prints protocol shapes, 
 | Single-instance lock | The `mcp` branch never calls `requestSingleInstanceLock`. With the Electron host holding the lock, the bridge ran, and the host saw no `second-instance` event. The bridge also needs its own `userData`, because Electron writes `Local State` into it. Pointed at the real profile, it would race the running Chord's `Local State`. |
 | Two Chords (`--user-data-dir`, or Chord and Chord Dev) | Each profile folder has its own lock and its own endpoint file, so `chord mcp` finds the one its profile path names: the default by default, `chord mcp --user-data-dir=<path>` for another. In-app profiles are one instance, so there's one endpoint (see the open question below). |
 
+**As built (M1b, 2026-11-20): the window before the DACL is tightened.** Chord tightens the pipe's DACL with `window-owner.exe restrict-pipe` (SYSTEM and the user, the network denied) on the **first connection**, not when it starts listening: running the helper at launch would break the zero-cost rule (Agents on costs one pipe and one file at launch, nothing more). Until that first connection, the pipe has libuv's default DACL, which also gives Everyone and Anonymous *read*. The planning thread accepted this window (review 1 of #76) because:
+
+- read access can open an instance but can't write to it (shown above), so it can never send the token;
+- Chord writes nothing on a connection until a valid hello arrives, and hangs up after 2 s;
+- the token is the real gate: 32 random bytes, in a 0600 file only the user can read, compared in constant time (`timingSafeEqual`), so a wrong guess says nothing about how close it was.
+
 ### 2. `chord mcp` as Chord's own executable
 
 | Question | Seen |
