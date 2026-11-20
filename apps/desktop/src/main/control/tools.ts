@@ -54,8 +54,10 @@ interface Call {
   scope: ControlScope;
   browser: ControlBrowser;
   signal: AbortSignal;
-  /** Ask the user to read; true for yes. */
-  ask(tool: AssistantToolName, description: string, target: string[], node: TabNode | null): Promise<boolean>;
+  /** The scope's card for this read, if it needs one: null to go on, else the refusal (`no`, in the front door's words, for a no). */
+  card(tool: AssistantToolName, node: TabNode | null, description: string, target: string[], no: string): Promise<ToolOutput | null>;
+  /** Stop came while the call waited: it answers already, and must change nothing more (the agent's memory, the chat). */
+  stopped(): boolean;
   /** The scope's activity line, unless the call was stopped. */
   activity(tool: string, summary: string, detail?: string, ok?: boolean): Promise<void>;
 }
@@ -75,8 +77,14 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
         scope,
         browser,
         signal,
-        ask: async (tool, description, target, node) =>
-          (await scope.agent.ask({ kind: 'read', tool, description, target, tab: node?.id ?? null, subject: tool }, signal)) !== 'deny',
+        card: async (tool, node, description, target, no) => {
+          const needed = scope.needsCard(tool, node);
+          if (!needed) return null;
+          const answer = await scope.agent.ask({ ...needed, tool, description, target, tab: node?.id ?? null }, signal, scope.cardWaitMs);
+          if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+          return answer === 'deny' ? refuse(no) : null;
+        },
+        stopped: () => signal.aborted,
         activity: async (tool, summary, detail = '', ok = true) => {
           if (!signal.aborted) await scope.activity(tool, summary, detail, ok);
         },
@@ -133,10 +141,9 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   const { scope, browser } = call;
   if (tool === 'list_tabs' || tool === 'search_history' || tool === 'search_archive') {
     if (tool !== 'list_tabs' && !scope.search) return { text: toolResult({ error: `Unknown tool ${tool}` }, false), isError: true };
-    if (scope.needsCard(tool, null)) {
-      const what = tool === 'list_tabs' ? 'See the list of your tabs' : tool === 'search_history' ? `Search your history for “${String(args['query'] ?? '')}”` : `Search your archive for “${String(args['query'] ?? '')}”`;
-      if (!(await call.ask(tool, what, [], null))) return refuse('The user said no to this. Carry on without it, or ask them.');
-    }
+    const what = tool === 'list_tabs' ? 'See the list of your tabs' : tool === 'search_history' ? `Search your history for “${String(args['query'] ?? '')}”` : `Search your archive for “${String(args['query'] ?? '')}”`;
+    const refused = await call.card(tool, null, what, [], 'The user said no to this. Carry on without it, or ask them.');
+    if (refused) return refused;
     if (tool === 'list_tabs') {
       const tabs = scope.tabs().map(({ node, given }) => ({ tab_id: scope.refs.refFor(node.id), title: node.title, site: safeHost(node.url), attached: given }));
       await call.activity(tool, `Listed ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`);
@@ -154,12 +161,14 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   if (isOutput(found)) return found;
   const node = found;
   if (!scope.readable(node)) return refuse(NEVER);
-  if (scope.needsCard(tool, node)) {
-    const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
-    if (!(await call.ask(tool, `${verb} “${node.title || safeHost(node.url)}”`, [node.url], node))) return refuse('The user said no to reading that tab. Carry on without it, or ask them.');
-  }
+  const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
+  const refused = await call.card(tool, node, `${verb} “${node.title || safeHost(node.url)}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
+  if (refused) return refused;
   const page = await loadedPage(browser, node.id);
   if (!page) return refuse('That tab could not be loaded.');
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  // The page read, taken before reading (which starts following its navigations): one that moved on meanwhile has no id.
+  const pageId = page.id;
   scope.memory.read.add(node.id);
   const ref = scope.refs.refFor(node.id);
   if (tool === 'tab_screenshot') {
@@ -172,16 +181,16 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   const read = await page.read();
   if (isPdf(read, page.url())) {
     if (tool === 'read_selection') return refuse('What’s selected inside a PDF can’t be seen. Read the PDF with read_tab instead.');
-    return readPdf(call, node, page, ref, args);
+    return readPdf(call, node, page, ref, args, pageId);
   }
   if (!read) return refuse('That page could not be read.');
   if (tool === 'read_selection') {
     await call.activity(tool, `Read your selection in “${node.title || safeHost(node.url)}”`, node.url);
-    return { text: pageResult({ ref, url: read.url, text: read.selection, retrievedAt: Date.now(), pageId: page.id }) };
+    return { text: pageResult({ ref, url: read.url, text: read.selection, retrievedAt: Date.now(), pageId: sameId(page, pageId) }) };
   }
   const start = typeof args['start'] === 'number' ? args['start'] : 0;
   const length = typeof args['length'] === 'number' ? args['length'] : undefined;
-  const text = pageResult({ ref, url: read.url, text: read.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pageId: page.id });
+  const text = pageResult({ ref, url: read.url, text: read.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pageId: sameId(page, pageId) });
   await call.activity(tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
   return { text };
 }
@@ -191,7 +200,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
  * text from pdf.js in a utility process, with [Page n] markers. Reading on
  * from `start` reuses the same read; a new read fetches it again.
  */
-async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string, args: Record<string, unknown>): Promise<ToolOutput> {
+async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string, args: Record<string, unknown>, pageId: string): Promise<ToolOutput> {
   const { memory } = call.scope;
   const title = node.title || safeHost(node.url);
   const url = page.url();
@@ -211,6 +220,7 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
       await call.activity('read_tab', `Couldn’t read “${title}”`, why, false);
       return { text: toolResult({ refused: `Couldn’t read this PDF: ${why}.` }, false), isError: true };
     }
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     memory.pdfs.delete(node.id);
     memory.pdfs.set(node.id, pdf);
     if (memory.pdfs.size > PDFS_KEPT) memory.pdfs.delete(memory.pdfs.keys().next().value!);
@@ -220,7 +230,7 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
     pdf.totalPages > read ? `This PDF has ${pdf.totalPages} pages; pages 1–${read} were read, the most Chord reads.` : '',
     pdf.pages.every((p) => !p.trim()) ? 'This PDF has no text to read (it may be scanned pages); tab_screenshot shows the page on screen.' : '',
   ].filter(Boolean);
-  const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}), pageId: page.id });
+  const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}), pageId: sameId(page, pageId) });
   await call.activity('read_tab', `Read “${title}”`, pdf.totalPages > read ? `PDF, pages 1–${read} of ${pdf.totalPages}` : `PDF, ${pdf.totalPages} page${pdf.totalPages === 1 ? '' : 's'}`);
   return { text };
 }
@@ -234,7 +244,6 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
  */
 async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
   const { scope, browser } = call;
-  const offScreen = "Only the tab on screen's problems can be read. Ask the user to switch to it, then to ask again.";
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use the tab id from "Attached:".');
   if (isOutput(found)) return found;
   const node = found;
@@ -247,7 +256,8 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
   const blocked = (at?: string): string | null => {
     const now = nodeOf(browser.store.state, node.id);
     if (now?.kind !== 'tab' || !scope.readable(now)) return NEVER;
-    if (scope.onScreen() !== node.id) return offScreen;
+    const inspect = scope.mayInspect(now, 'page_diagnostics');
+    if (inspect) return inspect;
     if (!page || page.gone()) return 'That tab could not be read.';
     // Where the page is, which can be ahead of the tab's saved address.
     if (isNeverReadable(page.url(), scope.neverSites())) return NEVER;
@@ -257,12 +267,12 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
   const before = blocked();
   if (before || !page) return refuse(before ?? 'That tab could not be read.');
   const title = node.title || safeHost(node.url);
-  if (scope.needsCard('page_diagnostics', node)) {
-    if (!(await call.ask('page_diagnostics', `Read the problems on “${title}”`, [node.url], node))) return refuse('The user said no to reading that page’s problems. Carry on without it, or ask them.');
-  }
+  const refused = await call.card('page_diagnostics', node, `Read the problems on “${title}”`, [node.url], 'The user said no to reading that page’s problems. Carry on without it, or ask them.');
+  if (refused) return refused;
   const asked = blocked();
   if (asked) return refuse(asked);
   const url = page.url();
+  const pageId = page.id;
   const read = await page.diagnostics();
   if (!read.ok) {
     await call.activity('page_diagnostics', `Couldn’t check “${title}” for problems`, read.why, false);
@@ -271,12 +281,13 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
   // What was read belongs to the page that was asked about, still on screen and still readable.
   const after = blocked(url);
   if (after) return refuse(after);
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   // A frame of a *Never read* site inside the page (mail.example.com in www.example.com): its problems are left out.
   const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: scope.neverSites(), contexts: read.contexts, page: url });
   scope.memory.read.add(node.id);
   const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
   await call.activity('page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));
-  return { text: diagnosticsResult({ ref: scope.refs.refFor(node.id), url, retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}), pageId: page.id }) };
+  return { text: diagnosticsResult({ ref: scope.refs.refFor(node.id), url, retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}), pageId: sameId(page, pageId) }) };
 }
 
 /* ---------- Forms: read_form, propose_fill (D16, ARCHITECTURE.md §11.6) ---------- */
@@ -295,24 +306,27 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
   if (isOutput(found)) return found;
   const node = found;
   if (!scope.readable(node)) return refuse(NEVER);
-  if (scope.onScreen() !== node.id) return refuse('Forms are filled only on the tab on screen. Ask the user to switch to it, then to ask again.');
+  const inspect = scope.mayInspect(node, tool);
+  if (inspect) return refuse(inspect);
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its form. Ask the user to close reader view first.');
   const title = node.title || safeHost(node.url);
   const { memory } = scope;
   if (tool === 'read_form') {
-    if (scope.needsCard(tool, node)) {
-      if (!(await call.ask(tool, `Read the form on “${title}”`, [node.url], node))) return refuse('The user said no to reading that form. Carry on without it, or ask them.');
-    }
+    const refused = await call.card(tool, node, `Read the form on “${title}”`, [node.url], 'The user said no to reading that form. Carry on without it, or ask them.');
+    if (refused) return refused;
     const page = await loadedPage(browser, node.id);
     const token = randomBytes(12).toString('hex');
+    const pageId = page?.id ?? '';
     const read = page ? await page.readForm(token) : null;
     if (!page || !read) return refuse('That page could not be read.');
+    // A form read after Stop is never kept: a later propose_fill must not find it.
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     const form = formRead(read, memory.nextField);
     memory.nextField += form.fields.length;
     memory.form = { nodeId: node.id, token, read: form };
     memory.read.add(node.id);
     await call.activity(tool, `Read the form on “${title}”`, `${fieldCount(form.fields.length)}${form.leftOut.length ? ` · ${form.leftOut.length} left out` : ''}`);
-    return { text: formResult(form, { ref: scope.refs.refFor(node.id), retrievedAt: Date.now(), pageId: page.id }) };
+    return { text: formResult(form, { ref: scope.refs.refFor(node.id), retrievedAt: Date.now(), ...(sameId(page, pageId) ? { pageId } : {}) }) };
   }
   const fills = scope.fills!;
   const form = memory.form;
@@ -324,6 +338,7 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
   if (!page || page.gone()) return refuse('That tab could not be read.');
   const mapped = proposedFill(form.read, args, page.url());
   if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const card: AssistantFillCard = { status: 'pending', title, site: safeHost(node.url), fields: mapped.fields, leftOut: form.read.leftOut, truncated: form.read.truncated };
   await fills.show(node, card, form);
   return {
@@ -337,6 +352,9 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
     ),
   };
 }
+
+/** The page id taken before a read, if the page is still that document: one that navigated meanwhile gets none. */
+const sameId = (page: ControlPage, before: string): string | undefined => (before && page.id === before ? before : undefined);
 
 /** Chromium's PDF viewer: the page's own document says application/pdf (and the extractor sees only the viewer). */
 function isPdf(page: PageRead | null, url: string): boolean {

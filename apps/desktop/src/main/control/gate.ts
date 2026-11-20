@@ -9,6 +9,7 @@
  *   `resume`. A call's own work may finish later; its answer is no longer
  *   waited for, and it adds nothing to what the user sees (`signal`).
  * - **Grants** stay with the agent object, so they last as long as it does.
+ * - **Cards**: one open card per kind and subject; every call asking for it waits on that one.
  * - **Pause** (M2) holds a tab's new calls until the user leaves the tab, at
  *   most CONTROL_WAIT_MS.
  */
@@ -49,13 +50,16 @@ export type CardPresenter = (card: ControlCard, signal: AbortSignal) => Promise<
 /** Why a call didn't run. */
 export type CallRefusal = 'stopped' | 'waiting';
 
+const cardKey = (card: { kind: ApprovalKind; subject: string }) => `${card.kind}:${card.subject}`;
+
 /** The agent-wide slot, for calls that name no tab (list_tabs, searches). */
 const NO_TAB = '';
 
 export class ControlAgent {
   private readonly states = new Map<string, ControlState>();
   private readonly grants = new Map<string, 'always' | 'deny'>();
-  private readonly cards = new Map<string, AbortController>();
+  /** Cards up now, one per kind and subject. */
+  private readonly open = new Map<string, { cancel: AbortController; answer: Promise<Grant> }>();
   private readonly waiters = new Set<() => void>();
   private stopping = new AbortController();
   private stopped = false;
@@ -140,35 +144,66 @@ export class ControlAgent {
 
   /**
    * Ask the user. An answer given for good before (`always`, a denied
-   * connection) answers at once; otherwise the card shows until it's answered,
-   * Stop takes it down, or `signal` (the call's) aborts. Answers `deny` then.
+   * connection) answers at once. Otherwise there's one open card per kind and
+   * subject: a second ask for the same thing (two reads at once, or a retry
+   * after *waiting*) waits on the card already up instead of opening another.
+   * It answers when the user does, `deny` when Stop or cancelCards takes the
+   * card down or this call's `signal` aborts (the card stays up for others),
+   * and `waiting` after `waitMs` (the card stays up: S18's 45 s rule).
    */
-  async ask(card: Omit<ControlCard, 'id'>, signal: AbortSignal): Promise<Grant> {
+  async ask(card: Omit<ControlCard, 'id'>, signal: AbortSignal, waitMs = Infinity): Promise<Grant | 'waiting'> {
     const remembered = this.granted(card.kind, card.subject);
     if (remembered) return remembered;
     if (signal.aborted || this.stopped) return 'deny';
+    const open = this.open.get(cardKey(card)) ?? this.openCard(card);
+    return new Promise<Grant | 'waiting'>((resolve) => {
+      const finish = (answer: Grant | 'waiting') => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        resolve(answer);
+      };
+      const onAbort = () => finish('deny');
+      const timer = Number.isFinite(waitMs) ? setTimeout(() => finish('waiting'), waitMs) : undefined;
+      timer?.unref?.();
+      signal.addEventListener('abort', onAbort, { once: true });
+      void open.answer.then(finish);
+    });
+  }
+
+  /** The card for a kind and subject, shown once until it's answered or taken down. */
+  private openCard(card: Omit<ControlCard, 'id'>): { cancel: AbortController; answer: Promise<Grant> } {
     const id = `c${++this.lastCard}`;
     const key = card.tab ?? NO_TAB;
+    const subject = cardKey(card);
     const cancel = new AbortController();
-    const onAbort = () => cancel.abort();
-    signal.addEventListener('abort', onAbort, { once: true });
-    this.cards.set(id, cancel);
     this.step(key, { t: 'ask', card: id });
-    try {
-      const grant = await this.present({ ...card, id }, cancel.signal);
-      const keep = cancel.signal.aborted ? null : grantAfter(card.kind, grant);
-      if (keep) this.grants.set(`${card.kind}:${card.subject}`, keep);
-      return cancel.signal.aborted ? 'deny' : grant;
-    } finally {
-      signal.removeEventListener('abort', onAbort);
-      this.cards.delete(id);
-      this.step(key, { t: 'answer', card: id });
-    }
+    const answer = (async (): Promise<Grant> => {
+      try {
+        const grant = await this.present({ ...card, id }, cancel.signal);
+        if (cancel.signal.aborted) return 'deny';
+        const keep = grantAfter(card.kind, grant);
+        if (keep) this.grants.set(subject, keep);
+        return grant;
+      } catch {
+        return 'deny';
+      } finally {
+        this.open.delete(subject);
+        this.step(key, { t: 'answer', card: id });
+      }
+    })();
+    const open = { cancel, answer };
+    this.open.set(subject, open);
+    return open;
   }
 
   /** Take down every card waiting (each answers `deny`): the assistant's turn ended. */
   cancelCards(): void {
-    for (const cancel of [...this.cards.values()]) cancel.abort();
+    for (const { cancel } of [...this.open.values()]) cancel.abort();
+  }
+
+  /** Whether a card for this kind and subject is up now. */
+  hasOpenCard(kind: ApprovalKind, subject: string): boolean {
+    return this.open.has(`${kind}:${subject}`);
   }
 
   /** The user said pause on a tab (they're working in it), or let it go. */
