@@ -392,6 +392,8 @@ export function startAgents(bridge: PasswordsBridge, options: Pick<AgentOptions,
     if (listened.has(d)) return () => {};
     listened.add(d);
     const onLoad = (event: Event) => {
+      // Only the browser's load: a page's own `dispatchEvent(new Event('load'))` would vouch for any frame (review of #67).
+      if (!event.isTrusted) return;
       const t = Event.prototype.composedPath.call(event)[0];
       const tag = t && typeof t === 'object' && 'tagName' in t ? String(tagOf.call(t as Element)) : '';
       if (tag !== 'IFRAME' && tag !== 'FRAME') return;

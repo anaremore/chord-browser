@@ -14,7 +14,7 @@ document.addEventListener(
   'load',
   (event) => {
     const t = event.target as HTMLIFrameElement | null;
-    if (t?.tagName === 'IFRAME' || t?.tagName === 'FRAME') loaded.set(t, t.contentDocument);
+    if (event.isTrusted && (t?.tagName === 'IFRAME' || t?.tagName === 'FRAME')) loaded.set(t, t.contentDocument);
   },
   { capture: true, passive: true },
 );

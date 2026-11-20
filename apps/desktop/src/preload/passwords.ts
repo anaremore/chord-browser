@@ -43,6 +43,7 @@ interface Field {
 /** An event as the sentinel reads it: its first target through open shadow roots, where the page gives one. */
 interface PageEvent {
   target: unknown;
+  isTrusted: boolean;
   composedPath?(): unknown[];
 }
 interface PageDocument {
@@ -175,7 +176,8 @@ const look = () => {
 /** A frame that loaded (added later, or navigated): looked into, once the agent isn't awake. */
 const onLoad = (event: PageEvent) => {
   const t = event.target as PageFrame | null;
-  if (t?.tagName !== 'IFRAME' && t?.tagName !== 'FRAME') return;
+  // A page's own `dispatchEvent` reaches every world: only the browser's load counts (review of #67).
+  if (!event.isTrusted || (t?.tagName !== 'IFRAME' && t?.tagName !== 'FRAME')) return;
   loaded.set(t, t.contentDocument);
   if (!woken) look();
 };

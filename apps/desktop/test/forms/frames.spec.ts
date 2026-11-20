@@ -669,3 +669,95 @@ test('BL2: a frame’s 101st frame, loaded sandboxed and its attribute removed a
   await a.settle();
   expect(await a.of('focus')).toEqual([]);
 });
+
+/* ---------- Re-check of #67: a page's own `load` vouches for nothing ---------- */
+
+for (const mode of ['open', 'closed'] as const) {
+  test(`P12/P14: a frame loaded sandboxed in a ${mode} shadow root, moved into the page’s tree, then a page-made load: never used`, async ({ page }) => {
+    const a = await open(page, '<h1>Top</h1><div id="dst"></div>', { '/login': SIGN_IN() });
+    // The agent runs (P14); the page builds the root, then moves the frame out and fakes its load.
+    const moved = await page.evaluate(
+      ([m, sandbox]) =>
+        new Promise<boolean>((done) => {
+          const host = document.createElement('x-shell');
+          document.body.append(host);
+          const root = host.attachShadow({ mode: m as ShadowRootMode });
+          root.innerHTML = `<iframe id="fr" src="/login" sandbox="${sandbox}" style="width:400px;height:200px"></iframe>`;
+          const f = root.querySelector('iframe')!;
+          f.addEventListener(
+            'load',
+            () => {
+              f.removeAttribute('sandbox');
+              const dst = document.getElementById('dst') as HTMLElement & { moveBefore?: (n: Node, c: Node | null) => void };
+              if (typeof dst.moveBefore !== 'function') return done(false);
+              dst.moveBefore(f, null);
+              f.dispatchEvent(new Event('load'));
+              done(true);
+            },
+            { once: true },
+          );
+        }),
+      [mode, SANDBOX] as const,
+    );
+    test.skip(!moved, 'this Chromium has no moveBefore');
+    await page.waitForTimeout(300);
+    await notUsed(page, a);
+  });
+}
+
+test('P13: in a frame in use, a frame loaded sandboxed in a closed shadow root, moved into the frame’s tree, then a page-made load: never used', async ({ page }) => {
+  const a = await open(page, `<iframe id="l1" src="/l1" style="width:440px;height:260px"></iframe>`, { '/l1': '<div id="dst"></div>', '/login': SIGN_IN() });
+  await page.waitForTimeout(200);
+  const outer = page.frames().find((f) => f.url().endsWith('/l1'))!;
+  const moved = await outer.evaluate(
+    (sandbox) =>
+      new Promise<boolean>((done) => {
+        const host = document.createElement('x-shell');
+        document.body.append(host);
+        const root = host.attachShadow({ mode: 'closed' });
+        root.innerHTML = `<iframe id="fr" src="/login" sandbox="${sandbox}" style="width:400px;height:200px"></iframe>`;
+        const f = root.querySelector('iframe')!;
+        f.addEventListener(
+          'load',
+          () => {
+            f.removeAttribute('sandbox');
+            const dst = document.getElementById('dst') as HTMLElement & { moveBefore?: (n: Node, c: Node | null) => void };
+            if (typeof dst.moveBefore !== 'function') return done(false);
+            dst.moveBefore(f, null);
+            f.dispatchEvent(new Event('load'));
+            done(true);
+          },
+          { once: true },
+        );
+      }),
+    SANDBOX,
+  );
+  test.skip(!moved, 'this Chromium has no moveBefore');
+  await page.waitForTimeout(300);
+  await a.clear();
+  await page.frameLocator('#l1').frameLocator('#fr').locator('#p').click();
+  await a.settle();
+  expect(await a.of('focus')).toEqual([]);
+});
+
+test('P12, before the agent wakes: the BL1 setup in the page’s own script, then a page-made load: never used', async ({ page }) => {
+  const a = await open(
+    page,
+    `<x-shell id="shell"></x-shell><div id="dst"></div><script>
+      const root = document.getElementById('shell').attachShadow({ mode: 'open' });
+      root.innerHTML = '<iframe id="fr" src="/login" sandbox="${SANDBOX}" style="width:400px;height:200px"></iframe>';
+      const f = root.getElementById('fr');
+      f.addEventListener('load', () => {
+        f.removeAttribute('sandbox');
+        const dst = document.getElementById('dst');
+        if (typeof dst.moveBefore !== 'function') return;
+        dst.moveBefore(f, null);
+        f.dispatchEvent(new Event('load'));
+        window.moved = true;
+      }, { once: true });
+    </script>`,
+    { '/login': SIGN_IN() },
+  );
+  test.skip(!(await page.evaluate(() => (window as unknown as { moved?: boolean }).moved)), 'this Chromium has no moveBefore');
+  await notUsed(page, a);
+});
