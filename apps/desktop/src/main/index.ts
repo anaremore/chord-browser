@@ -33,6 +33,7 @@ import { AfterLaunch } from './after-launch';
 import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
+import { watchAgents, type AgentSwitch } from './agents/switch';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
@@ -102,6 +103,8 @@ function devNumber(name: string): number | null {
 let browser: Browser | undefined;
 let persistence: Persistence | undefined;
 let assistant: AssistantService | undefined;
+/** Outside agents (S18): null in packaged builds, which have none yet. */
+let agents: AgentSwitch | null = null;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
@@ -702,7 +705,7 @@ if (!app.requestSingleInstanceLock()) {
     // Chord Player quits by itself once Chord's channel closes: nothing to wait for.
     browser?.player.stopUpdates();
     browser?.effects.stop();
-    void Promise.all([assistant?.quit(), adBlocking.stop()])
+    void Promise.all([assistant?.quit(), adBlocking.stop(), agents?.quit()])
       .catch(() => undefined)
       .then(() => imports)
       .then(() => persistence!.close())
@@ -1045,6 +1048,20 @@ if (!app.requestSingleInstanceLock()) {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
     browser.assistant = assistant;
+    // Outside agents (S18, development builds until Settings → Agents): off, nothing; on, one pipe and one token file,
+    // started without waiting for it; the rest waits for an agent to connect.
+    const agentBrowser = browser;
+    agents = watchAgents({
+      packaged: app.isPackaged,
+      store: browser.store,
+      devSwitch: devEnv('CHORD_AGENTS'),
+      make: async () => {
+        const { AgentService, devApproval, devPresenter } = await import('./agents/service');
+        const helper = process.platform === 'win32' ? join(app.getAppPath(), 'out/window-owner/window-owner.exe') : null;
+        const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
+        return new AgentService({ userData: app.getPath('userData'), browser: agentBrowser, present: devPresenter(devApproval(devEnv('CHORD_AGENT_APPROVE'))), helper: helper && existsSync(helper) ? helper : null, waitMs });
+      },
+    });
     afterLaunch.run(() => void assistant!.afterLaunch());
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.
@@ -1181,6 +1198,14 @@ if (!app.requestSingleInstanceLock()) {
         },
         clearPasswordEvents: () => void (passwordEvents.length = 0),
         launch: () => launchTimings(),
+        /** Outside agents (S18): whether the endpoint is served, its connections, and the DACL helper's exit code (Windows). */
+        agents: async () => {
+          await agents?.settled();
+          const service = agents?.service;
+          return { serving: service?.serving?.path ?? null, connections: service?.connections.size ?? 0, restricted: (await service?.restricted) ?? null };
+        },
+        /** Stop for every agent, as Ctrl+. will (M1c). */
+        agentsStopAll: () => agents?.service?.stopAll(),
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),
         /** Why each window's last frame change that wanted pictures happened at once (null: it glided). */

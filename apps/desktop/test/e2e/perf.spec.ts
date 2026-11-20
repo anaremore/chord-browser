@@ -348,7 +348,7 @@ test('launch: from main entry to a usable window', async () => {
   test.setTimeout(300_000);
   cpuBusy = await measureCpuBusy();
   /** With `bareProfile`, bare Electron launches before each of Chord's, and the median of Chord's is held to its baseline against them. */
-  const runs = async (scenario: string, profile: (() => string) | null, count: number, bareProfile?: string) => {
+  const runs = async (scenario: string, profile: (() => string) | null, count: number, bareProfile?: string, env: Record<string, string> = {}, inspect?: (app: ElectronApplication, profile: string | null) => Promise<void>) => {
     const all: LaunchTimings[] = [];
     const bare: number[] = [];
     let locked: boolean | null = null;
@@ -356,9 +356,11 @@ test('launch: from main entry to a usable window', async () => {
       locked = screenLocked() || locked;
       // In turns, so a busy moment on the machine slows both.
       if (bareProfile) bare.push(await bareElectronLaunch(bareProfile));
-      const app = await launch({}, profile ? profile() : undefined);
+      const dir = profile ? profile() : mkdtempSync(join(tmpdir(), 'chord-perf-'));
+      const app = await launch(env, dir);
       try {
         all.push(await launchTimings(app));
+        await inspect?.(app, dir);
       } finally {
         await app.close();
       }
@@ -405,7 +407,19 @@ test('launch: from main entry to a usable window', async () => {
     });
   };
 
-  await runs('fresh profile', null, 3);
+  // Outside agents (S18) off, the default: no pipe and nothing written for them. On: one pipe and one token file, and
+  // nothing else until an agent connects; the launch is reported beside the plain one (held by the same budget).
+  const endpoint = (dir: string | null) => (dir ? join(dir, 'agent-endpoint.json') : '');
+  await runs('fresh profile', null, 3, undefined, {}, async (app, dir) => {
+    expect(existsSync(endpoint(dir))).toBe(false);
+    expect(await app.evaluate(() => (globalThis as unknown as { chordTestHooks: { agents(): Promise<{ serving: string | null }> } }).chordTestHooks.agents())).toMatchObject({ serving: null });
+  });
+  await runs('fresh profile, Agents on', null, 3, undefined, { CHORD_AGENTS: '1' }, async (app, dir) => {
+    const agents = await app.evaluate(() => (globalThis as unknown as { chordTestHooks: { agents(): Promise<{ serving: string | null; connections: number; restricted: number | null }> } }).chordTestHooks.agents());
+    expect(agents).toMatchObject({ connections: 0, restricted: null });
+    expect(agents.serving).toBeTruthy();
+    expect(existsSync(endpoint(dir))).toBe(true);
+  });
 
   // A profile with 200 Today tabs and a used history, restored at launch.
   const profile = mkdtempSync(join(tmpdir(), 'chord-perf-'));
