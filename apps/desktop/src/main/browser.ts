@@ -740,6 +740,8 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       onChange: () => this.syncPopovers(),
+      // Outside agents' tabs (S18): only the harmless permissions, never a prompt.
+      agentTab: (nodeId) => this.isAgentNode(nodeId),
     });
     this.previews = new Previews(join(app.getPath('userData'), 'Captures'), {
       state: () => this.store.state,
@@ -817,6 +819,8 @@ export class Browser {
     });
     options.screenShare.connect({
       state: () => this.store.state,
+      // Outside agents' tabs (S18) never share the screen.
+      agentTab: (nodeId) => this.isAgentNode(nodeId),
       dispatch: (command) => this.store.dispatch(command),
       nodeFor: (contents) => this.tabs.nodeFor(contents),
       // A tab picked that fell asleep while the picker was up wakes to be shared.

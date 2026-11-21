@@ -24,10 +24,10 @@ import {
 } from '@chord/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runBridge } from '../../src/main/agents/bridge';
-import { connectEndpoint, endpointPath, lines, readEndpoint } from '../../src/main/agents/endpoint';
+import { connectEndpoint, endpointPath, LIVE_MAX, lines, readEndpoint, startEndpoint, UNAUTHENTICATED_MAX } from '../../src/main/agents/endpoint';
 import { privateFolder, relayFolder, relayUserData, userCache } from '../../src/main/agents/relay-folder';
 import type { ConnectAnswer, ConnectingAgent } from '../../src/main/agents/connect';
-import { AgentService } from '../../src/main/agents/service';
+import { AgentService, QUEUED_MAX } from '../../src/main/agents/service';
 import { watchAgents } from '../../src/main/agents/switch';
 import type { ControlBrowser } from '../../src/main/control/tools';
 import type { Change } from '../../src/main/store';
@@ -490,5 +490,75 @@ describe('No work while no agent connects (S18 M1c)', () => {
     expect((await c.call('list_tabs')).error).toBe(false);
     expect(service.chords).not.toBeNull();
     expect(subscribed).toBe(1);
+  });
+});
+
+/** A raw connection to the endpoint: what it was sent, and whether Chord hung up, once `settle` ms pass. */
+function rawConnection(path: string, write: string | null, settle = 300) {
+  const s = connect(path);
+  s.on('error', () => undefined);
+  cleanup.push(() => s.destroy());
+  let bytes = '';
+  let closed = false;
+  s.on('connect', () => write !== null && s.write(write));
+  s.on('data', (d) => (bytes += d));
+  s.on('close', () => (closed = true));
+  return { socket: s, settled: () => sleep(settle).then(() => ({ bytes, closed })) };
+}
+
+const helloLine = (token: string) => `${JSON.stringify({ type: 'hello', token, initialize: null, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() })}\n`;
+
+describe('The endpoint under load (security review)', () => {
+  it('the first connection hands over the endpoint’s path, before startEndpoint returns (the Windows DACL never waits on it)', async () => {
+    const ud = profile();
+    const firsts: string[] = [];
+    const endpoint = await startEndpoint({ userData: ud, onConnection: () => ({ message: () => undefined }), onFirstConnection: (path) => void firsts.push(path) });
+    cleanup.push(() => endpoint.close());
+    await rawConnection(endpoint.path, null, 50).settled();
+    await rawConnection(endpoint.path, null, 50).settled();
+    expect(firsts).toEqual([endpoint.path]);
+  });
+
+  // [connections that said hello, connections that haven't, whether one more is hung up on at once]
+  const table: [number, number, boolean][] = [
+    [0, UNAUTHENTICATED_MAX - 1, false],
+    [0, UNAUTHENTICATED_MAX, true],
+    [LIVE_MAX - UNAUTHENTICATED_MAX, UNAUTHENTICATED_MAX - 1, false],
+    [LIVE_MAX - 1, 0, false],
+    [LIVE_MAX, 0, true],
+  ];
+  it.each(table)('%i in and %i before their hello: the next is refused: %s', async (authenticated, unauthenticated, refused) => {
+    const ud = profile();
+    let connected = 0;
+    const endpoint = await startEndpoint({ userData: ud, onConnection: () => (connected++, { message: () => undefined }) });
+    cleanup.push(() => endpoint.close());
+    const token = readEndpoint(ud)!.token;
+    // One at a time: a burst would be before its hello all at once.
+    for (let i = 0; i < authenticated; i++) {
+      rawConnection(endpoint.path, helloLine(token));
+      await expect.poll(() => connected, { timeout: 5000 }).toBe(i + 1);
+    }
+    const quiet = Array.from({ length: unauthenticated }, () => rawConnection(endpoint.path, null));
+    await sleep(100);
+    // The next one says hello at once.
+    const next = await rawConnection(endpoint.path, helloLine(token)).settled();
+    expect(next.closed).toBe(refused);
+    expect(next.bytes).toBe(refused ? '' : `${JSON.stringify({ type: 'welcome' })}\n`);
+    // Those already in stay.
+    expect((await Promise.all(quiet.map((q) => q.settled()))).every((q) => !q.closed)).toBe(true);
+  }, 15_000);
+
+  // [messages sent with the hello, before the connection's code has loaded; whether Chord hangs up]
+  const queued: [number, boolean][] = [
+    [3, false],
+    [QUEUED_MAX + 1, true],
+  ];
+  it.each(queued)('%i messages while the connection’s code loads: hung up: %s', async (count, hungUp) => {
+    const ud = profile();
+    await chord(ud);
+    const token = readEndpoint(ud)!.token;
+    const pings = Array.from({ length: count }, (_, i) => `${JSON.stringify({ jsonrpc: '2.0', id: i + 1, method: 'ping' })}\n`).join('');
+    const got = await rawConnection(readEndpoint(ud)!.path, helloLine(token) + pings).settled();
+    expect(got.closed).toBe(hungUp);
   });
 });

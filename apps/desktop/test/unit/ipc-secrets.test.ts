@@ -15,6 +15,11 @@ const frame = { url: 'chord://popover/index.html' };
 const popover = { id: 7, mainFrame: frame, once: () => undefined };
 registerCaller(popover as never, 'popover', ['chord://popover']);
 const call = (channel: string, payload: unknown) => handlers.get(channel)!({ sender: popover, senderFrame: frame }, payload);
+/** Settings' page, registered as Chord's own (the `internal` role sync's channels take). */
+const settingsFrame = { url: 'chord://settings/index.html' };
+const settings = { id: 8, mainFrame: settingsFrame, once: () => undefined };
+registerCaller(settings as never, 'internal', ['chord://settings']);
+const callInternal = (channel: string, payload: unknown) => handlers.get(channel)!({ sender: settings, senderFrame: settingsFrame }, payload);
 
 const PASSWORD = 'Zq9-never-in-an-error';
 
@@ -41,5 +46,25 @@ describe('a bad request on a channel that carries a password', () => {
     handle('auth:respond', respond as never);
     await call('auth:respond', { id: 1, credentials: { account: 0, username: 'ada' }, remember: true });
     expect(respond).toHaveBeenCalledWith({ id: 1, credentials: { account: 0, username: 'ada' }, remember: true }, popover);
+  });
+});
+
+describe('a bad request on a sync channel, which carries the sync passphrase (security review)', () => {
+  it.each([
+    ['sync:unlock', 'a passphrase too long', { passphrase: `${PASSWORD}${'x'.repeat(5000)}` }],
+    ['sync:unlock', 'an extra field beside it', { passphrase: PASSWORD, hint: PASSWORD }],
+    ['sync:setup', 'a folder id that isn’t text', { folderId: 7, passphrase: PASSWORD }],
+    ['sync:join', 'a wrong type', { folderId: 1, passphrase: PASSWORD }],
+    ['sync:startOver', 'a passphrase that isn’t text', { passphrase: [PASSWORD] }],
+  ])('%s with %s: refused, saying nothing of it', async (channel, _name, payload) => {
+    const run = vi.fn();
+    handle(channel as never, run as never);
+    const error = await callInternal(channel, payload).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(error?.message).toBe(`${channel}: invalid request`);
+    expect(JSON.stringify({ message: error?.message, stack: error?.stack, cause: (error as { cause?: unknown }).cause })).not.toContain(PASSWORD);
   });
 });

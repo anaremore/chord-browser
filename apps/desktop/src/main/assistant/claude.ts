@@ -85,7 +85,7 @@ export function claudeContextUsage(result: Record<string, unknown>, model: strin
 }
 
 /** The MCP side of Chord's tools, answered on the control channel. */
-async function mcpReply(message: { id?: unknown; method?: string; params?: Record<string, unknown> }, tools: readonly AssistantToolSpec[], call: (name: string, args: Record<string, unknown>) => Promise<ToolOutput>) {
+export async function mcpReply(message: { id?: unknown; method?: string; params?: Record<string, unknown> }, tools: readonly AssistantToolSpec[], call: (name: string, args: Record<string, unknown>) => Promise<ToolOutput>) {
   const { id, method, params } = message;
   if (method === 'initialize') {
     return { jsonrpc: '2.0', id, result: { protocolVersion: (params?.['protocolVersion'] as string) ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'chord', version: '1' } } };
@@ -94,7 +94,7 @@ async function mcpReply(message: { id?: unknown; method?: string; params?: Recor
     return {
       jsonrpc: '2.0',
       id,
-      result: { tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: true }})) },
+      result: { tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.readOnly } })) },
     };
   }
   if (method === 'tools/call') {

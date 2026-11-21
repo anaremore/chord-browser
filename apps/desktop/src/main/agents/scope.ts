@@ -3,7 +3,8 @@
  * agent's own tabs. It sees only its Agent chord's tabs (and, with M1e, tabs
  * you share with it), with refs of its own (`a1`, never reused). Its reads
  * need no card: the connection card let it in, and its tabs are its own.
- * Never-readable pages (Chord's own, a site on your *Never* list) stay refused.
+ * Never-readable pages (Chord's own, a site on your *Never* list) stay refused,
+ * and a tab on a *Never* site isn't even listed.
  */
 import { CONTROL_WAIT_MS, isNeverReadable, nodeList, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
@@ -15,6 +16,11 @@ export interface AgentScopeDeps {
   chordId(): string | null;
   /** The *Never* list (Settings → Assistant's): sites no agent reads either. */
   neverSites(): readonly string[];
+}
+
+/** A web address on the *Never* list (a blank or unloaded page is none). */
+export function onNeverSite(url: string, sites: readonly string[]): boolean {
+  return /^(https?|file):/i.test(url) && isNeverReadable(url, sites);
 }
 
 /** What an agent hears when it names a tab that isn't its own. */
@@ -31,7 +37,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
       const chordId = deps.chordId();
       if (!chordId) return [];
       return nodeList(deps.state())
-        .filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId)
+        .filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId && !onNeverSite(n.url, deps.neverSites()))
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((node) => ({ node, given: false }));
     },

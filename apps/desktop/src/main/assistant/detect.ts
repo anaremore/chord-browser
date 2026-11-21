@@ -244,20 +244,40 @@ export function openSignIn(provider: AssistantProvider, launch: Launch): void {
     return;
   }
   const path = launch.prefix.at(-1) ?? launch.command;
-  const command = `"${path}" ${args.join(' ')}`;
-  if (process.platform === 'win32') {
-    spawn('cmd.exe', ['/d', '/s', '/c', `start "Sign in" ${command}`], { windowsVerbatimArguments: true, detached: true, stdio: 'ignore', windowsHide: true }).unref();
-  } else if (process.platform === 'darwin') {
-    const script = `tell application "Terminal" to do script ${JSON.stringify(command)}`;
-    spawn('osascript', ['-e', script, '-e', 'tell application "Terminal" to activate'], { detached: true, stdio: 'ignore' }).unref();
-  } else {
-    for (const term of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm']) {
-      const child = spawn(term, term === 'gnome-terminal' ? ['--', path, ...args] : ['-e', path, ...args], { detached: true, stdio: 'ignore' });
-      child.on('error', () => undefined);
-      child.unref();
-      break;
-    }
+  const how = signInSpawn(process.platform, path, args);
+  if (!how) {
+    // Windows: a path cmd.exe would misread. Elsewhere: no terminal on PATH.
+    console.warn(process.platform === 'win32' ? '[chord] the sign-in command’s path can’t be launched safely through cmd.exe' : '[chord] no terminal to sign in from');
+    return;
   }
+  const child = spawn(how.command, how.args, { ...(how.verbatim ? { windowsVerbatimArguments: true, windowsHide: true } : {}), detached: true, stdio: 'ignore' });
+  child.on('error', () => undefined);
+  child.unref();
+}
+
+/** Linux terminals, the system's choice first. */
+const TERMINALS = ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm'];
+
+const onSystemPath = (name: string): boolean => (process.env['PATH'] ?? '').split(delimiter).some((dir) => dir !== '' && existsSync(join(dir, name)));
+
+/**
+ * How "Sign in" opens a terminal running `path args`: the program to spawn and its arguments, or null where it
+ * can't. Windows: through cmd.exe's `start`, the path in quotes, so one with a quote or a % (which cmd.exe reads
+ * even inside quotes) is refused. macOS: Terminal, the path single-quoted for its shell. Linux: the first terminal
+ * on PATH (`onPath`), given the path as an argument.
+ */
+export function signInSpawn(platform: NodeJS.Platform, path: string, args: readonly string[], onPath: (name: string) => boolean = onSystemPath): { command: string; args: string[]; verbatim: boolean } | null {
+  if (platform === 'win32') {
+    if (/["%\r\n]/.test(path)) return null;
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `start "Sign in" "${path}" ${args.join(' ')}`], verbatim: true };
+  }
+  if (platform === 'darwin') {
+    const command = [path, ...args].map((a) => `'${a.replaceAll("'", `'\\''`)}'`).join(' ');
+    return { command: 'osascript', args: ['-e', `tell application "Terminal" to do script ${JSON.stringify(command)}`, '-e', 'tell application "Terminal" to activate'], verbatim: false };
+  }
+  const term = TERMINALS.find(onPath);
+  if (!term) return null;
+  return { command: term, args: term === 'gnome-terminal' ? ['--', path, ...args] : ['-e', path, ...args], verbatim: false };
 }
 
 /** Claude names a project folder after its working directory, every other character a dash. */

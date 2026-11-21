@@ -12,7 +12,10 @@
  * - **Your hands first**: a key you press in an agent's tab pauses the agent
  *   there until you leave the tab or let it continue.
  * - **Held, for the agent**: dialogs, file pickers, popups and downloads its
- *   tabs tried go into its next result.
+ *   tabs tried go into its next result, never one from a tab now on a site the
+ *   user keeps private.
+ * - **Never read**: a tab that goes to a site on the *Never* list (a redirect,
+ *   a page's own script) closes at once, and what it held goes with it.
  * - **When it's done** (its connection ends): a toast asks *Keep these tabs?*
  *   Keep moves them into your chord; Close all closes them, with Undo.
  *
@@ -25,6 +28,7 @@ import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
 import type { Change } from '../store';
 import type { AgentHeld } from '../tabs';
+import { onNeverSite } from './scope';
 
 export interface AgentChordsDeps {
   store: { readonly state: State; dispatch(command: Command): void; subscribe(listener: (change: Change) => void): () => void };
@@ -32,6 +36,8 @@ export interface AgentChordsDeps {
   page(nodeId: NodeId): WebContents | undefined;
   /** The window used last (not a private one): where an agent's toasts go, and whose sign-ins its chord takes. */
   lastWindow(): { id: WindowId; toast(toast: Toast): void } | null;
+  /** The *Never* list: an agent's tab that goes to one of its sites closes. */
+  neverSites?(): readonly string[];
 }
 
 /** Something an agent's tab held or refused, for its next result. */
@@ -136,6 +142,12 @@ export class AgentChords {
     const state = this.deps.store.state;
     if (!state.chords[chord.chordId]) return this.forget(chord);
     const tabs = this.tabsOf(chord.chordId);
+    // A tab gone to a site the user keeps private closes, and nothing it held reaches the agent.
+    const sites = this.deps.neverSites?.() ?? [];
+    for (const tab of tabs.filter((t) => onNeverSite(t.url, sites))) {
+      this.dropNotes(tab.id);
+      this.deps.store.dispatch({ t: 'agent.tab.remove', nodeId: tab.id });
+    }
     if (chord.done && tabs.length === 0) {
       this.deps.store.dispatch({ t: 'agent.chord.remove', chordId: chord.chordId });
       return this.forget(chord);
@@ -178,7 +190,7 @@ export class AgentChords {
 
   note(nodeId: NodeId, what: AgentHeld, detail: string): void {
     const chord = this.chordOfTab(nodeId);
-    if (!chord) return;
+    if (!chord || this.onPrivateSite(nodeId)) return;
     const text = detail.slice(0, 500);
     // A site asks for a sign-in on every retry and every page of it: one note per tab and origin (the note names
     // it) until the agent hears it.
@@ -191,7 +203,20 @@ export class AgentChords {
   drain(agent: ControlAgent): AgentNote[] {
     const chordId = this.chordOf(agent);
     const chord = chordId ? this.chords.get(chordId) : undefined;
-    return chord ? chord.notes.splice(0) : [];
+    return chord ? chord.notes.splice(0).filter((n) => !this.onPrivateSite(n.nodeId)) : [];
+  }
+
+  /** Forget what a tab held: it went to a site the user keeps private. */
+  dropNotes(nodeId: NodeId): void {
+    for (const chord of this.chords.values()) chord.notes = chord.notes.filter((n) => n.nodeId !== nodeId);
+  }
+
+  /** Whether the tab is, by its saved address or its page's, on a site the user keeps private. */
+  private onPrivateSite(nodeId: NodeId): boolean {
+    const sites = this.deps.neverSites?.() ?? [];
+    const node = nodeOf(this.deps.store.state, nodeId);
+    const page = this.deps.page(nodeId);
+    return (node?.kind === 'tab' && onNeverSite(node.url, sites)) || Boolean(page && !page.isDestroyed() && onNeverSite(page.getURL(), sites));
   }
 
   /* ---------- Stop, continue, and when it's done ---------- */

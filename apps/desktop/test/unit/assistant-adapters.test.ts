@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { ASSISTANT_TOOLS, type AssistantContextUsage } from '@chord/core';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { MadeImage, ProviderError, SessionEvents, SessionOptions, ToolOutput } from '../../src/main/assistant/adapter';
-import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError } from '../../src/main/assistant/claude';
+import { ClaudeSession, claudeArgs, claudeContextUsage, claudeError, mcpReply } from '../../src/main/assistant/claude';
 import { CodexSession, codexArgs, codexContextUsage, codexError, imageLimitError } from '../../src/main/assistant/codex';
 
 const fakeClaude = resolve(import.meta.dirname, '../e2e/fake-claude.mjs');
@@ -271,5 +271,24 @@ describe('Codex adapter', () => {
     const error = codexError('usageLimitExceeded', 'You’ve hit your usage limit. Upgrade to Plus to continue using Codex, or try again at Nov 16th, 2026 5:07 PM.');
     expect(error.kind).toBe('usage-limit');
     expect(error.message).toContain('Nov 16th, 2026 5:07 PM');
+  });
+});
+
+describe('Claude’s tool list over MCP (security review)', () => {
+  // [tool, whether Claude is told it only reads]
+  const table: [string, boolean][] = [
+    ['list_tabs', true],
+    ['read_tab', true],
+    ['read_selection', true],
+    ['tab_screenshot', true],
+    ['search_history', true],
+    ['search_archive', true],
+    ['read_form', true],
+    ['propose_fill', false],
+    ['page_diagnostics', true],
+  ];
+  it('says read-only from each tool’s spec: propose_fill isn’t', async () => {
+    const reply = (await mcpReply({ id: 1, method: 'tools/list' }, ASSISTANT_TOOLS, async () => ({ text: '' }))) as { result: { tools: { name: string; annotations: { readOnlyHint: boolean } }[] } };
+    expect(reply.result.tools.map((t) => [t.name, t.annotations.readOnlyHint])).toEqual(table);
   });
 });

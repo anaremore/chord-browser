@@ -269,3 +269,39 @@ describe('a big flush, in batches', () => {
     expect(nextBatch([nodeOp('a'), kept, nodeOp('b'), nodeOp('c')], 2).map((op) => op.id)).toEqual(['kept', 'a']);
   });
 });
+
+describe('chord-data respawned (security review)', () => {
+  /** A chord-data that answers its `open` with `open`: ok, refused, or by exiting before it answers. */
+  class Reopening extends FakeChild {
+    override readonly kill = vi.fn(() => void this.emit('exit', 1));
+    constructor(private readonly open: 'ok' | 'refused' | 'exits') {
+      super();
+    }
+    override postMessage(message: { id: number; type: string }): void {
+      if (message.type !== 'open' || this.open === 'ok') return super.postMessage(message as never);
+      if (this.open === 'exits') return void queueMicrotask(() => this.emit('exit', 1));
+      queueMicrotask(() => this.emit('message', { id: message.id, ok: false, error: 'Error: disk I/O error' }));
+    }
+  }
+  // [how the respawned chord-data answers its open, whether it's killed to go again]
+  const table: ['ok' | 'refused' | 'exits', boolean][] = [
+    ['ok', false],
+    ['refused', true],
+    ['exits', false],
+  ];
+  it.each(table)('its open %s: killed %s; the app hears once, from the one that opened, and nothing is unhandled', async (open, killed) => {
+    const first = child;
+    const { persistence } = await Persistence.open('/profile/chord.db');
+    let respawned = 0;
+    persistence.onRespawn(() => respawned++);
+    const again = new Reopening(open);
+    child = again;
+    first.emit('exit', 1);
+    // Whatever comes after it opens fine.
+    child = new FakeChild();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(again.kill).toHaveBeenCalledTimes(killed ? 1 : 0);
+    // A refused or lost open is followed by one more chord-data, whose open works.
+    expect(respawned).toBe(1);
+  });
+});

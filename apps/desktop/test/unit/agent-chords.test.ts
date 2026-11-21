@@ -6,7 +6,7 @@
  * agent connects.
  */
 import { EventEmitter } from 'node:events';
-import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, agentToolsVersion, emptyState, findShortcut, nodeOf, type Command, type State, type TabNode } from '@chord/core';
+import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
 import { size } from '@chord/tokens';
 import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
@@ -26,7 +26,7 @@ afterEach(() => vi.useRealTimers());
 const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
 
 /** A store with your chord and one window, a tab of yours, and the pages main has made. */
-function setup() {
+function setup(neverSites: string[] = []) {
   const state: State = emptyState();
   state.chords['c1'] = { id: 'c1', profileId: 'default', name: 'Personal', icon: '✦', theme, rank: 'a0', createdAt: 0 };
   state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
@@ -42,9 +42,11 @@ function setup() {
       emitter.throttled = true;
       pages.set(nodeId, (p = emitter));
     }
+    // A page with no address yet, unless a test gives it one.
+    if (!('getURL' in p)) Object.assign(p, { getURL: () => '' });
     return Object.assign(p, { isDestroyed: () => false, setBackgroundThrottling: (on: boolean) => (p!.throttled = on) }) as unknown as WebContents;
   };
-  const chords = new AgentChords({ store, page, lastWindow: () => ({ id: 'w1', toast: (t) => void toasts.push(t) }) });
+  const chords = new AgentChords({ store, page, lastWindow: () => ({ id: 'w1', toast: (t) => void toasts.push(t) }), neverSites: () => neverSites });
   const agent = new ControlAgent('agent:1', async () => 'once');
   const chordId = chords.chordFor(agent, 'Claude Code', null);
   const open = (nodeId: string, url = `https://agent.test/${nodeId}`) => store.dispatch({ t: 'agent.tab.add', chordId, nodeId, url });
@@ -340,6 +342,94 @@ describe('Review 1 of #77', () => {
     // And Keep works on the chord that came back.
     t.chords.keep('w1', t.chordId);
     expect(nodeOf(t.store.state, 'a1')).toMatchObject({ chordId: 'c1' });
+  });
+});
+
+type Reply = { id?: number; result?: { content: { text: string }[]; isError: boolean } };
+
+/** An agent connected to `t`'s chords, its tabs' page the one `contents` (loading, at no address yet), the Never list bank.test. */
+function connected(t: ReturnType<typeof setup>, loadMs?: number) {
+  const events = new EventEmitter();
+  const page = { at: '', loading: true };
+  const contents = Object.assign(events, { isDestroyed: () => false, isLoading: () => page.loading, getURL: () => page.at, getTitle: () => 'Statements for Ada' }) as unknown as WebContents;
+  const sent: Reply[] = [];
+  const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() }, (m) => void sent.push(m as never), {
+    present: async () => 'once',
+    browser: { store: t.store, tabs: { get: () => undefined, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
+    chords: t.chords,
+    dispatch: (c) => t.store.dispatch(c),
+    neverSites: () => ['bank.test'],
+    ...(loadMs ? { loadMs } : {}),
+  });
+  const reply = async (id: number, name: string, args: Record<string, unknown> = {}) => {
+    connection.message({ id, method: 'tools/call', params: { name, arguments: args } });
+    await vi.waitFor(() => expect(sent.find((m) => m.id === id)).toBeDefined());
+    return sent.find((m) => m.id === id)!.result!;
+  };
+  const tabs = () => nodeList(t.store.state).filter((n) => n.kind === 'tab' && n.chordId === t.chords.chordOf(connection.agent));
+  return { connection, events, page, sent, reply, tabs };
+}
+
+const PRIVATE = /bank|statements|Ada/i;
+const signIn = (url: string) => `The site ${new URL(url).origin} asked for a sign-in; Chord doesn’t sign agents in.`;
+
+describe('open_tab and a Never site (security review)', () => {
+  // [address asked for, where the page ends up (asking for a sign-in on the way), what the agent hears, whether its tab stays]
+  const table: [string, string, string, boolean][] = [
+    ['https://bank.test/', 'https://bank.test/', 'That site is one the user keeps private, so it can’t be opened for you.', false],
+    ['https://agent.test/go', 'https://www.bank.test/statements', 'That site is one the user keeps private, so it can’t be opened for you.', false],
+    ['https://agent.test/go', 'https://agent.test/home', 'https://agent.test/home', true],
+  ];
+  it.each(table)('%s, landing on %s: %s; the whole reply says nothing of a Never site', async (asked, landed, said, stays) => {
+    const t = setup(['bank.test']);
+    const a = connected(t);
+    const replied = a.reply(1, 'open_tab', { url: asked });
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading') + a.sent.length).toBeGreaterThan(0));
+    // On the way, the site it lands on asks for a sign-in (the note names it); then it finishes loading there.
+    const [tab] = a.tabs();
+    if (tab) t.chords.note(tab.id, 'signin', signIn(landed));
+    a.page.at = landed;
+    a.page.loading = false;
+    a.events.emit('did-stop-loading');
+    const result = await replied;
+    expect(result.isError).toBe(!stays);
+    expect(result.content[0]!.text).toContain(said);
+    if (stays) expect(JSON.stringify(result)).toContain(signIn(landed));
+    else expect(JSON.stringify(result)).not.toMatch(PRIVATE);
+    expect(a.tabs()).toHaveLength(stays ? 1 : 0);
+    // Nothing of it comes later either.
+    expect(JSON.stringify(await a.reply(2, 'list_tabs'))).not.toMatch(PRIVATE);
+  });
+
+  it('a tab that goes to a Never site after open_tab returned (its wait ended while it loaded) closes, and list_tabs and later replies never show it', async () => {
+    const t = setup(['bank.test']);
+    const a = connected(t, 20);
+    const opened = await a.reply(1, 'open_tab', { url: 'https://agent.test/slow' });
+    expect(JSON.parse(opened.content[0]!.text)).toMatchObject({ data: { loading: true } });
+    const [tab] = a.tabs();
+    // It redirects there: a sign-in box on the way, then it commits.
+    a.page.at = 'https://bank.test/login';
+    t.chords.note(tab!.id, 'signin', signIn('https://bank.test/login'));
+    t.store.dispatch({ t: 'tab.updated', nodeId: tab!.id, url: 'https://bank.test/login', title: 'Statements for Ada' });
+    expect(a.tabs()).toHaveLength(0);
+    const listed = await a.reply(2, 'list_tabs');
+    expect(JSON.stringify(listed)).not.toMatch(PRIVATE);
+    expect(JSON.parse(listed.content[0]!.text)).toMatchObject({ data: { tabs: [] } });
+    expect(JSON.stringify(await a.reply(3, 'read_tab', { tab_id: 'a1' }))).not.toMatch(PRIVATE);
+  });
+
+  it('list_tabs while a tab is on a Never site, before anything closes it: not listed, and nothing it held is told', () => {
+    // These chords don't close it (no Never list of their own): the scope still leaves it out.
+    const t = setup();
+    const scope = agentScope(t.agent, { state: () => t.store.state, chordId: () => t.chordId, neverSites: () => ['bank.test'] });
+    t.store.dispatch({ t: 'tab.updated', nodeId: 'a1', url: 'https://bank.test/' });
+    expect(scope.tabs().map(({ node }) => node.id)).toEqual(['a2']);
+    const closing = setup(['bank.test']);
+    const page = closing.page('a1') as unknown as { getURL?: () => string };
+    page.getURL = () => 'https://bank.test/';
+    closing.chords.note('a1', 'download', 'statement-ada.pdf');
+    closing.chords.note('a2', 'dialog', 'alert: hi');
+    expect(closing.chords.drain(closing.agent).map((n) => n.nodeId)).toEqual(['a2']);
   });
 });
 
