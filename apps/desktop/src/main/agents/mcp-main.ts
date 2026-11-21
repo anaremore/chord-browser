@@ -10,6 +10,7 @@
 import { createReadStream } from 'node:fs';
 import { Socket } from 'node:net';
 import { join } from 'node:path';
+import { AGENTS_RELEASED } from '@chord/core/agent-tools';
 import { app } from 'electron';
 import { userDataOverride } from '../user-data';
 import { runBridge } from './bridge';
@@ -58,6 +59,8 @@ runBridge({
   // stdout is a SyncWriteStream in Electron's main: each line goes out whole, at once.
   output: process.stdout,
   version: app.getVersion(),
+  // Packaged builds have no Agents until AGENTS_RELEASED (0.14.0): answered as when Agents is off.
+  closed: app.isPackaged && !AGENTS_RELEASED,
   onEnd: () => {
     scratch.dispose();
     app.exit(0);

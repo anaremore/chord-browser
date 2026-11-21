@@ -43,10 +43,19 @@ export interface AgentHello {
 }
 
 /**
- * Whether Chord serves the endpoint (S18 M1d): Settings → Agents' switch, off by default, in every build.
+ * Whether outside agents ship in release builds. False until S18 is finished: packaged builds hide
+ * Settings → Agents, never serve the endpoint, and `chord mcp` answers that Chord isn't open.
+ * Development and E2E builds have it all. Flipped to true in the 0.14.0 release commit.
+ */
+export const AGENTS_RELEASED = false as boolean;
+
+/**
+ * Whether Chord serves the endpoint (S18 M1d): Settings → Agents' switch, off by default, in every build
+ * that has Agents (never a packaged one before AGENTS_RELEASED).
  * CHORD_AGENTS=1 turns it on too in development builds only (the perf spec's launch with Agents on).
  */
-export function agentsServe(build: { packaged: boolean }, settingOn: boolean, devSwitch: string | undefined): boolean {
+export function agentsServe(build: { packaged: boolean }, settingOn: boolean, devSwitch: string | undefined, released = AGENTS_RELEASED): boolean {
+  if (build.packaged && !released) return false;
   return settingOn || (!build.packaged && devSwitch === '1');
 }
 
