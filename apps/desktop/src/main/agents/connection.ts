@@ -147,6 +147,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         // (Only a web address counts: a page still loading at the wait's end may show none yet.)
         const landed = page.url();
         if (WEB_ADDRESS.test(landed) && isNeverReadable(landed, neverSites())) {
+          // Nor what it held on the way (a sign-in box, a dialog, a download): those would name the site.
+          deps.chords?.dropNotes(nodeId);
           deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
           return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
         }

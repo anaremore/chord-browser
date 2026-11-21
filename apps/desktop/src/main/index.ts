@@ -1117,6 +1117,7 @@ if (!app.requestSingleInstanceLock()) {
           neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
           chords: {
             store: agentBrowser.store,
+            neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
             page: (nodeId) => pageOf(agentBrowser.tabs.get(nodeId)),
             lastWindow: () => {
               const w = lastWindow();

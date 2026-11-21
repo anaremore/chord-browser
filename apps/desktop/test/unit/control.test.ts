@@ -140,7 +140,7 @@ type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) 
 /** A page that answers the extractor with `read`, never (`hang`), or as a test's function does. */
 function fakePage(url: string, read: Answer) {
   const events = new EventEmitter();
-  const at = { url };
+  const at: { url: string; onCapture?: () => void } = { url };
   const contents = {
     isDestroyed: () => false,
     isLoading: () => false,
@@ -148,6 +148,10 @@ function fakePage(url: string, read: Answer) {
     on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
     once: (e: string, f: (...a: unknown[]) => void) => events.once(e, f),
     off: (e: string, f: (...a: unknown[]) => void) => events.off(e, f),
+    capturePage: async () => {
+      at.onCapture?.();
+      return { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('secret') };
+    },
     executeJavaScriptInIsolatedWorld: (_world: number, [script]: { code: string }[]) =>
       typeof read === 'function'
         ? read(script!.code, events)
@@ -160,8 +164,10 @@ function fakePage(url: string, read: Answer) {
 
 /** The tab goes to `url`: its page, and its saved address too unless `pageOnly` (a redirect the store hasn't heard of yet). */
 type Go = (id: NodeId, url: string, pageOnly?: boolean) => void;
+/** What a test does to a tab meanwhile: it goes somewhere, or closes. */
+type Meanwhile = { go: Go; close(id: NodeId): void };
 
-function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answer; cardWaitMs?: number; onCard?: (go: Go) => void; onEnsure?: (go: Go) => void } = {}) {
+function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answer; cardWaitMs?: number; onCard?: (t: Meanwhile) => void; onEnsure?: (t: Meanwhile) => void; onCapture?: (t: Meanwhile) => void } = {}) {
   let nodes = [tab('n1', 'https://news.test/a'), tab('n2', 'https://private.test/'), tab('n3', 'https://news.test/b')];
   let state = stateWith(nodes);
   const pages = new Map<NodeId, ReturnType<typeof fakePage>>(nodes.map((n) => [n.id, fakePage(n.url, opts.read ?? { text: `Text of ${n.id}` })]));
@@ -172,10 +178,14 @@ function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answ
         return state;
       },
     },
-    tabs: { get: view, ensure: (id) => (opts.onEnsure?.(go), view(id)) },
+    tabs: { get: view, ensure: (id) => (opts.onEnsure?.({ go, close }), view(id)) },
     readers: { viewFor: () => undefined },
   };
   const cards: ControlCard[] = [];
+  function close(id: NodeId) {
+    state = stateWith(nodes.filter((n) => n.id !== id));
+  }
+  for (const page of pages.values()) page.at.onCapture = () => opts.onCapture?.({ go, close });
   const go: Go = (id, url, pageOnly = false) => {
     pages.get(id)!.at.url = url;
     if (pageOnly) return;
@@ -184,7 +194,7 @@ function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answ
   };
   const agent = new ControlAgent('test', (c, signal) => {
     cards.push(c);
-    opts.onCard?.(go);
+    opts.onCard?.({ go, close });
     if (opts.answer !== 'hold') return Promise.resolve(opts.answer ?? 'once');
     return new Promise<Grant>((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
   });
@@ -205,9 +215,6 @@ function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answ
     activity: async (_tool, summary) => void activity.push(summary),
   };
   const call = (name: string, args: Record<string, unknown> = {}) => runControlTool(scope, browser, name, args);
-  const close = (id: NodeId) => {
-    state = stateWith(nodes.filter((n) => n.id !== id));
-  };
   return { scope, agent, call, close, cards, activity, pages, go };
 }
 
@@ -414,25 +421,32 @@ describe('Never read, through a redirect (security review)', () => {
   const NEVER = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
   const formAt = (url: string) => async () => ({ url, forms: [], controls: [], truncated: false });
   const readAt = (url: string) => async () => ({ title: 'Inbox', url, contentType: 'text/html', text: 'secret', selection: 'secret' });
-  // [tool, how the tab got to the Never site, the setup that makes it so]
-  const table: [string, string, Parameters<typeof setup>[0]][] = [
-    ['read_tab', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
-    ['read_selection', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
-    ['tab_screenshot', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
-    ['read_form', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
-    ['read_tab', 'redirected as it loaded', { onEnsure: (go) => go('n1', 'https://private.test/inbox', true) }],
-    ['tab_screenshot', 'redirected as it loaded', { onEnsure: (go) => go('n1', 'https://mail.private.test/', true) }],
-    ['read_form', 'redirected as it loaded', { onEnsure: (go) => go('n1', 'https://private.test/inbox', true) }],
+  // [tool, how the tab got to the Never site, the setup that makes it so, what it says (the Never refusal unless given)]
+  const table: [string, string, Parameters<typeof setup>[0], string?][] = [
+    ['read_tab', 'navigated while the card was up', { needsCard: true, onCard: ({ go }) => go('n1', 'https://private.test/inbox') }],
+    ['read_selection', 'navigated while the card was up', { needsCard: true, onCard: ({ go }) => go('n1', 'https://private.test/inbox') }],
+    ['tab_screenshot', 'navigated while the card was up', { needsCard: true, onCard: ({ go }) => go('n1', 'https://private.test/inbox') }],
+    ['read_form', 'navigated while the card was up', { needsCard: true, onCard: ({ go }) => go('n1', 'https://private.test/inbox') }],
+    ['read_tab', 'redirected as it loaded', { onEnsure: ({ go }) => go('n1', 'https://private.test/inbox', true) }],
+    ['tab_screenshot', 'redirected as it loaded', { onEnsure: ({ go }) => go('n1', 'https://mail.private.test/', true) }],
+    ['read_form', 'redirected as it loaded', { onEnsure: ({ go }) => go('n1', 'https://private.test/inbox', true) }],
     ['read_tab', 'redirected during the read', { read: readAt('https://private.test/inbox') }],
     ['read_selection', 'redirected during the read', { read: readAt('https://private.test/inbox') }],
     ['read_form', 'redirected during the read', { read: formAt('https://private.test/inbox') }],
+    ['read_selection', 'redirected as it loaded', { onEnsure: ({ go }) => go('n1', 'https://private.test/inbox', true) }],
+    ['tab_screenshot', 'redirected while the picture was taken', { onCapture: ({ go }) => go('n1', 'https://private.test/inbox', true) }],
+    ['tab_screenshot', 'closed while the picture was taken', { onCapture: ({ close }) => close('n1') }, CONTROL_REFUSALS.closed],
+    // A blank or unloaded page isn't a Never site: the read's own words, as Duet has always said them.
+    ['read_tab', 'was left blank as it loaded', { onEnsure: ({ go }) => go('n1', 'about:blank', true) }, 'That tab could not be loaded.'],
+    ['tab_screenshot', 'was left blank as it loaded', { onEnsure: ({ go }) => go('n1', '', true) }, 'That tab could not be loaded.'],
+    ['read_form', 'was left blank as it loaded', { onEnsure: ({ go }) => go('n1', 'about:blank', true) }, 'That page could not be read.'],
   ];
-  it.each(table)('%s on a tab that %s: refused, and nothing read is kept', async (tool, _how, opts) => {
+  it.each(table)('%s on a tab that %s: refused, and nothing read is kept', async (tool, _how, opts, said = NEVER) => {
     const { scope, call, activity } = setup(opts);
     const out = await call(tool, { tab_id: scope.refs.refFor('n1') });
     expect(out.isError).toBe(true);
     expect(out.image).toBeUndefined();
-    expect(refusal(out).refused).toBe(NEVER);
+    expect(refusal(out).refused).toBe(said);
     expect(out.text).not.toContain('secret');
     expect([...scope.memory.read]).toEqual([]);
     expect(scope.memory.form).toBeNull();

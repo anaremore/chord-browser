@@ -120,6 +120,7 @@ export class PermissionBroker {
     });
     ses.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
       if (HARMLESS.has(permission)) return true;
+      // No page (a service worker's check) can't be tied to a tab, agent's or not: it gets the site's saved answer, as before.
       if (contents && this.isAgent(contents)) return false;
       if (ASKED_ELSEWHERE.has(permission)) return true;
       const mediaTypes = details.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : [];

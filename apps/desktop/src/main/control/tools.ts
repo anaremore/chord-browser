@@ -112,18 +112,25 @@ function resolveTab(call: Call, ref: unknown, unknown: string): TabNode | ToolOu
 
 const isOutput = (x: TabNode | ToolOutput): x is ToolOutput => !('kind' in x);
 
+/** Addresses a page can be read at; anything else (blank, an error page, not loaded yet) is simply not readable now. */
+const READABLE_ADDRESS = /^(https?|file):/i;
+
 /**
- * Whether the tab is now somewhere the agent may never read. Asked again after the approval card, after the
- * load and after the read: a redirect or a navigation meanwhile can land on a *Never read* site, and what was
- * read there is thrown away. `page`: where the page is, which can be ahead of the tab's saved address;
- * `urls`: where the read itself says it was.
+ * Whether the tab can still be read where it is now, as its refusal; null if so. Asked again after the approval
+ * card, after the load and after the read: a redirect or a navigation meanwhile can land on a *Never read* site,
+ * and what was read there is thrown away. A tab that closed, or a page that's gone, is refused too. `page`: where
+ * the page is, which can be ahead of the tab's saved address; `urls`: where the read itself says it was;
+ * `unread`: what to say when one of them is no web address (the read's usual words).
  */
-function neverNow(call: Call, nodeId: NodeId, page: ControlPage | null, ...urls: string[]): boolean {
+function blockedNow(call: Call, nodeId: NodeId, page: ControlPage | null, unread: string, ...urls: string[]): string | null {
   const now = nodeOf(call.browser.store.state, nodeId);
-  if (now?.kind === 'tab' && !call.scope.readable(now)) return true;
+  if (now?.kind !== 'tab') return CONTROL_REFUSALS.closed;
+  if (!call.scope.readable(now)) return NEVER;
+  if (page?.gone()) return unread;
+  const addresses = [...(page ? [page.url()] : []), ...urls];
   const sites = call.scope.neverSites();
-  if (page && !page.gone() && isNeverReadable(page.url(), sites)) return true;
-  return urls.some((url) => isNeverReadable(url, sites));
+  if (addresses.some((url) => READABLE_ADDRESS.test(url) && isNeverReadable(url, sites))) return NEVER;
+  return addresses.every((url) => READABLE_ADDRESS.test(url)) ? null : unread;
 }
 
 /** The tab's page, loading it if it's asleep or wasn't opened since launch. */
@@ -178,11 +185,13 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
   const refused = await call.card(tool, node, `${verb} “${node.title || safeHost(node.url)}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
   if (refused) return refused;
-  if (neverNow(call, node.id, null)) return refuse(NEVER);
+  const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
+  if (moved) return refuse(moved);
   const page = await loadedPage(browser, node.id);
   if (!page) return refuse('That tab could not be loaded.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-  if (neverNow(call, node.id, page)) return refuse(NEVER);
+  const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+  if (loaded) return refuse(loaded);
   // The page read, taken before reading (which starts following its navigations): one that moved on meanwhile has no id.
   const pageId = page.id;
   const ref = scope.refs.refFor(node.id);
@@ -192,7 +201,8 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
     const shot = await (reader ? controlPage(reader) : page).screenshot();
     // Kept only once the picture is taken, and never after Stop (as diagnostics and read_form do).
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    if (neverNow(call, node.id, page)) return refuse(NEVER);
+    const taken = blockedNow(call, node.id, page, 'Could not take the picture.');
+    if (taken) return refuse(taken);
     if (shot) scope.memory.read.add(node.id);
     await call.activity(tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
     return shot ? { image: shot } : refuse('Could not take the picture.');
@@ -201,7 +211,8 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const pdf = isPdf(read, page.url());
   // A PDF's read is the viewer's: readPdf checks the address it fetches itself.
-  if (neverNow(call, node.id, page, ...(read && !pdf ? [read.url] : []))) return refuse(NEVER);
+  const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read && !pdf ? [read.url] : []));
+  if (after) return refuse(after);
   scope.memory.read.add(node.id);
   if (pdf) {
     if (tool === 'read_selection') return refuse('What’s selected inside a PDF can’t be seen. Read the PDF with read_tab instead.');
@@ -279,11 +290,12 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
    */
   const blocked = (at?: string): string | null => {
     const now = nodeOf(browser.store.state, node.id);
-    if (now?.kind !== 'tab' || neverNow(call, node.id, null)) return NEVER;
+    if (now?.kind !== 'tab' || !scope.readable(now)) return NEVER;
     const inspect = scope.mayInspect(now, 'page_diagnostics');
     if (inspect) return inspect;
     if (!page || page.gone()) return 'That tab could not be read.';
-    if (neverNow(call, node.id, page)) return NEVER;
+    // Where the page is, which can be ahead of the tab's saved address.
+    if (isNeverReadable(page.url(), scope.neverSites())) return NEVER;
     if (at !== undefined && page.url() !== at) return 'The page went to another address while Chord was reading it. Ask the user to ask again once it has loaded.';
     return null;
   };
@@ -337,9 +349,11 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
   if (tool === 'read_form') {
     const refused = await call.card(tool, node, `Read the form on “${title}”`, [node.url], 'The user said no to reading that form. Carry on without it, or ask them.');
     if (refused) return refused;
-    if (neverNow(call, node.id, null)) return refuse(NEVER);
+    const moved = blockedNow(call, node.id, null, 'That page could not be read.');
+    if (moved) return refuse(moved);
     const page = await loadedPage(browser, node.id);
-    if (page && neverNow(call, node.id, page)) return refuse(NEVER);
+    const loaded = page && blockedNow(call, node.id, page, 'That page could not be read.');
+    if (loaded) return refuse(loaded);
     const token = randomBytes(12).toString('hex');
     const pageId = page?.id ?? '';
     const read = page ? await page.readForm(token) : null;
@@ -347,7 +361,8 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
     // A form read after Stop is never kept: a later propose_fill must not find it.
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     // Nor one read where the page went meanwhile, if that's a site the agent may never read.
-    if (neverNow(call, node.id, page, read.url)) return refuse(NEVER);
+    const after = blockedNow(call, node.id, page, 'That page could not be read.', read.url);
+    if (after) return refuse(after);
     const form = formRead(read, memory.nextField);
     memory.nextField += form.fields.length;
     memory.form = { nodeId: node.id, token, read: form };

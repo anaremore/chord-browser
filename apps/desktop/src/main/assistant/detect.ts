@@ -245,7 +245,11 @@ export function openSignIn(provider: AssistantProvider, launch: Launch): void {
   }
   const path = launch.prefix.at(-1) ?? launch.command;
   const how = signInSpawn(process.platform, path, args);
-  if (!how) return void console.warn('[chord] no terminal to sign in from');
+  if (!how) {
+    // Windows: a path cmd.exe would misread. Elsewhere: no terminal on PATH.
+    console.warn(process.platform === 'win32' ? '[chord] the sign-in command’s path can’t be launched safely through cmd.exe' : '[chord] no terminal to sign in from');
+    return;
+  }
   const child = spawn(how.command, how.args, { ...(how.verbatim ? { windowsVerbatimArguments: true, windowsHide: true } : {}), detached: true, stdio: 'ignore' });
   child.on('error', () => undefined);
   child.unref();
