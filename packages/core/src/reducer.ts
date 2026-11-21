@@ -75,7 +75,8 @@ export type Command =
    * A new tab at the top of Today. With `route`, a link route for its site
    * (from the command bar) puts it in that chord instead, and the window goes there.
    */
-  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean; route?: boolean }
+  /** `id`: the new tab's, made by the caller (uuidv7) so it knows which tab it opened without looking; nothing opens if a node has it already. */
+  | { t: 'tab.open'; windowId: WindowId; url: string; background?: boolean; pinned?: boolean; route?: boolean; id?: NodeId }
   /**
    * A page that wasn't a tab yet (Peek, a mini window) becomes one as `nodeId`:
    * main has already given TabManager its live page, so it keeps its history.
@@ -1461,10 +1462,11 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.open': {
       const win = draft.windows[cmd.windowId];
       if (!win) return;
+      if (cmd.id !== undefined && nodeOf(draft, cmd.id)) return;
       // A route sends the site to its chord; a private window keeps everything to itself.
       const routed = cmd.route && !win.private ? routeFor(draft as State, cmd.url) : null;
       const chordId = routed && chordsFor(draft as State, cmd.windowId).some((c) => c.id === routed) ? routed : win.activeChordId;
-      const id = ctx.newId();
+      const id = cmd.id ?? ctx.newId();
       const tab: TabNode = {
         kind: 'tab',
         id,

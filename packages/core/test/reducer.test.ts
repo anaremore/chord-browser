@@ -96,6 +96,27 @@ describe('reducer', () => {
     expect(t.run({ t: 'chord.profile', chordId: 'c1', profileId: 'p-work' }).effects).toEqual([]);
   });
 
+  // A caller (an extension's chrome.tabs.create, an upload's new tab) knows the tab it opened without looking for it.
+  it.each([
+    { name: 'a new id: the tab has it', taken: false, id: 'given-1', opens: 'given-1' },
+    { name: 'no id: one is made', taken: false, id: undefined, opens: 'id-001' },
+    { name: 'an id a node has already: nothing opens', taken: true, id: 'taken', opens: null },
+  ])('opens a tab with an id made by the caller: $name', ({ taken, id, opens }) => {
+    const t = setup();
+    if (taken) t.run({ t: 'tab.open', windowId: 'w1', url: 'https://first.test/', id: 'taken' });
+    const countBefore = nodeList(t.state).length;
+    const existing = id ? nodeOf(t.state, id) : undefined;
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://new.test/', ...(id ? { id } : {}) });
+    if (opens === null) {
+      expect(nodeList(t.state)).toHaveLength(countBefore);
+      expect(nodeOf(t.state, id!)).toBe(existing);
+      return;
+    }
+    expect(nodeOf(t.state, opens)).toMatchObject({ kind: 'tab', url: 'https://new.test/', chordId: 'c1', section: 'today' });
+    expect(t.state.live[opens]?.loading).toBe(true);
+    expect(t.state.windows['w1']!.activeTab['c1']).toBe(opens);
+  });
+
   it('opens new tabs at the top of Today and activates them', () => {
     const t = setup();
     t.run({ t: 'tab.open', windowId: 'w1', url: 'https://a.test/' });
