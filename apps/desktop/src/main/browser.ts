@@ -44,6 +44,7 @@ import {
   SPLIT,
   findShortcut,
   tabsInOrder,
+  openedTab,
   uuidv7,
   nodeOf,
   nodeList,
@@ -1618,8 +1619,9 @@ export class Browser {
   /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */
   private openTabFor(w: AppWindow, url: string, background: boolean): WebContents | null {
     const nodeId = uuidv7();
+    const before = this.store.state;
     this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background, id: nodeId });
-    return nodeOf(this.store.state, nodeId) ? (this.tabs.ensure(nodeId)?.webContents ?? null) : null;
+    return openedTab(before, this.store.state, w.id, nodeId) ? (this.tabs.ensure(nodeId)?.webContents ?? null) : null;
   }
 
   /** The DRM notice's buttons, for the page the window shows: another browser, Chord Player (installing it first), or Not now. */

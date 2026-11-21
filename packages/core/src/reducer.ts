@@ -65,7 +65,7 @@ import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import type { SyncApply, SyncGone } from './sync';
 import { activeTabId, chordsFor, descendants, favoriteFits, favoritesFor, isAgentChord, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
-import { childrenToRead, nodeList, byRank, children, deleteNode, nodeOf, nodesOfChord, setNode } from './nodes';
+import { childrenToRead, nodeList, byRank, children, deleteNode, hasNode, nodeOf, nodesOfChord, setNode } from './nodes';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
 enablePatches();
@@ -1481,7 +1481,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.open': {
       const win = draft.windows[cmd.windowId];
       if (!win) return;
-      if (cmd.id !== undefined && nodeOf(draft, cmd.id)) return;
+      if (cmd.id !== undefined && hasNode(draft, cmd.id)) return;
       // A route sends the site to its chord; a private window keeps everything to itself.
       const routed = cmd.route && !win.private ? routeFor(draft as State, cmd.url) : null;
       const chordId = routed && chordsFor(draft as State, cmd.windowId).some((c) => c.id === routed) ? routed : win.activeChordId;

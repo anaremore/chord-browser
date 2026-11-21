@@ -13,7 +13,7 @@ import { trimNavState } from './nav';
 import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
-import { TabIconIndex } from './site-icons';
+import { iconOn, TabIconIndex } from './site-icons';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -125,21 +125,20 @@ export class TabManager {
     if (icons.size > SITE_ICONS) icons.delete(icons.keys().next().value!);
   }
 
-  /** Read every tab into the icon index now (after launch), rather than on the first navigation that needs it. */
+  /** Read every tab into the icon index (after launch), a slice of buckets a turn, rather than on the first navigation that needs it. */
   warmIcons(): void {
-    this.tabIcons.warm();
+    this.tabIcons.catchUpInSlices();
   }
 
   /** A site's icon if Chord has one: kept from earlier, or on another of this session's tabs there. */
   private knownIcon(session: Session, site: string): string | null {
     const kept = this.siteIcons.get(session)?.get(site);
     if (kept) return kept;
-    for (const node of this.tabIcons.tabsOn(site)) {
-      if (!node.favicon || this.deps.sessionFor(node) !== session) continue;
-      this.rememberIcon(session, node.url, node.favicon);
-      return node.favicon;
-    }
-    return null;
+    // Only a tab that's still the state's own node, in this session (a closed private window's never: site-icons.ts).
+    const node = iconOn(this.tabIcons, this.deps.state(), site, (n) => this.deps.sessionFor(n) === session);
+    if (!node?.favicon) return null;
+    this.rememberIcon(session, node.url, node.favicon);
+    return node.favicon;
   }
 
   get(nodeId: NodeId): WebContentsView | undefined {

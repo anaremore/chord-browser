@@ -1,6 +1,6 @@
 import { applyPatches, enablePatches } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, nodeOf, nodeList, type Command, type Context, type State, type TabNode } from '../src';
+import { apply, children, emptyState, favoritesFor, MAX_FAVORITES, sortedFavorites, tabsInOrder, nodeOf, nodeList, openedTab, type Command, type Context, type State, type TabNode } from '../src';
 
 enablePatches();
 
@@ -115,6 +115,30 @@ describe('reducer', () => {
     expect(nodeOf(t.state, opens)).toMatchObject({ kind: 'tab', url: 'https://new.test/', chordId: 'c1', section: 'today' });
     expect(t.state.live[opens]?.loading).toBe(true);
     expect(t.state.windows['w1']!.activeTab['c1']).toBe(opens);
+  });
+
+  // What a caller then checks before using the tab (openTabFor, an extension's createTab).
+  it.each([
+    { name: 'a new tab in the window’s chord', setupTaken: null, look: 'given-1', window: 'w1', found: true },
+    { name: 'an id that was already a tab', setupTaken: 'tab', look: 'taken', window: 'w1', found: false },
+    { name: 'an id that was already a folder', setupTaken: 'folder', look: 'taken', window: 'w1', found: false },
+    { name: 'no such window: nothing opened', setupTaken: null, look: 'given-1', window: 'nope', found: false },
+  ] as const)('openedTab: $name', ({ setupTaken, look, window, found }) => {
+    const t = setup();
+    if (setupTaken === 'tab') t.run({ t: 'tab.open', windowId: 'w1', url: 'https://first.test/', id: 'taken' });
+    if (setupTaken === 'folder') t.run({ t: 'folder.create', folderId: 'taken', chordId: 'c1', title: 'F' });
+    const before = t.state;
+    t.run({ t: 'tab.open', windowId: window, url: 'https://new.test/', id: look });
+    expect(openedTab(before, t.state, window, look) !== null).toBe(found);
+  });
+
+  it('openedTab: a tab in another chord than the window showed is not it', () => {
+    const t = setup();
+    const before = t.state;
+    t.run({ t: 'tab.open', windowId: 'w1', url: 'https://new.test/', id: 'given-1' });
+    const moved = { ...before, windows: { ...before.windows, w1: { ...before.windows['w1']!, activeChordId: 'c2' } } };
+    expect(openedTab(moved, t.state, 'w1', 'given-1')).toBeNull();
+    expect(openedTab(before, t.state, 'w1', 'given-1')?.id).toBe('given-1');
   });
 
   it('opens new tabs at the top of Today and activates them', () => {
