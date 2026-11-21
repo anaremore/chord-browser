@@ -38,6 +38,7 @@ const api: OverlayApi = {
   peek: {
     onState: (listener) => subscribe('peek:state', listener),
     expand: () => invoke('peek:expand'),
+    move: (card) => invoke('peek:move', { card }),
   },
   capture: {
     hover: (x, y) => invoke('capture:hover', { x, y }),

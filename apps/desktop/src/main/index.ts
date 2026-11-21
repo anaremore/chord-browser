@@ -384,6 +384,7 @@ function registerIpc(): void {
   handle('screenshots:clear', (_request, sender) => browser!.screenshots.clear(senderWindow(sender)));
   handle('focus:move', ({ to }, sender) => senderWindow(sender).focusRegion(to));
   handle('peek:expand', (_request, sender) => browser!.expandPeek(sender));
+  handle('peek:move', ({ card }, sender) => senderWindow(sender).movePeek(card));
   // A mini window's bar (DESIGN.md §7.9): each acts on the mini window it's in.
   handle('mini:state', (_request, sender) => {
     const state = browser!.minis.stateFor(sender);

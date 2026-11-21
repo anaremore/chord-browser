@@ -11,7 +11,7 @@
  * At launch, popover, preview and overlay load once the shell has painted (`deferViews`).
  */
 import { join } from 'node:path';
-import { AGENT_BAR_HEIGHT, DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
+import { AGENT_BAR_HEIGHT, clampPeekCard, DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
@@ -145,12 +145,12 @@ function place(view: WebContentsView, rect: Rect): void {
   if (now.x !== to.x || now.y !== to.y || now.width !== to.width || now.height !== to.height) view.setBounds(to);
 }
 
-/** Peek's card: up to 88% of the content frame, at most 1200 × 900, centered in it (DESIGN.md §7.9). */
+/** Peek's card at home (its default box): up to 88% of the focused pane, at most 1200 × 900, centered in it (DESIGN.md §7.9). */
 const PEEK_SHARE = 0.88;
 const PEEK_MAX = { width: 1200, height: 900 } as const;
 
 /** What a Peek shows, apart from where its card is (main works that out from the window). */
-export type PeekInfo = Omit<PeekState, 'card'>;
+export type PeekInfo = Omit<PeekState, 'card' | 'home' | 'area'>;
 
 function uiUrl(surface: UiSurface): string {
   const dev = process.env['ELECTRON_RENDERER_URL'];
@@ -292,6 +292,12 @@ export class AppWindow {
   private peekView: WebContentsView | null = null;
   private peek: PeekInfo | null = null;
   private peekSeq = 0;
+  /**
+   * Where Peek's card was left in this window (moved or resized), for this Peek and the next; null: at home. In
+   * memory only, so each window has its own until Chord quits. Clamped to the page area as it's read, not here,
+   * so a window that shrinks and grows again gives it back.
+   */
+  private peekBox: Rect | null = null;
   private peekTimer: ReturnType<typeof setTimeout> | undefined;
   /** Peek asked for before the overlay listens (a click just after launch): it opens once it does. */
   private pendingPeek: { view: WebContentsView; info: PeekInfo; delayMs: number } | null = null;
@@ -689,6 +695,26 @@ export class AppWindow {
     send(this.overlay.webContents, 'peek:state', this.peekState());
   }
 
+  /**
+   * Peek's card moved or resized (DESIGN.md §8.5): the overlay draws the card where the pointer has it, and sends
+   * its box here, at most once a frame. Only Peek's page and the popover hanging from it move: nothing else is laid
+   * out, so the tab underneath never is. The window remembers the box for its next Peek; null puts it back home.
+   */
+  movePeek(card: Rect | null): Rect | null {
+    if (!this.peekOnScreen || this.window.isDestroyed()) return null;
+    this.peekBox = card && clampPeekCard(card, this.frameRect());
+    this.placePeek();
+    return this.peekCard();
+  }
+
+  /** Peek's page in its card, and the popover (find) at the card's corner below the header. */
+  private placePeek(): void {
+    const page = this.peekPageRect();
+    const { width: pw, height: ph } = this.popoverSize;
+    place(this.popover, toWindowRect({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph }));
+    if (this.peekView && this.window.contentView.children.includes(this.peekView)) place(this.peekView, toWindowRect(page));
+  }
+
   /** Take Peek's page out of the window (it closes, or becomes a tab) and put the overlay away. */
   closePeek(): WebContentsView | null {
     const view = this.peekView;
@@ -747,7 +773,7 @@ export class AppWindow {
   }
 
   private peekState(): PeekState {
-    return { ...this.peek!, card: this.peekCard() };
+    return { ...this.peek!, card: this.peekCard(), home: this.peekHome(), area: this.frameRect() };
   }
 
   /** The window's content area in UI units. */
@@ -784,8 +810,16 @@ export class AppWindow {
     this.layout();
   }
 
-  /** Peek's card floats over the focused pane's page. */
+  /**
+   * Peek's card: where it was left in this window, kept inside the page area as it is now (the window or the sidebar
+   * may have changed since), or at home. Peek's page, the popover, screenshots and Open in Today all go by it.
+   */
   private peekCard(): Rect {
+    return this.peekBox ? clampPeekCard(this.peekBox, this.frameRect()) : this.peekHome();
+  }
+
+  /** Peek's card at home: it floats over the focused pane's page, centered. */
+  private peekHome(): Rect {
     const whole = this.frameRect();
     const frame = this.pageRectsIn(whole)[this.focusedPane] ?? whole;
     const width = Math.round(Math.min(frame.width * PEEK_SHARE, PEEK_MAX.width));
@@ -1349,9 +1383,7 @@ export class AppWindow {
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
     if (this.peekOnScreen) {
-      const page = this.peekPageRect();
-      place(this.popover, toWindowRect({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph }));
-      if (this.peekView && this.window.contentView.children.includes(this.peekView)) place(this.peekView, toWindowRect(page));
+      this.placePeek();
       // Its chrome, unless that's waiting for the overlay to listen again.
       if (this.peek) send(this.overlay.webContents, 'peek:state', this.peekState());
       this.placementChanged();
