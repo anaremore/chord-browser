@@ -29,6 +29,8 @@ export interface AgentServiceDeps {
   changed?(): void;
   /** Windows: window-owner.exe, for the pipe's DACL; null where there's none. */
   helper: string | null;
+  /** How the pipe is restricted (its exit code): window-owner.exe's restrict-pipe on Windows. Tests give their own. */
+  restrict?(path: string): Promise<number>;
   /** How long a call waits on a card (CONTROL_WAIT_MS unless a test says). */
   waitMs?: number;
   log?(...args: unknown[]): void;
@@ -85,14 +87,17 @@ export class AgentService {
         log: this.deps.log,
         // The path comes with it: a connection can arrive before startEndpoint has returned, and must never skip the DACL.
         onFirstConnection: (path) => {
-          if (process.platform === 'win32' && this.deps.helper) this.restricted = restrictPipe(this.deps.helper, path);
+          if (this.deps.restrict) this.restricted = this.deps.restrict(path);
+          else if (process.platform === 'win32' && this.deps.helper) this.restricted = restrictPipe(this.deps.helper, path);
         },
         onConnection: ({ token: _token, ...hello }, send, socket) => {
           // The connection's code loads with the first one; messages that come meanwhile wait.
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
           let gone = false;
-          void Promise.all([import('./connection'), this.deps.chords && !this.chords ? import('./chords') : null]).then(([{ agentConnection }, chordsModule]) => {
+          // Nothing of it is handled until the pipe is restricted (Windows' DACL, started by the first connection): its
+          // messages wait meanwhile, as they do for the connection's code.
+          void Promise.all([import('./connection'), this.deps.chords && !this.chords ? import('./chords') : null, this.restricted?.catch(() => -1)]).then(([{ agentConnection }, chordsModule]) => {
             if (chordsModule && this.deps.chords && !this.chords) {
               this.chords = new chordsModule.AgentChords(this.deps.chords);
               // A tab you took over (to a site you keep private) is closed, as far as any agent knows.

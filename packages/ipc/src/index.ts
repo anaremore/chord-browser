@@ -965,6 +965,15 @@ export interface AgentsView {
   allowed: { name: string; parent: string; signIns: string; connected: boolean; tabs: number; lastUsedAt: number }[];
 }
 
+/** Settings → Agents' *Add to Antigravity*: add Chord to its MCP config, or Undo that. */
+export type AntigravityRequest = { do: 'add' } | { do: 'undo'; token: string };
+/**
+ * `invalid`: its config can't be read as JSONC, or isn't an object (left as it was); `link`: it's a symbolic link (never
+ * written through); `unwritable`: it couldn't be read or written; `changed`: Chord's entry isn't the one it wrote any
+ * more (Undo leaves it); `gone`: nothing to undo.
+ */
+export type AntigravityAnswer = { ok: true; token: string | null } | { ok: false; why: 'invalid' | 'link' | 'unwritable' | 'changed' | 'gone' };
+
 export type AgentsRequest = { do: 'view' } | { do: 'remove'; name: string; parent: string } | { do: 'continue'; id: string };
 
 export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
@@ -1721,6 +1730,11 @@ export const invokeChannels = {
     ]),
     response: z.custom<AgentsView>(),
   },
+  'settings:antigravity': {
+    roles: ['internal'],
+    request: z.discriminatedUnion('do', [z.strictObject({ do: z.literal('add') }), z.strictObject({ do: z.literal('undo'), token: z.string().regex(/^[0-9a-f]{24}$/) })]),
+    response: z.custom<AntigravityAnswer>(),
+  },
   /** The connect card's answer (S18 M1d): Deny (or ×), Allow once, Always allow. */
   'agents:card': { roles: ['popover'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{16}$/), answer: z.enum(['deny', 'once', 'always']) }), response: z.void() },
   'settings:assistant': {
@@ -2291,6 +2305,8 @@ export interface SettingsApi {
     assistant(request: { do: 'detect' } | { do: 'signIn'; provider: AssistantProvider } | { do: 'clearAll' }): Promise<AssistantProviderInfo[]>;
     /** Settings → Agents (S18 M1d). */
     agents(request: AgentsRequest): Promise<AgentsView>;
+    /** Settings → Agents' *Add to Antigravity*, and its Undo. */
+    antigravity(request: AntigravityRequest): Promise<AntigravityAnswer>;
     onAgentsChange(listener: () => void): () => void;
     openUrl(url: string): Promise<void>;
     /** Settings → Privacy → Safe Browsing: available in this build, and how its lists are doing. */

@@ -9,7 +9,7 @@
  */
 import { AGENTS_ALLOWED_MAX, cleanAgentsAllowed, emptyState, type State } from '@chord/core';
 import { describe, expect, it } from 'vitest';
-import { cardFolder, ConnectCards, plain, signInsExist, unversioned, type ConnectAnswer } from '../../src/main/agents/connect';
+import { cardFolder, ConnectCards, plain, signInsExist, startedByOf, unversioned, type ConnectAnswer } from '../../src/main/agents/connect';
 import { clientName } from '../../src/main/agents/connection';
 import type { ProcessInfo } from '../../src/main/agents/parent';
 import { agentsView, mcpCommand, quote, setupLines, signInsName, type SetupWhere } from '../../src/main/agents/settings';
@@ -186,7 +186,7 @@ describe('Always allow', () => {
     await next;
   });
 
-  it('an update in a versioned install folder takes the place of its row, not a second one', async () => {
+  it('an update in a versioned install folder is the same program: let in without a card, and never a second row', async () => {
     // [kept, new, same program]
     const table: [string, string, boolean][] = [
       ['/home/me/.local/share/claude/versions/2.1.3', '/home/me/.local/share/claude/versions/2.1.4', true],
@@ -194,22 +194,41 @@ describe('Always allow', () => {
       ['/Users/me/.claude/versions/v1.0.58-beta.1/claude', '/Users/me/.claude/versions/v1.0.60/claude', true],
       ['/home/me/.local/share/claude/versions/2.1.3/claude', '/home/me/.local/share/claude/versions/2.1.4/codex', false],
       ['/home/me/a/versions/2.1.3/claude', '/home/me/b/versions/2.1.3/claude', false],
-      ['C:\\Tools\\claude.exe', 'C:\\Tools\\claude.exe', true],
+      ['C:\Tools\claude.exe', 'C:\Tools\claude.exe', true],
     ];
     for (const [kept, next, same] of table) expect(unversioned(kept) === unversioned(next), `${kept} → ${next}`).toBe(same);
     const t = setup();
     const at = (path: string) => [{ ...claude, path }];
     t.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [{ name: 'Claude Code', parent: '/opt/c/versions/2.1.3/claude', profileId: 'default', allowedAt: 5, lastUsedAt: 5 }, { name: 'Codex', parent: '/opt/x/codex', profileId: 'default', allowedAt: 6, lastUsedAt: 6 }] } });
-    // The updated program asks (it's another path), and Always allow replaces the row.
-    const asked = t.cards.ask(t.who(Promise.resolve(at('/opt/c/versions/2.1.4/claude'))), new AbortController().signal);
+    // Updated (another version folder): the same program, let in at once with its sign-ins; its row is the one it had.
+    expect(await t.cards.ask(t.who(Promise.resolve(at('/opt/c/versions/2.1.4/claude'))), new AbortController().signal)).toEqual({ grant: 'always', profileId: 'default', allowedParent: '/opt/c/versions/2.1.3/claude' });
+    expect(t.store.state.settings.agentsAllowed.map((a) => [a.name, a.parent, a.lastUsedAt])).toEqual([
+      ['Claude Code', '/opt/c/versions/2.1.3/claude', 1000],
+      ['Codex', '/opt/x/codex', 6],
+    ]);
+    // Another program by that name (another folder): asked, and Always allow keeps a row of its own.
+    const asked = t.cards.ask(t.who(Promise.resolve(at('/elsewhere/versions/2.1.4/claude'))), new AbortController().signal);
     await tick();
     await tick();
     t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
     await asked;
-    expect(t.store.state.settings.agentsAllowed).toEqual([
-      { name: 'Codex', parent: '/opt/x/codex', profileId: 'default', allowedAt: 6, lastUsedAt: 6 },
-      { name: 'Claude Code', parent: '/opt/c/versions/2.1.4/claude', profileId: 'default', allowedAt: 5, lastUsedAt: 1000 },
-    ]);
+    expect(t.store.state.settings.agentsAllowed.map((a) => a.parent)).toEqual(['/opt/c/versions/2.1.3/claude', '/opt/x/codex', '/elsewhere/versions/2.1.4/claude']);
+  });
+
+  it('who started it, past a helper the agent runs tools from (language_server_*) to the app behind it', async () => {
+    const helper = { pid: 9, name: 'language_server_linux_x64', path: '/opt/Antigravity/resources/bin/language_server_linux_x64', cwd: null, ppid: 8 };
+    const app = { pid: 8, name: 'antigravity', path: '/opt/Antigravity/antigravity', cwd: null, ppid: 1 };
+    expect(startedByOf([helper, app])).toEqual(app);
+    expect(startedByOf([claude])).toEqual(claude);
+    expect(startedByOf([helper])).toEqual(helper);
+    expect(startedByOf([])).toBeNull();
+    const t = setup();
+    const asked = t.cards.ask({ name: 'antigravity-cli', folder: '/home/me/code', parent: Promise.resolve([helper, app]) }, new AbortController().signal);
+    await tick();
+    await tick();
+    expect(t.cards.cardFor('w1')).toMatchObject({ name: 'antigravity-cli', startedBy: 'antigravity' });
+    t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
+    expect(await asked).toMatchObject({ grant: 'always', allowedParent: '/opt/Antigravity/antigravity' });
   });
 
   it('over the cap, the ones used longest ago go', () => {

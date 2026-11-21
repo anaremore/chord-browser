@@ -142,8 +142,16 @@ type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) 
 /** A page that answers the extractor with `read`, never (`hang`), or as a test's function does. */
 function fakePage(url: string, read: Answer) {
   const events = new EventEmitter();
-  const at: { url: string; onCapture?: () => void } = { url };
+  const at: { url: string; onCapture?: () => void; pdfLandsAt?: string } = { url };
   const contents = {
+    // A PDF's bytes, fetched through the tab's session: it ends up at `pdfLandsAt` (a redirect), else where it was asked.
+    session: {
+      fetch: async (asked: string) => {
+        const response = new Response('%PDF-1.4');
+        Object.defineProperty(response, 'url', { value: at.pdfLandsAt ?? asked });
+        return response;
+      },
+    },
     isDestroyed: () => false,
     isLoading: () => false,
     getURL: () => at.url,
@@ -180,6 +188,8 @@ function setup(
     onCapture?: (t: Meanwhile) => void;
     /** A scope that reads only on this site, as an outside agent's does a shared tab (S18 M1e). */
     sharedOn?: string;
+    /** Where a PDF's download ends up. */
+    pdfLandsAt?: string;
   } = {},
 ) {
   let nodes = [tab('n1', 'https://news.test/a'), tab('n2', 'https://private.test/'), tab('n3', 'https://news.test/b')];
@@ -199,7 +209,10 @@ function setup(
   function close(id: NodeId) {
     state = stateWith(nodes.filter((n) => n.id !== id));
   }
-  for (const page of pages.values()) page.at.onCapture = () => opts.onCapture?.({ go, close });
+  for (const page of pages.values()) {
+    page.at.onCapture = () => opts.onCapture?.({ go, close });
+    if (opts.pdfLandsAt) page.at.pdfLandsAt = opts.pdfLandsAt;
+  }
   const go: Go = (id, url, pageOnly = false) => {
     pages.get(id)!.at.url = url;
     if (pageOnly) return;
@@ -494,6 +507,15 @@ describe('A shared tab is read only on its site (S18 M1e, review 1 of #96)', () 
     expect(out.text).not.toContain('secret');
     expect([...scope.memory.read]).toEqual([]);
     expect(scope.memory.form).toBeNull();
+    expect(activity).toEqual([]);
+  });
+
+  it('a shared PDF whose download ends up on another site: refused as no longer shared, not as never readable (#96)', async () => {
+    const pdfRead = async () => ({ title: 'Guide', url: 'https://news.test/a', contentType: 'application/pdf', text: '', selection: '' });
+    const { scope, call, activity } = setup({ sharedOn: 'news.test', read: pdfRead, pdfLandsAt: 'https://elsewhere.test/guide.pdf' });
+    const out = await call('read_tab', { tab_id: scope.refs.refFor('n1') });
+    expect(out.isError).toBe(true);
+    expect(refusal(out).refused).toBe(NOT_SHARED);
     expect(activity).toEqual([]);
   });
 

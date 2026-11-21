@@ -61,8 +61,16 @@ const LOOKUP_MS = 5000;
 /** The longest folder the card shows; longer ones lose their middle. */
 const FOLDER_MAX = 120;
 
+/**
+ * The program that started it, as the card names it and Always allow keeps it: the bridge's parent, past a helper
+ * the agent runs its tools from (Antigravity's `language_server_*`, reportedly) to the app behind it.
+ */
+export function startedByOf(chain: readonly ProcessInfo[]): ProcessInfo | null {
+  return chain.find((p) => !/^language_server/i.test(p.name ?? '')) ?? chain[0] ?? null;
+}
+
 const firstOf = (parent: Promise<ProcessInfo[]>): Promise<ProcessInfo | null> =>
-  Promise.race([parent.then((chain) => chain[0] ?? null).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_MS).unref?.())]);
+  Promise.race([parent.then(startedByOf).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_MS).unref?.())]);
 
 /** Control and format characters (bidi overrides, zero-width joiners…): never shown from an agent or the OS. */
 const UNSAFE = /[\p{Cc}\p{Cf}]/u;
@@ -106,10 +114,14 @@ export class ConnectCards {
     return this.deps.now?.() ?? Date.now();
   }
 
-  /** The agent let in for good, if it is: the same name, the same program, sign-ins that still exist. */
+  /**
+   * The agent let in for good, if it is: the same name, the same program (an update in a versioned install folder is
+   * the same program, as `keep` counts it), sign-ins that still exist.
+   */
   private allowance(name: string, parent: string): AgentAllowance | null {
     const state = this.deps.store.state;
-    return state.settings.agentsAllowed.find((a) => a.name === name && a.parent === parent && signInsExist(state, a.profileId)) ?? null;
+    const program = unversioned(parent);
+    return state.settings.agentsAllowed.find((a) => a.name === name && (a.parent === parent || unversioned(a.parent) === program) && signInsExist(state, a.profileId)) ?? null;
   }
 
   /** Ask (or not, for an agent let in for good). Taken down when `signal` aborts (Stop, the agent going): a no. */

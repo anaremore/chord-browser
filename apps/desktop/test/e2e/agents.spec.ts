@@ -6,7 +6,7 @@
  * those sign-ins are gone). Then its Agent chord, its tools, the bar and Stop.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -101,8 +101,10 @@ async function agentsSettings(app: ElectronApplication, shell: Page): Promise<Pa
 test('Settings → Agents turns it on; the card asks, Deny refuses, Allow once lets in this connection only, and Stop lists it in Settings', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  // The old development hook does nothing now: only the card lets an agent in.
-  const app = await launch(profile, { CHORD_AGENT_APPROVE: 'always' });
+  // The old development hook does nothing now: only the card lets an agent in. A home of the test's own (Linux and
+  // macOS read HOME), where Add to Antigravity writes.
+  const home = mkdtempSync(join(tmpdir(), 'chord-e2e-home-'));
+  const app = await launch(profile, { CHORD_AGENT_APPROVE: 'always', ...(process.platform === 'win32' ? {} : { HOME: home }) });
   try {
     const shell = await pageWhere(app, isShell);
     expect(await agents(app)).toMatchObject({ serving: null });
@@ -113,6 +115,25 @@ test('Settings → Agents turns it on; the card asks, Deny refuses, Allow once l
     await settings.getByRole('switch', { name: 'Let agents connect' }).click();
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(true);
+
+    // Antigravity: Chord adds itself to its MCP config (the same command as the lines above), with Undo.
+    if (process.platform !== 'win32') {
+      const config = join(home, '.gemini', 'config', 'mcp_config.json');
+      mkdirSync(join(home, '.gemini', 'config'), { recursive: true });
+      writeFileSync(config, '');
+      await settings.getByRole('button', { name: 'Add to Antigravity' }).click();
+      const said = settings.getByRole('status').filter({ hasText: 'Added Chord to Antigravity. Refresh or restart its MCP servers to see it.' });
+      await expect(said).toBeVisible();
+      const entry = (JSON.parse(readFileSync(config, 'utf8')) as { mcpServers: { chord: { command: string; args: string[] } } }).mcpServers.chord;
+      expect(entry.args.at(-1)).toBe('mcp');
+      await settle(settings);
+      mkdirSync(capturesDir, { recursive: true });
+      await settings.screenshot({ path: join(capturesDir, 'agents-settings-antigravity.png') });
+      await said.getByRole('button', { name: 'Undo' }).click();
+      await expect(settings.getByRole('status').filter({ hasText: 'Antigravity’s MCP servers are as they were.' })).toBeVisible();
+      // Only Chord's entry went: the rest of what Undo leaves is Antigravity's.
+      expect((JSON.parse(readFileSync(config, 'utf8')) as { mcpServers: Record<string, unknown> }).mcpServers).toEqual({});
+    }
     await closeSettings(app);
 
     // Deny (× answers the same): told so, and nothing is kept.
@@ -171,6 +192,7 @@ test('Settings → Agents turns it on; the card asks, Deny refuses, Allow once l
   // Quitting takes the endpoint away.
   expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
   rmSync(profile, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 test('Always allow: no card next time, with the sign-ins of the window that allowed it; once those are gone it asks again; Remove forgets it', async () => {

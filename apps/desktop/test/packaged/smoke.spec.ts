@@ -240,8 +240,8 @@ test('macOS: a build the keychain has never seen loads pages without asking', as
 /* ---------- Outside agents (S18 M1b) ---------- */
 
 /** `Chord mcp` as an agent starts it: its stdio, one JSON-RPC message a line (Electron may write a blank line first). */
-function mcpClient(executable: string, profile: string, extra: string[] = []) {
-  const args = [`--user-data-dir=${profile}`, ...(process.platform === 'linux' ? ['--ozone-platform=headless'] : []), ...extra, 'mcp'];
+function mcpClient(executable: string, profile: string) {
+  const args = [`--user-data-dir=${profile}`, ...(process.platform === 'linux' ? ['--ozone-platform=headless'] : []), 'mcp'];
   const child = spawn(executable, args, { env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
   const waiting = new Map<number, (m: { result: Record<string, unknown> }) => void>();
   let buffer = '';
@@ -281,18 +281,18 @@ function relayFolderFor(): string {
  * (what Activity Monitor shows: RSS there also counts the system frameworks every app maps, which aren't this
  * process's own). `rss`: its resident set everywhere. `children`: what each child is (its `--type`, else its name).
  */
-function processInfo(pid: number): { mb: number; rss: number; children: string[] } {
+function processInfo(pid: number): { mb: number; rss: number; children: string[]; childPids: number[] } {
   if (process.platform === 'win32') {
     const ps = `$p = Get-Process -Id ${pid}; $c = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | ForEach-Object { $_.CommandLine }); "$($p.WorkingSet64)"; $c`;
     const [bytes, ...children] = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8' }).trim().split(/\r?\n/);
     const mb = Number(bytes) / 2 ** 20;
-    return { mb, rss: mb, children: children.filter(Boolean).map(kindOf) };
+    return { mb, rss: mb, children: children.filter(Boolean).map(kindOf), childPids: [] };
   }
   if (process.platform === 'linux') {
     const kb = Number(/^VmRSS:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]);
     // From /proc, since the Fedora .rpm container has no ps. The parent pid is the 2nd field after the command name,
     // which sits in parentheses (and may hold spaces).
-    const children = readdirSync('/proc')
+    const childPids = readdirSync('/proc')
       .filter((d) => /^\d+$/.test(d))
       .filter((d) => {
         try {
@@ -302,14 +302,15 @@ function processInfo(pid: number): { mb: number; rss: number; children: string[]
           return false;
         }
       })
-      .map((d) => {
-        try {
-          return kindOf(readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0').join(' '));
-        } catch {
-          return '?';
-        }
-      });
-    return { mb: kb / 1024, rss: kb / 1024, children };
+      .map(Number);
+    const children = childPids.map((d) => {
+      try {
+        return kindOf(readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0').join(' '));
+      } catch {
+        return '?';
+      }
+    });
+    return { mb: kb / 1024, rss: kb / 1024, children, childPids };
   }
   const rss = Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) / 1024;
   const children = execFileSync('ps', ['-A', '-o', 'ppid=,command='], { encoding: 'utf8' })
@@ -321,11 +322,27 @@ function processInfo(pid: number): { mb: number; rss: number; children: string[]
   const summary = execFileSync('vmmap', ['-summary', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   const footprint = /Physical footprint:\s+([\d.]+)([KMG])/.exec(summary);
   const mb = footprint ? Number(footprint[1]) * { K: 1 / 1024, M: 1, G: 1024 }[footprint[2] as 'K' | 'M' | 'G'] : rss;
-  return { mb, rss, children };
+  return { mb, rss, children, childPids: [] };
 }
 
 /** A child process as Chromium names it (`--type=zygote`), else its program. */
 const kindOf = (command: string): string => /--type=(\S+)/.exec(command)?.[1] ?? command.trim().split(/\s+/)[0] ?? '?';
+
+/**
+ * The relay's budgets (#90), per platform, because each OS counts memory its own way:
+ * - Windows: its working set. Measured 67 MB (x64) and 73 MB (arm64); M0's 90 MB holds. No child processes.
+ * - macOS: its physical footprint, what Activity Monitor shows. Measured 25 MB (arm64) and 18 MB (x64). RSS there
+ *   (113 MB and 64 MB, the first runs' "113 MB") also counts the system frameworks every app maps, not the relay's own.
+ * - Linux: its RSS, which counts the shared libraries too. Measured 124 MB (x64) and 129 MB (arm64). Two children:
+ *   Chromium's zygotes, started before any of Chord's code runs. Dropping them needs `--no-zygote --no-sandbox` on
+ *   the relay's command line, and it measured the relay no smaller (123 and 129 MB), so they stay.
+ * An AppImage is measured past its runtime, at Chord itself.
+ */
+const RELAY_BUDGETS = {
+  win32: { mb: 90, children: [] as string[] },
+  darwin: { mb: 40, children: [] as string[] },
+  linux: { mb: 160, children: ['zygote', 'zygote'] },
+};
 
 test('Chord mcp: the relay alone answers fast, in one process, with no window and nothing written to the profile', async () => {
   const executable = packagedExecutable();
@@ -349,23 +366,15 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
     expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(8);
     // Settled: one process (GPU and network service in-process), within its memory budget.
     await new Promise((done) => setTimeout(done, 1000));
-    const { mb, rss, children } = processInfo(mcp.child.pid!);
+    // An AppImage's runtime (1 MB) mounts it and runs Chord as its one child: that's the relay.
+    const outer = processInfo(mcp.child.pid!);
+    const { mb, rss, children } = executable.endsWith('.AppImage') && outer.childPids.length === 1 ? processInfo(outer.childPids[0]!) : outer;
     console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms (median of ${times.map(Math.round).join(', ')}), ${Math.round(mb)} MB (resident ${Math.round(rss)} MB), child processes: ${children.length ? children.join(', ') : 'none'}`);
-    // #90's measurement: on Linux, without Chromium's zygotes (which need the sandbox off), for comparison.
-    if (process.platform === 'linux') {
-      const bare = mcpClient(executable, profile, ['--no-zygote', '--no-sandbox']);
-      await bare.request('initialize', hello);
-      await new Promise((done) => setTimeout(done, 1000));
-      const without = processInfo(bare.child.pid!);
-      console.log(`Chord mcp with --no-zygote --no-sandbox: ${Math.round(without.mb)} MB, child processes: ${without.children.length ? without.children.join(', ') : 'none'}`);
-      bare.child.stdin!.end();
-      await bare.exited;
-    }
-    // Held on Windows, where M0 measured them. Measuring the others now (#90).
-    if (process.platform === 'win32') {
-      expect(children).toEqual([]);
-      expect(mb).toBeLessThanOrEqual(90);
-    }
+    // Budgets per platform (#90), from the 2026-11-21 release dry run (release.yml run 44961409463), each with room
+    // over the worst build measured.
+    const budget = RELAY_BUDGETS[process.platform as 'win32' | 'darwin' | 'linux'];
+    expect(children).toEqual(budget.children);
+    expect(mb).toBeLessThanOrEqual(budget.mb);
     // The budget is CI Windows' (S18 M1 plan): elsewhere it's reported.
     if (process.env['CI'] && process.platform === 'win32') expect(initializeMs).toBeLessThanOrEqual(250);
     const call = await mcp.request('tools/call', { name: 'list_tabs', arguments: {} });

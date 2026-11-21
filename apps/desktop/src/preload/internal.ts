@@ -26,6 +26,7 @@ const api: SettingsApi = {
     defaultBrowser: () => invoke('settings:defaultBrowser'),
     assistant: (request) => invoke('settings:assistant', request),
     agents: (request) => invoke('settings:agents', request),
+    antigravity: (request) => invoke('settings:antigravity', request),
     onAgentsChange: (listener) => subscribe('settings:agentsChanged', () => listener()),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),

@@ -210,6 +210,27 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     await expect.poll(() => counts.at(-1)).toBe(0);
   });
 
+  it('nothing of a connection is handled until the pipe is restricted (the Windows DACL, which the first connection starts)', async () => {
+    const ud = profile();
+    const events: string[] = [];
+    const restrict = (_path: string) =>
+      new Promise<number>((done) =>
+        setTimeout(() => {
+          events.push('restricted');
+          done(0);
+        }, 300),
+      );
+    const ask: Ask = async () => (events.push('asked'), { grant: 'once', profileId: null });
+    const service = new AgentService({ userData: ud, browser, ask, helper: null, waitMs: 2000, restrict });
+    await service.start();
+    cleanup.push(() => service.stop());
+    const c = client(ud);
+    await c.initialize();
+    expect((await c.call('list_tabs')).error).toBe(false);
+    expect(events).toEqual(['restricted', 'asked']);
+    expect(await service.restricted).toBe(0);
+  });
+
   it('Remove in Settings hangs up on that agent, let in for good by that program, and leaves an Allow once one alone', async () => {
     const ud = profile();
     // Claude Code is always allowed, kept by its program; Codex was let in once.
