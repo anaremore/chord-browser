@@ -64,9 +64,9 @@ A milestone is done when all of these hold:
 
 ## Where we are (updated 2026-11-17)
 
-Released, all previews: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), then 0.3 to 0.6 (Effects, form filling, Your data: export, import and sync; 2026-10-25 to 10-31), **0.6.1** (security, Electron 45.2.3), **0.7.0** and **0.8.0** (Chord Player, and play in the tab on Windows; 2026-11-06), **0.9.0** and **0.9.1** (Favorites per chord, address-bar fixes; 2026-11-09), **0.10.0** (Back, Forward and Reload beside the address; 2026-11-12) and **0.11.0** (passwords phase 1, huge sidebars, the windowed Pinned, Electron 45.3.2; 2026-11-16). 0.2.0, 0.8.0, 0.8.1, 0.10.1, 0.10.2 and 0.11.1 were tagged but never published (0.8.0's release run was cancelled; 0.9.0 carried its changes, 0.11.0 carried 0.10.1's and 0.10.2's, and 0.12.0 carries 0.11.1's: HTTP sign-in, the sign-in sweep's fixes and Peek right after launch). **0.12.0** (passwords phase 2) is in its release pull request. Chord Player: 0.1.1, 0.1.2, 0.2.0 and 0.3.0 (ECS 45.2.1) released. 0.2.1 is the first build signed on Windows and the first that updates itself (Windows and the AppImage). RELEASE_NOTES.md has each release. chordbrowser.com's download links follow each published release. Every item marked done has unit and E2E tests, and the six release targets build and pass their smoke tests.
+Released, all previews: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), then 0.3 to 0.6 (Effects, form filling, Your data: export, import and sync; 2026-10-25 to 10-31), **0.6.1** (security, Electron 45.2.3), **0.7.0** and **0.8.0** (Chord Player, and play in the tab on Windows; 2026-11-06), **0.9.0** and **0.9.1** (Favorites per chord, address-bar fixes; 2026-11-09), **0.10.0** (Back, Forward and Reload beside the address; 2026-11-12) and **0.11.0** (passwords phase 1, huge sidebars, the windowed Pinned, Electron 45.3.2; 2026-11-16). 0.2.0, 0.8.0, 0.8.1, 0.10.1, 0.10.2 and 0.11.1 were tagged but never published (0.8.0's release run was cancelled; 0.9.0 carried its changes, 0.11.0 carried 0.10.1's and 0.10.2's, and 0.12.0 carries 0.11.1's: HTTP sign-in, the sign-in sweep's fixes and Peek right after launch). 0.12.0 (passwords phase 2) was tagged but never published: **0.13.0** (2026-11-20) carried it with passwords phase 3, and **0.13.1** (2026-11-21, security) followed. Chord Player: 0.1.1, 0.1.2, 0.2.0 and 0.3.0 (ECS 45.2.1) released. 0.2.1 is the first build signed on Windows and the first that updates itself (Windows and the AppImage). RELEASE_NOTES.md has each release. chordbrowser.com's download links follow each published release. Every item marked done has unit and E2E tests, and the six release targets build and pass their smoke tests.
 
-**Under way (2026-11-17):** 0.12.0's release, with passwords phase 2 ([S17](docs/decisions/S17-passwords.md)): CSV import from other browsers and password managers, export as a CSV or an encrypted Chord file (#52), and the generator with sign-up and change-password forms (#53).
+**Under way (2026-11-21):** outside agents ([S18](docs/decisions/S18-agent-mcp.md), Connect an agent): M1's slices a to d are merged and hidden in release builds (`AGENTS_RELEASED`) until 0.14.0; slice e (sharing a tab, and the connect card's hardening) is in review. Also the codebase review's follow-ups: release pipeline hardening (#86, after 0.13.1) and the icon index's follow-ups.
 
 **Renovate isn't running** (found 2026-11-15): `renovate.json` is in place, but no Dependency Dashboard exists and no Renovate pull request has ever opened; Electron's last two bumps were made by hand. Until the Renovate app is installed on the repository (the maintainer's step), electron-watch's P0 issue is the signal and the planning thread makes the bump.
 
@@ -491,7 +491,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 - **Arc import.**
 - ~~**A built-in password store** (D12)~~ Reversed 2026-11-15: Chord builds its own ([S17](docs/decisions/S17-passwords.md)); see *Next, in order* above.
 - **Assistant developer mode, your own API keys, local models.** The assistant stays a chat that can read the browser; Effects use the same apps.
-- **Connect an agent** (the Chord MCP server for your own Claude Code or Codex) is parked, not deleted. It goes beyond chat, and can come back if you want it.
+- **Connect an agent** (the Chord MCP server for your own Claude Code or Codex) came back on 2026-11-19 as [S18](docs/decisions/S18-agent-mcp.md): M1 is being built, hidden in release builds until 0.14.0.
   - Unparked as [S18](docs/decisions/S18-agent-mcp.md) (2026-11-19). M1 is on main but **hidden in release builds until 0.14.0** (decided 2026-11-21, for the 0.13.1 security release): packaged builds have no Settings → Agents, never serve the endpoint, and `chord mcp` answers that Chord isn't open. Development and E2E builds have all of it. Flip `AGENTS_RELEASED` (packages/core/src/agent-tools.ts) in the 0.14.0 release commit.
 - *Moved to After 0.1 on 2026-10-24:* built-in ad blocking (D5 reversed) and importing from other browsers.
 
@@ -509,7 +509,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 | Never sleep or archive playing/PiP/sharing tabs; at most 2 crash reloads | M1.5 |
 | Native-messaging lookup for password managers | M1.5 |
 | Per-animation switches with ↺ reset, and ↺ on every changed setting | Each animation as it ships (DESIGN.md §6.8) |
-| Connect an agent: MCP helper, chrome-devtools-mcp tool names, badge and Stop | Parked |
+| Connect an agent: Chord's own MCP server, the Agent chord, the connect card and Stop (S18 M1) | Built, hidden until 0.14.0 |
 | Link routes, remembered chord per site | Done (2026-10-23, with the mini window) |
 | Import guardrails with written exemptions, AGENTS.md, append-only release notes | Process, M1.1 |
 
