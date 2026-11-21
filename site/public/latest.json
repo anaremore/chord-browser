@@ -1,48 +1,48 @@
 {
-  "version": "0.13.0",
-  "tag": "v0.13.0",
-  "url": "https://github.com/anaremore/chord-browser/releases/tag/v0.13.0",
-  "published": "2026-11-20T17:54:56Z",
+  "version": "0.13.1",
+  "tag": "v0.13.1",
+  "url": "https://github.com/anaremore/chord-browser/releases/tag/v0.13.1",
+  "published": "2026-11-21T20:32:27Z",
   "files": {
     "win-x64": {
-      "name": "Chord-0.13.0-win-x64-setup.exe",
-      "size": 138530768
+      "name": "Chord-0.13.1-win-x64-setup.exe",
+      "size": 138735064
     },
     "win-arm64": {
-      "name": "Chord-0.13.0-win-arm64-setup.exe",
-      "size": 132654256
+      "name": "Chord-0.13.1-win-arm64-setup.exe",
+      "size": 132859640
     },
     "mac-arm64": {
-      "name": "Chord-0.13.0-mac-arm64.dmg",
-      "size": 126309358
+      "name": "Chord-0.13.1-mac-arm64.dmg",
+      "size": 126354136
     },
     "mac-x64": {
-      "name": "Chord-0.13.0-mac-x64.dmg",
-      "size": 133481269
+      "name": "Chord-0.13.1-mac-x64.dmg",
+      "size": 133541249
     },
     "deb-amd64": {
-      "name": "Chord-0.13.0-linux-amd64.deb",
-      "size": 106378076
+      "name": "Chord-0.13.1-linux-amd64.deb",
+      "size": 106441360
     },
     "deb-arm64": {
-      "name": "Chord-0.13.0-linux-arm64.deb",
-      "size": 101261540
+      "name": "Chord-0.13.1-linux-arm64.deb",
+      "size": 101326232
     },
     "rpm-x86_64": {
-      "name": "Chord-0.13.0-linux-x86_64.rpm",
-      "size": 94846021
+      "name": "Chord-0.13.1-linux-x86_64.rpm",
+      "size": 94941561
     },
     "rpm-aarch64": {
-      "name": "Chord-0.13.0-linux-aarch64.rpm",
-      "size": 89888101
+      "name": "Chord-0.13.1-linux-aarch64.rpm",
+      "size": 89962349
     },
     "appimage-x86_64": {
-      "name": "Chord-0.13.0-linux-x86_64.AppImage",
-      "size": 123460680
+      "name": "Chord-0.13.1-linux-x86_64.AppImage",
+      "size": 123526015
     },
     "appimage-arm64": {
-      "name": "Chord-0.13.0-linux-arm64.AppImage",
-      "size": 123681634
+      "name": "Chord-0.13.1-linux-arm64.AppImage",
+      "size": 123746947
     },
     "checksums": {
       "name": "SHA256SUMS.txt",
