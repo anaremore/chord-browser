@@ -855,6 +855,16 @@ As built in Phase 2. The assistant chats and reads; it never changes your tabs (
 - **Motion:** when the frame changes size (the sidebar, the assistant), docked DevTools glide as a picture beside the page's, their header included (ARCHITECTURE.md §5).
 - **Accessibility:** DevTools' frame is a region named *Developer tools*, and its buttons are ordinary Tab stops in the shell. Windows High Contrast gives the frame a `CanvasText` edge.
 
+### 7.17 Outside agents
+
+*Built 2026-11-20* (S18 M1; `mocks/agents-s18-m1.html`; ARCHITECTURE.md §11.3). AI agents you run yourself, like Claude Code and Codex, use Chord through `chord mcp`. They're off until you turn them on in Settings → Agents.
+
+- **The connect card:** an agent's first call asks, in the window you used last, in its popover, centered at the top of the page. It never takes the keyboard. It has the agents' card body (`AgentCardBody`): ✳ and *Claude Code wants to use Chord* (the name the agent gives) in `text-title`, with ×; *Started by claude.exe in ~/code/app.* in `text-small`, `fg-muted` (*Started in ~/code/app.* until Chord knows who started it, or if it can't tell); what it may do (*Open and read pages in its own Agent chord*, *Read a tab of yours only when you share it*, *Never see your passwords*); then **Deny** (a quiet word), **Allow once** (an outlined pill) and **Always allow** (the filled accent pill). × is Deny. As with Chord's other prompts over a page, its buttons ignore clicks for `promptInputDelay` after it appears. There's no verified badge: the name is the agent's own, and the program and folder are only what the OS says.
+- **Always allow** keeps the agent with the sign-ins of the window you answered in. Its next connections come in without a card while those sign-ins exist; once no chord uses them, it asks again.
+- **The Agent chord:** each agent's tabs are in a section of their own below your chord's, in memory only. While it works on a tab, a 36 px bar over the page says so, with Stop; a key you press in its tab pauses it there. Ctrl+. (⌘. on macOS) stops every agent. When it's done, a toast asks *Keep these tabs?* Kept tabs start fresh: the agent's Back and Forward history doesn't come with them.
+- **Settings → Agents:** the lead (*Let AI agents you run, like Claude Code and Codex, use Chord. They work in their own tabs and never see your passwords.*), then the switch *Let agents connect* (*Chord asks you each time a new one tries.*). **Set up:** one line each for Claude Code and Codex, in the computer's monospace on `surface-raised`, with **Copy**; they run this Chord's own executable. **Stopped**, only while an agent is stopped: its row reads *Stopped · 2 tabs*, with **Let Codex continue**. **Allowed:** *Chord goes by the name the agent gives. Remove any you don't recognize.* Then a row per agent: the name's first letter on a neutral tile (never a brand's glyph), its name, and *Always allowed · Work's sign-ins · connected now · 2 tabs* (or *· last used yesterday*), with **Remove**. With none: *No agents yet. Copy a line above into your terminal to connect one.*
+- **Accessibility:** the card is an `alertdialog` named by its title; Settings' rows are plain text with named buttons (*Copy the line for Claude Code*, *Remove Claude Code*).
+
 ---
 
 ## 8. Key flows

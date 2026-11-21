@@ -1,11 +1,10 @@
 /**
- * Agents on or off (S18 M1b), the only part of the feature main loads by
- * itself. Packaged builds: nothing at all, whatever the setting says (until
- * Settings → Agents, M1d). Development builds: off (the default), nothing but
- * a look at the store's changes for the setting; on (the setting, or
- * CHORD_AGENTS=1), the service starts, which serves one pipe and one token file.
+ * Agents on or off (S18 M1b, M1d), the only part of the feature main loads by
+ * itself. Off (Settings → Agents, the default): nothing but a look at the
+ * store's changes for the setting. On (the setting, or CHORD_AGENTS=1 in a
+ * development build), the service starts, which serves one pipe and one token file.
  */
-import { agentsAvailable, agentsServe, type State } from '@chord/core';
+import { agentsServe, type State } from '@chord/core';
 import type { Change } from '../store';
 import type { AgentService } from './service';
 
@@ -26,8 +25,7 @@ export interface AgentSwitch {
   quit(): Promise<void>;
 }
 
-export function watchAgents(deps: AgentSwitchDeps): AgentSwitch | null {
-  if (!agentsAvailable({ packaged: deps.packaged })) return null;
+export function watchAgents(deps: AgentSwitchDeps): AgentSwitch {
   let service: AgentService | null = null;
   let queue = Promise.resolve();
   const apply = (on: boolean) => {

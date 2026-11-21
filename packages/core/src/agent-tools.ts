@@ -43,16 +43,11 @@ export interface AgentHello {
 }
 
 /**
- * Agents are a development-only feature until Settings → Agents (S18 M1d):
- * packaged builds never serve the endpoint, whatever the setting says.
+ * Whether Chord serves the endpoint (S18 M1d): Settings → Agents' switch, off by default, in every build.
+ * CHORD_AGENTS=1 turns it on too in development builds only (the perf spec's launch with Agents on).
  */
-export function agentsAvailable(build: { packaged: boolean }): boolean {
-  return !build.packaged;
-}
-
-/** Whether a launch serves the endpoint: available, and switched on (the setting, or CHORD_AGENTS=1 in development). */
 export function agentsServe(build: { packaged: boolean }, settingOn: boolean, devSwitch: string | undefined): boolean {
-  return agentsAvailable(build) && (settingOn || devSwitch === '1');
+  return settingOn || (!build.packaged && devSwitch === '1');
 }
 
 /**

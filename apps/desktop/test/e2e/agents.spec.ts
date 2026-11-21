@@ -1,17 +1,17 @@
 /**
- * Outside agents' transport, end to end (S18 M1b, development builds only): a
- * Chord serving its endpoint (CHORD_AGENTS=1), and `chord mcp` (the same
- * executable, its relay) started as an agent starts it. The connection card is
- * the development hook's (CHORD_AGENT_APPROVE) until Settings → Agents (M1d);
- * the tools run against the stub scope until the Agent chord (M1c).
+ * Outside agents end to end (S18 M1b–d): a Chord serving its endpoint (Settings
+ * → Agents, or CHORD_AGENTS=1 in development builds), and `chord mcp` (the same
+ * executable, its relay) started as an agent starts it. The connect card in the
+ * popover lets it in: Deny, Allow once, Always allow (no card next time, until
+ * those sign-ins are gone). Then its Agent chord, its tools, the bar and Stop.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
-import { isShell, pageWhere, pressReal } from './a11y-kit';
+import { audit, capturesDir, closeSettings, dispatch, expectClean, isPopover, isSettings, isShell, pageWhere, pressReal, runAction, settle } from './a11y-kit';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -71,30 +71,164 @@ function resolveElectron(): string {
   return (process.getBuiltinModule('module').createRequire(join(appDir, 'package.json'))('electron') as string);
 }
 
-test('an agent connects through chord mcp, is let in by the development hook, and Stop refuses it', async () => {
+const CODEX = { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } };
+const CLAUDE = { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '2.1.328' } };
+const DENIED = 'The user denied this connection in Chord. Stop using Chord’s tools and tell the user.';
+const NO_AGENTS = 'No agents yet. Copy a line above into your terminal to connect one.';
+
+/** The connect card in the window's popover, for that agent. */
+const cardOf = (popover: Page, name: string) => popover.getByRole('alertdialog', { name: `${name} wants to use Chord` });
+
+/** Answer the card as you would: once it's shown (its buttons wait a moment before they take a click). */
+async function answer(app: ElectronApplication, name: string, button: 'Deny' | 'Allow once' | 'Always allow' | 'Close'): Promise<void> {
+  const popover = await pageWhere(app, isPopover);
+  const card = cardOf(popover, name);
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await popover.waitForTimeout(600);
+  await card.getByRole('button', { name: button, exact: true }).click();
+  await expect(card).toHaveCount(0);
+}
+
+/** Settings → Agents, opened from the window. */
+async function agentsSettings(app: ElectronApplication, shell: Page): Promise<Page> {
+  await runAction(shell, 'app.settings');
+  const settings = await pageWhere(app, isSettings);
+  await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Agents' }).click();
+  await expect(settings.getByRole('main').getByRole('heading', { level: 1 })).toHaveText('Agents');
+  return settings;
+}
+
+test('Settings → Agents turns it on; the card asks, Deny refuses, Allow once lets in this connection only, and Stop lists it in Settings', async () => {
+  test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_AGENT_APPROVE: 'once' });
-  const mcp = relay(profile);
+  // The old development hook does nothing now: only the card lets an agent in.
+  const app = await launch(profile, { CHORD_AGENT_APPROVE: 'always' });
   try {
+    const shell = await pageWhere(app, isShell);
+    expect(await agents(app)).toMatchObject({ serving: null });
+    let settings = await agentsSettings(app, shell);
+    await expect(settings.getByText(NO_AGENTS)).toBeVisible();
+    await expect(settings.getByText(/^claude mcp add chord -- .* mcp$/)).toBeVisible();
+    await expect(settings.getByText(/^codex mcp add chord -- .* mcp$/)).toBeVisible();
+    await settings.getByRole('switch', { name: 'Let agents connect' }).click();
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(true);
-    const init = await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } });
+    await closeSettings(app);
+
+    // Deny (× answers the same): told so, and nothing is kept.
+    let mcp = relay(profile);
+    const init = await mcp.request('initialize', CODEX);
     expect(init.result).toMatchObject({ serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
-    const listed = await mcp.call('list_tabs');
-    expect(listed.isError).toBe(false);
-    expect(JSON.parse(listed.text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
+    const denied = mcp.call('list_tabs');
+    const popover = await pageWhere(app, isPopover);
+    const card = cardOf(popover, 'Codex');
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    // Who started it (once Chord has looked), where, what it may do; and it never takes the keyboard.
+    await expect(card).toContainText(/Started (by .+ )?in /);
+    for (const line of ['Open and read pages in its own Agent chord', 'Read a tab of yours only when you share it', 'Never see your passwords']) await expect(card).toContainText(line);
+    expect(await app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? '')).not.toContain('popover');
+    mkdirSync(capturesDir, { recursive: true });
+    await popover.waitForTimeout(600);
+    await card.screenshot({ path: join(capturesDir, 'agents-connect-card.png') });
+    expectClean(await audit(popover, 'connect card', { appearance: 'light' }));
+    await card.getByRole('button', { name: 'Deny', exact: true }).click();
+    expect(await denied).toMatchObject({ isError: true, text: DENIED });
+    mcp.child.kill();
+
+    // Allow once: this connection only. Then Stop: Settings lists it, and lets it continue.
+    mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const listed = mcp.call('list_tabs');
+    await answer(app, 'Codex', 'Allow once');
+    expect((await listed).isError).toBe(false);
+    expect(JSON.parse((await listed).text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
     expect(await agents(app)).toMatchObject({ connections: 1 });
     await app.evaluate(() => (globalThis as unknown as Hooks).chordTestHooks.agentsStopAll());
     expect(await mcp.call('list_tabs')).toMatchObject({ isError: true, text: 'The user stopped you in Chord. Don’t call Chord’s tools again until the user asks you to.' });
+    settings = await agentsSettings(app, shell);
+    await expect(settings.getByRole('heading', { name: 'Stopped' })).toBeVisible();
+    await expect(settings.getByText('Stopped · 0 tabs')).toBeVisible();
+    // Allowed once isn't allowed for good.
+    await expect(settings.getByText(NO_AGENTS)).toBeVisible();
+    await settings.getByRole('button', { name: 'Let Codex continue' }).click();
+    await expect(settings.getByRole('heading', { name: 'Stopped' })).toHaveCount(0);
+    expect((await mcp.call('list_tabs')).isError).toBe(false);
+    await closeSettings(app);
+    mcp.child.kill();
+    // A new connection asks again; its × is a no.
+    mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const again = mcp.call('list_tabs');
+    await answer(app, 'Codex', 'Close');
+    expect((await again).text).toBe(DENIED);
+    mcp.child.stdin!.end();
+    await mcp.exited;
   } finally {
     await app.close();
   }
-  // Quitting takes the endpoint away: the relay's next call says Chord isn't open, and the file is gone.
-  expect(await mcp.call('list_tabs')).toMatchObject({ isError: true, text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' });
+  // Quitting takes the endpoint away.
   expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
-  mcp.child.stdin!.end();
-  expect(await mcp.exited).toBe(0);
   rmSync(profile, { recursive: true, force: true });
+});
+
+test('Always allow: no card next time, with the sign-ins of the window that allowed it; once those are gone it asks again; Remove forgets it', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    // Personal gets sign-ins of its own, so they can go later.
+    const own = '7d4c8a10-5b3e-4c2a-9f61-0a1b2c3d4e5f';
+    const chordId = await shell.evaluate(async () => {
+      type Snap = { state: { windows: Record<string, { activeChordId: string }> } };
+      const snap = await (window as unknown as { chord: { state: { snapshot(): Promise<Snap> } } }).chord.state.snapshot();
+      return Object.values(snap.state.windows)[0]!.activeChordId;
+    });
+    await dispatch(shell, { t: 'chord.profile', chordId, profileId: own });
+
+    let mcp = relay(profile);
+    await mcp.request('initialize', CLAUDE);
+    const first = mcp.call('list_tabs');
+    await answer(app, 'Claude Code', 'Always allow');
+    expect((await first).isError).toBe(false);
+    const settings = await agentsSettings(app, shell);
+    await expect(settings.getByText('Always allowed · Personal’s sign-ins · connected now · 0 tabs', { exact: true })).toBeVisible();
+    await expect(settings.getByText('Chord goes by the name the agent gives. Remove any you don’t recognize.')).toBeVisible();
+    mkdirSync(capturesDir, { recursive: true });
+    await settle(settings);
+    await settings.screenshot({ path: join(capturesDir, 'agents-settings.png') });
+    expectClean(await audit(settings, 'Settings → Agents', { appearance: 'light' }));
+    mcp.child.stdin!.end();
+    await mcp.exited;
+    await expect(settings.getByText('Always allowed · Personal’s sign-ins · last used today', { exact: true })).toBeVisible();
+
+    // Reconnecting: let in without a card.
+    mcp = relay(profile);
+    await mcp.request('initialize', CLAUDE);
+    expect((await mcp.call('list_tabs')).isError).toBe(false);
+    await expect(cardOf(await pageWhere(app, isPopover), 'Claude Code')).toHaveCount(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+
+    // Those sign-ins gone (Personal back on the default ones): the card asks again.
+    await dispatch(shell, { t: 'chord.profile', chordId, profileId: 'default' });
+    await expect(settings.getByText('Always allowed · last used today', { exact: true })).toBeVisible();
+    mcp = relay(profile);
+    await mcp.request('initialize', CLAUDE);
+    const asked = mcp.call('list_tabs');
+    await answer(app, 'Claude Code', 'Allow once');
+    expect((await asked).isError).toBe(false);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+
+    // Remove: forgotten.
+    await settings.getByRole('button', { name: 'Remove Claude Code' }).click();
+    await expect(settings.getByText(NO_AGENTS)).toBeVisible();
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
 });
 
 test('Agents off (the default): no endpoint, and the relay finds no Chord', async () => {
@@ -142,15 +276,17 @@ test.afterAll(() => site.server.close());
 test('an agent opens and reads its own tabs, is stopped and let go on, is paused while you type, and its tabs are kept or closed when it’s done', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_AGENT_APPROVE: 'once' });
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
   try {
     const shell = await pageWhere(app, isShell);
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     let mcp = relay(profile);
-    await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } });
+    await mcp.request('initialize', CODEX);
 
     // open_tab: a tab in its own chord, shown below yours in the sidebar.
-    const opened = JSON.parse((await mcp.call('open_tab', { url: `${site.origin}/notes` })).text) as { data: { tab_id: string; title: string; page_id: string } };
+    const opening = mcp.call('open_tab', { url: `${site.origin}/notes` });
+    await answer(app, 'Codex', 'Allow once');
+    const opened = JSON.parse((await opening).text) as { data: { tab_id: string; title: string; page_id: string } };
     expect(opened.data).toMatchObject({ tab_id: 'a1', title: 'Release notes' });
     const section = shell.getByRole('region', { name: 'Codex’s tabs' });
     await expect(section.getByRole('button', { name: /Release notes/ })).toBeVisible();
@@ -203,8 +339,10 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
 
     // Another agent, done: Keep moves its tab into your chord.
     mcp = relay(profile);
-    await mcp.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '2.1.328' } });
-    await mcp.call('open_tab', { url: `${site.origin}/notes#kept` });
+    await mcp.request('initialize', CLAUDE);
+    const keeping = mcp.call('open_tab', { url: `${site.origin}/notes#kept` });
+    await answer(app, 'Claude Code', 'Allow once');
+    await keeping;
     mcp.child.stdin!.end();
     await mcp.exited;
     await expect(shell.getByText('Claude Code finished. Keep these tabs?')).toBeVisible();

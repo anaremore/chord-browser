@@ -1,0 +1,109 @@
+/* An outside agent's card body (S18; mocks/agents-s18-m1.html §1). */
+
+.head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-2) 0 var(--space-4);
+  font: var(--text-title);
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  font: var(--text-title);
+  overflow-wrap: anywhere;
+}
+
+.close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-subtle);
+}
+
+.close:hover {
+  background: var(--color-item-hover);
+}
+
+.note {
+  margin: var(--space-2) 0 0;
+  padding: 0 var(--space-4);
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding: 0 var(--space-4);
+  list-style: none;
+  font: var(--text-body);
+}
+
+.list li {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.list li::before {
+  color: var(--color-fg-subtle);
+  content: '·';
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: flex-end;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.link,
+.quiet,
+.primary {
+  block-size: var(--size-icon-button);
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  font: var(--text-label);
+  white-space: nowrap;
+}
+
+.link {
+  padding-inline: var(--space-1);
+  background: none;
+  color: var(--color-fg-muted);
+  font: var(--text-body);
+}
+
+.quiet {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--size-hairline) var(--color-divider);
+  color: var(--color-fg);
+}
+
+.primary {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.quiet:hover {
+  background: var(--color-item-hover);
+}
+
+.close:focus-visible,
+.link:focus-visible,
+.quiet:focus-visible,
+.primary:focus-visible {
+  outline: var(--size-focus-ring) solid var(--color-focus-ring);
+  outline-offset: var(--size-hairline);
+}

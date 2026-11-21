@@ -6,6 +6,7 @@
 import { formatKeys, PASSWORD_REGENERATE_KEYS, SAFE_BROWSING_NOTICE, type Platform, type SitePermission } from '@chord/core';
 import {
   SYSTEM_SHARE_SOURCE,
+  type AgentConnectCard,
   type AuthPrompt,
   type DrmNotice,
   type FindState,
@@ -45,6 +46,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
+import { AgentCardBody } from '../shared/AgentCard';
 import { Favicon } from '../shared/Favicon';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { useLive, type Live } from '../shared/live';
@@ -503,6 +505,33 @@ export function AuthCard({ prompt }: { prompt: AuthPrompt }) {
         </button>
       </div>
     </form>
+  );
+}
+
+/** What an outside agent may do, as the connect card lists it (mocks/agents-s18-m1.html §1). */
+const AGENT_MAY = ['Open and read pages in its own Agent chord', 'Read a tab of yours only when you share it', 'Never see your passwords'];
+
+/**
+ * An outside agent asks to use Chord (S18 M1d): centered at the top of the page, never taking the keyboard.
+ * Who started it is a hint: the name is the agent's own, the program and folder are what the OS says.
+ */
+function AgentConnectCardView({ card }: { card: AgentConnectCard }) {
+  const respond = (answer: 'deny' | 'once' | 'always') => void api.agents.respond(card.id, answer);
+  return (
+    <div className={styles.card} role="alertdialog" aria-label={`${card.name} wants to use Chord`}>
+      <AgentCardBody
+        title={`${card.name} wants to use Chord`}
+        note={card.startedBy ? `Started by ${card.startedBy} in ${card.folder}.` : `Started in ${card.folder}.`}
+        list={AGENT_MAY}
+        closeLabel="Close"
+        onClose={() => respond('deny')}
+        actions={[
+          { label: 'Deny', look: 'link', onClick: () => respond('deny') },
+          { label: 'Allow once', look: 'quiet', onClick: () => respond('once') },
+          { label: 'Always allow', look: 'primary', onClick: () => respond('always') },
+        ]}
+      />
+    </div>
   );
 }
 
@@ -1149,7 +1178,7 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
   const menu = menuOnly ? state.passwordMenu : null;
   const hasCards = menuOnly
     ? Boolean(menu)
-    : Boolean(state.find || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.passwordSave || state.safeBrowsingOffer || state.drm || state.effects);
+    : Boolean(state.find || state.agentCard || state.permission || state.share || state.auth || state.passkey || state.passwordsUnlock || state.passwordSave || state.safeBrowsingOffer || state.drm || state.effects);
 
   // Main fits the view to the cards; with none, the view hides.
   useLayoutEffect(() => {
@@ -1177,6 +1206,7 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
   return (
     <div ref={root} className={styles.root} style={style}>
       {state.find && <FindBar find={state.find} />}
+      {state.agentCard && <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}

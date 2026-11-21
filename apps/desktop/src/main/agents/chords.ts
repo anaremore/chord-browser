@@ -179,7 +179,11 @@ export class AgentChords {
   note(nodeId: NodeId, what: AgentHeld, detail: string): void {
     const chord = this.chordOfTab(nodeId);
     if (!chord) return;
-    chord.notes.push({ nodeId, what, detail: detail.slice(0, 500) });
+    const text = detail.slice(0, 500);
+    // A site asks for a sign-in on every retry and every page of it: one note per tab and origin (the note names
+    // it) until the agent hears it.
+    if (what === 'signin' && chord.notes.some((n) => n.what === 'signin' && n.nodeId === nodeId && n.detail === text)) return;
+    chord.notes.push({ nodeId, what, detail: text });
     if (chord.notes.length > NOTES_KEPT) chord.notes.splice(0, chord.notes.length - NOTES_KEPT);
   }
 

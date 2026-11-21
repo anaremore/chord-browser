@@ -25,6 +25,8 @@ const api: SettingsApi = {
     linkRoute: (host, chordId) => invoke('settings:linkRoute', { host, chordId }),
     defaultBrowser: () => invoke('settings:defaultBrowser'),
     assistant: (request) => invoke('settings:assistant', request),
+    agents: (request) => invoke('settings:agents', request),
+    onAgentsChange: (listener) => subscribe('settings:agentsChanged', () => listener()),
     makeDefaultBrowser: () => invoke('settings:makeDefaultBrowser'),
     updateStatus: () => invoke('settings:updateStatus'),
     checkForUpdates: () => invoke('settings:checkForUpdates'),

@@ -342,3 +342,25 @@ describe('Review 1 of #77', () => {
     expect(nodeOf(t.store.state, 'a1')).toMatchObject({ chordId: 'c1' });
   });
 });
+
+describe('S18 M1d', () => {
+  it('a site asking again and again for a sign-in is one note per tab and origin until the agent hears it', () => {
+    const t = setup();
+    const asked = (origin: string) => `The site ${origin} asked for a sign-in; Chord doesn’t sign agents in.`;
+    for (let i = 0; i < 5; i++) t.chords.note('a1', 'signin', asked('https://a.test'));
+    t.chords.note('a1', 'signin', asked('https://b.test'));
+    t.chords.note('a2', 'signin', asked('https://a.test'));
+    t.chords.note('a1', 'dialog', 'alert: hi');
+    t.chords.note('a1', 'dialog', 'alert: hi');
+    expect(t.chords.drain(t.agent).map((n) => `${n.nodeId} ${n.what} ${n.detail.slice(9, 23)}`)).toEqual([
+      'a1 signin https://a.test',
+      'a1 signin https://b.test',
+      'a2 signin https://a.test',
+      'a1 dialog ',
+      'a1 dialog ',
+    ]);
+    // Heard: the next ask is a new note.
+    t.chords.note('a1', 'signin', asked('https://a.test'));
+    expect(t.chords.drain(t.agent)).toHaveLength(1);
+  });
+});

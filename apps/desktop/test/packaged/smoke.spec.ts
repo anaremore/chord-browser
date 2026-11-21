@@ -330,10 +330,9 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
   }
 });
 
-test('Chord mcp holds no lock, and a packaged Chord never serves agents, even with the setting on and asked to', async () => {
+test('Chord mcp holds no lock; a packaged Chord serves agents only with Settings → Agents on, and no hook lets one in', async () => {
   const executable = packagedExecutable();
   const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
-  // A profile with Agents switched on in its settings, as Settings → Agents will save it (M1d).
   const first = await start(executable, profile);
   try {
     await quit(first, await pageWhere(first.browser, isShell));
@@ -350,27 +349,50 @@ test('Chord mcp holds no lock, and a packaged Chord never serves agents, even wi
       db.close();
     }
   };
-  expect(agentsSetting('true')).toBe('true');
+  /** Chord on that profile with the old development switches set: neither does anything in a packaged build. */
+  const startAsked = () => {
+    process.env['CHORD_AGENTS'] = '1';
+    process.env['CHORD_AGENT_APPROVE'] = 'always';
+    return start(executable, profile).finally(() => {
+      delete process.env['CHORD_AGENTS'];
+      delete process.env['CHORD_AGENT_APPROVE'];
+    });
+  };
+  const notOpen = { isError: true, content: [{ type: 'text', text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' }] };
   const mcp = mcpClient(executable, profile);
   try {
     await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '0.160.1' } });
-    // No lock: a Chord starts on that profile as if the relay weren't there. Packaged, it never serves agents
-    // (CHORD_AGENTS is development-only): no endpoint file, and the relay still finds no Chord.
-    process.env['CHORD_AGENTS'] = '1';
-    const app = await start(executable, profile).finally(() => delete process.env['CHORD_AGENTS']);
+    // Off (the default): no lock, so a Chord starts on that profile as if the relay weren't there, and serves nothing.
+    expect(agentsSetting()).toBeUndefined();
+    let app = await startAsked();
     try {
       const shell = await pageWhere(app.browser, isShell);
       await expect(shell.getByText('Personal')).toBeVisible();
       expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
-      const call = await mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
-      expect(call.result).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.' }] });
+      expect((await mcp.request('tools/call', { name: 'list_tabs', arguments: {} })).result).toMatchObject(notOpen);
       await quit(app, shell);
     } catch (error) {
       app.child.kill();
       throw error;
     }
-    // The setting was read and kept as it was: it's ignored, not lost.
-    expect(agentsSetting()).toBe('true');
+    // On, as Settings → Agents saves it: one endpoint, and the agent's first call shows the card (no hook answers it).
+    expect(agentsSetting('true')).toBe('true');
+    app = await startAsked();
+    try {
+      const shell = await pageWhere(app.browser, isShell);
+      await expect(shell.getByText('Personal')).toBeVisible();
+      await expect.poll(() => existsSync(join(profile, 'agent-endpoint.json'))).toBe(true);
+      const call = mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
+      const popover = await pageWhere(app.browser, (url) => url === 'chord://popover/');
+      await expect(popover.getByRole('alertdialog', { name: 'Codex wants to use Chord' })).toBeVisible({ timeout: 15_000 });
+      await quit(app, shell);
+      // Quitting takes the card down unanswered: the agent was never let in.
+      expect((await call).result).toMatchObject({ isError: true });
+    } catch (error) {
+      app.child.kill();
+      throw error;
+    }
+    expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
   } finally {
     mcp.child.kill();
     rmSync(profile, { recursive: true, force: true });

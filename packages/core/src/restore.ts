@@ -32,6 +32,7 @@ import {
   type SitePermissions,
   type State,
   type WindowModel,
+  cleanAgentsAllowed,
 } from './model';
 import { cleanOffSites } from './ad-blocking';
 import { cleanOverrides } from './bindings';
@@ -199,6 +200,7 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
     if (typeof saved[key] === 'boolean') settings[key] = saved[key];
   }
   if (typeof saved['autoPip'] === 'boolean') settings.autoPip = saved['autoPip'];
+  settings.agentsAllowed = cleanAgentsAllowed(saved['agentsAllowed']);
   // A profile from before auto picture-in-picture's default became off: main switches it off once (index.ts).
   settings.autoPipDefaultOff = saved['autoPipDefaultOff'] === true;
   if (saved['externalLinks'] === 'mini' || saved['externalLinks'] === 'tab') settings.externalLinks = saved['externalLinks'];

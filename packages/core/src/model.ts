@@ -399,6 +399,8 @@ export interface Settings {
    * Development builds only until Settings → Agents (S18 M1d); packaged builds ignore it.
    */
   agentsEnabled: boolean;
+  /** Outside agents you've let in for good (the connect card's *Always allow*), each with the sign-ins it uses. */
+  agentsAllowed: AgentAllowance[];
   /** New chords keep their own sign-ins (a profile of their own) instead of sharing everyone's. */
   separateSignIns: boolean;
   /** First run is done (DESIGN.md §8.1). Only a brand-new profile starts without it. */
@@ -511,6 +513,43 @@ export interface SpellcheckSettings {
   language: string | null;
 }
 
+/**
+ * An outside agent let in for good (S18 M1d): by the name it gives and the program that started it (both
+ * hints, never proof: S18 §3), with the sign-ins of the window that allowed it. If those sign-ins are gone,
+ * Chord asks again.
+ */
+export interface AgentAllowance {
+  name: string;
+  /** The executable that started `chord mcp` (claude.exe, codex.exe…), if Chord could tell. */
+  parent: string | null;
+  profileId: ProfileId;
+  allowedAt: number;
+  lastUsedAt: number;
+}
+
+/** At most this many agents allowed for good. */
+export const AGENTS_ALLOWED_MAX = 50;
+
+/** A list as saved or sent, kept to what an allowance can be. */
+export function cleanAgentsAllowed(value: unknown): AgentAllowance[] {
+  if (!Array.isArray(value)) return [];
+  const out: AgentAllowance[] = [];
+  for (const item of value.slice(0, AGENTS_ALLOWED_MAX)) {
+    if (!item || typeof item !== 'object') continue;
+    const a = item as Record<string, unknown>;
+    if (typeof a['name'] !== 'string' || !a['name'].trim() || typeof a['profileId'] !== 'string' || !a['profileId']) continue;
+    const time = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+    out.push({
+      name: a['name'].trim().slice(0, 60),
+      parent: typeof a['parent'] === 'string' && a['parent'] ? a['parent'].slice(0, 1000) : null,
+      profileId: a['profileId'].slice(0, 100),
+      allowedAt: time(a['allowedAt']),
+      lastUsedAt: time(a['lastUsedAt']),
+    });
+  }
+  return out;
+}
+
 export interface AssistantSettings {
   /** Off removes the panel, its button, shortcut and menu items; nothing is ever spawned. */
   enabled: boolean;
@@ -545,6 +584,7 @@ export const DEFAULT_SETTINGS: Settings = {
   searchSuggestions: true,
   checkForUpdates: true,
   agentsEnabled: false,
+  agentsAllowed: [],
   separateSignIns: false,
   onboarded: true,
   archiveAfter: '12h',
@@ -583,6 +623,7 @@ export const defaultSettings = (): Settings => ({
   motion: { ...DEFAULT_SETTINGS.motion },
   interface: { ...DEFAULT_SETTINGS.interface },
   themes: [],
+  agentsAllowed: [],
   spellcheck: { ...DEFAULT_SETTINGS.spellcheck },
   shortcuts: {},
   adBlocking: { ...DEFAULT_SETTINGS.adBlocking, offSites: [] },
@@ -614,6 +655,8 @@ export interface SettingsPatch {
   searchSuggestions?: boolean;
   checkForUpdates?: boolean;
   agentsEnabled?: boolean;
+  /** The whole new list (main's: the connect card adds, Settings → Agents removes). */
+  agentsAllowed?: AgentAllowance[];
   separateSignIns?: boolean;
   onboarded?: boolean;
   archiveAfter?: ArchiveAfter;

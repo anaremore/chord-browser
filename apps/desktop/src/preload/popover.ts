@@ -21,6 +21,7 @@ const api: PopoverApi = {
     unlock: (id) => invoke('auth:unlock', { id }),
   },
   passkey: { respond: (id, credentialId) => invoke('passkey:respond', { id, credentialId }) },
+  agents: { respond: (id, answer) => invoke('agents:card', { id, answer }) },
   passwords: {
     unlock: (id, passphrase, keep) => invoke('passwords:unlockCard', { id, passphrase, keep }),
     choose: (id, index) => invoke('passwords:menuChoose', { id, index }),
