@@ -12,7 +12,7 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -284,7 +284,21 @@ function processInfo(pid: number): { mb: number; children: number } {
     return { mb: bytes! / 2 ** 20, children: children! };
   }
   const kb = process.platform === 'linux' ? Number(/^VmRSS:\s+(\d+)/m.exec(execFileSync('cat', [`/proc/${pid}/status`], { encoding: 'utf8' }))?.[1]) : Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim());
-  const children = execFileSync('ps', ['-A', '-o', 'ppid='], { encoding: 'utf8' }).split('\n').filter((l) => Number(l.trim()) === pid).length;
+  // Linux reads /proc, since the Fedora .rpm container has no ps. The parent pid is the 2nd field after the command
+  // name, which sits in parentheses (and may hold spaces).
+  const children =
+    process.platform === 'linux'
+      ? readdirSync('/proc')
+          .filter((d) => /^\d+$/.test(d))
+          .filter((d) => {
+            try {
+              const stat = readFileSync(`/proc/${d}/stat`, 'utf8');
+              return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) === pid;
+            } catch {
+              return false;
+            }
+          }).length
+      : execFileSync('ps', ['-A', '-o', 'ppid='], { encoding: 'utf8' }).split('\n').filter((l) => Number(l.trim()) === pid).length;
   return { mb: kb / 1024, children };
 }
 
