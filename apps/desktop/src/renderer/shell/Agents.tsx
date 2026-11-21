@@ -4,7 +4,7 @@
  * an agent's tab while it works there or is held. The section is never in a
  * private window. What the buttons do happens in main (main/agents).
  */
-import { agentChords, nodeList, type AgentLive, type State, type TabNode } from '@chord/core';
+import { agentChords, nodesOfChord, type AgentLive, type State, type TabNode } from '@chord/core';
 import type { Appearance } from '@chord/tokens';
 import { Favicon } from '../shared/Favicon';
 import { api } from './api';
@@ -15,11 +15,10 @@ export function AgentSections({ state, windowId, appearance }: { state: State; w
   const win = state.windows[windowId];
   const chords = agentChords(state);
   if (!win || win.private || chords.length === 0) return null;
-  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab');
   return (
     <div className={styles.sections}>
       {chords.map((chord) => {
-        const own = tabs.filter((n) => n.chordId === chord.id).sort((a, b) => a.createdAt - b.createdAt);
+        const own = nodesOfChord(state, chord.id).filter((n): n is TabNode => n.kind === 'tab').sort((a, b) => a.createdAt - b.createdAt);
         return (
           <section key={chord.id} className={styles.section} aria-label={`${chord.name}’s tabs`}>
             <h2 className={styles.header}>

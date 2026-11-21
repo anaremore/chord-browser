@@ -32,13 +32,12 @@ describe('the update service', () => {
     ]);
   });
 
-  it('downloads over HTTPS only, and only what matches the announced hash', async () => {
+  it('downloads over HTTPS only (the announced hash is checked in the installer’s worker)', async () => {
     const body = Buffer.from('the package');
     const fetch: Fetch = async () => ({ ok: true, status: 200, text: async () => '', arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length) });
     const store = new WebStore({ fetch, prodversion: '156' });
     const info = { id: ID, status: 'ok', version: '1', codebase: 'https://example.com/a.crx', sha256: sha256Hex(body).toUpperCase() };
     expect((await store.download(info)).equals(body)).toBe(true);
-    await expect(store.download({ ...info, sha256: sha256Hex('something else') })).rejects.toThrow(/doesn’t match/);
     await expect(store.download({ ...info, codebase: 'http://example.com/a.crx' })).rejects.toThrow(/HTTPS/);
     await expect(store.download({ ...info, codebase: 'http://127.0.0.1:4000/a.crx' })).resolves.toBeInstanceOf(Buffer);
     await expect(new WebStore({ fetch, prodversion: '156', maxBytes: 3 }).download(info)).rejects.toThrow(/too big/);

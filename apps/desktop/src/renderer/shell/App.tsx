@@ -9,7 +9,7 @@ import {
   sortedChords,
   splitOf,
   nodeOf,
-  nodeList,
+  nodesOfChord,
   type ActionId,
   type LiveTab,
   type LoadError,
@@ -505,7 +505,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   useEffect(() => {
     if (!chord || announcedChord.current === chord.id) return;
     announcedChord.current = chord.id;
-    const tabs = nodeList(state).filter((n) => n.kind === 'tab' && n.chordId === chord.id);
+    const tabs = nodesOfChord(state, chord.id).filter((n) => n.kind === 'tab');
     const pinned = tabs.filter((n) => n.section === 'pinned').length;
     announce(`${chord.name} chord, ${pinned} pinned, ${tabs.length - pinned} unpinned`);
   }, [chord?.id]);

@@ -4,7 +4,6 @@
  * answers with the latest version of each, where to download it, and the
  * download's SHA-256.
  */
-import { createHash } from 'node:crypto';
 
 /** Chrome's update endpoint. */
 export const WEB_STORE_UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
@@ -75,7 +74,11 @@ export class WebStore {
     return parseUpdateResponse(await response.text());
   }
 
-  /** Download a package and check it against the hash the update service gave. */
+  /**
+   * Download a package (HTTPS, size-limited). The hash the update service gave
+   * is checked with the signatures, in the installer's worker (unpack-worker.ts):
+   * hashing 30 MB on main would hold it for tens of milliseconds.
+   */
   async download(info: UpdateInfo): Promise<Buffer> {
     if (!info.codebase) throw new Error(`No download for ${info.id} (${info.status})`);
     const codebase = new URL(info.codebase);
@@ -86,9 +89,6 @@ export class WebStore {
     if (!response.ok) throw new Error(`Download failed (${response.status})`);
     const crx = Buffer.from(await response.arrayBuffer());
     if (crx.length > (this.options.maxBytes ?? MAX_CRX_BYTES)) throw new Error('The package is too big');
-    if (info.sha256 && createHash('sha256').update(crx).digest('hex') !== info.sha256.toLowerCase()) {
-      throw new Error('The download doesn’t match what the Chrome Web Store described');
-    }
     return crx;
   }
 }

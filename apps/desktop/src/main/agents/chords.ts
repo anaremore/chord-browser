@@ -26,7 +26,7 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { randomBytes } from 'node:crypto';
-import { isAgentChord, nodeList, nodeOf, uuidv7, type AgentLive, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -114,8 +114,8 @@ export class AgentChords {
 
   /** The agent's tabs, newest first, as the sidebar lists them. */
   tabsOf(chordId: ChordId): TabNode[] {
-    return nodeList(this.deps.store.state)
-      .filter((n): n is TabNode => n.kind === 'tab' && n.chordId === chordId)
+    return nodesOfChord(this.deps.store.state, chordId)
+      .filter((n): n is TabNode => n.kind === 'tab')
       .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   }
 
