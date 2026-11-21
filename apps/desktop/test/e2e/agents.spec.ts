@@ -370,10 +370,13 @@ test('you share a tab: the agent reads it and your selection, can’t close it, 
     await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/notes` });
     const page = await pageWhere(app, (url) => url.startsWith(`${site.origin}/notes`));
     await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
-    const key = [process.platform === 'darwin' ? 'meta' : 'control', 'shift'];
+    // The key from the page, as you'd press it; where menu accelerators can't fire from injected keys (macOS: no
+    // NSEvent; headless Weston: no active window) the same action, as the menu's accelerator runs it.
+    const keyWorks = process.platform !== 'darwin' && process.env['XDG_SESSION_TYPE'] !== 'wayland';
+    const shareKey = () => (keyWorks ? pressReal(app, `${site.origin}/notes`, 'K', ['control', 'shift']) : runAction(shell, 'agents.share'));
 
     // No agent yet: the key says so.
-    await pressReal(app, `${site.origin}/notes`, 'K', key);
+    await shareKey();
     await expect(shell.getByText('No agent is connected.')).toBeVisible();
 
     const mcp = relay(profile);
@@ -383,7 +386,7 @@ test('you share a tab: the agent reads it and your selection, can’t close it, 
     expect(JSON.parse((await first).text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
 
     // The key shares the tab on screen with the agent that called last: its bar, and the ✳ on its row.
-    await pressReal(app, `${site.origin}/notes`, 'K', key);
+    await shareKey();
     const bar = shell.getByRole('status').filter({ hasText: 'Shared with Codex: it can read this tab' });
     await expect(bar).toBeVisible();
     await expect(shell.getByRole('img', { name: 'Shared with Codex' })).toBeVisible();
@@ -416,7 +419,7 @@ test('you share a tab: the agent reads it and your selection, can’t close it, 
     // Shared again (the key toggles), then Stop sharing on the bar.
     await page.evaluate((url) => (location.href = url), `${site.origin}/notes`);
     await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
-    await pressReal(app, `${site.origin}/notes`, 'K', key);
+    await shareKey();
     await expect(bar).toBeVisible();
     await bar.getByRole('button', { name: 'Stop sharing' }).click();
     await expect(bar).toHaveCount(0);
