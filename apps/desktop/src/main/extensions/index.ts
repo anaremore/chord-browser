@@ -9,6 +9,7 @@ import {
   extensionKey,
   isPrivateProfile,
   tabsInOrder,
+  openedTab,
   nodeOf,
   uuidv7,
   type Command,
@@ -181,8 +182,9 @@ export class Extensions {
         const w = (named && !named.isPrivate ? named : undefined) || this.deps.lastWindow();
         if (!w) throw new Error('No window to open a tab in');
         const nodeId = uuidv7();
+        const before = this.deps.state();
         this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: url ?? NEW_TAB_URL, background: !active, id: nodeId });
-        const contents = nodeOf(this.deps.state(), nodeId) ? this.deps.ensureTab(nodeId) : undefined;
+        const contents = openedTab(before, this.deps.state(), w.id, nodeId) ? this.deps.ensureTab(nodeId) : undefined;
         if (!contents) throw new Error('The tab could not be opened');
         if (contents.session !== this.host(profileId, false)?.session) throw new Error('The tab opened in another profile');
         return [contents, w.window];

@@ -87,6 +87,59 @@ describe('TabIconIndex', () => {
     expect([...index.tabsOn(site)].map((t) => t.id).sort()).toEqual(tabs);
   });
 
+  it.each(cases)('$name (caught up a bucket at a time)', ({ steps, site, tabs }) => {
+    let state: State = freeze(emptyState(), true);
+    const index = new TabIconIndex(() => state);
+    for (const step of steps) state = produce(state, step);
+    let looks = 0;
+    while (!index.catchUp(1)) looks++;
+    expect(looks).toBeLessThanOrEqual(256);
+    expect([...index.known(site)].map((t) => t.id).sort()).toEqual(tabs);
+  });
+
+  it('a limited look reads only so many buckets, and goes by what it has read so far', () => {
+    let state: State = freeze(emptyState(), true);
+    const index = new TabIconIndex(() => state);
+    expect(index.catchUp()).toBe(true);
+    // Tabs in many buckets: one look of 4 can't read them all.
+    state = produce(state, (draft) => {
+      for (let i = 0; i < 64; i++) setNode(draft, tab(`t${i}`, `https://a.test/${i}`, 'icon-a'));
+    });
+    expect(index.catchUp(4)).toBe(false);
+    const partly = [...index.known('https://a.test')].length;
+    expect(partly).toBeGreaterThan(0);
+    expect(partly).toBeLessThan(64);
+    expect(index.catchUp()).toBe(true);
+    expect([...index.known('https://a.test')]).toHaveLength(64);
+  });
+
+  it('catching up in slices: a slice a turn, one run at a time, to the newest state', () => {
+    let state: State = freeze(emptyState(), true);
+    const index = new TabIconIndex(() => state);
+    index.catchUp();
+    state = produce(state, (draft) => {
+      for (let i = 0; i < 64; i++) setNode(draft, tab(`t${i}`, `https://a.test/${i}`, 'icon-a'));
+    });
+    const turns: (() => void)[] = [];
+    const next = (step: () => void) => turns.push(step);
+    index.catchUpInSlices(4, next);
+    // Nothing runs on the caller's turn.
+    expect([...index.known('https://a.test')]).toHaveLength(0);
+    // Asked again while it runs: still one run.
+    index.catchUpInSlices(4, next);
+    expect(turns).toHaveLength(1);
+    let ran = 0;
+    while (turns.length > 0) {
+      turns.shift()!();
+      ran++;
+      // A change meanwhile is caught up too.
+      if (ran === 2) state = produce(state, add(tab('late', 'https://a.test/late', 'icon-a')));
+    }
+    expect(ran).toBeGreaterThan(1);
+    expect([...index.known('https://a.test')]).toHaveLength(65);
+    expect(index.catchUp(0)).toBe(true);
+  });
+
   it('a site with no tabs left goes from the index', () => {
     let state: State = freeze(emptyState(), true);
     const index = new TabIconIndex(() => state);

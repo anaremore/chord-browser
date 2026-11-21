@@ -1,6 +1,6 @@
 /** Read-only queries over State, shared by main and renderers. */
 import { MAX_FAVORITES, type Chord, type ChordId, type Download, type Favorite, type NodeId, type Section, type SidebarNode, type State, type TabNode, type WindowId } from './model';
-import { childrenIndex, nodeOf, nodesOfChord } from './nodes';
+import { childrenIndex, hasNode, nodeOf, nodesOfChord } from './nodes';
 import { placeKey } from './rank';
 import { shownTabs } from './split';
 
@@ -18,6 +18,18 @@ export function tabsInOrder(state: State, chordId: ChordId): TabNode[] {
   walk('pinned', null);
   walk('today', null);
   return out;
+}
+
+/**
+ * The tab `tab.open` made with `id` in a window, if it did: not there
+ * before, a tab now, in the chord the window showed (where a tab without a
+ * route opens). Null otherwise: nothing opened, or the id names some other node.
+ */
+export function openedTab(before: State, after: State, windowId: WindowId, id: NodeId): TabNode | null {
+  if (hasNode(before, id)) return null;
+  const node = nodeOf(after, id);
+  const chordId = before.windows[windowId]?.activeChordId;
+  return node?.kind === 'tab' && chordId !== undefined && node.chordId === chordId ? node : null;
 }
 
 /** Everything inside a folder (or a split), at any depth, parents before their children. To read (in a draft, see `nodeList`). */

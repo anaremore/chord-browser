@@ -13,7 +13,7 @@ import { trimNavState } from './nav';
 import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
-import { TabIconIndex } from './site-icons';
+import { LOOK_BUCKETS, TabIconIndex } from './site-icons';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -125,16 +125,18 @@ export class TabManager {
     if (icons.size > SITE_ICONS) icons.delete(icons.keys().next().value!);
   }
 
-  /** Read every tab into the icon index now (after launch), rather than on the first navigation that needs it. */
+  /** Read every tab into the icon index (after launch), a slice of buckets a turn, rather than on the first navigation that needs it. */
   warmIcons(): void {
-    this.tabIcons.warm();
+    this.tabIcons.catchUpInSlices();
   }
 
   /** A site's icon if Chord has one: kept from earlier, or on another of this session's tabs there. */
   private knownIcon(session: Session, site: string): string | null {
     const kept = this.siteIcons.get(session)?.get(site);
     if (kept) return kept;
-    for (const node of this.tabIcons.tabsOn(site)) {
+    // A few buckets now; after a big change (an import), the rest on later turns, and this look goes by what's read so far.
+    if (!this.tabIcons.catchUp(LOOK_BUCKETS)) this.tabIcons.catchUpInSlices();
+    for (const node of this.tabIcons.known(site)) {
       if (!node.favicon || this.deps.sessionFor(node) !== session) continue;
       this.rememberIcon(session, node.url, node.favicon);
       return node.favicon;

@@ -1139,7 +1139,8 @@ if (!app.requestSingleInstanceLock()) {
       void assistant?.stopAll();
     };
     afterLaunch.run(() => void assistant!.afterLaunch());
-    // The tabs-with-an-icon index's one pass over every tab (tens of ms at 35,000 nodes), so no navigation waits for it.
+    // The tabs-with-an-icon index reads every tab, so no navigation waits for it: a slice of buckets a turn, the first
+    // on a turn of its own (tens of ms in one pass at 35,000 nodes, a few ms a slice), never right after the task above.
     afterLaunch.run(() => browser!.tabs.warmIcons());
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.

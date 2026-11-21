@@ -9,7 +9,7 @@
 import { emptyState, nodeList, nodeOf, nodesOfChord, setNode, type SidebarNode, type State, type TabNode } from '@chord/core';
 import { freeze, produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { TabIconIndex } from '../../src/main/site-icons';
+import { LOOK_BUCKETS, SLICE_BUCKETS, TabIconIndex } from '../../src/main/site-icons';
 
 const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.35, appearance: 'auto' as const };
 
@@ -87,9 +87,69 @@ function newOrigin(base: State) {
   return { before: timed(scan), after: timed(lookup), build };
 }
 
+/**
+ * The worst look: since the last, 300 tabs went elsewhere and 30,000 bookmarks were imported (every bucket changed).
+ * The index read now, beside the pass over every node; each run a fresh index, read once before the changes.
+ */
+function worstCase() {
+  const base = bigState(10, 5_000);
+  const changed = produce(base, (draft) => {
+    for (let i = 0; i < 300; i++) (nodeOf(draft, `t${i * 13}`) as TabNode).url = `https://moved${i}.test/`;
+    for (let i = 0; i < 30_000; i++) setNode(draft, tab(`b${i}`, 'c9', 100_000 + i));
+  });
+  const site = 'https://nowhere-yet.test';
+  const scan = () => {
+    for (const node of nodeList(changed)) if (node.kind === 'tab' && node.favicon && (node.url === site || node.url.startsWith(`${site}/`))) return node.favicon;
+    return null;
+  };
+  const before = best(scan);
+  const times: number[] = [];
+  for (let i = 0; i < 12; i++) {
+    let state = base;
+    const index = new TabIconIndex(() => state);
+    index.catchUp();
+    state = changed;
+    // As knownIcon looks: a few buckets now, the rest in slices on later turns.
+    const t = performance.now();
+    index.catchUp(LOOK_BUCKETS);
+    for (const node of index.known(site)) void node;
+    if (i >= 2) times.push(performance.now() - t);
+  }
+  return { before, after: Math.min(...times) };
+}
+
+/** The index's first read of every tab, after launch: in one pass (as before), and in slices, the longest of which main runs at once. */
+function warmUp(state: State) {
+  const once: number[] = [];
+  const slices: number[] = [];
+  let count = 0;
+  for (let i = 0; i < 7; i++) {
+    const whole = new TabIconIndex(() => state);
+    let t = performance.now();
+    whole.catchUp();
+    once.push(performance.now() - t);
+    const sliced = new TabIconIndex(() => state);
+    const queue: (() => void)[] = [];
+    sliced.catchUpInSlices(SLICE_BUCKETS, (step) => queue.push(step));
+    let longest = 0;
+    count = 0;
+    while (queue.length > 0) {
+      t = performance.now();
+      queue.shift()!();
+      longest = Math.max(longest, performance.now() - t);
+      count++;
+    }
+    slices.push(longest);
+    expect(sliced.size).toBe(whole.size);
+  }
+  return { once: Math.min(...once.slice(2)), slice: Math.min(...slices.slice(2)), count };
+}
+
 /** Budgets (docs/testing/performance.md): each read ≤ 0.5 ms now; CI's shared machines get twice as long. */
 const enforce = process.env.CHORD_PERF_ENFORCE === '1';
 const BUDGET = enforce ? 0.5 : 1;
+/** The index's warm-up: the longest turn of main ≤ 4 ms, at 35,000 nodes. */
+const SLICE = enforce ? 4 : 8;
 
 describe('reads that once went over every node', () => {
   for (const [name, chords, tabs] of [
@@ -100,6 +160,9 @@ describe('reads that once went over every node', () => {
       const state = bigState(chords, tabs);
       const sw = chordSwitch(state, 'c3');
       const nav = newOrigin(state);
+      const warm = warmUp(state);
+      expect.soft(warm.slice, 'warming the icon index: longest turn').toBeLessThan(SLICE);
+      console.log(`${name}: warming the icon index ${warm.once.toFixed(1)} ms in one pass → ${warm.slice.toFixed(1)} ms at most a turn (${warm.count} turns)`);
       console.log(
         `${name}: chord switch ${sw.before.toFixed(3)} → ${sw.after.toFixed(3)} ms; new site's icon ${nav.before.toFixed(3)} → ${nav.after.toFixed(3)} ms (index built once in ${nav.build.toFixed(1)} ms)`,
       );
@@ -107,4 +170,10 @@ describe('reads that once went over every node', () => {
       expect.soft(nav.after, "new site's icon").toBeLessThan(BUDGET);
     });
   }
+
+  it("a new site's icon after 300 tabs moved and 30,000 bookmarks came", () => {
+    const worst = worstCase();
+    console.log(`worst case: new site's icon ${worst.before.toFixed(3)} → ${worst.after.toFixed(3)} ms`);
+    expect.soft(worst.after, "new site's icon, worst case").toBeLessThan(BUDGET);
+  });
 });

@@ -8,6 +8,15 @@
 import type { BucketKey, NodeBucket, NodeBuckets, NodeId, TabNode } from '@chord/core';
 
 /**
+ * Buckets a navigation's look reads at most (about 0.1 ms each at 35,000
+ * nodes): one or two changed between most looks; after a big change (an
+ * import), the rest is read in slices on later turns.
+ */
+export const LOOK_BUCKETS = 4;
+/** Buckets read in one turn of main when catching up in slices: a few ms at 35,000 nodes, 1 ms at 5,000. */
+export const SLICE_BUCKETS = 16;
+
+/**
  * A tab's site as the index keys it: its address up to its path (an
  * origin, as Chromium writes addresses). Null for anything that isn't a
  * web page. No URL parse: this runs once per tab that changed.
@@ -25,8 +34,13 @@ export function tabSite(url: string): string | null {
   return end > from ? url.slice(0, end) : null;
 }
 
+/**
+ * What it holds between looks: each bucket as it was at the last one (one
+ * old copy of the nodes at most, shared with the state wherever a bucket
+ * hasn't changed since), and the tabs with an icon it found there.
+ */
 export class TabIconIndex {
-  /** The nodes last read, and each bucket as it was then. */
+  /** The nodes last read through, and each bucket as it was then. */
   private nodes: NodeBuckets | null = null;
   private readonly buckets = new Map<BucketKey, NodeBucket>();
   /** Tabs with an icon, by site. */
@@ -34,16 +48,36 @@ export class TabIconIndex {
 
   constructor(private readonly current: () => { readonly nodes: NodeBuckets }) {}
 
-  /** The tabs on `site` (an origin) with an icon, as the state has them now. */
+  /** The tabs on `site` (an origin) with an icon, as the state has them now: caught up first, however much changed. */
   tabsOn(site: string): Iterable<TabNode> {
     this.catchUp();
+    return this.known(site);
+  }
+
+  /**
+   * The tabs on `site` with an icon as far as the index has caught up: some
+   * may have gone or changed since, and a new one may be missing. For a
+   * look that mustn't wait (a navigation): `catchUp` with a limit first.
+   */
+  known(site: string): Iterable<TabNode> {
     return this.bySite.get(site)?.values() ?? [];
   }
 
-  /** Catch up now: the first time, a pass over every tab. */
-  warm(): void {
-    this.catchUp();
+  /**
+   * Catch up `slice` buckets a turn of main (`next`: setImmediate), so
+   * other work runs between slices, never one long pass. One run at a time:
+   * asked again while it runs, it goes on catching up to the newest state.
+   */
+  catchUpInSlices(slice = SLICE_BUCKETS, next: (step: () => void) => void = setImmediate): void {
+    if (this.slicing) return;
+    this.slicing = true;
+    const step = () => {
+      if (this.catchUp(slice)) this.slicing = false;
+      else next(step);
+    };
+    next(step);
   }
+  private slicing = false;
 
   /** How many sites have a tab with an icon (for tests). */
   get size(): number {
@@ -51,16 +85,25 @@ export class TabIconIndex {
     return this.bySite.size;
   }
 
-  private catchUp(): void {
+  /**
+   * Read the buckets that changed since the last look, at most `buckets` of
+   * them (the first time, every bucket counts as changed). True once caught
+   * up with the state as it is now; false if more are left, for later turns.
+   */
+  catchUp(buckets = Infinity): boolean {
     const nodes = this.current().nodes;
-    if (nodes === this.nodes) return;
-    this.nodes = nodes;
+    if (nodes === this.nodes) return true;
+    let left = buckets;
     for (const [key, before] of this.buckets) if (!(key in nodes)) this.reread(key, before, undefined);
     for (const key in nodes) {
       const bucket = nodes[key as BucketKey];
       const before = this.buckets.get(key as BucketKey);
-      if (bucket !== before) this.reread(key as BucketKey, before, bucket);
+      if (bucket === before) continue;
+      if (left-- <= 0) return false;
+      this.reread(key as BucketKey, before, bucket);
     }
+    this.nodes = nodes;
+    return true;
   }
 
   /** One bucket changed: what left it or changed goes, what came or changed comes. */
