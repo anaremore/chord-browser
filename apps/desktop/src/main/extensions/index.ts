@@ -25,11 +25,18 @@ import { join, relative, resolve, sep } from 'node:path';
 import { send } from '../ipc';
 import type { AppWindow } from '../window';
 import { extensionIdFrom } from './crx';
-import { ExtensionHost, type HostCallbacks } from './host';
+import { ExtensionHost, within, type HostCallbacks } from './host';
 import { ExtensionPopup } from './popup';
 import { unpackInWorker } from './unpack';
 import { isNewerVersion, type WebStore } from './webstore';
 
+/**
+ * One extension's update (download, unpack, load, the install step) fails if
+ * it takes longer than this, so a step that never settles can't hold every
+ * later check. Far beyond a real update: downloading and unpacking each give
+ * up at five minutes on their own.
+ */
+const UPDATE_DEADLINE_MS = 15 * 60_000;
 /** Chrome checks for extension updates about every five hours. */
 const UPDATE_INTERVAL_MS = 5 * 60 * 60 * 1000;
 const FIRST_UPDATE_CHECK_MS = 60 * 1000;
@@ -50,6 +57,8 @@ export interface ExtensionsDeps {
   webStore: WebStore;
   /** SHA-256 of the key every package must also be signed with: the Web Store's, except in tests. */
   publisherKeyHash?: string;
+  /** Tests only: how long one extension's update may take (UPDATE_DEADLINE_MS otherwise). */
+  updateDeadlineMs?: number;
   windows(): Iterable<AppWindow>;
   windowById(windowId: WindowId): AppWindow | undefined;
   lastWindow(): AppWindow | undefined;
@@ -515,7 +524,7 @@ export class Extensions {
     const running = this.installing.get(key);
     if (running) return running;
     const updating = this.updating.get(key);
-    const task = (updating ? updating.catch(() => false) : Promise.resolve())
+    const task = (updating ? within(updating.catch(() => false), this.deps.updateDeadlineMs ?? UPDATE_DEADLINE_MS) : Promise.resolve())
       .then(() => this.installFromStore(profileId, id))
       .then((record): InstallResult => ({ ok: true, name: record.name }))
       .catch((error: unknown): InstallResult => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
@@ -610,7 +619,10 @@ export class Extensions {
 
   /**
    * Ask the Web Store about every store extension and update the ones that are behind. Resolves with how many were updated.
-   * One check at a time: a check asked for while one runs gets that one's result.
+   * One check at a time: a check asked for while one runs (the timer's, or
+   * Settings' Check for updates) joins it and gets its result, rather than
+   * starting another. A Settings click during a check doesn't ask the store
+   * again; that's accepted, as the running check just asked.
    */
   checkForUpdates(): Promise<number> {
     this.updateCheck ??= this.runUpdateCheck().finally(() => {
@@ -634,17 +646,22 @@ export class Extensions {
       const info = infos.find((i) => i.id === e.id);
       if (!info || info.status !== 'ok' || !info.version || !isNewerVersion(info.version, e.version)) continue;
       const key = extensionKey(e.profileId, e.id);
-      // Removed (or changed) since the check began, or being installed again: skip it.
-      if (!this.stillCurrent(e) || this.installing.has(key)) continue;
+      // Removed (or changed) since the check began, being installed again, or an earlier update of it still running: skip it.
+      if (!this.stillCurrent(e) || this.installing.has(key) || this.updating.has(key)) continue;
       const version = info.version;
       const task = this.deps.webStore.download(info).then((crx) => this.updateFromStore(e, version, crx, info.sha256));
+      // Tracked until it really settles, even past its deadline, so nothing else unpacks into its folder meanwhile.
       this.updating.set(key, task);
+      void task.then(
+        () => this.updating.delete(key),
+        () => this.updating.delete(key),
+      );
       try {
-        if (await task) updated++;
+        const done = await within(task, this.deps.updateDeadlineMs ?? UPDATE_DEADLINE_MS);
+        if (done === undefined) throw new Error('It took too long, and was given up on.');
+        if (done) updated++;
       } catch (error) {
         console.error(`Updating ${e.name} failed:`, error);
-      } finally {
-        this.updating.delete(key);
       }
     }
     if (updated > 0) {

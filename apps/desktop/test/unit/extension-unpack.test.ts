@@ -2,8 +2,8 @@
  * Web Store packages are verified and unpacked in a worker thread
  * (main/extensions/unpack-worker.ts), never on main. Every case here runs
  * through that worker, bundled as the app builds it, the way installs and
- * updates do. The budget at the end holds main's blocking during a large
- * install (docs/testing/performance.md).
+ * updates do. Main's blocking during a large install is held in
+ * extension-unpack.perf.test.ts.
  */
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { idFromKey, type ExtractLimits } from '../../src/main/extensions/crx';
 import { unpackInWorker, WORKER_STOPPED } from '../../src/main/extensions/unpack';
-import { unpack } from '../../src/main/extensions/unpack-worker';
 import { crx3, extensionIdOf, keyPair, sha256Hex, spki, zip } from '../fixtures/crx';
 import { buildUnpackWorker } from '../fixtures/extension-worker';
 
@@ -154,68 +153,4 @@ describe('unpacking a Web Store package in the worker', () => {
     await expect(unpackInWorker(join(dir, 'missing.mjs'), { crx: crx(), id, version: '1.0', dest: dest() })).rejects.toThrow(WORKER_STOPPED);
     await expect(unpackInWorker(hangs, { crx: crx(), id, version: '1.0', dest: dest() }, 300)).rejects.toThrow(/took too long/);
   });
-});
-
-/**
- * How long main is held while `job` runs: a setImmediate loop spins on main
- * (timers tick only every 15 ms on Windows), and its longest gap is the
- * longest stretch main couldn't answer anything.
- */
-async function mainBlocking<T>(job: () => Promise<T>): Promise<{ result: T; longest: number; total: number }> {
-  let spinning = true;
-  let longest = 0;
-  let last = performance.now();
-  const spin = () => {
-    const now = performance.now();
-    longest = Math.max(longest, now - last);
-    last = now;
-    if (spinning) setImmediate(spin);
-  };
-  setImmediate(spin);
-  const started = performance.now();
-  try {
-    return { result: await job(), longest, total: performance.now() - started };
-  } finally {
-    spinning = false;
-  }
-}
-
-/** About 20 MB unpacked in 400 files: half script text, half incompressible bytes, as a large real bundle is. */
-function largePackage(version: string): Buffer {
-  const files: Record<string, Buffer> = { 'manifest.json': Buffer.from(manifest(version)) };
-  for (let i = 0; i < 400; i++) {
-    const size = 50_000;
-    const buf = Buffer.alloc(size);
-    if (i % 2) for (let j = 0; j < size; j += 4) buf.writeUInt32LE((Math.imul(i * 7919 + j, 2654435761) ^ (j << 7)) >>> 0, j);
-    else buf.write(`function f${i}(x) { return x * ${i}; }
-`.repeat(size / 40));
-    files[`js/chunk-${i}.js`] = buf;
-  }
-  return crx3(zip(files), developer, [developer, publisher]);
-}
-
-/**
- * Budget (docs/testing/performance.md): installing a large extension blocks
- * main ≤ 50 ms. Verifying and unpacking the package on main itself, as
- * before, is measured alongside for the report: it held main for the whole
- * job.
- */
-describe('main-thread budget', () => {
-  it('installing a large package blocks main ≤ 50 ms', async () => {
-    const first = largePackage('3.1.4');
-    const onMain = await mainBlocking(() => unpack({ crx: first, sha256: sha256Hex(first), id, version: '3.1.4', dest: dest(), publisherKeyHash }));
-    expect(onMain.result).toEqual({ ok: true, files: 401 });
-    const crx = largePackage('3.1.5');
-    const size = crx.length;
-    const sha256 = sha256Hex(crx);
-    const inWorker = await mainBlocking(() => unpackInWorker(workerPath, { crx, sha256, id, version: '3.1.5', dest: dest(), publisherKeyHash }));
-    expect(inWorker.result).toBe(401);
-    const ms = (n: number) => `${n.toFixed(1)} ms`;
-    console.log(
-      `[extension-unpack] ${(size / 1e6).toFixed(1)} MB package. On main: ${ms(onMain.total)}, main held ${ms(onMain.longest)}. ` +
-        `In the worker: ${ms(inWorker.total)}, main held ${ms(inWorker.longest)}.`,
-    );
-    // Tests running alongside share the CPU: the budget is generous, and still far below what the job takes on main.
-    expect(inWorker.longest).toBeLessThanOrEqual(50);
-  }, 60_000);
 });

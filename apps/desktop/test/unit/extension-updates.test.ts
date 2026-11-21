@@ -22,6 +22,7 @@ vi.mock('electron', () => ({ BaseWindow: class {}, BrowserWindow: class {}, Menu
 vi.mock('../../src/main/ipc', () => ({ send: () => {} }));
 vi.mock('../../src/main/extensions/popup', () => ({ ExtensionPopup: class {} }));
 vi.mock('../../src/main/extensions/host', () => ({
+  within: <T>(promise: Promise<T>, ms: number) => Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms))]),
   ExtensionHost: class {
     readonly session = { serviceWorkers: { startWorkerForScope: async () => {} } };
     async load(path: string) {
@@ -74,7 +75,7 @@ let release: (() => void) | null;
 let holdDownload: boolean;
 let announced: string;
 
-function setup() {
+function setup({ updateDeadlineMs = 30_000 } = {}) {
   const extensions = new Extensions({
     state: () => state,
     dispatch: (command) => {
@@ -88,6 +89,7 @@ function setup() {
     preloadPath: 'unused',
     unpackWorkerPath: workerPath,
     publisherKeyHash,
+    updateDeadlineMs,
     webStore: {
       check: async () => [{ id, status: 'ok', version: '2.0', codebase: 'https://example.com/a.crx', sha256: announced }],
       download: async () => {
@@ -190,6 +192,35 @@ describe('updating extensions with the unpacking in a worker', () => {
     expect(record()).toBeUndefined();
     expect(engine.loaded.has(id)).toBe(false);
     expect(existsSync(folder('2.0'))).toBe(false);
+  });
+
+  it('Remove, then Undo, while it updates: the update goes ahead', async () => {
+    holdDownload = true;
+    const extensions = setup();
+    const check = extensions.checkForUpdates();
+    await downloading();
+    const before = record()!;
+    extensions.remove('default', id);
+    expect(record()).toBeUndefined();
+    // Undo puts the same record back (extension.restore).
+    state = { ...state, extensions: { ...state.extensions, [`default:${id}`]: before } };
+    release!();
+    expect(await check).toBe(1);
+    expect(record()).toMatchObject({ version: '2.0', path: folder('2.0'), notifiedVersion: '2.0' });
+    expect(engine.loaded.get(id)).toBe(folder('2.0'));
+    expect(existsSync(folder('1.0'))).toBe(false);
+  });
+
+  it('a step that never settles fails that extension’s update at its deadline, and the check still finishes', async () => {
+    const extensions = setup({ updateDeadlineMs: 500 });
+    engine.beforeLoad = (path) => (path === folder('2.0') ? new Promise<void>(() => {}) : Promise.resolve());
+    const started = Date.now();
+    expect(await extensions.checkForUpdates()).toBe(0);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(450);
+    expect(record()).toMatchObject({ version: '1.0', path: folder('1.0') });
+    // The next check is a new one, and leaves the stuck update alone instead of unpacking beside it.
+    expect(await extensions.checkForUpdates()).toBe(0);
+    expect(downloads).toBe(1);
   });
 
   it('adding the extension again while its old update finishes waits for it, then installs', async () => {
