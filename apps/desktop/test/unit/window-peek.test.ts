@@ -390,4 +390,29 @@ describe('Peek moved and resized', () => {
     vi.runAllTimers();
     expect(done).toBe(true);
   });
+
+  // #78's review: a glide home still running, or a drag, when Open as tab starts would move the page mid-grow.
+  it.each<[string, Box | null]>([
+    ['a late box from a glide home or a drag', { x: 600, y: 300, width: 400, height: 300 }],
+    ['the glide’s last word, home', null],
+  ])('while Open as tab grows the page, a move is ignored: %s', (_name, late) => {
+    const s = newWindow();
+    open(s);
+    const left = s.w.movePeek({ x: 300, y: 100, width: 500, height: 400 })!;
+    const popover = s.w.popover as unknown as FakeView;
+    const popoverAt = popover.getBounds();
+    s.w.growPeekToFrame(true, () => s.w.closePeek());
+    vi.advanceTimersByTime(17);
+    const growing = s.peek.setBounds.mock.calls.length;
+    expect(s.w.movePeek(late)).toBeNull();
+    // Nothing placed by the move, and a layout meanwhile leaves the page to the glide too.
+    (s.w as unknown as { layout(): void }).layout();
+    expect(s.peek.setBounds.mock.calls.length).toBe(growing);
+    expect(popover.getBounds()).toEqual(popoverAt);
+    vi.runAllTimers();
+    // The next Peek opens where the card was when Open as tab began, not at the late box.
+    open(s, new FakeView() as unknown as WebContentsView);
+    expect(told(s).card).toEqual(left);
+    expect(s.w.movePeek({ x: 320, y: 120, width: 500, height: 400 })).toEqual({ x: 320, y: 120, width: 500, height: 400 });
+  });
 });
