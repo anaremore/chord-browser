@@ -51,11 +51,11 @@ Each principle has a test, so reviews can say "this fails principle 3" instead o
 
 **Voice.**
 - Friendly, plain, brief. Sentence case everywhere. Verbs on buttons ("Make it the default", not "OK").
-- Talk about outcomes, not mechanisms. Say "Keep sign-ins separate", not "isolated session partition". Say "Today", not "unpinned tabs". Say "Archive", not "history of closed tabs".
+- Talk about outcomes, not mechanisms. Say "Keep sign-ins separate", not "isolated session partition". Say "unpinned tabs" in the interface (the word "Today" left it in 0.13.0). Say "Archive", not "history of closed tabs".
 - Never blame. Say "That page couldn't load", not "You entered an invalid URL".
 - A wink is welcome in empty states and onboarding. Everywhere else, be clear.
 
-**Words we use:** chord (a set of tabs with its own color; lowercase in running text, so the app stays "Chord") · Pinned · Today · Folder · Archive · Split · Peek · Mini window.
+**Words we use:** chord (a set of tabs with its own color; lowercase in running text, so the app stays "Chord") · Pinned · unpinned tabs · Folder · Archive · Split · Peek · Mini window.
 **Words we avoid:** space and workspace (we say *chord*), session, profile (except in Settings → Advanced), tab group, incognito (we say *private window*), AI (we say *the assistant*). The assistant has no name: in the interface it is its icon, and where a word can't be avoided (Settings, a tooltip, a screen reader) it is *Assistant*. Copy drops the subject where it can: *Ask anything*, *Couldn’t answer.*, not *Ask the assistant*.
 
 ---

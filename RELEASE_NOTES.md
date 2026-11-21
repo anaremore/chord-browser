@@ -2,6 +2,14 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.13.1 · security · 2026-11-21
+
+- **Security: the assistant keeps away from sites you never let it read.** If a tab it was about to read was redirected, or moved to another page while you were answering its card, to a site on your *Never read* list, the assistant could read that site after all. It now checks again after the page loads and after reading, and refuses. Update as soon as you can.
+- **Peek moves and resizes.** Drag Peek by the empty part of its bar to move it, or drag an edge or corner to resize it. It stays inside the window, and a double-click on its bar puts it back in the middle. The next Peek in that window opens where you left it, until Chord quits.
+- **New profiles start faster.** A brand-new profile's database is set up in one step instead of two dozen, which is quicker on Windows in particular.
+- **No pause while extensions install or update.** Checking, unpacking and setting up an extension now happens away from Chord's window, so a big extension no longer freezes it for a moment, including during the updates Chord checks for every few hours.
+- **Smaller fixes:** sync passphrases never appear in error logs; the Linux sign-in terminal for the assistant tries the next terminal app when the first isn't installed; and the Flatpak now includes every license file.
+
 ## 0.13.0 · preview · 2026-11-20
 
 0.12.0 was never published: everything in its entry below (importing and exporting passwords, the password generator, sign-up and change-password forms, and 0.11.1's sign-in box) comes in this release.
