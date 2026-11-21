@@ -120,9 +120,12 @@ function compatibility(report: (badge: Badge) => void): void {
   }
 }
 
-/** Sandboxed preloads get Electron's `additionalArguments` in `process.argv`. */
+/**
+ * Sandboxed preloads get Electron's `additionalArguments` in `process.argv`: `process` is the preload's own
+ * (a variable of its scope, not a property of globalThis).
+ */
 const AGENT_TAB_ARG = '--chord-agent-tab';
-const agentTab = (globalThis as unknown as { process?: { argv?: string[] } }).process?.argv?.includes(AGENT_TAB_ARG) ?? false;
+const agentTab = typeof process !== 'undefined' && Array.isArray(process.argv) && process.argv.includes(AGENT_TAB_ARG);
 
 // Web pages only: not an extension's pages, which share the session, nor a blank frame's.
 const { protocol } = (globalThis as unknown as { location: { protocol: string } }).location;

@@ -143,7 +143,8 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const c = client(ud);
     await c.initialize();
     const first = c.call('list_tabs');
-    await sleep(50);
+    // The card shows once the connection's code has loaded: under load that can take a while.
+    await expect.poll(() => answers.length).toBe(1);
     answers[0]!('deny');
     expect(await first).toEqual({ error: true, text: CONTROL_REFUSALS.denied });
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.denied });
@@ -159,7 +160,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.waiting });
     const retry = c.call('list_tabs');
     await sleep(50);
-    expect(answers).toHaveLength(1);
+    await expect.poll(() => answers.length).toBe(1);
     answers[0]!('once');
     expect((await retry).error).toBe(false);
     expect((await c.call('list_tabs')).error).toBe(false);
