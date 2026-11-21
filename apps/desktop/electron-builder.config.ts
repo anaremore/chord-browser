@@ -163,8 +163,10 @@ const config: Configuration = {
     target: 'nsis',
     icon: 'build/icon.ico',
     // Chord Player in the tab (ARCHITECTURE.md §9): the helper that makes the player's window Chord's own
-    // (scripts/build-window-owner.mjs). An .exe, so it's code-signed with Chord.exe.
-    extraResources: [{ from: 'out/window-owner/window-owner.exe', to: 'window-owner.exe' }],
+    // (scripts/build-window-owner.mjs). An .exe, so it's code-signed with Chord.exe. Copied as a folder with a
+    // filter, not as one file: electron-builder signs the extra resources it copies from a folder, but copies a
+    // single file without signing it (0.13.0 shipped it unsigned). release.yml checks its signature.
+    extraResources: [{ from: 'out/window-owner', to: '.', filter: ['window-owner.exe'] }],
     ...winSigning(process.env),
   },
   nsis: {

@@ -44,11 +44,11 @@ jobs:
           - { name: macOS x64, os: macos-15-intel, target: darwin-x64 }
           - { name: Linux x64, os: ubuntu-24.04, target: linux-x64 }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           # Release builds restore no cache: a cache saved by another job (one that ran third-party code) could
@@ -58,7 +58,7 @@ jobs:
 
       # ECS's zip, as checked against apps/player/ecs.json (scripts/fetch-ecs.mjs checks it again from the cache).
       - name: Cache castLabs ECS
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/chord-ecs
           key: ecs-${{ matrix.target }}-${{ hashFiles('apps/player/ecs.json') }}
@@ -113,7 +113,7 @@ jobs:
 
       - name: Python for castLabs EVS
         if: steps.vmp.outputs.mode == 'production'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
 
@@ -252,7 +252,7 @@ jobs:
           fi
 
       - name: Upload the build
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chord-player-${{ matrix.target }}
           if-no-files-found: error
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload the smoke test's capture
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: player-smoke-${{ matrix.target }}
           path: apps/player/release/smoke/
