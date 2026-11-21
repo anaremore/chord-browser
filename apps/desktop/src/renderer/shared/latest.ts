@@ -2,10 +2,12 @@
  * Latest wins: sends values one at a time, and while one is on its way keeps
  * only the newest to send next. A fast stream (a drag's boxes, one a frame)
  * never queues up behind a slow receiver: each send carries the latest value,
- * and the last value pushed is always the last one sent.
+ * and the last value pushed is always the last one sent, unless cancelled.
  */
 export interface LatestWins<T> {
   push(value: T): void;
+  /** Drops the value waiting, if any: it's never sent. One already on its way still arrives. */
+  cancel(): void;
   /** Nothing on its way, and nothing waiting. */
   readonly idle: boolean;
 }
@@ -28,6 +30,9 @@ export function latestWins<T>(send: (value: T) => Promise<unknown>): LatestWins<
     push(value) {
       next = { value };
       if (!busy) pump();
+    },
+    cancel() {
+      next = null;
     },
     get idle() {
       return !busy && !next;

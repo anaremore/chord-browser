@@ -62,4 +62,18 @@ describe('latestWins', () => {
     expect(got).toEqual([1, 2]);
     expect(mover.idle).toBe(true);
   });
+
+  it('cancel drops the one waiting (a closed Peek’s last box is never sent); the one on its way still arrives', async () => {
+    const r = receiver();
+    const mover = latestWins(r.send);
+    mover.push(1);
+    mover.push(2);
+    mover.cancel();
+    await r.answer();
+    expect(r.got).toEqual([1]);
+    expect(mover.idle).toBe(true);
+    // Pushed again afterwards, it sends as before.
+    mover.push(3);
+    expect(r.got).toEqual([1, 3]);
+  });
 });

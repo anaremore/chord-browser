@@ -298,6 +298,8 @@ export class AppWindow {
    * so a window that shrinks and grows again gives it back.
    */
   private peekBox: Rect | null = null;
+  /** Open as tab is growing Peek's page into the frame (`growPeekToFrame`): its card doesn't move any more. */
+  private peekGrowing = false;
   private peekTimer: ReturnType<typeof setTimeout> | undefined;
   /** Peek asked for before the overlay listens (a click just after launch): it opens once it does. */
   private pendingPeek: { view: WebContentsView; info: PeekInfo; delayMs: number } | null = null;
@@ -699,9 +701,10 @@ export class AppWindow {
    * Peek's card moved or resized (DESIGN.md §8.5): the overlay draws the card where the pointer has it, and sends
    * its box here, at most once a frame. Only Peek's page and the popover hanging from it move: nothing else is laid
    * out, so the tab underneath never is. The window remembers the box for its next Peek; null puts it back home.
+   * While Open as tab grows the page, a late box (a glide home, a drag) is ignored: the page grows from where it was.
    */
   movePeek(card: Rect | null): Rect | null {
-    if (!this.peekOnScreen || this.window.isDestroyed()) return null;
+    if (!this.peekOnScreen || this.peekGrowing || this.window.isDestroyed()) return null;
     this.peekBox = card && clampPeekCard(card, this.frameRect());
     this.placePeek();
     return this.peekCard();
@@ -712,13 +715,15 @@ export class AppWindow {
     const page = this.peekPageRect();
     const { width: pw, height: ph } = this.popoverSize;
     place(this.popover, toWindowRect({ x: Math.max(page.x, page.x + page.width - pw), y: page.y, width: pw, height: ph }));
-    if (this.peekView && this.window.contentView.children.includes(this.peekView)) place(this.peekView, toWindowRect(page));
+    // Growing into the frame, the page is the glide's to place.
+    if (this.peekView && !this.peekGrowing && this.window.contentView.children.includes(this.peekView)) place(this.peekView, toWindowRect(page));
   }
 
   /** Take Peek's page out of the window (it closes, or becomes a tab) and put the overlay away. */
   closePeek(): WebContentsView | null {
     const view = this.peekView;
     this.pendingPeek = null;
+    this.peekGrowing = false;
     clearTimeout(this.peekTimer);
     if (this.peek) send(this.overlay.webContents, 'overlay:dismiss', { seq: this.peekSeq });
     this.peek = null;
@@ -744,6 +749,7 @@ export class AppWindow {
     const view = this.peekView;
     if (!view || !this.peek || this.window.isDestroyed()) return done();
     clearTimeout(this.peekTimer);
+    this.peekGrowing = true;
     const root = this.window.contentView;
     if (!root.children.includes(view)) root.addChildView(view, root.children.indexOf(this.popover));
     const from = this.peekPageRect();

@@ -9,13 +9,13 @@
  * back. The card follows the pointer here, once a frame, and main places the
  * page under it from the boxes sent (`peek:move`, latest wins).
  */
-import { dragPeekCard, clampPeekCard, PEEK_CURSOR, PEEK_GRIP, peekGripAt, type PeekGrip, type PeekTarget } from '@chord/core';
-import type { PeekState, Rect, SystemInfo } from '@chord/ipc';
+import { PEEK_CURSOR, PEEK_GRIP, peekGripAt, type PeekGrip, type PeekTarget } from '@chord/core';
+import type { PeekState, SystemInfo } from '@chord/ipc';
 import { Globe, Lock, PanelTopOpen, X } from 'lucide-react';
-import { animate, motion, type AnimationPlaybackControls, type Transition } from 'motion/react';
+import { animate, motion, type Transition } from 'motion/react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import { latestWins } from '../shared/latest';
 import { api } from './api';
+import { CardMotion } from './peek-motion';
 import styles from './Peek.module.css';
 
 /** A press on the card's frame: what it landed on, for `peekGripAt`. */
@@ -23,14 +23,6 @@ function targetOf(event: { target: EventTarget }): PeekTarget {
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest('button, [data-peek-label]')) return 'control';
   return target?.closest('[data-peek-header]') ? 'header' : 'outside';
-}
-
-interface Gesture {
-  grip: PeekGrip;
-  start: Rect;
-  x: number;
-  y: number;
-  pointerId: number;
 }
 
 const G = PEEK_GRIP.outside;
@@ -50,76 +42,65 @@ export function PeekChrome({
   onClose: () => void;
 }) {
   const [peek, setPeek] = useState(initial);
-  // The card as React draws it: main's box, or where a gesture left it.
+  // The card as React draws it: main's box, or where a gesture or glide left it.
   const [box, setBox] = useState(initial.card);
   const [cursor, setCursor] = useState('');
   const [lifted, setLifted] = useState(false);
   const latest = useRef(initial);
   latest.current = peek;
-  // The card as it is on screen: during a gesture or a glide home it's drawn straight into the DOM each frame, and
-  // React gets the box once it ends (rendering the chrome every frame cost more than the move itself).
-  const drawn = useRef(initial.card);
+  const spring = useRef(enter);
+  spring.current = enter;
   const frameEl = useRef<HTMLDivElement>(null);
   const cardEl = useRef<HTMLDivElement>(null);
-  const gesture = useRef<Gesture | null>(null);
   /** What the last press took hold of: a double-click's target is the frame holding the pointer, not the header. */
   const pressed = useRef<PeekGrip | null>(null);
-  const recentering = useRef<AnimationPlaybackControls | null>(null);
-  const frame = useRef(0);
-  const nextBox = useRef<Rect | null>(null);
-  const lastSent = useRef<Rect | null | undefined>(undefined);
-  const busy = () => gesture.current !== null || recentering.current !== null;
 
-  /** React's box is what's on screen, once nothing draws over it. */
-  const commit = (b: Rect) => {
-    drawn.current = b;
-    setBox(b);
-  };
-
-  /** Draws the card at `b` this frame, without a render. */
-  const draw = (b: Rect) => {
-    drawn.current = b;
-    const f = frameEl.current?.style;
-    const c = cardEl.current?.style;
-    if (!f || !c) return;
-    f.left = `${b.x - G}px`;
-    f.top = `${b.y - G}px`;
-    f.width = `${b.width + 2 * G}px`;
-    f.height = `${b.height + 2 * G}px`;
-    c.width = `${b.width}px`;
-    c.height = `${b.height}px`;
-  };
-
-  // One box a frame goes to main, the latest; the card as main placed it is drawn once nothing newer is on its way.
-  const mover = useMemo(
+  // While the card moves it's drawn straight into the DOM each frame, and React gets the box once it ends
+  // (rendering the chrome every frame cost more than the move itself).
+  const card = useMemo(
     () =>
-      latestWins<Rect | null>(async (card) => {
-        const placed = await api.peek.move(card);
-        if (placed && lastSent.current === card && !busy()) commit(placed);
+      new CardMotion(initial.card, {
+        draw: (b) => {
+          const f = frameEl.current?.style;
+          const c = cardEl.current?.style;
+          if (!f || !c) return;
+          f.left = `${b.x - G}px`;
+          f.top = `${b.y - G}px`;
+          f.width = `${b.width + 2 * G}px`;
+          f.height = `${b.height + 2 * G}px`;
+          c.width = `${b.width}px`;
+          c.height = `${b.height}px`;
+        },
+        commit: setBox,
+        move: (card) => api.peek.move(card),
+        frame: (run) => requestAnimationFrame(run),
+        cancelFrame: (id) => cancelAnimationFrame(id),
+        // On Peek's spring as it is when the glide starts; none with motion off.
+        glide: (onUpdate, onComplete) => {
+          const t = spring.current;
+          return 'type' in t && t.type === 'spring' ? animate(0, 1, { ...t, onUpdate, onComplete }) : null;
+        },
       }),
-    [],
+    [initial.card],
   );
-  const send = (card: Rect | null) => {
-    lastSent.current = card;
-    mover.push(card);
-  };
 
   useEffect(
     () =>
       api.peek.onState((state) => {
         setPeek(state);
-        // A box from main while one of ours is on its way is older than what's drawn: the reply puts it right.
-        if (!busy() && mover.idle) commit(state.card);
+        card.fromMain(state.card);
       }),
-    [mover],
+    [card],
   );
-  useEffect(
-    () => () => {
-      cancelAnimationFrame(frame.current);
-      recentering.current?.stop();
-    },
-    [],
-  );
+  // Closed: a box still waiting is never sent, and nothing more moves.
+  useEffect(() => () => card.stop(), [card]);
+
+  /** Open as tab: the card stops where it is first, so the page grows from there without a late box moving it. */
+  const openAsTab = () => {
+    card.stop();
+    setLifted(false);
+    void api.peek.expand();
+  };
 
   // While the overlay has focus (before the page is in, or after a click on the header): the same keys the page has.
   useEffect(() => {
@@ -130,24 +111,14 @@ export function PeekChrome({
         onClose();
       } else if (event.key === 'Enter' && command) {
         event.preventDefault();
-        void api.peek.expand();
+        openAsTab();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [info.platform, onClose]);
+  });
 
-  const gripAt = (event: ReactPointerEvent) => peekGripAt({ x: event.clientX, y: event.clientY }, drawn.current, targetOf(event));
-
-  /** The pointer's latest box goes on screen and to main, once a frame. */
-  const flush = () => {
-    frame.current = 0;
-    const next = nextBox.current;
-    if (!next) return;
-    nextBox.current = null;
-    draw(next);
-    send(next);
-  };
+  const gripAt = (event: ReactPointerEvent) => peekGripAt({ x: event.clientX, y: event.clientY }, card.box, targetOf(event));
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -155,78 +126,30 @@ export function PeekChrome({
     pressed.current = grip;
     if (!grip) return;
     event.preventDefault();
-    // Pressed on its way home, the card stays where it got to.
-    recentering.current?.stop();
-    recentering.current = null;
     event.currentTarget.setPointerCapture(event.pointerId);
-    gesture.current = { grip, start: drawn.current, x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+    card.press(grip, event.clientX, event.clientY, event.pointerId);
     if (grip === 'move') setCursor('grabbing');
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const g = gesture.current;
-    if (!g) {
+    const holding = card.grip;
+    if (!holding) {
       const grip = gripAt(event);
       setCursor(grip ? PEEK_CURSOR[grip] : '');
       return;
     }
-    if (event.pointerId !== g.pointerId) return;
-    const dx = event.clientX - g.x;
-    const dy = event.clientY - g.y;
-    if (dx === 0 && dy === 0) return;
-    if (g.grip === 'move') setLifted(true);
-    nextBox.current = dragPeekCard(g.start, g.grip, dx, dy, latest.current.area);
-    if (!frame.current) frame.current = requestAnimationFrame(flush);
+    if (card.drag(event.pointerId, event.clientX, event.clientY, latest.current.area) && holding === 'move') setLifted(true);
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const g = gesture.current;
-    if (!g || event.pointerId !== g.pointerId) return;
-    // Where it was let go is where it stays: the last box goes now, not a frame later.
-    cancelAnimationFrame(frame.current);
-    flush();
-    gesture.current = null;
-    commit(drawn.current);
+    const grip = card.release(event.pointerId);
+    if (!grip) return;
     setLifted(false);
-    setCursor(PEEK_CURSOR[g.grip]);
-  };
-
-  /** Back to the center at the default size: gliding there (`overlay`), or at once with motion off. */
-  const recenter = () => {
-    const from = drawn.current;
-    const { home, area } = latest.current;
-    recentering.current?.stop();
-    recentering.current = null;
-    if (!('type' in enter) || enter.type !== 'spring') {
-      commit(home);
-      send(null);
-      return;
-    }
-    const at = (k: number) =>
-      clampPeekCard(
-        { x: from.x + (home.x - from.x) * k, y: from.y + (home.y - from.y) * k, width: from.width + (home.width - from.width) * k, height: from.height + (home.height - from.height) * k },
-        area,
-      );
-    const controls = animate(0, 1, {
-      ...enter,
-      onUpdate: (k) => {
-        if (recentering.current !== controls) return;
-        const next = at(k);
-        draw(next);
-        send(next);
-      },
-      onComplete: () => {
-        if (recentering.current !== controls) return;
-        recentering.current = null;
-        commit(home);
-        send(null);
-      },
-    });
-    recentering.current = controls;
+    setCursor(PEEK_CURSOR[grip]);
   };
 
   const onDoubleClick = () => {
-    if (pressed.current === 'move') recenter();
+    if (pressed.current === 'move') card.goHome(latest.current.home, latest.current.area);
   };
 
   const { origin } = peek;
@@ -262,7 +185,7 @@ export function PeekChrome({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onLostPointerCapture={onPointerUp}
-        onPointerLeave={() => !gesture.current && setCursor('')}
+        onPointerLeave={() => !card.grip && setCursor('')}
         onDoubleClick={onDoubleClick}
         data-testid="peek-frame"
       >
@@ -288,7 +211,7 @@ export function PeekChrome({
               </span>
             )}
             <span className={styles.flex} title="Drag to move" />
-            <button type="button" className={styles.action} onClick={() => void api.peek.expand()} title={`Open as tab (${keys.open})`}>
+            <button type="button" className={styles.action} onClick={openAsTab} title={`Open as tab (${keys.open})`}>
               <PanelTopOpen size={14} strokeWidth={1.75} aria-hidden />
               Open as tab
               <kbd className={styles.keycap}>{keys.open}</kbd>
