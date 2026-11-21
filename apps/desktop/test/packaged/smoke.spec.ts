@@ -240,8 +240,8 @@ test('macOS: a build the keychain has never seen loads pages without asking', as
 /* ---------- Outside agents (S18 M1b) ---------- */
 
 /** `Chord mcp` as an agent starts it: its stdio, one JSON-RPC message a line (Electron may write a blank line first). */
-function mcpClient(executable: string, profile: string) {
-  const args = [`--user-data-dir=${profile}`, ...(process.platform === 'linux' ? ['--ozone-platform=headless'] : []), 'mcp'];
+function mcpClient(executable: string, profile: string, extra: string[] = []) {
+  const args = [`--user-data-dir=${profile}`, ...(process.platform === 'linux' ? ['--ozone-platform=headless'] : []), ...extra, 'mcp'];
   const child = spawn(executable, args, { env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
   const waiting = new Map<number, (m: { result: Record<string, unknown> }) => void>();
   let buffer = '';
@@ -276,31 +276,56 @@ function relayFolderFor(): string {
   return join(env['XDG_CACHE_HOME'] || join(homedir(), '.cache'), 'Chord MCP');
 }
 
-/** A process's memory (MB: Windows' working set, Linux's resident set, macOS's RSS) and how many children it has. */
-function processInfo(pid: number): { mb: number; children: number } {
+/**
+ * A process's memory and its children. `mb`: Windows' working set, Linux's resident set, macOS's physical footprint
+ * (what Activity Monitor shows: RSS there also counts the system frameworks every app maps, which aren't this
+ * process's own). `rss`: its resident set everywhere. `children`: what each child is (its `--type`, else its name).
+ */
+function processInfo(pid: number): { mb: number; rss: number; children: string[] } {
   if (process.platform === 'win32') {
-    const ps = `$p = Get-Process -Id ${pid}; $c = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}").Count; "$($p.WorkingSet64) $c"`;
-    const [bytes, children] = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8' }).trim().split(' ').map(Number);
-    return { mb: bytes! / 2 ** 20, children: children! };
+    const ps = `$p = Get-Process -Id ${pid}; $c = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | ForEach-Object { $_.CommandLine }); "$($p.WorkingSet64)"; $c`;
+    const [bytes, ...children] = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8' }).trim().split(/\r?\n/);
+    const mb = Number(bytes) / 2 ** 20;
+    return { mb, rss: mb, children: children.filter(Boolean).map(kindOf) };
   }
-  const kb = process.platform === 'linux' ? Number(/^VmRSS:\s+(\d+)/m.exec(execFileSync('cat', [`/proc/${pid}/status`], { encoding: 'utf8' }))?.[1]) : Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim());
-  // Linux reads /proc, since the Fedora .rpm container has no ps. The parent pid is the 2nd field after the command
-  // name, which sits in parentheses (and may hold spaces).
-  const children =
-    process.platform === 'linux'
-      ? readdirSync('/proc')
-          .filter((d) => /^\d+$/.test(d))
-          .filter((d) => {
-            try {
-              const stat = readFileSync(`/proc/${d}/stat`, 'utf8');
-              return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) === pid;
-            } catch {
-              return false;
-            }
-          }).length
-      : execFileSync('ps', ['-A', '-o', 'ppid='], { encoding: 'utf8' }).split('\n').filter((l) => Number(l.trim()) === pid).length;
-  return { mb: kb / 1024, children };
+  if (process.platform === 'linux') {
+    const kb = Number(/^VmRSS:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]);
+    // From /proc, since the Fedora .rpm container has no ps. The parent pid is the 2nd field after the command name,
+    // which sits in parentheses (and may hold spaces).
+    const children = readdirSync('/proc')
+      .filter((d) => /^\d+$/.test(d))
+      .filter((d) => {
+        try {
+          const stat = readFileSync(`/proc/${d}/stat`, 'utf8');
+          return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) === pid;
+        } catch {
+          return false;
+        }
+      })
+      .map((d) => {
+        try {
+          return kindOf(readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0').join(' '));
+        } catch {
+          return '?';
+        }
+      });
+    return { mb: kb / 1024, rss: kb / 1024, children };
+  }
+  const rss = Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) / 1024;
+  const children = execFileSync('ps', ['-A', '-o', 'ppid=,command='], { encoding: 'utf8' })
+    .split('\n')
+    .map((l) => /^\s*(\d+)\s+(.*)$/.exec(l))
+    .filter((m): m is RegExpExecArray => m !== null && Number(m[1]) === pid)
+    .map((m) => kindOf(m[2]!));
+  // vmmap's summary: "Physical footprint:   45.2M".
+  const summary = execFileSync('vmmap', ['-summary', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const footprint = /Physical footprint:\s+([\d.]+)([KMG])/.exec(summary);
+  const mb = footprint ? Number(footprint[1]) * { K: 1 / 1024, M: 1, G: 1024 }[footprint[2] as 'K' | 'M' | 'G'] : rss;
+  return { mb, rss, children };
 }
+
+/** A child process as Chromium names it (`--type=zygote`), else its program. */
+const kindOf = (command: string): string => /--type=(\S+)/.exec(command)?.[1] ?? command.trim().split(/\s+/)[0] ?? '?';
 
 test('Chord mcp: the relay alone answers fast, in one process, with no window and nothing written to the profile', async () => {
   const executable = packagedExecutable();
@@ -324,12 +349,21 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
     expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(8);
     // Settled: one process (GPU and network service in-process), within its memory budget.
     await new Promise((done) => setTimeout(done, 1000));
-    const { mb, children } = processInfo(mcp.child.pid!);
-    console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms (median of ${times.map(Math.round).join(', ')}), ${Math.round(mb)} MB, ${children} child processes`);
-    // Held on Windows, where M0 measured them. On macOS and Linux the first packaged runs (2026-11-21) saw 113 MB and
-    // 2 child processes (Electron's own helpers on Linux): reported there until the budgets are set per platform (#90).
+    const { mb, rss, children } = processInfo(mcp.child.pid!);
+    console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms (median of ${times.map(Math.round).join(', ')}), ${Math.round(mb)} MB (resident ${Math.round(rss)} MB), child processes: ${children.length ? children.join(', ') : 'none'}`);
+    // #90's measurement: on Linux, without Chromium's zygotes (which need the sandbox off), for comparison.
+    if (process.platform === 'linux') {
+      const bare = mcpClient(executable, profile, ['--no-zygote', '--no-sandbox']);
+      await bare.request('initialize', hello);
+      await new Promise((done) => setTimeout(done, 1000));
+      const without = processInfo(bare.child.pid!);
+      console.log(`Chord mcp with --no-zygote --no-sandbox: ${Math.round(without.mb)} MB, child processes: ${without.children.length ? without.children.join(', ') : 'none'}`);
+      bare.child.stdin!.end();
+      await bare.exited;
+    }
+    // Held on Windows, where M0 measured them. Measuring the others now (#90).
     if (process.platform === 'win32') {
-      expect(children).toBe(0);
+      expect(children).toEqual([]);
       expect(mb).toBeLessThanOrEqual(90);
     }
     // The budget is CI Windows' (S18 M1 plan): elsewhere it's reported.
