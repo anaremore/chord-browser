@@ -1,12 +1,13 @@
 /**
- * An outside agent's ControlScope (S18 M1c): the shared layer's tools, on the
- * agent's own tabs. It sees only its Agent chord's tabs (and, with M1e, tabs
- * you share with it), with refs of its own (`a1`, never reused). Its reads
- * need no card: the connection card let it in, and its tabs are its own.
- * Never-readable pages (Chord's own, a site on your *Never* list) stay refused,
- * and a tab on a *Never* site isn't even listed.
+ * An outside agent's ControlScope (S18 M1c, M1e): the shared layer's tools, on
+ * the agent's own tabs (`a1`…) and the tabs you share with it (`s1`…), with
+ * refs of its own, never reused. Its reads need no card: the connection card
+ * let it in, its tabs are its own, and a shared tab is one you gave it. Shared
+ * tabs are only read (close_tab is its own tabs' alone); once you stop sharing
+ * one, it hears so. Never-readable pages (Chord's own, a site on your *Never*
+ * list) stay refused, and a tab on a *Never* site isn't even listed.
  */
-import { CONTROL_WAIT_MS, isNeverReadable, nodesOfChord, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
+import { CONTROL_WAIT_MS, isNeverReadable, nodeOf, nodesOfChord, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
 import type { ControlScope } from '../control/scope';
 
@@ -16,6 +17,8 @@ export interface AgentScopeDeps {
   chordId(): string | null;
   /** The *Never* list (Settings → Assistant's): sites no agent reads either. */
   neverSites(): readonly string[];
+  /** The tabs the user shares with it now, in the order they were shared (M1e). */
+  shared?(): readonly NodeId[];
 }
 
 /** A web address on the *Never* list (a blank or unloaded page is none). */
@@ -26,26 +29,47 @@ export function onNeverSite(url: string, sites: readonly string[]): boolean {
 /** What an agent hears when it names a tab that isn't its own. */
 export const NOT_YOURS = 'That tab isn’t yours: you can use only the tabs you opened (open_tab) and tabs the user shares with you.';
 
+/** What an agent hears about a tab the user shared and then stopped sharing (or that left the site it was shared on). */
+export const NOT_SHARED = 'The user isn’t sharing that tab with you any more. Use list_tabs for the tabs you can use.';
+
 export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlScope {
   const own = (node: TabNode) => node.chordId === deps.chordId();
+  const sharedNow = (id: NodeId) => deps.shared?.().includes(id) ?? false;
+  /** Tabs it was ever given a shared ref for: once unshared, they're refused in those words. */
+  const everShared = new Set<NodeId>();
+  const refs = new TabRefs<NodeId>('a', (id) => {
+    if (!sharedNow(id)) return 'a';
+    everShared.add(id);
+    return 's';
+  });
+  const mine = (node: TabNode) => own(node) || sharedNow(node.id);
   return {
     agent,
-    refs: new TabRefs<NodeId>('a'),
+    refs,
     memory: { pdfs: new Map(), form: null, nextField: 1, read: new Set() },
     off: () => null,
     tabs: () => {
+      const state = deps.state();
+      const sites = deps.neverSites();
       const chordId = deps.chordId();
-      if (!chordId) return [];
-      return nodesOfChord(deps.state(), chordId)
-        .filter((n): n is TabNode => n.kind === 'tab' && !onNeverSite(n.url, deps.neverSites()))
-        .sort((a, b) => a.createdAt - b.createdAt)
-        .map((node) => ({ node, given: false }));
+      const owned = chordId
+        ? nodesOfChord(state, chordId)
+            .filter((n): n is TabNode => n.kind === 'tab' && !onNeverSite(n.url, sites))
+            .sort((a, b) => a.createdAt - b.createdAt)
+            .map((node) => ({ node, given: false }))
+        : [];
+      const shared = (deps.shared?.() ?? [])
+        .map((id) => nodeOf(state, id))
+        .filter((n): n is TabNode => n?.kind === 'tab' && !onNeverSite(n.url, sites))
+        .map((node) => ({ node, given: true }));
+      return [...owned, ...shared];
     },
     defaultTab: () => null,
-    readable: (node) => own(node) && !isNeverReadable(node.url, deps.neverSites()),
+    readable: (node) => mine(node) && !isNeverReadable(node.url, deps.neverSites()),
+    whyNot: (node) => (!mine(node) && everShared.has(node.id) ? NOT_SHARED : null),
     neverSites: () => deps.neverSites(),
     needsCard: () => null,
-    mayInspect: (node) => (own(node) ? null : NOT_YOURS),
+    mayInspect: (node) => (mine(node) ? null : everShared.has(node.id) ? NOT_SHARED : NOT_YOURS),
     cardWaitMs: CONTROL_WAIT_MS,
     activity: async () => undefined,
   };

@@ -15,7 +15,11 @@
  *   tabs tried go into its next result, never one from a tab now on a site the
  *   user keeps private.
  * - **Never read**: a tab that goes to a site on the *Never* list (a redirect,
- *   a page's own script) closes at once, and what it held goes with it.
+ *   a page's own script, or the list gaining its site) closes at once, and
+ *   what it held goes with it. One *you* took there (you typed the address or
+ *   clicked through, in the last USER_MS) isn't closed under you: it becomes a
+ *   tab of yours, in the window's chord, and the agent hears it's closed. A
+ *   note naming such a site (a popup, a download) never names it.
  * - **When it's done** (its connection ends): a toast asks *Keep these tabs?*
  *   Keep moves them into your chord; Close all closes them, with Undo.
  *
@@ -38,6 +42,7 @@ export interface AgentChordsDeps {
   lastWindow(): { id: WindowId; toast(toast: Toast): void } | null;
   /** The *Never* list: an agent's tab that goes to one of its sites closes. */
   neverSites?(): readonly string[];
+  now?(): number;
 }
 
 /** Something an agent's tab held or refused, for its next result. */
@@ -61,6 +66,8 @@ interface AgentChord {
 const NOTES_KEPT = 20;
 /** Close all's Undo, by its toast's token. */
 const UNDOS_KEPT = 10;
+/** How long after your key, click or typed address a tab's navigation counts as yours. */
+const USER_MS = 15_000;
 
 export class AgentChords {
   private readonly chords = new Map<ChordId, AgentChord>();
@@ -69,12 +76,18 @@ export class AgentChords {
   /** Agent tabs running at full speed while hidden. */
   private readonly unthrottled = new Set<NodeId>();
   private readonly undos = new Map<string, { chord: Chord; tabs: TabNode[]; record: AgentChord | null }>();
+  /** When you last pressed a key, clicked or typed an address in each agent tab. */
+  private readonly userActs = new Map<NodeId, number>();
   private readonly unsubscribe: () => void;
+  /** A tab handed over to you: the agents' refs for it say it's closed. Set by the service. */
+  onHandedOver: ((nodeId: NodeId) => void) | null = null;
 
   constructor(private readonly deps: AgentChordsDeps) {
-    // Leaving a tab you paused lets the agent go on there; your closing an agent's last tab ends its chord once it's done.
+    // Leaving a tab you paused lets the agent go on there; your closing an agent's last tab ends its chord once it's
+    // done; a site added to the *Never* list closes its agent tabs.
     this.unsubscribe = deps.store.subscribe((change) => {
-      if (!change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'nodes')) return;
+      const never = change.before.settings.assistant.neverSites !== change.state.settings.assistant.neverSites;
+      if (!never && !change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'nodes')) return;
       for (const chord of [...this.chords.values()]) this.settle(chord);
       this.prune();
     });
@@ -142,11 +155,17 @@ export class AgentChords {
     const state = this.deps.store.state;
     if (!state.chords[chord.chordId]) return this.forget(chord);
     const tabs = this.tabsOf(chord.chordId);
-    // A tab gone to a site the user keeps private closes, and nothing it held reaches the agent.
+    // A tab gone to a site the user keeps private closes, and nothing it held reaches the agent; one you took there
+    // is yours now.
     const sites = this.deps.neverSites?.() ?? [];
     for (const tab of tabs.filter((t) => onNeverSite(t.url, sites))) {
       this.dropNotes(tab.id);
-      this.deps.store.dispatch({ t: 'agent.tab.remove', nodeId: tab.id });
+      const windowId = this.yoursNow(tab.id);
+      if (windowId) {
+        this.deps.store.dispatch({ t: 'agent.tab.keep', nodeId: tab.id, windowId });
+        this.onHandedOver?.(tab.id);
+      } else this.deps.store.dispatch({ t: 'agent.tab.remove', nodeId: tab.id });
+      this.userActs.delete(tab.id);
     }
     if (chord.done && tabs.length === 0) {
       this.deps.store.dispatch({ t: 'agent.chord.remove', chordId: chord.chordId });
@@ -162,9 +181,23 @@ export class AgentChords {
     this.prune();
   }
 
+  /** You acted in an agent's tab (a key, a click, an address typed for it): what it does next is yours. */
+  userActed(nodeId: NodeId): void {
+    if (this.chordOfTab(nodeId)) this.userActs.set(nodeId, this.deps.now?.() ?? Date.now());
+  }
+
+  /** The window showing the tab, if you acted in it just now: its going somewhere is yours. */
+  private yoursNow(nodeId: NodeId): WindowId | null {
+    const at = this.userActs.get(nodeId);
+    if (at === undefined || (this.deps.now?.() ?? Date.now()) - at > USER_MS) return null;
+    const state = this.deps.store.state;
+    return Object.values(state.windows).find((w) => w.agentTab === nodeId)?.id ?? null;
+  }
+
   /** What's kept per tab goes with the tab. */
   private prune(): void {
     const state = this.deps.store.state;
+    for (const id of [...this.userActs.keys()]) if (!nodeOf(state, id)) this.userActs.delete(id);
     for (const id of [...this.shown.keys()]) if (!nodeOf(state, id)) this.shown.delete(id);
     for (const id of [...this.unthrottled]) if (!nodeOf(state, id)) this.unthrottled.delete(id);
   }
@@ -173,8 +206,12 @@ export class AgentChords {
   wire(contents: WebContents, nodeId: NodeId): void {
     // Made while the agent already works on the tab (its first load, or after it slept): full speed now too.
     if (this.unthrottled.has(nodeId)) contents.setBackgroundThrottling(false);
+    contents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type === 'mouseDown') this.userActed(nodeId);
+    });
     contents.on('before-input-event', (_event, input) => {
       if (input.type !== 'keyDown') return;
+      this.userActed(nodeId);
       const chord = this.chordOfTab(nodeId);
       if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
     });
@@ -188,10 +225,14 @@ export class AgentChords {
 
   /* ---------- Held, for the agent ---------- */
 
-  note(nodeId: NodeId, what: AgentHeld, detail: string): void {
+  /** `from`: where it came from (a download's address), if not the detail itself (a popup's). */
+  note(nodeId: NodeId, what: AgentHeld, detail: string, from?: string): void {
     const chord = this.chordOfTab(nodeId);
     if (!chord || this.onPrivateSite(nodeId)) return;
-    const text = detail.slice(0, 500);
+    // A popup or a download from a site the user keeps private (one the tab never got to): never named.
+    const source = what === 'popup' ? detail : from;
+    const hidden = source !== undefined && onNeverSite(source, this.deps.neverSites?.() ?? []);
+    const text = hidden ? (what === 'popup' ? 'a site the user keeps private' : 'a file from a site the user keeps private') : detail.slice(0, 500);
     // A site asks for a sign-in on every retry and every page of it: one note per tab and origin (the note names
     // it) until the agent hears it.
     if (what === 'signin' && chord.notes.some((n) => n.what === 'signin' && n.nodeId === nodeId && n.detail === text)) return;

@@ -308,13 +308,30 @@ export interface TabMenuActions {
    */
   stopSharing: { label: string; click(): void } | null;
   backToPinned: (() => void) | null;
+  /** Sharing it with an outside agent (S18 M1e), or null when there's none to share with. */
+  agentShare: AgentShareMenu | null;
+  shareWithAgent(agentId?: string): void;
   /** Reader view: offered while the page reads as an article (`on` while it shows in reader view), else null. */
   reader: { on: boolean } | null;
   toggleReader(): void;
 }
 
+/** The tab menu's sharing item (mocks/agents-s18-m1.html §3): stop sharing, or share with the one agent, or choose. */
+export type AgentShareMenu = { sharedWith: string } | { agents: { id: string; name: string }[] };
+
+function agentShareItems(a: TabMenuActions): MenuItemConstructorOptions[] {
+  const share = a.agentShare;
+  if (!share) return [];
+  const accelerator = acceleratorFor('agents.share');
+  if ('sharedWith' in share) return [{ label: `Stop sharing with ${share.sharedWith}`, accelerator, click: () => a.shareWithAgent() }];
+  if (share.agents.length === 0) return [];
+  if (share.agents.length === 1) return [{ label: `Share with ${share.agents[0]!.name}`, accelerator, click: () => a.shareWithAgent(share.agents[0]!.id) }];
+  return [{ label: 'Share with', submenu: share.agents.map((agent) => ({ label: agent.name, click: () => a.shareWithAgent(agent.id) })) }];
+}
+
 /** Right-click on a tab row in the sidebar. */
 export function buildTabMenu(a: TabMenuActions): Menu {
+  const sharing = agentShareItems(a);
   const web = /^https?:/i.test(a.url);
   const moveTo: MenuItemConstructorOptions[] = a.moveTargets.map((c) => ({
     label: c.signInsDiffer ? `${c.label} (other sign-ins)` : c.label,
@@ -346,6 +363,7 @@ export function buildTabMenu(a: TabMenuActions): Menu {
     { label: a.muted ? 'Unmute tab' : 'Mute tab', accelerator: acceleratorFor('tab.mute'), enabled: web, click: a.toggleMute },
     // For a site whose count isn't wanted (an inbox's unread mail): kept for the site, listed in Settings → General.
     ...(a.count ? [{ label: 'Show count on tab', type: 'checkbox' as const, checked: a.count.shown, click: a.count.toggle }] : []),
+    ...(sharing.length > 0 ? [{ type: 'separator' as const }, ...sharing] : []),
     { type: 'separator' },
     { label: a.pinned ? 'Close (stays pinned)' : 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
   ]);

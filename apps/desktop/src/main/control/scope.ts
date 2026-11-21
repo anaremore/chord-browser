@@ -56,6 +56,8 @@ export interface ControlScope {
   defaultTab(): TabNode | null;
   /** A tab may be read at all: never a private window, a Chord page or a *Never* site. */
   readable(node: TabNode): boolean;
+  /** Why `readable` said no, where the scope has its own words (an outside agent's: the user stopped sharing it); absent, the *never* refusal. */
+  whyNot?(node: TabNode): string | null;
   /** The *Never* list, for addresses a read ends up at (a PDF's redirects, a frame inside the page). */
   neverSites(): readonly string[];
   /**

@@ -13,17 +13,38 @@ export class TabRefs<Id = string> {
   private readonly byRef = new Map<string, Id | null>();
   private readonly byId = new Map<Id, string>();
   private next = 1;
+  /** Other prefixes' counters (an outside agent's shared tabs: `s1`…). */
+  private readonly others = new Map<string, number>();
 
-  constructor(private readonly prefix = 't') {}
+  /** `prefixFor`: another prefix for some tabs (an outside agent's: `s` for tabs the user shares), counted apart. */
+  constructor(
+    private readonly prefix = 't',
+    private readonly prefixFor?: (id: Id) => string,
+  ) {}
 
   /** The tab's ref, made the first time it's asked for. */
   refFor(id: Id): string {
     const known = this.byId.get(id);
     if (known !== undefined) return known;
-    const ref = `${this.prefix}${this.next++}`;
+    const prefix = this.prefixFor?.(id) ?? this.prefix;
+    let ref: string;
+    if (prefix === this.prefix) ref = `${prefix}${this.next++}`;
+    else {
+      const n = this.others.get(prefix) ?? 1;
+      this.others.set(prefix, n + 1);
+      ref = `${prefix}${n}`;
+    }
     this.byRef.set(ref, id);
     this.byId.set(id, ref);
     return ref;
+  }
+
+  /** The tab is gone for this table, though it's still open (handed to the user): its ref now resolves as closed. */
+  close(id: Id): void {
+    const ref = this.byId.get(id);
+    if (ref === undefined) return;
+    this.byRef.set(ref, null);
+    this.byId.delete(id);
   }
 
   /**

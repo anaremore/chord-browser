@@ -756,6 +756,12 @@ const TabRow = memo(function TabRow({ tab, live, index, shows, section, depth, p
         <TabFace tab={tab} live={live} appearance={appearance} />
         <Count unread={unread} />
         {assistantRead && <AssistantIcon className={styles.assistantRead} size={12} strokeWidth={2} role="img" aria-label="Read by the assistant" />}
+        {/* Shared with an outside agent (S18 M1e): its ✳. */}
+        {live?.agent?.state === 'shared' && (
+          <span className={styles.agentShared} role="img" aria-label={`Shared with ${live.agent.name}`}>
+            ✳
+          </span>
+        )}
       </div>
       {sharing ? (
         <button

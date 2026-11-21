@@ -9,7 +9,12 @@
  * Always allow keeps the agent by the name it gives and the program that
  * started it (hints, never proof: S18 §3), with the sign-ins of the window you
  * answered in. While those sign-ins still exist, its next connections are let
- * in without a card; once they're gone, it asks again.
+ * in without a card; once they're gone, it asks again. Without the program
+ * (the lookup failed) nothing is kept: a name alone never lets anything in.
+ *
+ * Everything on the card but its buttons comes from the agent or the OS, so it
+ * is shown only as plain, bounded text: no control or bidi characters, and a
+ * folder only if it is an absolute path.
  */
 import { randomBytes } from 'node:crypto';
 import { sortedChords, type AgentAllowance, type Command, type Grant, type ProfileId, type State, type WindowId } from '@chord/core';
@@ -28,11 +33,13 @@ export interface ConnectAnswer {
   grant: Grant;
   /** The sign-ins its chord gets: those of the window you answered in, or the ones it was let in with for good. */
   profileId: ProfileId | null;
+  /** Always allowed (now or before): the program its allowance is kept by, so Remove ends only that one. */
+  allowedParent?: string | null;
 }
 
 export interface ConnectCardsDeps {
   store: { readonly state: State; dispatch(command: Command): void };
-  /** The window used last (never a private one), where the card goes. */
+  /** The window used last (never a private one), where the card goes; null while there's none. */
   lastWindow(): WindowId | null;
   /** The cards changed: windows' popovers show them again. */
   changed(): void;
@@ -41,18 +48,49 @@ export interface ConnectCardsDeps {
 
 interface Waiting {
   card: AgentConnectCard;
-  windowId: WindowId;
+  /** Where it shows; null while there's no normal window (it waits for one). */
+  windowId: WindowId | null;
   /** The program that started it, once looked up. */
   parent: ProcessInfo | null;
   looked: Promise<ProcessInfo | null>;
-  answer(answer: 'deny' | 'once' | 'always', windowId: WindowId): void;
+  answer(answer: 'deny' | 'once' | 'always', windowId: WindowId | null): void;
 }
 
 /** How long Chord waits on the lookup before it decides whether an agent it knows may come in. */
 const LOOKUP_MS = 5000;
+/** The longest folder the card shows; longer ones lose their middle. */
+const FOLDER_MAX = 120;
 
 const firstOf = (parent: Promise<ProcessInfo[]>): Promise<ProcessInfo | null> =>
   Promise.race([parent.then((chain) => chain[0] ?? null).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_MS).unref?.())]);
+
+/** Control and format characters (bidi overrides, zero-width joiners…): never shown from an agent or the OS. */
+const UNSAFE = /[\p{Cc}\p{Cf}]/u;
+const UNSAFE_ALL = /[\p{Cc}\p{Cf}]/gu;
+
+/** Text from outside, as plain text: those characters dropped. */
+export const plain = (text: string): string => text.replace(UNSAFE_ALL, '');
+
+/**
+ * The folder line's folder: an absolute path (`/…`, `C:\…`, `\\server\…`) with nothing hidden in it, its middle
+ * dropped past FOLDER_MAX; null for anything else (the card then says "an unknown folder").
+ */
+export function cardFolder(folder: string): string | null {
+  if (!folder || UNSAFE.test(folder)) return null;
+  if (!/^(\/|[A-Za-z]:[\\/]|\\\\[^\\])/.test(folder)) return null;
+  const chars = [...folder];
+  if (chars.length <= FOLDER_MAX) return folder;
+  const half = (FOLDER_MAX - 1) / 2;
+  return `${chars.slice(0, Math.ceil(half)).join('')}…${chars.slice(chars.length - Math.floor(half)).join('')}`;
+}
+
+/** A program's path with its version folders as `*` (…/versions/2.1.3/claude, …/versions/2.1.3): an update is the same program. */
+export function unversioned(path: string): string {
+  return path
+    .split(/([\\/])/)
+    .map((part) => (/^v?\d+(\.\d+)+([-+.][0-9A-Za-z.-]+)?$/.test(part) ? '*' : part))
+    .join('');
+}
 
 /** Sign-ins that still exist: one of your chords (not a private window's, not an agent's) uses them. */
 export function signInsExist(state: State, profileId: ProfileId): boolean {
@@ -69,7 +107,7 @@ export class ConnectCards {
   }
 
   /** The agent let in for good, if it is: the same name, the same program, sign-ins that still exist. */
-  private allowance(name: string, parent: string | null): AgentAllowance | null {
+  private allowance(name: string, parent: string): AgentAllowance | null {
     const state = this.deps.store.state;
     return state.settings.agentsAllowed.find((a) => a.name === name && a.parent === parent && signInsExist(state, a.profileId)) ?? null;
   }
@@ -80,53 +118,71 @@ export class ConnectCards {
     const looked = firstOf(who.parent);
     // An agent you've let in for good by that name: who started it decides, so Chord looks first (about 1 s on Windows).
     if (known) {
-      const allowed = this.allowance(who.name, (await looked)?.path ?? null);
+      const path = (await looked)?.path;
+      const allowed = path ? this.allowance(who.name, path) : null;
       if (allowed) {
         this.touch(allowed);
-        return { grant: 'always', profileId: allowed.profileId };
+        return { grant: 'always', profileId: allowed.profileId, allowedParent: allowed.parent };
       }
     }
     if (signal.aborted) return { grant: 'deny', profileId: null };
-    const windowId = this.deps.lastWindow();
-    if (!windowId) return { grant: 'deny', profileId: null };
     return new Promise<ConnectAnswer>((resolve) => {
       const id = randomBytes(8).toString('hex');
+      const folder = cardFolder(who.folder);
       const entry: Waiting = {
-        card: { id, name: who.name, folder: who.folder.slice(0, 500), startedBy: null },
-        windowId,
+        card: { id, name: plain(who.name), folder, startedBy: null },
+        // No normal window yet: it waits for one (the call says *waiting* after 45 s, and the card stays).
+        windowId: this.deps.lastWindow(),
         parent: null,
         looked,
         answer: (answer, answeredIn) => {
           if (!this.waiting.delete(id)) return;
           signal.removeEventListener('abort', onAbort);
           this.deps.changed();
-          if (answer === 'deny') return resolve({ grant: 'deny', profileId: null });
+          if (answer === 'deny' || !answeredIn) return resolve({ grant: 'deny', profileId: null });
           const state = this.deps.store.state;
           const profileId = state.chords[state.windows[answeredIn]?.activeChordId ?? '']?.profileId ?? null;
-          if (answer === 'always' && profileId) void this.keep(who.name, entry, profileId);
+          if (answer === 'always' && profileId) {
+            // Kept only with the program that started it (looked up by now, or as soon as it is).
+            void (async () => {
+              const parent = entry.parent ?? (await entry.looked);
+              const kept = parent?.path ? this.keep(who.name, parent.path, profileId) : null;
+              resolve({ grant: answer, profileId, allowedParent: kept });
+            })();
+            return;
+          }
           resolve({ grant: answer, profileId });
         },
       };
-      const onAbort = () => entry.answer('deny', windowId);
+      const onAbort = () => entry.answer('deny', entry.windowId);
       signal.addEventListener('abort', onAbort, { once: true });
       this.waiting.set(id, entry);
       this.deps.changed();
       // Who started it, as soon as it's known.
       void looked.then((parent) => {
-        if (!this.waiting.has(id) || !parent?.name) return;
+        if (!this.waiting.has(id) || !parent) return;
         entry.parent = parent;
-        entry.card = { ...entry.card, startedBy: parent.name.slice(0, 100) };
+        const name = parent.name ? plain(parent.name).slice(0, 100) : '';
+        if (!name) return;
+        entry.card = { ...entry.card, startedBy: name };
         this.deps.changed();
       });
     });
   }
 
-  /** Always allow: kept with the program that started it (looked up by now, or as soon as it is) and those sign-ins. */
-  private async keep(name: string, entry: Waiting, profileId: ProfileId): Promise<void> {
-    const parent = entry.parent ?? (await entry.looked);
+  /**
+   * Always allow: kept with this program and those sign-ins. It takes the place of the same agent's row for the
+   * same program, or for that program at another version (Claude Code updates into …/versions/<version>), so an
+   * update doesn't add a row. Returns the program it's kept by.
+   */
+  private keep(name: string, parent: string, profileId: ProfileId): string {
     const now = this.now();
-    const others = this.deps.store.state.settings.agentsAllowed.filter((a) => !(a.name === name && a.parent === (parent?.path ?? null)));
-    this.deps.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [...others, { name, parent: parent?.path ?? null, profileId, allowedAt: now, lastUsedAt: now }] } });
+    const same = (a: AgentAllowance) => a.name === name && (a.parent === parent || unversioned(a.parent) === unversioned(parent));
+    const list = this.deps.store.state.settings.agentsAllowed;
+    const before = list.find(same);
+    const others = list.filter((a) => !same(a));
+    this.deps.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [...others, { name, parent, profileId, allowedAt: before?.allowedAt ?? now, lastUsedAt: now }] } });
+    return parent;
   }
 
   private touch(allowed: AgentAllowance): void {
@@ -134,10 +190,28 @@ export class ConnectCards {
     this.deps.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: list } });
   }
 
-  /** The card a window shows: the oldest waiting there. */
+  /** The card a window shows: the oldest waiting there. A card waiting for a window goes to this one if it's the one used last. */
   cardFor(windowId: WindowId): AgentConnectCard | null {
     for (const entry of this.waiting.values()) if (entry.windowId === windowId) return entry.card;
+    if (this.deps.lastWindow() === windowId) {
+      for (const entry of this.waiting.values()) {
+        if (entry.windowId) continue;
+        entry.windowId = windowId;
+        return entry.card;
+      }
+    }
     return null;
+  }
+
+  /** A normal window came to the front: cards waiting for one show there. */
+  windowFocused(windowId: WindowId): void {
+    let moved = false;
+    for (const entry of this.waiting.values()) {
+      if (entry.windowId) continue;
+      entry.windowId = windowId;
+      moved = true;
+    }
+    if (moved) this.deps.changed();
   }
 
   /** Your answer, from the card in that window's popover (only that window's card). */
@@ -146,14 +220,10 @@ export class ConnectCards {
     if (entry && entry.windowId === windowId) entry.answer(answer, windowId);
   }
 
-  /** A window closed: its cards go to the window used last, or are a no if there's none. */
+  /** A window closed: its cards go to the window used last, or wait for a normal window (never a no on their own). */
   windowClosed(windowId: WindowId): void {
     const to = this.deps.lastWindow();
-    for (const entry of [...this.waiting.values()]) {
-      if (entry.windowId !== windowId) continue;
-      if (to && to !== windowId) entry.windowId = to;
-      else entry.answer('deny', windowId);
-    }
+    for (const entry of this.waiting.values()) if (entry.windowId === windowId) entry.windowId = to && to !== windowId ? to : null;
     this.deps.changed();
   }
 }

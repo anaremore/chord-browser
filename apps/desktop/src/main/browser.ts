@@ -86,7 +86,7 @@ import { IdleKeeper, type IdleTiming } from './idle';
 import { MiniWindows } from './mini-window';
 import { MediaWatcher } from './media';
 import { liveOf, Peeks } from './peek';
-import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH } from './menu';
+import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH, type AgentShareMenu } from './menu';
 import type { PermissionBroker } from './permissions';
 import { Previews } from './previews';
 import { Readers, type ReaderLinkTarget } from './reader/service';
@@ -278,6 +278,15 @@ export class Browser {
 
   /** A window closed: an agent's connect card in it moves on (S18 M1d). Set by main. */
   agentWindowClosed: ((windowId: WindowId) => void) | null = null;
+  /**
+   * Sharing a tab with an outside agent (S18 M1e): the key, the command bar and the tab menu's item toggle it
+   * (`agentId`: the menu's chosen agent; else the one that called last). Set by main while Agents is on.
+   */
+  agentShare: ((windowId: WindowId, nodeId: NodeId, agentId?: string) => void) | null = null;
+  /** The tab menu's item for a tab: whom it can be shared with, or whom it's shared with now; null for none. Set by main. */
+  agentShareMenu: ((nodeId: NodeId) => AgentShareMenu | null) | null = null;
+  /** A normal window came to the front: a connect card waiting for one shows there (S18). */
+  agentWindowFocused: ((windowId: WindowId) => void) | null = null;
 
   /** Every window's popover again (the agents' connect cards changed). */
   refreshPopovers(): void {
@@ -289,7 +298,7 @@ export class Browser {
   /** An outside agent's tab's page was made (S18): main/agents wires it (the typing pause, leaving without asking). */
   agentContents: ((contents: WebContents, nodeId: NodeId) => void) | null = null;
   /** Something an agent's tab held or refused (a dialog, a file picker, a popup, a download), for the agent. */
-  agentHeld: ((nodeId: NodeId, what: AgentHeld, detail: string) => void) | null = null;
+  agentHeld: ((nodeId: NodeId, what: AgentHeld, detail: string, from?: string) => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -945,7 +954,8 @@ export class Browser {
    * no agent's chord and no bar up, there's nothing to do.
    */
   private syncAgentBars(state: State): void {
-    if (!this.agentBars && agentChords(state).length === 0) return;
+    // A tab you shared has a bar too (M1e), though its agent may have no chord.
+    if (!this.agentBars && agentChords(state).length === 0 && !this.agentShareMenu) return;
     let any = false;
     for (const w of this.windows.values()) {
       const shown = shownTabs(state, w.id);
@@ -957,10 +967,10 @@ export class Browser {
   }
 
   /** A download an outside agent's tab started (S18): refused, and the agent told. False for any other page. */
-  agentDownload(contents: WebContents, filename: string): boolean {
+  agentDownload(contents: WebContents, url: string, filename: string): boolean {
     const nodeId = this.tabOfPage.get(contents);
     if (!nodeId || !this.isAgentNode(nodeId)) return false;
-    this.agentHeld?.(nodeId, 'download', filename);
+    this.agentHeld?.(nodeId, 'download', filename, url);
     return true;
   }
 
@@ -1083,6 +1093,7 @@ export class Browser {
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
       this.lastWindowId = windowId;
+      if (!w.isPrivate) this.agentWindowFocused?.(windowId);
       this.settingsWindow?.update(this.settingsSnapshot());
       this.options.windowFocused?.();
     });
@@ -1804,7 +1815,9 @@ export class Browser {
       }
     }
     const popover = this.popoverState(w);
-    w.setPopoverCentered(Boolean(popover.agentCard));
+    // Centered only while the connect card is all it shows: find and the page's prompts keep their corner.
+    const { agentCard, theme: _theme, interface: _interface, passwordMenu: _menu, ...others } = popover;
+    w.setPopoverCentered(Boolean(agentCard) && Object.values(others).every((v) => !v));
     const json = JSON.stringify(popover);
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
@@ -2268,6 +2281,9 @@ export class Browser {
           .filter((c) => c.id !== tab.chordId)
           .map((c) => ({ id: c.id, label: `${c.icon}  ${c.name}`, signInsDiffer: c.profileId !== from?.profileId })),
         moveTo: (chordId) => this.moveToChord(w, nodeId, chordId),
+        // Sharing with an outside agent (S18 M1e): only while one is let in, or the tab is shared.
+        agentShare: this.agentShareMenu?.(nodeId) ?? null,
+        shareWithAgent: (agentId) => this.agentShare?.(w.id, nodeId, agentId),
         stopSharing:
           state.live[nodeId]?.sharing || state.live[nodeId]?.shared
             ? { label: state.live[nodeId]?.sharing ? 'Stop sharing' : 'Stop sharing this tab', click: () => void this.options.screenShare.stop(nodeId) }
@@ -2872,6 +2888,12 @@ export class Browser {
         // Every outside agent (S18) and every assistant reply, at once.
         this.stopAll?.();
         return true;
+      case 'agents.share': {
+        // The tab on screen (M1e); Peek's page isn't a tab. With Agents off, nothing.
+        const nodeId = activeTabId(this.store.state, w.id);
+        if (nodeId) this.agentShare?.(w.id, nodeId);
+        return true;
+      }
       case 'chord.separateSignIns': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;
         if (chordId) this.toggleSeparateSignIns(w, chordId);

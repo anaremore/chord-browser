@@ -239,6 +239,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('agents.continue'), chordId: id }),
   z.object({ t: z.literal('agents.keep'), windowId: id, chordId: id }),
   z.object({ t: z.literal('agents.closeAll'), chordId: id }),
+  z.object({ t: z.literal('agents.unshare'), nodeId: id }),
   z.object({ t: z.literal('agents.undoClose'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
@@ -948,8 +949,8 @@ export interface AgentConnectCard {
   id: string;
   /** The name the agent gives (a hint, never proof). */
   name: string;
-  /** The folder its client runs in. */
-  folder: string;
+  /** The folder its client runs in: an absolute path with nothing hidden in it, shortened in the middle; null if it isn't one. */
+  folder: string | null;
   /** The program that started it (claude.exe), once Chord has looked; null until then, or if it can't tell. */
   startedBy: string | null;
 }
@@ -961,10 +962,10 @@ export interface AgentsView {
   /** Connected agents you stopped, each to let continue. */
   stopped: { id: string; name: string; tabs: number }[];
   /** Agents let in for good. */
-  allowed: { name: string; parent: string | null; signIns: string; connected: boolean; tabs: number; lastUsedAt: number }[];
+  allowed: { name: string; parent: string; signIns: string; connected: boolean; tabs: number; lastUsedAt: number }[];
 }
 
-export type AgentsRequest = { do: 'view' } | { do: 'remove'; name: string; parent: string | null } | { do: 'continue'; id: string };
+export type AgentsRequest = { do: 'view' } | { do: 'remove'; name: string; parent: string } | { do: 'continue'; id: string };
 
 export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
 export type OtherBrowserId = (typeof OTHER_BROWSERS)[number];
@@ -1715,7 +1716,7 @@ export const invokeChannels = {
     roles: ['internal'],
     request: z.discriminatedUnion('do', [
       z.strictObject({ do: z.literal('view') }),
-      z.strictObject({ do: z.literal('remove'), name: z.string().min(1).max(60), parent: z.string().max(1000).nullable() }),
+      z.strictObject({ do: z.literal('remove'), name: z.string().min(1).max(60), parent: z.string().min(1).max(1000) }),
       z.strictObject({ do: z.literal('continue'), id: z.string().min(1).max(40) }),
     ]),
     response: z.custom<AgentsView>(),

@@ -112,7 +112,7 @@ export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
           ) : (
             <div className={styles.group}>
               {view.allowed.map((a) => (
-                <div key={`${a.name}\u0000${a.parent ?? ''}`} className={local.agent}>
+                <div key={`${a.name}\u0000${a.parent}`} className={local.agent}>
                   <Tile name={a.name} />
                   <div className={styles.rowText}>
                     <span className={styles.rowLabel}>{a.name}</span>

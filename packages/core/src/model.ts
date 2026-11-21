@@ -227,8 +227,11 @@ export interface AgentLive {
   /** The agent's name, as it gives it. */
   name: string;
   chordId: ChordId;
-  /** Working: a call runs on the tab. Paused: you're using the tab. Stopped: you pressed Stop. */
-  state: 'working' | 'paused' | 'stopped';
+  /**
+   * Working: a call runs on the tab. Paused: you're using the tab. Stopped: you pressed Stop. Shared: a tab of
+   * yours you shared with the agent (M1e; `chordId` is then its chord's, or '' while it has none).
+   */
+  state: 'working' | 'paused' | 'stopped' | 'shared';
 }
 
 export interface LiveTab {
@@ -520,8 +523,8 @@ export interface SpellcheckSettings {
  */
 export interface AgentAllowance {
   name: string;
-  /** The executable that started `chord mcp` (claude.exe, codex.exe…), if Chord could tell. */
-  parent: string | null;
+  /** The executable that started `chord mcp` (claude.exe, codex.exe…). Never empty: without it nothing is kept (name alone matches nothing). */
+  parent: string;
   profileId: ProfileId;
   allowedAt: number;
   lastUsedAt: number;
@@ -534,20 +537,25 @@ export const AGENTS_ALLOWED_MAX = 50;
 export function cleanAgentsAllowed(value: unknown): AgentAllowance[] {
   if (!Array.isArray(value)) return [];
   const out: AgentAllowance[] = [];
-  for (const item of value.slice(0, AGENTS_ALLOWED_MAX)) {
+  for (const item of value.slice(0, AGENTS_ALLOWED_MAX * 4)) {
     if (!item || typeof item !== 'object') continue;
     const a = item as Record<string, unknown>;
     if (typeof a['name'] !== 'string' || !a['name'].trim() || typeof a['profileId'] !== 'string' || !a['profileId']) continue;
+    // Who started it is what an allowance matches on: one without it would match by name alone.
+    if (typeof a['parent'] !== 'string' || !a['parent'].trim()) continue;
     const time = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
     out.push({
       name: a['name'].trim().slice(0, 60),
-      parent: typeof a['parent'] === 'string' && a['parent'] ? a['parent'].slice(0, 1000) : null,
+      parent: a['parent'].slice(0, 1000),
       profileId: a['profileId'].slice(0, 100),
       allowedAt: time(a['allowedAt']),
       lastUsedAt: time(a['lastUsedAt']),
     });
   }
-  return out;
+  if (out.length <= AGENTS_ALLOWED_MAX) return out;
+  // Over the cap: the ones used longest ago go, the rest keep their order.
+  const keep = new Set([...out].sort((x, y) => y.lastUsedAt - x.lastUsedAt).slice(0, AGENTS_ALLOWED_MAX));
+  return out.filter((a) => keep.has(a));
 }
 
 export interface AssistantSettings {

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
-import { audit, capturesDir, closeSettings, dispatch, expectClean, isPopover, isSettings, isShell, pageWhere, pressReal, runAction, settle } from './a11y-kit';
+import { audit, capturesDir, closeSettings, dispatch, expectClean, isPopover, isSettings, isShell, pageWhere, pressReal, runAction, settle, where } from './a11y-kit';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -125,8 +125,10 @@ test('Settings → Agents turns it on; the card asks, Deny refuses, Allow once l
     await expect(card).toBeVisible({ timeout: 15_000 });
     // Who started it (once Chord has looked), where, what it may do; and it never takes the keyboard.
     await expect(card).toContainText(/Started (by .+ )?in /);
+    // It never takes the keyboard, so it's announced, politely.
+    await expect(popover.locator('[role="status"][aria-live="polite"]').filter({ hasText: 'Codex wants to use Chord' })).toHaveCount(1);
     for (const line of ['Open and read pages in its own Agent chord', 'Read a tab of yours only when you share it', 'Never see your passwords']) await expect(card).toContainText(line);
-    expect(await app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? '')).not.toContain('popover');
+    await expect.poll(() => app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? '')).not.toContain('popover');
     mkdirSync(capturesDir, { recursive: true });
     await popover.waitForTimeout(600);
     await card.screenshot({ path: join(capturesDir, 'agents-connect-card.png') });
@@ -349,6 +351,80 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
     await shell.getByRole('button', { name: 'Keep', description: 'Claude Code finished. Keep these tabs?' }).click();
     await expect(shell.getByRole('region', { name: 'Claude Code’s tabs' })).toHaveCount(0);
     await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Release notes');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+/* ---------- Sharing a tab (S18 M1e) ---------- */
+
+test('you share a tab: the agent reads it and your selection, can’t close it, and once it leaves the site it’s refused', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const { windowId } = await where(shell);
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/notes` });
+    const page = await pageWhere(app, (url) => url.startsWith(`${site.origin}/notes`));
+    await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
+    // The key from the page, as you'd press it; where menu accelerators can't fire from injected keys (macOS: no
+    // NSEvent; headless Weston: no active window) the same action, as the menu's accelerator runs it.
+    const keyWorks = process.platform !== 'darwin' && process.env['XDG_SESSION_TYPE'] !== 'wayland';
+    const shareKey = () => (keyWorks ? pressReal(app, `${site.origin}/notes`, 'K', ['control', 'shift']) : runAction(shell, 'agents.share'));
+
+    // No agent yet: the key says so.
+    await shareKey();
+    await expect(shell.getByText('No agent is connected.')).toBeVisible();
+
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const first = mcp.call('list_tabs');
+    await answer(app, 'Codex', 'Allow once');
+    expect(JSON.parse((await first).text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
+
+    // The key shares the tab on screen with the agent that called last: its bar, and the ✳ on its row.
+    await shareKey();
+    const bar = shell.getByRole('status').filter({ hasText: 'Shared with Codex: it can read this tab' });
+    await expect(bar).toBeVisible();
+    await expect(shell.getByRole('img', { name: 'Shared with Codex' })).toBeVisible();
+    mkdirSync(capturesDir, { recursive: true });
+    await settle(shell);
+    await shell.screenshot({ path: join(capturesDir, 'agents-shared-tab.png') });
+
+    // Listed as s1; read, with what you selected; never closed by the agent.
+    const listed = JSON.parse((await mcp.call('list_tabs')).text) as { data: { tabs: { tab_id: string; title: string; attached: boolean }[] } };
+    expect(listed.data.tabs).toEqual([expect.objectContaining({ tab_id: 's1', title: 'Release notes', attached: true })]);
+    expect(JSON.parse((await mcp.call('read_tab', { tab_id: 's1' })).text).content).toContain('Electron 46 brings a faster start.');
+    await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('p')!);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+    });
+    expect(JSON.parse((await mcp.call('read_selection', { tab_id: 's1' })).text).content).toContain('Electron 46 brings a faster start.');
+    expect(await mcp.call('close_tab', { tab_id: 's1' })).toMatchObject({ isError: true, text: expect.stringContaining('isn’t yours') });
+    await expect(bar).toBeVisible();
+
+    // It leaves the site it was shared on: sharing ends, and the agent is told so.
+    const elsewhere = site.origin.replace('127.0.0.1', 'localhost');
+    await page.evaluate((url) => (location.href = url), `${elsewhere}/dialog`);
+    await expect(bar).toHaveCount(0);
+    await expect(shell.getByRole('img', { name: 'Shared with Codex' })).toHaveCount(0);
+    expect(await mcp.call('read_tab', { tab_id: 's1' })).toMatchObject({ isError: true, text: 'The user isn’t sharing that tab with you any more. Use list_tabs for the tabs you can use.' });
+    expect(JSON.parse((await mcp.call('list_tabs')).text).data.tabs).toEqual([]);
+
+    // Shared again (the key toggles), then Stop sharing on the bar.
+    await page.evaluate((url) => (location.href = url), `${site.origin}/notes`);
+    await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
+    await shareKey();
+    await expect(bar).toBeVisible();
+    await bar.getByRole('button', { name: 'Stop sharing' }).click();
+    await expect(bar).toHaveCount(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

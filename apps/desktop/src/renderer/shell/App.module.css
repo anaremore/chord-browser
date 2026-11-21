@@ -1990,6 +1990,13 @@ kbd {
   color: var(--color-accent);
 }
 
+/* A tab of yours shared with an outside agent (S18 M1e): its ✳, in the agents' blue. */
+.agentShared {
+  flex: none;
+  color: var(--color-agent);
+  font: var(--text-micro);
+}
+
 /* ---------- Windows High Contrast (DESIGN.md §10): tints off, system colors on ---------- */
 
 @media (forced-colors: active) {

@@ -454,3 +454,74 @@ describe('S18 M1d', () => {
     expect(t.chords.drain(t.agent)).toHaveLength(1);
   });
 });
+
+describe('S18 M1e: Never sites (review of #83)', () => {
+  it('a popup or a download from a site the user keeps private is never named in a note', () => {
+    const t = setup(['bank.test']);
+    t.chords.note('a1', 'popup', 'https://login.bank.test/secret?id=42');
+    t.chords.note('a1', 'popup', 'https://news.test/story');
+    t.chords.note('a1', 'download', 'statement-2026.pdf', 'https://bank.test/statements/2026.pdf');
+    t.chords.note('a1', 'download', 'notes.txt', 'https://files.test/notes.txt');
+    expect(t.chords.drain(t.agent).map((n) => `${n.what}: ${n.detail}`)).toEqual([
+      'popup: a site the user keeps private',
+      'popup: https://news.test/story',
+      'download: a file from a site the user keeps private',
+      'download: notes.txt',
+    ]);
+  });
+
+  it('a site added to the Never list closes the agent tabs already on it', () => {
+    const never: string[] = [];
+    const t = setup(never);
+    t.store.dispatch({ t: 'tab.updated', nodeId: 'a1', url: 'https://bank.test/home' });
+    expect(nodeOf(t.store.state, 'a1')).toBeDefined();
+    never.push('bank.test');
+    t.store.dispatch({ t: 'settings.set', settings: { assistant: { neverSites: ['bank.test'] } } });
+    expect(nodeOf(t.store.state, 'a1')).toBeUndefined();
+    expect(nodeOf(t.store.state, 'a2')).toBeDefined();
+  });
+
+  it('you take an agent’s tab to a Never site: it becomes yours, and the agent hears it closed; the agent going there still closes it', () => {
+    // [you acted in it just now, what becomes of it]
+    const table: [boolean, 'yours' | 'closed'][] = [
+      [true, 'yours'],
+      [false, 'closed'],
+    ];
+    for (const [acted, outcome] of table) {
+      let now = 1_000_000;
+      const t = setup(['bank.test']);
+      const handed: string[] = [];
+      const chords = new AgentChords({ store: t.store, page: t.page, lastWindow: () => null, neverSites: () => ['bank.test'], now: () => now });
+      chords.onHandedOver = (id) => void handed.push(id);
+      const agent = new ControlAgent('agent:2', async () => 'once');
+      const chordId = chords.chordFor(agent, 'Codex', null);
+      t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'b1', url: 'https://agent.test/b1' });
+      t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: 'b1' });
+      expect(t.store.state.windows['w1']!.agentTab).toBe('b1');
+      if (acted) chords.userActed('b1');
+      now += 5_000;
+      t.store.dispatch({ t: 'tab.updated', nodeId: 'b1', url: 'https://bank.test/login' });
+      if (outcome === 'yours') {
+        expect(nodeOf(t.store.state, 'b1')).toMatchObject({ chordId: 'c1', section: 'today' });
+        expect(handed).toEqual(['b1']);
+      } else {
+        expect(nodeOf(t.store.state, 'b1')).toBeUndefined();
+        expect(handed).toEqual([]);
+      }
+    }
+  });
+
+  it('your key or click long ago doesn’t count: the agent took it there', () => {
+    let now = 1_000_000;
+    const t = setup(['bank.test']);
+    const chords = new AgentChords({ store: t.store, page: t.page, lastWindow: () => null, neverSites: () => ['bank.test'], now: () => now });
+    const agent = new ControlAgent('agent:3', async () => 'once');
+    const chordId = chords.chordFor(agent, 'Codex', null);
+    t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'c9', url: 'https://agent.test/c9' });
+    t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: 'c9' });
+    chords.userActed('c9');
+    now += 60_000;
+    t.store.dispatch({ t: 'tab.updated', nodeId: 'c9', url: 'https://bank.test/login' });
+    expect(nodeOf(t.store.state, 'c9')).toBeUndefined();
+  });
+});

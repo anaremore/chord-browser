@@ -853,12 +853,12 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             data-devtools={docked || undefined}
             // A page is sharing the tab on screen: the frame's edge is tinted (a split's pane, or the page beside its DevTools, says it itself).
             data-shared={(!split && !docked && live?.shared) || undefined}
-            // An outside agent is reading the tab on screen (S18): the frame's edge is its blue.
-            data-agent={(!split && live?.agent?.state === 'working') || undefined}
+            // An outside agent is reading the tab on screen, or you shared it with one (S18): the frame's edge is its blue.
+            data-agent={(!split && (live?.agent?.state === 'working' || live?.agent?.state === 'shared')) || undefined}
             data-region="page"
           >
             {/* The agent's bar (S18): main keeps the page below it while it shows. */}
-            {!split && live?.agent && <AgentBar agent={live.agent} />}
+            {!split && live?.agent && activeId && <AgentBar agent={live.agent} nodeId={activeId} />}
             {!state.settings.onboarded && chord && !isPrivate ? (
               <Onboarding chord={chord} chords={sortedChords(state)} windowId={windowId} info={info} spring={spring} />
             ) : (

@@ -521,7 +521,7 @@ function AgentConnectCardView({ card }: { card: AgentConnectCard }) {
     <div className={styles.card} role="alertdialog" aria-label={`${card.name} wants to use Chord`}>
       <AgentCardBody
         title={`${card.name} wants to use Chord`}
-        note={card.startedBy ? `Started by ${card.startedBy} in ${card.folder}.` : `Started in ${card.folder}.`}
+        note={`Started${card.startedBy ? ` by ${card.startedBy}` : ''} in ${card.folder ?? 'an unknown folder'}.`}
         list={AGENT_MAY}
         closeLabel="Close"
         onClose={() => respond('deny')}
@@ -1205,6 +1205,10 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
     );
   return (
     <div ref={root} className={styles.root} style={style}>
+      {/* The connect card never takes the keyboard, so it's announced instead (politely: it waits for you). */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {state.agentCard ? `${state.agentCard.name} wants to use Chord` : ''}
+      </p>
       {state.find && <FindBar find={state.find} />}
       {state.agentCard && <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}

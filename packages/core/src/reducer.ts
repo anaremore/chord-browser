@@ -99,6 +99,8 @@ export type Command =
   | { t: 'agent.tab.remove'; nodeId: NodeId }
   | { t: 'agent.chord.remove'; chordId: ChordId }
   | { t: 'agent.chord.keep'; chordId: ChordId; windowId: WindowId }
+  /** One agent tab you took over (you went to a site you keep private in it): yours now, in the window's chord. */
+  | { t: 'agent.tab.keep'; nodeId: NodeId; windowId: WindowId }
   | { t: 'agent.chord.restore'; chord: Chord; tabs: TabNode[] }
   | { t: 'tab.close'; windowId: WindowId; nodeId: NodeId }
   | { t: 'tab.reopenClosed'; windowId: WindowId }
@@ -320,6 +322,8 @@ export type Command =
   | { t: 'agents.keep'; windowId: WindowId; chordId: ChordId }
   | { t: 'agents.closeAll'; chordId: ChordId }
   | { t: 'agents.undoClose'; token: string }
+  /** A shared tab's bar: Stop sharing it with the agent (M1e). */
+  | { t: 'agents.unshare'; nodeId: NodeId }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -1300,6 +1304,34 @@ function replaceChords(draft: Draft<State>, chordIds: readonly ChordId[], to: Ch
 
 /* ---------- Outside agents' chords (S18) ---------- */
 
+/** Where kept agent tabs go: the window's chord; a private window's never takes them, so the first of yours does. */
+function keepingChord(draft: Draft<State>, windowId: WindowId): Draft<Chord> | null {
+  const win = draft.windows[windowId];
+  const to = win && !win.private ? draft.chords[win.activeChordId] : draft.chords[sortedChords(draft as State)[0]?.id ?? ''];
+  return to && !to.agent ? to : null;
+}
+
+/** An agent's tab made yours: on top of the chord's Today, its page made again as a tab of yours. */
+function keepAgentTab(draft: Draft<State>, tab: Draft<TabNode>, to: Draft<Chord>, effects: Effect[]): void {
+  tab.chordId = to.id;
+  tab.section = 'today';
+  tab.parentId = null;
+  tab.rank = topOfToday(draft, to.id);
+  // Its page goes, whatever the sign-ins: it was made as an agent's (no dialogs, no file pickers, leaving never
+  // asks), and loads again as a tab of yours when shown. Its Back and Forward history stays with the agent.
+  delete draft.live[tab.id];
+  effects.push({ e: 'view.destroy', nodeId: tab.id });
+  // A window showing it over its chord now shows it as a tab of that chord, where it's the chord it shows.
+  for (const w of Object.values(draft.windows)) {
+    if (w.agentTab !== tab.id) continue;
+    delete w.agentTab;
+    if (w.activeChordId === to.id) w.activeTab[to.id] = tab.id;
+    const shown = w.activeTab[w.activeChordId] ?? null;
+    if (shown) effects.push({ e: 'view.ensure', nodeId: shown });
+    effects.push({ e: 'view.show', windowId: w.id, nodeId: shown });
+  }
+}
+
 type AgentCommand = Extract<Command, { t: `agent.${string}` }>;
 
 /** What may happen to an agent's tab or chord from outside its own commands. */
@@ -1418,32 +1450,19 @@ function runAgent(draft: Draft<State>, cmd: AgentCommand, ctx: Context, effects:
     }
     case 'agent.chord.keep': {
       const agent = draft.chords[cmd.chordId];
-      const win = draft.windows[cmd.windowId];
       if (!agent?.agent) return;
-      // Into the window's chord; a private window's never takes them, so the first of yours does.
-      const to = win && !win.private ? draft.chords[win.activeChordId] : draft.chords[sortedChords(draft as State)[0]?.id ?? ''];
-      if (!to || to.agent) return;
-      for (const tab of agentTabsOf(draft, agent.id)) {
-        tab.chordId = to.id;
-        tab.section = 'today';
-        tab.parentId = null;
-        tab.rank = topOfToday(draft, to.id);
-        // Its page goes, whatever the sign-ins: it was made as an agent's (no dialogs, no file pickers, leaving never
-        // asks), and loads again as a tab of yours when shown.
-        delete draft.live[tab.id];
-        effects.push({ e: 'view.destroy', nodeId: tab.id });
-        // A window showing it over its chord now shows it as a tab of that chord, where it's the chord it shows.
-        for (const w of Object.values(draft.windows)) {
-          if (w.agentTab !== tab.id) continue;
-          delete w.agentTab;
-          if (w.activeChordId === to.id) w.activeTab[to.id] = tab.id;
-          const shown = w.activeTab[w.activeChordId] ?? null;
-          if (shown) effects.push({ e: 'view.ensure', nodeId: shown });
-          effects.push({ e: 'view.show', windowId: w.id, nodeId: shown });
-        }
-      }
+      const to = keepingChord(draft, cmd.windowId);
+      if (!to) return;
+      for (const tab of agentTabsOf(draft, agent.id)) keepAgentTab(draft, tab, to, effects);
       delete draft.chords[agent.id];
       for (const w of Object.values(draft.windows)) delete w.activeTab[agent.id];
+      return;
+    }
+    case 'agent.tab.keep': {
+      const tab = nodeOf(draft, cmd.nodeId);
+      if (tab?.kind !== 'tab' || !isAgentChord(draft as State, tab.chordId)) return;
+      const to = keepingChord(draft, cmd.windowId);
+      if (to) keepAgentTab(draft, tab, to, effects);
       return;
     }
     case 'agent.chord.restore': {
@@ -2741,6 +2760,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'agents.keep':
     case 'agents.closeAll':
     case 'agents.undoClose':
+    case 'agents.unshare':
       // Main's: an agent's gate and connection live there (main/agents).
       return;
   }

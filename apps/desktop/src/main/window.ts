@@ -1027,11 +1027,45 @@ export class AppWindow {
    */
   private showPopover(): void {
     const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0 && !this.snapshots.active;
-    if (this.popover.getVisible() !== visible) this.popover.setVisible(visible);
+    if (this.popover.getVisible() !== visible) {
+      this.popover.setVisible(visible);
+      // An agent's connect card never takes the keyboard (S18): where the OS makes a view just shown the window's
+      // first responder (macOS, when nothing else in it has focus), the page or the shell gets it back.
+      if (visible && this.popoverCentered && !this.focusPopoverWhenShown) {
+        this.cardShownAt = Date.now();
+        this.watchCardFocus();
+        this.giveCardFocusBack();
+      }
+    }
     if (visible && this.focusPopoverWhenShown) {
       this.focusPopoverWhenShown = false;
       pageOf(this.popover)?.focus();
     }
+  }
+
+  /** When the agent's connect card last appeared, and whether its focus watch is set up (S18). */
+  private cardShownAt = 0;
+  private cardFocusWatched = false;
+
+  /** Focus the card got on its own, soon after it appeared (not from a click on it), goes back. */
+  private watchCardFocus(): void {
+    if (this.cardFocusWatched) return;
+    const contents = pageOf(this.popover);
+    if (!contents) return;
+    this.cardFocusWatched = true;
+    let clicked = 0;
+    contents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type === 'mouseDown') clicked = Date.now();
+    });
+    contents.on('focus', () => {
+      if (this.popoverCentered && Date.now() - this.cardShownAt < 1000 && Date.now() - clicked > 1000) setTimeout(() => this.giveCardFocusBack(), 0);
+    });
+  }
+
+  private giveCardFocusBack(): void {
+    if (this.window.isDestroyed() || !this.popoverCentered || !pageOf(this.popover)?.isFocused()) return;
+    const page = this.activeTabContents;
+    (page && !page.isDestroyed() ? page : this.shell.webContents).focus();
   }
 
   /** Give the popover keyboard focus (the find bar), now or as soon as it's shown. */
