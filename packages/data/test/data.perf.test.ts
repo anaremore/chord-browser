@@ -75,7 +75,7 @@ describe('chord-data', () => {
   });
 
   // From import.test.ts: 10,000 pages and their 50,000 visits undone in under 5 s (1.3 s on a Windows desk).
-  it('undoes a big import quickly', { timeout: 60_000 }, () => {
+  it('undoes a big import quickly', () => {
     const DAY = 86_400_000;
     const t0 = 1_700_000_000_000;
     const page = (url: string, title: string, visits: number[]): ImportedPage => ({ url, title, visits, typed: [] });
