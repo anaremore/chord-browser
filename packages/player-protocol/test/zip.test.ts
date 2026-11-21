@@ -46,7 +46,9 @@ function craft(entries: { name: string; data: Buffer; mode?: number; method?: nu
   return Buffer.concat([...locals, dir, end]);
 }
 
-describe('the player’s zip format', () => {
+// Real files zipped and unpacked, several times a test: in the whole suite on Windows, beside every other file, one took
+// past vitest's 5 s default. Nothing here is timed.
+describe('the player’s zip format', { timeout: 20_000 }, () => {
   it('round-trips a tree: contents, executables and symlinks (a macOS framework’s layout)', async () => {
     const src = fresh();
     mkdirSync(join(src, 'App.app/Contents/Frameworks/F.framework/Versions/A'), { recursive: true });

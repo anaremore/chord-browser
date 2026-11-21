@@ -199,7 +199,13 @@ export class ChordDatabase {
   ) {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
-    this.migrate();
+    try {
+      this.migrate();
+    } catch (error) {
+      // Closed, so the file isn't held open (on Windows it couldn't be moved or deleted) by a database nothing can use.
+      this.db.close();
+      throw error;
+    }
     this.sync = new SyncStore((text) => this.sql(text), () => this.device(), platform);
     this.passwords = new PasswordStore((text) => this.sql(text), passwordKdf, (meta) => this.scrubBackups(meta), {
       transaction: (work) => this.transaction(work),
@@ -266,6 +272,18 @@ export class ChordDatabase {
     // dropping the old one mustn't cascade into the rows that point at it. Each migration is checked before it commits.
     this.db.exec('PRAGMA foreign_keys = OFF');
     try {
+      if (from === 0) {
+        // A new database: every migration in one transaction, checked once, so one sync to disk instead of one per
+        // migration (each an fsync on Windows). The same SQL runs in the same order, so the schema and rows are the ones
+        // going version by version reaches (db.test.ts compares them). Upgrades still go one version at a time.
+        this.transaction(() => {
+          for (const migration of MIGRATIONS) this.db.exec(migration);
+          const broken = this.db.prepare('PRAGMA foreign_key_check').all();
+          if (broken.length > 0) throw new Error(`A new database's migrations left ${broken.length} rows pointing at nothing`);
+          this.db.exec(`PRAGMA user_version = ${MIGRATIONS.length}`);
+        });
+        return;
+      }
       for (let v = from; v < MIGRATIONS.length; v++) {
         this.transaction(() => {
           this.db.exec(MIGRATIONS[v]!);
