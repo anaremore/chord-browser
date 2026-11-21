@@ -508,9 +508,6 @@ export function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   );
 }
 
-/** How long after the popover shows its connect card the card is announced (the view must be on screen first). */
-const ANNOUNCE_DELAY_MS = 150;
-
 /** What an outside agent may do, as the connect card lists it (mocks/agents-s18-m1.html §1). */
 const AGENT_MAY = ['Open and read pages in its own Agent chord', 'Read a tab of yours only when you share it', 'Never see your passwords'];
 
@@ -1199,15 +1196,23 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
 
   const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
 
-  // The connect card never takes the keyboard, so it's announced. A live region only speaks a change it saw: the text
-  // comes a moment after the view (hidden with no cards) shows, never with it.
+  // The connect card never takes the keyboard, so it's announced. A live region only speaks a change it saw while on
+  // screen, and the view is hidden while it has no cards: the text comes once main has answered the card's size,
+  // which it shows the view with, never with the card itself.
   const card = menuOnly ? null : state.agentCard;
   const [announced, setAnnounced] = useState('');
   useEffect(() => {
     setAnnounced('');
-    if (!card) return;
-    const timer = setTimeout(() => setAnnounced(`${card.name} wants to use Chord`), ANNOUNCE_DELAY_MS);
-    return () => clearTimeout(timer);
+    const el = root.current;
+    if (!card || !el) return;
+    let current = true;
+    const { width, height } = el.getBoundingClientRect();
+    void api.popover.size(width, height).then(() => {
+      if (current) setAnnounced(`${card.name} wants to use Chord`);
+    });
+    return () => {
+      current = false;
+    };
   }, [card?.id, card?.name]);
 
   useRootColorScheme(appearance);

@@ -248,14 +248,21 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
   const length = typeof args['length'] === 'number' ? args['length'] : undefined;
   let pdf = memory.pdfs.get(node.id);
   if (!pdf || pdf.url !== url || start === 0) {
+    /** The download ended up somewhere the scope won't read it (a shared tab's PDF on another site): its words, not *never*. */
+    let offSite = false;
     try {
       // The address the tab shows now, and where the download ends up, must both be readable.
-      const readable = (address: string) => !isNeverReadable(address, call.scope.neverSites()) && (call.scope.siteOk?.(node, address) ?? true);
+      const readable = (address: string) => {
+        if (isNeverReadable(address, call.scope.neverSites())) return false;
+        if (call.scope.siteOk && !call.scope.siteOk(node, address)) return !(offSite = true);
+        return true;
+      };
       if (!readable(url)) throw new PdfError('never');
       const bytes = await page.fetchPdf(url, readable);
       const { pages, totalPages } = await extractPdf(bytes, ASSISTANT_PDF_MAX_PAGES);
       pdf = { url, pages, totalPages, text: pdfText(pages) };
     } catch (error) {
+      if (offSite) return refuse(unreadable(call.scope, node));
       const why = error instanceof PdfError ? pdfProblemCopy(error.problem, error.detail) : pdfProblemCopy('crashed');
       await call.activity('read_tab', `Couldn’t read “${title}”`, why, false);
       return { text: toolResult({ refused: `Couldn’t read this PDF: ${why}.` }, false), isError: true };
@@ -302,7 +309,8 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
     if (!page || page.gone()) return 'That tab could not be read.';
     // Where the page is, which can be ahead of the tab's saved address.
     if (isNeverReadable(page.url(), scope.neverSites())) return NEVER;
-    if (scope.siteOk && !scope.siteOk(now, page.url())) return unreadable(scope, now);
+    // Only a web address can be on another site: a page still loading (about:blank) isn't one, as in blockedNow.
+    if (scope.siteOk && READABLE_ADDRESS.test(page.url()) && !scope.siteOk(now, page.url())) return unreadable(scope, now);
     if (at !== undefined && page.url() !== at) return 'The page went to another address while Chord was reading it. Ask the user to ask again once it has loaded.';
     return null;
   };
