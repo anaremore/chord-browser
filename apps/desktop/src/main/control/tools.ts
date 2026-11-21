@@ -176,7 +176,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
     const shot = await (reader ? controlPage(reader) : page).screenshot();
     // Kept only once the picture is taken, and never after Stop (as diagnostics and read_form do).
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    scope.memory.read.add(node.id);
+    if (shot) scope.memory.read.add(node.id);
     await call.activity(tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
     return shot ? { image: shot } : refuse('Could not take the picture.');
   }

@@ -116,5 +116,6 @@ export const CONTROL_REFUSALS = {
   stopped: 'The user stopped you in Chord. Don’t call Chord’s tools again until the user asks you to.',
   notOpen: 'Chord isn’t open. Ask the user to open Chord, then call this tool again.',
   closed: 'That tab is closed. Use list_tabs for the tabs there are now.',
+  paused: 'The user is using this tab right now. Wait for them to finish, then call this tool again.',
 } as const;
 export type ControlRefusal = keyof typeof CONTROL_REFUSALS;

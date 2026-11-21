@@ -83,7 +83,8 @@ export class IdleKeeper {
           const live = state().live[id];
           // A tab showing a count (unread messages) stays awake, or its count would go stale; one with its
           // developer tools open too, as in Chrome (sleeping would close them).
-          if (live?.audible || live?.pip || live?.sharing || live?.shared || live?.badge != null || live?.devtools || tabs.isPlaying(id) || isCapturing(id)) out.add(id);
+          // An agent working on a tab, or held there (S18), keeps it awake too.
+          if (live?.agent || live?.audible || live?.pip || live?.sharing || live?.shared || live?.badge != null || live?.devtools || tabs.isPlaying(id) || isCapturing(id)) out.add(id);
         }
         return out;
       };

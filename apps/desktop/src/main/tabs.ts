@@ -53,7 +53,21 @@ export interface TabManagerDeps {
   onPopupCreated(contents: WebContents, openerNodeId: NodeId): void;
   /** A link in a pinned tab leads to another site: it opens in Peek (DESIGN.md §8.5), from `origin` (in the page) if known. */
   onPeek(openerNodeId: NodeId, url: string, origin: { x: number; y: number } | null): void;
+  /**
+   * An outside agent's tab (S18): its page gets no dialogs (Electron's `disableDialogs`, so none is ever a native
+   * modal and no read hangs on one), its preload knows it (AGENT_TAB_ARG: it holds them, and file pickers), and it
+   * opens no popups or tabs.
+   */
+  agentTab?(nodeId: NodeId): boolean;
+  /** Something an agent's tab tried that Chord refused (a popup or a new tab), for the agent's next result. */
+  onAgentRefused?(nodeId: NodeId, what: AgentHeld, detail: string): void;
 }
+
+/** What an agent's tab held or refused: a page dialog, a file picker, a popup or new tab, a download. */
+export type AgentHeld = 'dialog' | 'file' | 'popup' | 'download';
+
+/** What an agent's tab's preload looks for in its arguments (preload/page.ts has the same). */
+export const AGENT_TAB_ARG = '--chord-agent-tab';
 
 /** A page that isn't a tab yet: a Peek's or a mini window's (DESIGN.md §7.9). */
 interface FloatingPage {
@@ -189,6 +203,7 @@ export class TabManager {
             contextIsolation: true,
             nodeIntegration: false,
             webviewTag: false,
+            ...(this.deps.agentTab?.(nodeId) ? { disableDialogs: true, additionalArguments: [AGENT_TAB_ARG] } : {}),
           },
         });
     view.setBorderRadius(frameRadius[platform]);
@@ -431,6 +446,12 @@ export class TabManager {
     });
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
+    // An agent's tab (S18): a dialog or file picker its preload held, for the agent's next result. Any frame's.
+    contents.ipc.on('page:agentHeld', (_event, raw: unknown) => {
+      if (!this.deps.agentTab?.(nodeId) || !raw || typeof raw !== 'object') return;
+      const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
+      if ((kind === 'dialog' || kind === 'file') && typeof detail === 'string') this.deps.onAgentRefused?.(nodeId, kind, detail.slice(0, 500));
+    });
     // The count the page gives itself (counts on tabs, ARCHITECTURE.md §9), from Chord's page preload: its top frame's only.
     contents.ipc.on('page:badge', (event, raw: unknown) => {
       const badge = pageBadge(raw);
@@ -499,6 +520,11 @@ export class TabManager {
    * tab in the opener's Chord window.
    */
   private openFrom(openerNodeId: NodeId, { url, disposition, features }: HandlerDetails): WindowOpenHandlerResponse {
+    // An agent's tab (S18) opens nothing: no window, no tab of yours. The agent hears of it.
+    if (this.deps.agentTab?.(openerNodeId)) {
+      this.deps.onAgentRefused?.(openerNodeId, 'popup', url);
+      return { action: 'deny' };
+    }
     if (disposition === 'new-window' && features) {
       return {
         action: 'allow',

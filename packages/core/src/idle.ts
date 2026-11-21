@@ -53,7 +53,7 @@ export function visibleTabs(state: State): Set<NodeId> {
 
 /**
  * Today tabs unused for at least `afterMs`, oldest first. Pinned tabs never
- * go, nor does a private window's tab (nothing of it is kept), nor a split's
+ * go, nor does a private window's tab or an agent's (S18: nothing of either is kept), nor a split's
  * pane (you put it there on purpose); nor do tabs on screen, or ones the
  * engine says are busy (`busy`: playing, sharing the camera or screen, being
  * shared, in picture-in-picture).
@@ -62,7 +62,7 @@ export function archiveCandidates(state: State, now: number, afterMs: number | n
   if (afterMs === null) return [];
   const visible = visibleTabs(state);
   return nodeList(state)
-    .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today' && !state.chords[n.chordId]?.private)
+    .filter((n): n is TabNode => n.kind === 'tab' && n.section === 'today' && !state.chords[n.chordId]?.private && !state.chords[n.chordId]?.agent)
     .filter((t) => !(t.parentId && nodeOf(state, t.parentId)?.kind === 'split'))
     .filter((t) => !visible.has(t.id) && !busy.has(t.id) && now - t.lastActiveAt >= afterMs)
     // Ties by ID (time-ordered), not by where the nodes happen to sit: their buckets keep no order.

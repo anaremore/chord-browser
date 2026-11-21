@@ -48,7 +48,7 @@ export interface ControlCard {
 export type CardPresenter = (card: ControlCard, signal: AbortSignal) => Promise<Grant>;
 
 /** Why a call didn't run. */
-export type CallRefusal = 'stopped' | 'waiting';
+export type CallRefusal = 'stopped' | 'paused';
 
 /** What an answer for good covers: the kind and subject (*Allow for this chat* covers the tool, on any tab). */
 const grantKey = (card: { kind: ApprovalKind; subject: string }) => `${card.kind}:${card.subject}`;
@@ -66,12 +66,15 @@ interface OpenCard {
 const NO_TAB = '';
 
 export class ControlAgent {
-  private readonly states = new Map<string, ControlState>();
+  private readonly states_ = new Map<string, ControlState>();
   private readonly grants = new Map<string, 'always' | 'deny'>();
   /** Cards up now, one per kind, subject and tab. */
   private readonly open = new Map<string, OpenCard>();
   /** Cards answered *once* after their asks had gone: the next ask of each takes it. */
-  private readonly late = new Set<string>();
+  /** Cards answered *once* after their asks had gone: the next ask of each takes it, if it's soon and for the same address. */
+  private readonly late = new Map<string, { at: number; url: string }>();
+  /** Who hears when a state changes (an agent's bar). */
+  private readonly listeners = new Set<() => void>();
   private readonly waiters = new Set<() => void>();
   private stopping = new AbortController();
   private stopped = false;
@@ -84,7 +87,7 @@ export class ControlAgent {
 
   /** A tab's state (null: the agent-wide slot). */
   state(tab: string | null): ControlState {
-    return this.states.get(tab ?? NO_TAB) ?? (this.stopped ? { ...CONTROL_IDLE, stopped: true } : CONTROL_IDLE);
+    return this.states_.get(tab ?? NO_TAB) ?? (this.stopped ? { ...CONTROL_IDLE, stopped: true } : CONTROL_IDLE);
   }
 
   kind(tab: string | null): ControlStateKind {
@@ -100,10 +103,26 @@ export class ControlAgent {
     return this.grants.get(`${kind}:${subject}`);
   }
 
+  /** Hear of every change of state (calls, cards, pause, Stop); returns how to stop hearing. */
+  listen(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Every tab with a state other than idle, and the agent-wide slot's under ''. */
+  states(): ReadonlyMap<string, ControlState> {
+    return this.states_;
+  }
+
+  private changed(): void {
+    for (const listener of [...this.listeners]) listener();
+  }
+
   private step(tab: string, event: ControlEvent): void {
     const next = controlStep(this.state(tab), event);
-    if (!next.stopped && !next.paused && next.calls === 0 && next.cards.length === 0) this.states.delete(tab);
-    else this.states.set(tab, next);
+    if (!next.stopped && !next.paused && next.calls === 0 && next.cards.length === 0) this.states_.delete(tab);
+    else this.states_.set(tab, next);
+    this.changed();
   }
 
   /**
@@ -115,7 +134,7 @@ export class ControlAgent {
     const key = tab ?? NO_TAB;
     let admits = controlAdmits(this.state(key));
     if (admits === 'wait') admits = await this.unpaused(key);
-    if (admits !== 'go') return refused(admits === 'wait' ? 'waiting' : 'stopped');
+    if (admits !== 'go') return refused(admits === 'wait' ? 'paused' : 'stopped');
     const signal = this.stopping.signal;
     this.step(key, { t: 'call' });
     try {
@@ -171,7 +190,12 @@ export class ControlAgent {
     if (remembered) return remembered;
     if (signal.aborted || this.stopped) return 'deny';
     const key = openKey(card);
-    if (this.late.delete(key)) return 'once';
+    const late = this.late.get(key);
+    if (late) {
+      this.late.delete(key);
+      // Only soon after, and only for the page it was given on: a once answers for one read of what the card named.
+      if (Date.now() - late.at <= CONTROL_WAIT_MS && late.url === (card.target[0] ?? '')) return 'once';
+    }
     const open = this.open.get(key) ?? this.openCard(card);
     open.askers++;
     return new Promise<Grant | 'waiting'>((resolve) => {
@@ -207,7 +231,7 @@ export class ControlAgent {
         const keep = grantAfter(card.kind, grant);
         if (keep) this.grants.set(grantKey(card), keep);
         // Answered after everyone asking had gone (*waiting*): the retry gets it, rather than a second card.
-        if (grant === 'once' && open.askers === 0) this.late.add(key);
+        if (grant === 'once' && open.askers === 0) this.late.set(key, { at: Date.now(), url: card.target[0] ?? '' });
         return grant;
       } catch {
         return 'deny';
@@ -240,10 +264,11 @@ export class ControlAgent {
   /** Stop: everything in flight answers now, and nothing new runs until `resume`. */
   stop(): void {
     this.stopped = true;
-    for (const key of [...this.states.keys()]) this.step(key, { t: 'stop' });
+    for (const key of [...this.states_.keys()]) this.step(key, { t: 'stop' });
     this.cancelCards();
     this.stopping.abort();
     this.wake();
+    this.changed();
   }
 
   /** Let the agent continue after Stop. */
@@ -251,6 +276,7 @@ export class ControlAgent {
     if (!this.stopped) return;
     this.stopped = false;
     this.stopping = new AbortController();
-    for (const key of [...this.states.keys()]) this.step(key, { t: 'resume' });
+    for (const key of [...this.states_.keys()]) this.step(key, { t: 'resume' });
+    this.changed();
   }
 }

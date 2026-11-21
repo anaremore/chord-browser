@@ -19,6 +19,7 @@ import {
   isCrossSite,
   effectsHost,
   isInternalUrl,
+  isAgentChord,
   isPrivateChord,
   passwordsOnIn,
   isPrivateProfile,
@@ -895,9 +896,10 @@ export class Browser {
     return windowId;
   }
 
+  /** A private window's tab, or an agent's (S18): neither's visits or history are kept. */
   private isPrivateNode(nodeId: NodeId): boolean {
     const node = nodeOf(this.store.state, nodeId);
-    return node ? isPrivateChord(this.store.state, node.chordId) : false;
+    return node ? isPrivateChord(this.store.state, node.chordId) || isAgentChord(this.store.state, node.chordId) : false;
   }
 
   /** Chord launched again without a link: its first window comes forward (or its windows come back, if only mini windows were open). */

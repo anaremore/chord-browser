@@ -88,6 +88,11 @@ export interface Chord {
   createdAt: number;
   /** A private window's own chord: only that window sees it, and nothing of it is ever saved. */
   private?: boolean;
+  /**
+   * An outside agent's chord (S18): its own tabs, with the sign-ins of the window where the user let it in.
+   * Kept in memory only, never in the chord switcher: the sidebar shows it as a section below your chord.
+   */
+  agent?: { name: string };
   /** A private window's chord only: sites its page menu turned ad blocking off for, on top of Settings' list, forgotten with the window. */
   blockingOff?: string[];
   /**
@@ -203,6 +208,11 @@ export interface WindowModel {
   bounds: Bounds | null;
   /** A private window: it shows only its own chord, and Chord forgets it when it closes. */
   private?: boolean;
+  /**
+   * An agent's tab this window shows over its own chord's (S18): its chord and tab stay as they were, and showing
+   * any other tab or chord lets it go. Never saved.
+   */
+  agentTab?: NodeId;
 }
 
 /** Engine state that is shown but never persisted. */
@@ -212,7 +222,18 @@ export interface LoadError {
   url: string;
 }
 
+/** An agent's tab, while the agent works on it or is held (S18): what its bar says. Null: no bar. */
+export interface AgentLive {
+  /** The agent's name, as it gives it. */
+  name: string;
+  chordId: ChordId;
+  /** Working: a call runs on the tab. Paused: you're using the tab. Stopped: you pressed Stop. */
+  state: 'working' | 'paused' | 'stopped';
+}
+
 export interface LiveTab {
+  /** An agent's tab while it works or is held (S18); null otherwise. */
+  agent: AgentLive | null;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -725,7 +746,7 @@ export const emptyState = (): State => ({
   sharedWindows: [],
 });
 
-export const IDLE_LIVE: LiveTab = { loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, effects: null, devtools: null };
+export const IDLE_LIVE: LiveTab = { agent: null, loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, effects: null, devtools: null };
 
 /** Page zoom Chord remembers per site: Chromium's own range. */
 export const MIN_ZOOM = 0.25;

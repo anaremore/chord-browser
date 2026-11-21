@@ -171,12 +171,11 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
 }
 
 /**
- * The token file, 0600 from its first byte: an old one goes first (writeFileSync's mode
- * applies only to a new file, so an old file another mode would keep it), and the new
- * one is written beside it and renamed over, so no reader sees half a file.
+ * The token file, 0600 from its first byte: written to a new file of its own (`wx`: never
+ * an existing one, whose mode writeFileSync would keep), then renamed over the old one in
+ * one step, so a reader sees the old file or the new one, never half of either.
  */
 export function writeTokenFile(file: string, text: string): void {
-  rmSync(file, { force: true });
   const temp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     writeFileSync(temp, text, { mode: 0o600, flag: 'wx' });

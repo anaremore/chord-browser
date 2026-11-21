@@ -108,7 +108,7 @@ describe('ControlAgent', () => {
     }
   });
 
-  it('holds a paused tab’s calls until the user leaves it, or answers waiting after 45 s', async () => {
+  it('holds a paused tab’s calls until the user leaves it, or answers paused after 45 s', async () => {
     vi.useFakeTimers();
     const agent = new ControlAgent('a', presenter().present);
     agent.pause('n1', true);
@@ -121,7 +121,7 @@ describe('ControlAgent', () => {
     agent.pause('n1', true);
     const waiting = agent.call('n1', async () => 'ran', (why) => why);
     await vi.advanceTimersByTimeAsync(45_000);
-    await expect(waiting).resolves.toBe('waiting');
+    await expect(waiting).resolves.toBe('paused');
   });
 });
 
@@ -363,11 +363,38 @@ describe('Cards, review 1 of #76', () => {
     void agent.ask(card(), new AbortController().signal, 20);
     await tick();
     expect(shown).toHaveLength(2);
-    // Another tab never takes it.
-    shown[1]!.answer('once');
-    await tick();
-    void agent.ask(card({ tab: 'n2' }), new AbortController().signal, 20);
-    await tick();
-    expect(shown).toHaveLength(3);
+  });
+
+  it('a late once answers only for the tab and address its card named, and only soon after', async () => {
+    vi.useFakeTimers();
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const late = async (over: Partial<Omit<ControlCard, 'id'>>) => {
+      const asked = agent.ask(card(over), new AbortController().signal, 20);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(asked).resolves.toBe('waiting');
+      shown.at(-1)!.answer('once');
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    // A real late once on n1: another tab's read asks for itself.
+    await late({ tab: 'n1', target: ['https://a.test/'] });
+    void agent.ask(card({ tab: 'n2', target: ['https://a.test/'] }), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown.map((s) => s.card.tab)).toEqual(['n1', 'n2']);
+    // n1 has gone to another address since: its late once doesn't cover the new page.
+    await late({ tab: 'n3', target: ['https://a.test/'] });
+    void agent.ask(card({ tab: 'n3', target: ['https://b.test/'] }), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(4);
+    // Past the wait, it's gone.
+    await late({ tab: 'n4', target: ['https://a.test/'] });
+    await vi.advanceTimersByTimeAsync(45_001);
+    void agent.ask(card({ tab: 'n4', target: ['https://a.test/'] }), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(6);
+    // In time and for the same address, it answers.
+    await late({ tab: 'n5', target: ['https://a.test/'] });
+    await expect(agent.ask(card({ tab: 'n5', target: ['https://a.test/'] }), new AbortController().signal, 20)).resolves.toBe('once');
+    expect(shown).toHaveLength(7);
   });
 });

@@ -119,10 +119,88 @@ function compatibility(report: (badge: Badge) => void): void {
   }
 }
 
+/**
+ * An outside agent's tab (S18; main/tabs.ts gives its pages AGENT_TAB_ARG): page dialogs and file pickers are
+ * held, in the page's own world, so the agent's reads never wait on one and nothing opens a native window.
+ * alert answers at once, confirm "Cancel", prompt nothing; a file picker opens nothing. What was held goes to
+ * main for the agent's next result. Electron's `disableDialogs` backs it up in frames this doesn't reach.
+ */
+function holdForAgent(held: (kind: 'dialog' | 'file', detail: string) => void): void {
+  const page = globalThis as unknown as Record<string, unknown> & { HTMLInputElement?: { prototype: object }; DOMException: new (m: string, n: string) => unknown };
+  const answers: Record<string, unknown> = { alert: undefined, confirm: false, prompt: null };
+  for (const name of Object.keys(answers)) {
+    const original = page[name];
+    if (typeof original !== 'function') continue;
+    Object.defineProperty(page, name, {
+      value: new Proxy(original as (...args: unknown[]) => unknown, {
+        apply: (_target, _self, args) => {
+          held('dialog', `${name}: ${String(args[0] ?? '')}`);
+          return answers[name];
+        },
+      }),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  for (const name of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {
+    const original = page[name];
+    if (typeof original !== 'function') continue;
+    Object.defineProperty(page, name, {
+      value: new Proxy(original as (...args: unknown[]) => unknown, {
+        apply: () => {
+          held('file', name);
+          return Promise.reject(new page.DOMException('The user aborted a request.', 'AbortError'));
+        },
+      }),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  const input = page.HTMLInputElement?.prototype as { showPicker?: (...args: unknown[]) => unknown } | undefined;
+  const showPicker = input?.showPicker;
+  if (input && typeof showPicker === 'function') {
+    Object.defineProperty(input, 'showPicker', {
+      value: new Proxy(showPicker, {
+        apply: (target, self, args) => {
+          if ((self as { type?: string }).type !== 'file') return Reflect.apply(target, self, args);
+          held('file', 'showPicker');
+          return undefined;
+        },
+      }),
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+}
+
+/** Sandboxed preloads get Electron's `additionalArguments` in `process.argv`. */
+const AGENT_TAB_ARG = '--chord-agent-tab';
+const agentTab = (globalThis as unknown as { process?: { argv?: string[] } }).process?.argv?.includes(AGENT_TAB_ARG) ?? false;
+
 // Web pages only: not an extension's pages, which share the session, nor a blank frame's.
 const { protocol } = (globalThis as unknown as { location: { protocol: string } }).location;
 if (protocol === 'https:' || protocol === 'http:') {
   // The page calls this through the bridge: only the value crosses, and main takes only the top frame's.
   const report = (badge: Badge) => ipcRenderer.send('page:badge', badge);
   contextBridge.executeInMainWorld({ func: compatibility, args: [report] });
+  if (agentTab) {
+    const held = (kind: 'dialog' | 'file', detail: string) => ipcRenderer.send('page:agentHeld', { kind, detail: String(detail).slice(0, 500) });
+    contextBridge.executeInMainWorld({ func: holdForAgent, args: [held] });
+    // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent.
+    const doc = (globalThis as unknown as { document: { addEventListener(type: string, listener: (event: { composedPath(): unknown[]; preventDefault(): void }) => void, capture: boolean): void } }).document;
+    doc.addEventListener(
+      'click',
+      (event) => {
+        const target = event.composedPath()[0] as { tagName?: string; type?: string } | undefined;
+        if (target?.tagName === 'INPUT' && target.type === 'file') {
+          event.preventDefault();
+          held('file', 'a file input');
+        }
+      },
+      true,
+    );
+  }
 }

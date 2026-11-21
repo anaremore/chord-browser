@@ -234,6 +234,12 @@ export const RendererCommand = z.discriminatedUnion('t', [
   z.object({ t: z.literal('effects.undo'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // A toast's Undo for a form the assistant filled (main takes it over: what was there before stays in the page).
   z.object({ t: z.literal('assistant.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
+  // Outside agents (S18; main takes them over): the bar's Stop and continue, and the toasts when an agent's done.
+  z.object({ t: z.literal('agents.stop'), chordId: id }),
+  z.object({ t: z.literal('agents.continue'), chordId: id }),
+  z.object({ t: z.literal('agents.keep'), windowId: id, chordId: id }),
+  z.object({ t: z.literal('agents.closeAll'), chordId: id }),
+  z.object({ t: z.literal('agents.undoClose'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Presenting mode's indicator turns it off. Only yours: shares start and end it in main.
   z.object({ t: z.literal('presenting.set'), on: z.boolean(), by: z.literal('you') }),
   // Sync (S15 §8): Undo for turning it off or removing a computer, before either happens (main takes it over);
