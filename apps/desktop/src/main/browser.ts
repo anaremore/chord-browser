@@ -210,6 +210,8 @@ export interface BrowserOptions {
     root: string;
     /** The extension library's preload, as built. */
     preloadPath: string;
+    /** The worker that verifies and unpacks Web Store packages, as built. */
+    unpackWorkerPath: string;
     webStore: WebStore;
     /** Development and tests only: the key packages must be signed with instead of the Web Store's. */
     publisherKeyHash?: string;
@@ -706,6 +708,7 @@ export class Browser {
       profileSession: (profileId) => options.profileSession(profileId),
       root: options.extensions.root,
       preloadPath: options.extensions.preloadPath,
+      unpackWorkerPath: options.extensions.unpackWorkerPath,
       webStore: options.extensions.webStore,
       ...(options.extensions.publisherKeyHash ? { publisherKeyHash: options.extensions.publisherKeyHash } : {}),
       windows: () => this.windows.values(),

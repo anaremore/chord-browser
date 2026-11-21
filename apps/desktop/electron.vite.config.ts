@@ -72,6 +72,8 @@ export default defineConfig({
           'ad-blocking': src('main/ad-blocking/worker.ts'),
           // Installing Chord Player: hashing and unpacking its zip (ARCHITECTURE.md §9).
           'player-unpack': src('main/player/unpack-worker.ts'),
+          // Web Store extensions: verifying and unpacking a package, off main (ARCHITECTURE.md §12).
+          'extension-unpack': src('main/extensions/unpack-worker.ts'),
           import: src('import/worker.ts'),
           reader: src('main/reader/worker.ts'),
           // Effects' sanitizer: every stylesheet an Effect applies is checked there, never on main (§9).

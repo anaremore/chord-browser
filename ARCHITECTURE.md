@@ -1283,6 +1283,7 @@ Chrome extension support is a **Phase 1 requirement** (decided 2026-10-22), buil
   - It asks Google's update service, downloads over HTTPS, and checks the announced SHA-256.
   - It verifies CRX3 as Chromium's `crx_verifier.cc` does: every signature, the developer key against the ID, and the store's publisher key.
   - It unpacks with a traversal-safe, size-limited ZIP reader, and writes the developer key into the manifest so the store ID holds.
+  - **Off main** (performance rule 1): the verifying, unpacking and the manifest's key happen in a short-lived worker thread (`unpack-worker.ts`, built as `out/main/extension-unpack.js`), one per package, which gets the download's memory rather than a copy. Main only waits; a worker that dies or hangs fails the install or update with an error in the toast or the log, and its half-written folder is removed with `fs/promises`, as are superseded versions and, at launch, folders nothing uses.
   - Updates are checked a minute after launch, then every 5 hours, and roll back if a new version won't load.
 - **The install step:** on install or update, Chord sends `runtime.onInstalled` (once per version, remembered across crashes) and, on first install, enables the manifest's rulesets through the library's worker preload.
 - **Saved state:** installs, versions and pins live in chord-data's `extension` table, per profile.
