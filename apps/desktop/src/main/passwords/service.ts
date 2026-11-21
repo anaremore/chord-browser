@@ -67,7 +67,7 @@ export interface PasswordServiceOptions {
   /** The vault locked: what waits to be written into it (a generated password's confirmation) is dropped (phase 3A-2). */
   locked?(): void;
   /** A chord by id (its sign-ins' profile, whether it's a private window's), for the detector's API; null when there's none. */
-  chord?(chordId: string): { id: string; profileId: string; private?: boolean } | null;
+  chord?(chordId: string): { id: string; profileId: string; private?: boolean; agent?: unknown } | null;
   /** The installed extensions, for the extension rule. */
   extensions?(): Record<string, InstalledExtension>;
   now?: () => number;
@@ -711,11 +711,13 @@ export class PasswordService {
   /**
    * A page as the detector reports it: its origin (`event.senderFrame.origin`,
    * which main gives and this trusts) and its tab's chord. A private window's
-   * chord is fill only; a chord id main doesn't know (or none) gets nothing.
+   * chord is fill only; an agent's chord (S18), a chord id main doesn't know, or none gets nothing.
    */
   private pageOf(origin: string, chordId: string | null): PasswordPage | null {
     const chord = chordId ? (this.options.chord?.(chordId) ?? null) : null;
     if (!chord) return null;
+    // An outside agent's tab (S18): nothing of the vault, ever. No menu, no fill, no save, no generator: off.
+    if (chord.agent) return null;
     if (chord.private) return { origin, chord: null, private: true };
     return { origin, chord: { id: chord.id, profileId: chord.profileId }, private: false };
   }

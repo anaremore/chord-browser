@@ -51,6 +51,8 @@ export const durations = {
   fillHighlight: 1200,
   /** One turn of the loading spinner. */
   spin: 900,
+  /** One beat of the dot beside the tab an outside agent is using (S18). */
+  pulse: 1600,
 } as const;
 
 export const easing = {

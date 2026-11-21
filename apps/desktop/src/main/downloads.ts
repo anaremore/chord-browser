@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command, Download, DownloadAction, State, ThreatKind, WindowId } from '@chord/core';
-import { app, shell, type DownloadItem, type Session } from 'electron';
+import { app, shell, type DownloadItem, type Session, type WebContents } from 'electron';
 import { safeFilename, uniquePath } from './files';
 
 /** At most this often per download while it's progressing. */
@@ -40,6 +40,11 @@ export interface DownloadDeps {
   screen?(urls: string[]): Promise<ThreatKind | null> | null;
   /** A download is held: show it where it started (`privateWindow`, or the window used last). */
   onHeld?(download: Download): void;
+  /**
+   * A download an outside agent's tab started (S18): refused before anything's written, and the agent told.
+   * True when `contents` is such a tab (it's handled then).
+   */
+  refuse?(contents: WebContents, url: string, filename: string): boolean;
 }
 
 interface Entry {
@@ -67,7 +72,11 @@ export class DownloadManager {
 
   /** `privateWindow`: the session is that private window's, so its downloads are listed only there and never saved. */
   attach(session: Session, privateWindow: WindowId | null = null): void {
-    session.on('will-download', (_event, item) => {
+    session.on('will-download', (event, item, contents) => {
+      if (contents && this.deps.refuse?.(contents, item.getURL(), item.getFilename())) {
+        event.preventDefault();
+        return;
+      }
       const id = this.deps.newId();
       const finalPath = uniquePath(downloadsDir(), safeFilename(item.getFilename()), (p) => existsSync(p) || this.reserved.has(p));
       const screening = this.deps.screen?.(item.getURLChain()) ?? null;

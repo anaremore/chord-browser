@@ -34,6 +34,7 @@ import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
+import { pageOf } from './view-page';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
 import { APP_ID, configureAppIdentity, inFlatpak } from './identity';
@@ -193,6 +194,8 @@ const downloads = new DownloadManager({
   // Every download, a private window's too, is checked while Safe Browsing is on (its final address and redirects).
   screen: (urls) => (safeBrowsing.active ? safeBrowsing.check(urls, 'download').then((v) => (v.verdict === 'unsafe' ? v.kind : null)) : null),
   onHeld: (download) => browser?.showHeldDownload(download.privateWindow),
+  // An outside agent's tab (S18) downloads nothing: refused, and the agent told.
+  refuse: (contents, _url, filename) => browser?.agentDownload(contents, filename) ?? false,
 });
 let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
@@ -310,6 +313,13 @@ function registerIpc(): void {
     if (command.t === 'effects.undo') return browser!.effects.undo(command.token);
     // A toast's Undo for a form the assistant filled: the page puts back what it had (main/assistant).
     if (command.t === 'assistant.undoFill') return assistant?.undoFill(command.token);
+    // An outside agent's bar and toasts (S18): its gate and chord live in main.
+    // The bar's Stop is Ctrl+. / ⌘.: every agent, and every assistant reply.
+    if (command.t === 'agents.stopAll') return browser!.stopAll?.();
+    if (command.t === 'agents.continue') return agents?.service?.chords?.continue(command.chordId);
+    if (command.t === 'agents.keep') return agents?.service?.chords?.keep(command.windowId, command.chordId);
+    if (command.t === 'agents.closeAll') return agents?.service?.chords?.closeAll(command.chordId);
+    if (command.t === 'agents.undoClose') return agents?.service?.chords?.undoClose(command.token);
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -1060,9 +1070,43 @@ if (!app.requestSingleInstanceLock()) {
         const { AgentService, devApproval, devPresenter } = await import('./agents/service');
         const helper = process.platform === 'win32' ? join(app.getAppPath(), 'out/window-owner/window-owner.exe') : null;
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
-        return new AgentService({ userData: app.getPath('userData'), browser: agentBrowser, present: devPresenter(devApproval(devEnv('CHORD_AGENT_APPROVE'))), helper: helper && existsSync(helper) ? helper : null, waitMs });
+        // The window an agent was let in from (the development hook's card: the window used last) gives its chord its sign-ins.
+        const lastWindow = () => {
+          const w = agentBrowser.lastBrowserWindow();
+          return w && !w.isPrivate ? w : null;
+        };
+        return new AgentService({
+          userData: app.getPath('userData'),
+          browser: agentBrowser,
+          present: devPresenter(devApproval(devEnv('CHORD_AGENT_APPROVE'))),
+          helper: helper && existsSync(helper) ? helper : null,
+          waitMs,
+          dispatch: (command) => agentBrowser.store.dispatch(command),
+          neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
+          allowedProfile: () => {
+            const w = lastWindow();
+            const state = agentBrowser.store.state;
+            return w ? (state.chords[state.windows[w.id]?.activeChordId ?? '']?.profileId ?? null) : null;
+          },
+          chords: {
+            store: agentBrowser.store,
+            page: (nodeId) => pageOf(agentBrowser.tabs.get(nodeId)),
+            lastWindow: () => {
+              const w = lastWindow();
+              return w ? { id: w.id, toast: (toast) => w.toast(toast) } : null;
+            },
+          },
+        });
       },
     });
+    // Outside agents' tabs (S18): their pages' wiring, and what they held, go to the agents' chords once there are any.
+    browser.agentContents = (contents, nodeId) => agents?.service?.chords?.wire(contents, nodeId);
+    browser.agentHeld = (nodeId, what, detail) => agents?.service?.chords?.note(nodeId, what, detail);
+    // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
+    browser.stopAll = () => {
+      agents?.service?.stopAll();
+      void assistant?.stopAll();
+    };
     afterLaunch.run(() => void assistant!.afterLaunch());
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.

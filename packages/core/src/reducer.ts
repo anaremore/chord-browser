@@ -63,7 +63,7 @@ import { cleanProxy, sameProxy, type ProxySettings } from './proxy';
 import { cleanReaderSettings } from './reader';
 import { shortcutById, type ActionId } from './shortcuts';
 import type { SyncApply, SyncGone } from './sync';
-import { chordsFor, descendants, favoriteFits, favoritesFor, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
+import { activeTabId, chordsFor, descendants, favoriteFits, favoritesFor, isAgentChord, isPrivateChord, isWithin, reopenableIndex, sortedChords, sortedFavorites, tabForFavorite, tabsInOrder } from './select';
 import { childrenToRead, nodeList, byRank, children, deleteNode, nodeOf, nodesOfChord, setNode } from './nodes';
 import { equalSizes, normalizeSizes, settleSplits, shownTabs, shownWith, splitMembers, splitOf } from './split';
 
@@ -87,6 +87,17 @@ export type Command =
   | { t: 'linkRoute.delete'; host: string }
   /** `touch: false` switches without counting as a visit (used while cycling recent tabs). */
   | { t: 'tab.activate'; windowId: WindowId; nodeId: NodeId; touch?: boolean }
+  /**
+   * Outside agents' chords (S18), main only: no renderer sends these (ipc's RendererCommand has none). A chord
+   * of the agent's own with the sign-ins of `profileId`; a tab in it; one gone; all of it gone; its tabs kept in
+   * a window's chord when the agent's done; and Close all's Undo.
+   */
+  | { t: 'agent.chord.add'; chordId: ChordId; name: string; profileId: ProfileId }
+  | { t: 'agent.tab.add'; chordId: ChordId; nodeId: NodeId; url: string }
+  | { t: 'agent.tab.remove'; nodeId: NodeId }
+  | { t: 'agent.chord.remove'; chordId: ChordId }
+  | { t: 'agent.chord.keep'; chordId: ChordId; windowId: WindowId }
+  | { t: 'agent.chord.restore'; chord: Chord; tabs: TabNode[] }
   | { t: 'tab.close'; windowId: WindowId; nodeId: NodeId }
   | { t: 'tab.reopenClosed'; windowId: WindowId }
   /** Send Today tabs to the archive: unused for a while (`auto`) or Clear (`cleared`). */
@@ -296,6 +307,17 @@ export type Command =
    * from the page's own isolated world (main/assistant), outside the store.
    */
   | { t: 'assistant.undoFill'; token: string }
+  /**
+   * Outside agents (S18), from the agent's bar and its toasts; main takes them over (main/agents), since the
+   * agents' gates live there: Stop every agent, let one continue, keep its tabs in the window's chord when it's
+   * done, close them all, and that's Undo.
+   */
+  /** The bar's Stop: every agent and every assistant reply, as Ctrl+. / ⌘. (the mock's rule). */
+  | { t: 'agents.stopAll' }
+  | { t: 'agents.continue'; chordId: ChordId }
+  | { t: 'agents.keep'; windowId: WindowId; chordId: ChordId }
+  | { t: 'agents.closeAll'; chordId: ChordId }
+  | { t: 'agents.undoClose'; token: string }
 
 export type Effect =
   /** Make sure a view exists for this tab (created lazily, loading `url`). */
@@ -401,7 +423,7 @@ export function apply(state: State, command: Command, ctx: Context): Result {
   // A window whose panes (or how they share the frame) changed lays them out again.
   if (settles) {
     for (const win of Object.values(next.windows)) {
-      if (paneKey(state, win.id) !== paneKey(next, win.id)) effects.push({ e: 'view.show', windowId: win.id, nodeId: win.activeTab[win.activeChordId] ?? null });
+      if (paneKey(state, win.id) !== paneKey(next, win.id)) effects.push({ e: 'view.show', windowId: win.id, nodeId: activeTabId(next, win.id) });
     }
   }
   // Bump the version as its own step so it is part of the patch stream.
@@ -596,6 +618,8 @@ function activate(
 ) {
   const win = draft.windows[windowId];
   if (!win) return;
+  // An agent's tab shown over the chord (S18) gives way to whatever's shown now.
+  if (win.agentTab) delete win.agentTab;
   win.activeTab[win.activeChordId] = nodeId;
   // A window showing this tab (or another pane of its split) lets it go first (a view has one
   // parent): it falls back to its most recently used tab that's free, and its effects come first
@@ -1272,7 +1296,166 @@ function replaceChords(draft: Draft<State>, chordIds: readonly ChordId[], to: Ch
   for (const chordId of chordIds) giveWay(draft, chordId, to, ctx, effects);
 }
 
+/* ---------- Outside agents' chords (S18) ---------- */
+
+type AgentCommand = Extract<Command, { t: `agent.${string}` }>;
+
+/** What may happen to an agent's tab or chord from outside its own commands. */
+const AGENT_TAB_COMMANDS = new Set<Command['t']>(['tab.activate', 'tab.close', 'tab.sleep', 'tab.navigate', 'tab.mute', 'tab.updated', 'tab.live']);
+
+/**
+ * An agent's tabs and chord stay the agent's: nothing moves, pins, folds, archives, favorites or routes them,
+ * and no command of a window's chord (rename, theme, sign-ins, delete) reaches them. Only the agent's own
+ * commands, and showing, closing, reloading and the page's own reports, do.
+ */
+function refusedForAgents(state: State, cmd: Command): boolean {
+  if (cmd.t.startsWith('agent.')) return false;
+  if ('nodeId' in cmd && typeof cmd.nodeId === 'string') {
+    const node = nodeOf(state, cmd.nodeId);
+    if (node && isAgentChord(state, node.chordId) && !AGENT_TAB_COMMANDS.has(cmd.t)) return true;
+  }
+  if ('chordId' in cmd && typeof cmd.chordId === 'string' && isAgentChord(state, cmd.chordId)) return true;
+  if (cmd.t === 'tab.archive') return cmd.nodeIds.some((id) => isAgentChord(state, nodeOf(state, id)?.chordId ?? ''));
+  if (cmd.t === 'closed.restore') return cmd.nodeIds.some((id) => isAgentChord(state, nodeOf(state, id)?.chordId ?? ''));
+  // A split never takes an agent's tab, whichever field names it.
+  if (cmd.t === 'split.join') return cmd.nodeIds.some((id) => isAgentChord(state, nodeOf(state, id)?.chordId ?? ''));
+  if (cmd.t === 'split.add') return isAgentChord(state, nodeOf(state, cmd.withId)?.chordId ?? '');
+  return false;
+}
+
+/** A window shows an agent's tab over its chord; another window showing it goes back to its own tab. */
+function showAgentTab(draft: Draft<State>, win: Draft<WindowModel>, node: Draft<TabNode>, ctx: Context, effects: Effect[]): void {
+  if (win.private) return;
+  for (const other of Object.values(draft.windows)) {
+    if (other.id === win.id || other.agentTab !== node.id) continue;
+    delete other.agentTab;
+    const own = other.activeTab[other.activeChordId] ?? null;
+    if (own) effects.push({ e: 'view.ensure', nodeId: own });
+    effects.push({ e: 'view.show', windowId: other.id, nodeId: own });
+  }
+  win.agentTab = node.id;
+  node.lastActiveAt = ctx.now;
+  effects.push({ e: 'view.ensure', nodeId: node.id });
+  effects.push({ e: 'view.show', windowId: win.id, nodeId: node.id });
+}
+
+/** Agents' tabs go: windows showing one go back to their own tab; nothing is kept for Reopen or the archive. */
+function removeAgentTabs(draft: Draft<State>, nodeIds: readonly NodeId[], effects: Effect[]): void {
+  const gone = new Set(nodeIds);
+  for (const win of Object.values(draft.windows)) {
+    if (!win.agentTab || !gone.has(win.agentTab)) continue;
+    delete win.agentTab;
+    const own = win.activeTab[win.activeChordId] ?? null;
+    if (own) effects.push({ e: 'view.ensure', nodeId: own });
+    effects.push({ e: 'view.show', windowId: win.id, nodeId: own });
+  }
+  for (const id of gone) {
+    if (nodeOf(draft, id)?.kind !== 'tab') continue;
+    deleteNode(draft, id);
+    delete draft.live[id];
+    effects.push({ e: 'view.destroy', nodeId: id });
+  }
+}
+
+/** The agent's tabs, as the draft's own (so they can change). */
+const agentTabsOf = (draft: Draft<State>, chordId: ChordId): Draft<TabNode>[] =>
+  nodesOfChord(draft as State, chordId)
+    .filter((n) => n.kind === 'tab')
+    .map((n) => nodeOf(draft, n.id) as Draft<TabNode>);
+
+function runAgent(draft: Draft<State>, cmd: AgentCommand, ctx: Context, effects: Effect[]): void {
+  switch (cmd.t) {
+    case 'agent.chord.add': {
+      if (draft.chords[cmd.chordId]) return;
+      const last = sortedChords(draft as State).at(-1)?.rank ?? null;
+      draft.chords[cmd.chordId] = {
+        id: cmd.chordId,
+        profileId: cmd.profileId,
+        name: cmd.name.slice(0, 60),
+        icon: '✳',
+        theme: { ...PRIVATE_CHORD_THEME, stops: PRIVATE_CHORD_THEME.stops.map((s) => ({ ...s })) },
+        rank: rankBetween(last, null),
+        createdAt: ctx.now,
+        agent: { name: cmd.name.slice(0, 60) },
+      };
+      return;
+    }
+    case 'agent.tab.add': {
+      if (!isAgentChord(draft as State, cmd.chordId) || nodeOf(draft, cmd.nodeId)) return;
+      const tab: TabNode = {
+        kind: 'tab',
+        id: cmd.nodeId,
+        chordId: cmd.chordId,
+        section: 'today',
+        parentId: null,
+        rank: topOfToday(draft, cmd.chordId),
+        url: cmd.url,
+        title: '',
+        pinnedUrl: null,
+        customTitle: null,
+        favicon: null,
+        lastActiveAt: ctx.now,
+        createdAt: ctx.now,
+      };
+      setNode(draft, tab);
+      draft.live[cmd.nodeId] = { ...IDLE_LIVE, loading: true };
+      effects.push({ e: 'view.ensure', nodeId: cmd.nodeId });
+      return;
+    }
+    case 'agent.tab.remove': {
+      const node = nodeOf(draft, cmd.nodeId);
+      if (node?.kind === 'tab' && isAgentChord(draft as State, node.chordId)) removeAgentTabs(draft, [node.id], effects);
+      return;
+    }
+    case 'agent.chord.remove': {
+      if (!isAgentChord(draft as State, cmd.chordId)) return;
+      removeAgentTabs(draft, agentTabsOf(draft, cmd.chordId).map((t) => t.id), effects);
+      delete draft.chords[cmd.chordId];
+      for (const win of Object.values(draft.windows)) delete win.activeTab[cmd.chordId];
+      return;
+    }
+    case 'agent.chord.keep': {
+      const agent = draft.chords[cmd.chordId];
+      const win = draft.windows[cmd.windowId];
+      if (!agent?.agent) return;
+      // Into the window's chord; a private window's never takes them, so the first of yours does.
+      const to = win && !win.private ? draft.chords[win.activeChordId] : draft.chords[sortedChords(draft as State)[0]?.id ?? ''];
+      if (!to || to.agent) return;
+      for (const tab of agentTabsOf(draft, agent.id)) {
+        tab.chordId = to.id;
+        tab.section = 'today';
+        tab.parentId = null;
+        tab.rank = topOfToday(draft, to.id);
+        // Its page goes, whatever the sign-ins: it was made as an agent's (no dialogs, no file pickers, leaving never
+        // asks), and loads again as a tab of yours when shown.
+        delete draft.live[tab.id];
+        effects.push({ e: 'view.destroy', nodeId: tab.id });
+        // A window showing it over its chord now shows it as a tab of that chord, where it's the chord it shows.
+        for (const w of Object.values(draft.windows)) {
+          if (w.agentTab !== tab.id) continue;
+          delete w.agentTab;
+          if (w.activeChordId === to.id) w.activeTab[to.id] = tab.id;
+          const shown = w.activeTab[w.activeChordId] ?? null;
+          if (shown) effects.push({ e: 'view.ensure', nodeId: shown });
+          effects.push({ e: 'view.show', windowId: w.id, nodeId: shown });
+        }
+      }
+      delete draft.chords[agent.id];
+      for (const w of Object.values(draft.windows)) delete w.activeTab[agent.id];
+      return;
+    }
+    case 'agent.chord.restore': {
+      if (draft.chords[cmd.chord.id] || !cmd.chord.agent) return;
+      draft.chords[cmd.chord.id] = cmd.chord;
+      for (const tab of cmd.tabs) if (tab.chordId === cmd.chord.id && !nodeOf(draft, tab.id)) setNode(draft, tab);
+      return;
+    }
+  }
+}
+
 function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[]): void {
+  if (refusedForAgents(draft as State, cmd)) return;
+  if (cmd.t.startsWith('agent.')) return runAgent(draft, cmd as AgentCommand, ctx, effects);
   switch (cmd.t) {
     case 'tab.open': {
       const win = draft.windows[cmd.windowId];
@@ -1359,6 +1542,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (node?.kind !== 'tab' || !win) return;
       // A private window shows only its own tabs, and no other window ever shows them.
       if (win.private ? node.chordId !== win.activeChordId : isPrivateChord(draft as State, node.chordId)) return;
+      // An agent's tab (S18) shows over the window's own chord, which stays as it was.
+      if (isAgentChord(draft as State, node.chordId)) return showAgentTab(draft, win, node, ctx, effects);
       const touch = cmd.touch ?? true;
       if (touch && win.activeTab[win.activeChordId] !== cmd.nodeId) leave(draft, win, ctx);
       if (node.chordId !== win.activeChordId) win.activeChordId = node.chordId;
@@ -1369,6 +1554,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
     case 'tab.close': {
       const node = nodeOf(draft, cmd.nodeId);
       if (node?.kind !== 'tab') return;
+      if (isAgentChord(draft as State, node.chordId)) return removeAgentTabs(draft, [node.id], effects);
       // Closing a pane: the split's other panes stay on screen, and the window lands on one of them.
       const split = splitOf(draft as State, node.id);
       const panes = split ? splitMembers(draft as State, split.id).map((t) => t.id) : [];
@@ -2544,6 +2730,14 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
 
     case 'assistant.undoFill':
       // Main's: what a fill replaced stays in the page.
+      return;
+
+    case 'agents.stopAll':
+    case 'agents.continue':
+    case 'agents.keep':
+    case 'agents.closeAll':
+    case 'agents.undoClose':
+      // Main's: an agent's gate and connection live there (main/agents).
       return;
   }
 }

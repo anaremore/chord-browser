@@ -112,12 +112,16 @@ function siteOf(url: string): string | null {
 /** Your chords in switcher order. A private window's own chord is never among them. */
 export function sortedChords(state: State): Chord[] {
   return Object.values(state.chords)
-    .filter((c) => !c.private)
+    .filter((c) => !c.private && !c.agent)
     .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
 }
 
 export const isPrivateWindow = (state: State, windowId: WindowId): boolean => Boolean(state.windows[windowId]?.private);
 export const isPrivateChord = (state: State, chordId: ChordId): boolean => Boolean(state.chords[chordId]?.private);
+/** An outside agent's chord (S18): in memory only, its tabs shown below your chord's. */
+export const isAgentChord = (state: State, chordId: ChordId): boolean => Boolean(state.chords[chordId]?.agent);
+/** The agents' chords, oldest first. */
+export const agentChords = (state: State): Chord[] => Object.values(state.chords).filter((c) => c.agent).sort((a, b) => a.createdAt - b.createdAt);
 
 /** The chords a window can see and switch between: a private window only its own. */
 export function chordsFor(state: State, windowId: WindowId): Chord[] {
@@ -148,7 +152,7 @@ export function reopenableIndex(state: State, windowId: WindowId): number {
 export function activeTabId(state: State, windowId: WindowId): NodeId | null {
   const win = state.windows[windowId];
   if (!win) return null;
-  return win.activeTab[win.activeChordId] ?? null;
+  return win.agentTab ?? win.activeTab[win.activeChordId] ?? null;
 }
 
 export function activeTab(state: State, windowId: WindowId): TabNode | null {

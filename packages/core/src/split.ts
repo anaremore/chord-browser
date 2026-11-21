@@ -35,6 +35,8 @@ export function splitMembers(state: State, splitId: NodeId): TabNode[] {
  */
 export function shownTabs(state: State, windowId: WindowId): NodeId[] {
   const win = state.windows[windowId];
+  // An agent's tab shown over the chord (S18) is shown alone.
+  if (win?.agentTab) return nodeOf(state, win.agentTab)?.kind === 'tab' ? [win.agentTab] : [];
   const active = win ? win.activeTab[win.activeChordId] : null;
   if (!active || nodeOf(state, active)?.kind !== 'tab') return [];
   const split = splitOf(state, active);

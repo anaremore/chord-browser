@@ -48,6 +48,8 @@ export type ActionId =
   | 'chord.separateSignIns'
   | 'chord.proxy'
   | 'assistant.toggle'
+  /** Stop every outside agent (S18) and every assistant reply at once: Ctrl+. / ⌘. */
+  | 'agents.stopAll'
   | 'window.new'
   | 'window.newPrivate'
   | 'window.close'
@@ -139,6 +141,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('chord.proxy', 'Proxy for this chord…', 'page-first', []),
   // The assistant (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
   s('assistant.toggle', 'Show or hide the assistant', 'page-first', ['Mod+E']),
+  // Reserved: a page can never keep it from you.
+  s('agents.stopAll', 'Stop every agent and assistant reply', 'reserved', ['Mod+.']),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

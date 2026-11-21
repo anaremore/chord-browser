@@ -11,6 +11,9 @@ import { ASSISTANT_READ_MAX, CONTROL_TOOLS, type ControlTier } from './control-t
 /** What a call says while no Chord is running (or it quit mid-call): the bridge says it itself. */
 export const AGENT_NOT_OPEN = CONTROL_REFUSALS.notOpen;
 
+/** The agent's bar above its tab's page (S18 M1c), in UI units: main lowers the page by it, the shell draws it there. */
+export const AGENT_BAR_HEIGHT = 36;
+
 /** In the profile folder: where the running Chord's endpoint is, and its token (0600). */
 export const AGENT_ENDPOINT_FILE = 'agent-endpoint.json';
 /** A connection that hasn't sent the token by then is dropped, unanswered. */

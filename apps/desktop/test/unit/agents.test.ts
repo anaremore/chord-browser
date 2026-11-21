@@ -118,7 +118,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect(JSON.parse(listed.text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
   });
 
-  it('allowed: tools run through the shared layer against the stub scope, refusing in one sentence', async () => {
+  it('allowed: tools run through the shared layer on the agent’s own tabs (none yet), refusing in one sentence', async () => {
     const ud = profile();
     const service = await chord(ud);
     const c = client(ud);
@@ -127,7 +127,9 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const table: [string, Record<string, unknown>, string][] = [
       ['read_tab', { tab_id: 'a1' }, 'No such tab. Use list_tabs or an attached tab id.'],
       ['read_form', { tab_id: 'a1' }, 'No such tab. Use the tab id from "Attached:".'],
-      ['open_tab', { url: 'https://example.com/' }, 'This build of Chord has no Agent chord yet, so it can’t open or close tabs.'],
+      // This service has no chords (no browser to open tabs in): the E2E opens real ones.
+      ['open_tab', { url: 'https://example.com/' }, 'This Chord can’t open tabs for agents.'],
+      ['close_tab', { tab_id: 'a1' }, 'No such tab. Use list_tabs.'],
       ['search_history', { query: 'x' }, 'There’s no tool called search_history. Call tools/list.'],
     ];
     for (const [tool, args, said] of table) expect(await c.call(tool, args), tool).toEqual({ error: true, text: said });
@@ -141,7 +143,8 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const c = client(ud);
     await c.initialize();
     const first = c.call('list_tabs');
-    await sleep(50);
+    // The card shows once the connection's code has loaded: under load that can take a while.
+    await expect.poll(() => answers.length).toBe(1);
     answers[0]!('deny');
     expect(await first).toEqual({ error: true, text: CONTROL_REFUSALS.denied });
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.denied });
@@ -157,7 +160,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.waiting });
     const retry = c.call('list_tabs');
     await sleep(50);
-    expect(answers).toHaveLength(1);
+    await expect.poll(() => answers.length).toBe(1);
     answers[0]!('once');
     expect((await retry).error).toBe(false);
     expect((await c.call('list_tabs')).error).toBe(false);
@@ -455,5 +458,23 @@ describe('chord mcp’s own folder (review 1 of #76)', () => {
     expect(statSync(scratch.path).mode & 0o777).toBe(0o700);
     scratch.dispose();
     expect(existsSync(scratch.path)).toBe(false);
+  });
+});
+
+describe('No work while no agent connects (S18 M1c)', () => {
+  it('the agents’ chords, and their watch on the store, start with the first connection', async () => {
+    const ud = profile();
+    let subscribed = 0;
+    const store = { state: { nodes: {}, chords: {}, windows: {}, live: {} } as unknown as State, dispatch: () => undefined, subscribe: () => (subscribed++, () => undefined) };
+    const service = new AgentService({ userData: ud, browser, present: devPresenter('once'), helper: null, waitMs: 2000, chords: { store, page: () => undefined, lastWindow: () => null } });
+    await service.start();
+    cleanup.push(() => service.stop());
+    expect(service.chords).toBeNull();
+    expect(subscribed).toBe(0);
+    const c = client(ud);
+    await c.initialize();
+    expect((await c.call('list_tabs')).error).toBe(false);
+    expect(service.chords).not.toBeNull();
+    expect(subscribed).toBe(1);
   });
 });

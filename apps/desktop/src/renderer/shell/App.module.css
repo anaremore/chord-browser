@@ -1317,6 +1317,13 @@ kbd {
     var(--shadow-frame);
 }
 
+/* An outside agent is reading the tab on screen (S18): a blue edge just outside the frame, as the mock draws it. */
+.frame[data-agent] {
+  box-shadow:
+    0 0 0 var(--size-focus-ring) var(--color-agent),
+    var(--shadow-frame);
+}
+
 .window[data-shared-window]::after {
   position: absolute;
   inset: 0;

@@ -403,10 +403,11 @@ export const opKey = (op: WriteOp): string => `${op.k}:${op.id}`;
 function isPrivate(op: WriteOp, state: State): boolean {
   if (op.value === null) return false;
   switch (op.k) {
+    // An agent's chord and its tabs (S18) live in memory only, as a private window's do.
     case 'chord':
-      return Boolean(op.value.private);
+      return Boolean(op.value.private || op.value.agent);
     case 'node':
-      return Boolean(state.chords[op.value.chordId]?.private);
+      return Boolean(state.chords[op.value.chordId]?.private || state.chords[op.value.chordId]?.agent);
     case 'window':
       return Boolean(op.value.private);
     case 'download':

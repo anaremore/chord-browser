@@ -34,6 +34,15 @@ app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 // (relay-folder.ts), never a shared path in /tmp.
 const scratch = relayUserData(relayFolder(process.platform, process.env, userCache(process.platform, process.env, app.getPath('home')), app.isPackaged));
 app.setPath('userData', scratch.path);
+// A fresh folder for this run (the usual one wasn't the user's own) goes however the relay ends: the client going (below),
+// a signal, or Electron quitting.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    scratch.dispose();
+    app.exit(0);
+  });
+}
+app.once('will-quit', () => scratch.dispose());
 app.dock?.hide();
 
 // Electron's main has no working process.stdin on Windows (a stub that ends at once), but fd 0 is the client's pipe.

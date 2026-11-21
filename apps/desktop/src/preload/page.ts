@@ -24,6 +24,7 @@
  * so a site that checks for tampered APIs sees Chromium's.
  */
 import { contextBridge, ipcRenderer } from 'electron';
+import { holdForAgent } from './agent-hold';
 
 /** The page's globals this touches (the preload's project has no DOM types; this runs in the page's own world). */
 interface Signal {
@@ -119,10 +120,34 @@ function compatibility(report: (badge: Badge) => void): void {
   }
 }
 
+/**
+ * Sandboxed preloads get Electron's `additionalArguments` in `process.argv`: `process` is the preload's own
+ * (a variable of its scope, not a property of globalThis).
+ */
+const AGENT_TAB_ARG = '--chord-agent-tab';
+const agentTab = typeof process !== 'undefined' && Array.isArray(process.argv) && process.argv.includes(AGENT_TAB_ARG);
+
 // Web pages only: not an extension's pages, which share the session, nor a blank frame's.
 const { protocol } = (globalThis as unknown as { location: { protocol: string } }).location;
 if (protocol === 'https:' || protocol === 'http:') {
   // The page calls this through the bridge: only the value crosses, and main takes only the top frame's.
   const report = (badge: Badge) => ipcRenderer.send('page:badge', badge);
   contextBridge.executeInMainWorld({ func: compatibility, args: [report] });
+  if (agentTab) {
+    const held = (kind: 'dialog' | 'file', detail: string) => ipcRenderer.send('page:agentHeld', { kind, detail: String(detail).slice(0, 500) });
+    contextBridge.executeInMainWorld({ func: holdForAgent, args: [held] });
+    // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent.
+    const doc = (globalThis as unknown as { document: { addEventListener(type: string, listener: (event: { composedPath(): unknown[]; preventDefault(): void }) => void, capture: boolean): void } }).document;
+    doc.addEventListener(
+      'click',
+      (event) => {
+        const target = event.composedPath()[0] as { tagName?: string; type?: string } | undefined;
+        if (target?.tagName === 'INPUT' && target.type === 'file') {
+          event.preventDefault();
+          held('file', 'a file input');
+        }
+      },
+      true,
+    );
+  }
 }

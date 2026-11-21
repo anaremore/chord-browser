@@ -341,7 +341,9 @@ export function restoreState(saved: PersistedState | null, seed: SeedOptions): S
     activeTab[activeChordId] ??= null;
     const width = win.sidebarWidth;
     const sidebarWidth = typeof width === 'number' && width >= SIDEBAR_WIDTH.min && width <= SIDEBAR_WIDTH.max ? width : SIDEBAR_WIDTH.default;
-    state.windows[win.id] = { ...win, activeChordId, activeTab, sidebarWidth };
+    // An agent's tab shown over the chord (S18) was in memory only.
+    const { agentTab: _agentTab, ...kept } = win;
+    state.windows[win.id] = { ...kept, activeChordId, activeTab, sidebarWidth };
   }
   if (Object.keys(state.windows).length === 0) {
     const id = seed.newId();

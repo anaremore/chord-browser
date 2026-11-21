@@ -55,7 +55,7 @@ export function watchAgents(deps: AgentSwitchDeps): AgentSwitch | null {
     settled: () => queue,
     quit: async () => {
       await queue;
-      await service?.stop();
+      await service?.stop(true);
     },
   };
 }
