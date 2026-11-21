@@ -24,9 +24,9 @@ jobs:
     name: Typecheck · lint · unit tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -54,20 +54,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Cache the corpus
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/desktop/test/forms/.cache/ddg-*
           key: forms-corpus-${{ hashFiles('apps/desktop/test/forms/corpus.ts') }}
       - name: Cache Playwright's Chromium
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
@@ -75,7 +75,7 @@ jobs:
       - run: pnpm --filter @chord/desktop test:forms --project corpus
       - name: Upload the corpus score
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: forms-score
           path: apps/desktop/test-results/forms/score.json
@@ -97,22 +97,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - name: Cache test-the-web's build
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/desktop/test/forms/.cache/ttw-*
           key: forms-ttw-${{ hashFiles('apps/desktop/test/forms/ttw.ts') }}
       - name: Restore Playwright's Chromium
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
@@ -122,7 +122,7 @@ jobs:
           CHORD_TTW_REQUIRED: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
       - name: Upload the test-the-web score
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: forms-ttw-score
           path: apps/desktop/test-results/forms/ttw-score.json
@@ -152,9 +152,9 @@ jobs:
           - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland }
           - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11 }
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -173,7 +173,7 @@ jobs:
       # E2E's spelling dictionary: a pinned, hash-checked download served to Chord from this machine
       # (apps/desktop/test/dictionaries.ts), so no test downloads one from Google.
       - name: Cache the spelling dictionary
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/desktop/test/.cache/dictionaries
           key: dictionaries-${{ hashFiles('apps/desktop/test/dictionaries.ts') }}
@@ -181,7 +181,7 @@ jobs:
       # Chord Player's E2E test (player.spec.ts, Linux and Windows x64) packages the player on castLabs ECS: its checked zip, kept.
       - name: Cache castLabs ECS
         if: (runner.os == 'Linux' || runner.os == 'Windows') && runner.arch == 'X64'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/chord-ecs
           key: ecs-${{ runner.os }}-x64-${{ hashFiles('apps/player/ecs.json') }}
@@ -189,7 +189,7 @@ jobs:
       # The packages below, kept between runs: the mirror has been slow enough to time the step out.
       - name: Cache display-server packages
         if: runner.os == 'Linux'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/apt-archives
           key: apt-${{ matrix.os }}-${{ matrix.display }}-v2
@@ -260,7 +260,7 @@ jobs:
 
       - name: Upload design QA captures
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: captures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
           path: apps/desktop/test-results/captures/
@@ -271,7 +271,7 @@ jobs:
       # `pnpm --filter @chord/desktop perf:baseline --run <id>` takes from these reports (docs/testing/performance.md).
       - name: Upload performance report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
           path: apps/desktop/test-results/perf.json
@@ -279,7 +279,7 @@ jobs:
 
       - name: Upload failure details
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-failures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
           path: apps/desktop/test-results/
