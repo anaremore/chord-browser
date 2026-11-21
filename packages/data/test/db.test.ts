@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { apply, restoreState, seedState, nodeOf, nodeList, nodeIds, type Command, type Context, type ProxySettings, type State, type TabNode } from '@chord/core';
 import { ChordDatabase, errorPasses } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
+import { oldDatabase } from './old-version';
 import { opsForState, opsFromPatches, type WriteOp } from '../src';
 
 let dir: string;
@@ -213,9 +214,7 @@ describe('chord-data', () => {
   });
 
   it('upgrades a version-15 profile to 16, and keeps the proxy for every chord and a chord’s own across a restart', () => {
-    const v15 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 15)) v15.exec(migration);
-    v15.exec('PRAGMA user_version = 15');
+    const v15 = oldDatabase(file, 15);
     v15.prepare('INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
       'c-old',
       'default',
@@ -259,9 +258,7 @@ describe('chord-data', () => {
   });
 
   it('upgrades a version-16 profile to 17: settings, Favorites and routes get the time they change, from 0 for rows from before', () => {
-    const v16 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 16)) v16.exec(migration);
-    v16.exec('PRAGMA user_version = 16');
+    const v16 = oldDatabase(file, 16);
     v16.prepare('INSERT INTO setting (key, value) VALUES (?, ?)').run('searchEngine', '"google"');
     v16.prepare('INSERT INTO favorite (id, url, title, rank, created_at) VALUES (?, ?, ?, ?, ?)').run('fav-old', 'https://old.test/', 'Old', 'a0', 1);
     v16.close();
@@ -372,9 +369,7 @@ describe('chord-data', () => {
   });
 
   it('upgrades a version-14 profile to 15: a site’s Effects read as everything on, and each one’s switch is kept from then on', () => {
-    const v14 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 14)) v14.exec(migration);
-    v14.exec('PRAGMA user_version = 14');
+    const v14 = oldDatabase(file, 14);
     v14.prepare(
       `INSERT INTO effect (host, wet, css, hidden, presets, duet, compiled, sanitizer, created_at, updated_at)
        VALUES ('news.test', 1, 'h1 { color: red }', ?, '["dark"]', ?, 'h1 {\n  color: red !important;\n}', 1, 1, 2)`,
@@ -480,9 +475,7 @@ describe('chord-data', () => {
 
   it('upgrades a version-6 profile (extensions, no Favorites yet) to 7, keeping everything', () => {
     // A profile as the build before Favorites left it: migrations 1-6, a chord and an installed extension.
-    const v6 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 6)) v6.exec(migration);
-    v6.exec('PRAGMA user_version = 6');
+    const v6 = oldDatabase(file, 6);
     const theme = JSON.stringify({ stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' });
     v6.prepare('INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
       'c1', 'default', 'Personal', '✦', theme, 'a0', 0, 0,
@@ -523,9 +516,7 @@ describe('chord-data', () => {
   });
 
   it('upgrades a version-22 profile to 23: its Favorites stay in every chord, and one can be a chord’s own', () => {
-    const v22 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 22)) v22.exec(migration);
-    v22.exec('PRAGMA user_version = 22');
+    const v22 = oldDatabase(file, 22);
     v22.prepare(`INSERT INTO favorite (id, url, title, favicon_key, rank, created_at) VALUES ('old', 'https://mail.test/', 'Mail', NULL, 'a0', 1)`).run();
     v22.close();
     const db = new ChordDatabase(file);
@@ -539,9 +530,7 @@ describe('chord-data', () => {
   });
 
   it('upgrades a version-13 profile to 14: assistant chats keep their messages, and a chat can be set to ask every time', () => {
-    const v13 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 13)) v13.exec(migration);
-    v13.exec('PRAGMA user_version = 13');
+    const v13 = oldDatabase(file, 13);
     v13.exec('PRAGMA foreign_keys = ON');
     v13.prepare(
       `INSERT INTO duet_thread (id, chord_id, title, provider, model, provider_session_id, scope, created_at, updated_at, last_used_at)
@@ -582,6 +571,64 @@ describe('chord-data', () => {
     } finally {
       (MIGRATIONS as string[]).pop();
     }
+  });
+});
+
+/** A database's schema and every row in it, read through a connection of its own that's closed again. */
+function contents(path: string): { version: unknown; schema: unknown[]; rows: Record<string, unknown[]> } {
+  const db = new DatabaseSync(path);
+  try {
+    const schema = db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`).all();
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as { name: string }[];
+    const rows = Object.fromEntries(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY 1`).all()]));
+    return { version: db.prepare('PRAGMA user_version').get(), schema, rows };
+  } finally {
+    db.close();
+  }
+}
+
+describe('migrations', () => {
+  // Every old version, each opened by this build: upgrades go one version at a time, a new database all at once.
+  it('a new database (one transaction) has the same schema and rows as each older version upgraded one step at a time', { timeout: 120_000 }, () => {
+    new ChordDatabase(file).close();
+    const fresh = contents(file);
+    expect(fresh.version).toEqual({ user_version: MIGRATIONS.length });
+    expect(fresh.schema.length).toBeGreaterThan(MIGRATIONS.length);
+    for (let version = 1; version < MIGRATIONS.length; version++) {
+      const old = join(dir, `v${version}.db`);
+      oldDatabase(old, version).close();
+      const db = new ChordDatabase(old);
+      expect(db.version).toBe(MIGRATIONS.length);
+      db.close();
+      expect({ from: version, ...contents(old) }).toEqual({ from: version, ...fresh });
+    }
+  });
+
+  // What made a new profile slow on a slow disk was a commit per migration, each a write (and on Windows an fsync) of
+  // its own; the time is held in the perf suite (data.perf.test.ts), the count here, on any machine.
+  it('a new database is made in one commit', () => {
+    const db = new ChordDatabase(file);
+    // Frames in the write-ahead log that end a transaction: their header's database size after the commit isn't 0.
+    const wal = readFileSync(`${file}-wal`);
+    const pageSize = wal.readUInt32BE(8);
+    let commits = 0;
+    for (let at = 32; at + 24 <= wal.length; at += 24 + pageSize) if (wal.readUInt32BE(at + 4) !== 0) commits++;
+    db.close();
+    expect(commits).toBe(1);
+  });
+
+  it('a new database whose migrations fail is left empty, and made whole the next time', () => {
+    // Pretend a newer build adds a migration that leaves a row pointing at nothing.
+    (MIGRATIONS as string[]).push(`CREATE TABLE later (chord_id TEXT REFERENCES chord(id)) STRICT; INSERT INTO later VALUES ('gone');`);
+    try {
+      expect(() => new ChordDatabase(file)).toThrow(/new database's migrations left 1 rows pointing at nothing/);
+    } finally {
+      (MIGRATIONS as string[]).pop();
+    }
+    expect(contents(file)).toMatchObject({ version: { user_version: 0 }, schema: [], rows: {} });
+    const db = new ChordDatabase(file);
+    expect(db.version).toBe(MIGRATIONS.length);
+    db.close();
   });
 });
 

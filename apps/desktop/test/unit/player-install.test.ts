@@ -148,7 +148,9 @@ function installer(fetch: (url: string) => Promise<Response>, options: { root?: 
   return { inst, root, changes };
 }
 
-describe('the installer', () => {
+// Each test zips, serves, checks and unpacks (in a worker) real releases of over a megabyte: real disk work, which in
+// the whole suite, beside every other file, took past vitest's 5 s default on Windows. Nothing here is timed.
+describe('the installer', { timeout: 30_000 }, () => {
   it('installs a signed release: checked, unpacked, and the zip gone', async () => {
     const r = await makeRelease('0.1.0');
     const { inst, root, changes } = installer(server({ 'player-v0.1.0': r.files }));

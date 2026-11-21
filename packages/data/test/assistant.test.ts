@@ -6,6 +6,7 @@ import type { AssistantMessage, AssistantThread } from '@chord/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ChordDatabase } from '../src/db';
 import { MIGRATIONS } from '../src/migrations';
+import { oldDatabase } from './old-version';
 
 let dir: string;
 let db: ChordDatabase;
@@ -86,9 +87,7 @@ describe('The assistant store (migration 9)', () => {
   it('upgrades a version-8 profile (site zoom, no assistant yet), keeping its zoom', () => {
     db.close();
     const file = join(dir, 'v8.db');
-    const v8 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 8)) v8.exec(migration);
-    v8.exec('PRAGMA user_version = 8');
+    const v8 = oldDatabase(file, 8);
     v8.prepare('INSERT INTO site_zoom (profile_id, host, factor, updated_at) VALUES (?, ?, ?, ?)').run('default', 'news.test', 1.25, 1);
     v8.close();
 
@@ -164,9 +163,7 @@ describe('a Chord file’s chats (S15 §5, migration 18)', () => {
   it('upgrades a version-17 profile to 18: chats from before are this computer’s own', () => {
     db.close();
     const file = join(dir, 'v17.db');
-    const v17 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 17)) v17.exec(migration);
-    v17.exec('PRAGMA user_version = 17');
+    const v17 = oldDatabase(file, 17);
     v17.prepare(`INSERT INTO duet_thread (id, chord_id, title, provider, scope, created_at, updated_at, last_used_at) VALUES ('old', 'c1', 'Old', 'claude', 'ask', 1, 1, 1)`).run();
     v17.close();
     db = new ChordDatabase(file);
@@ -179,9 +176,7 @@ describe('0.6.x’s duet names (migration 22)', () => {
   it('moves a version-21 profile’s chats, search, Effects patches and settings to the assistant’s names', () => {
     db.close();
     const file = join(dir, 'v21.db');
-    const v21 = new DatabaseSync(file);
-    for (const migration of MIGRATIONS.slice(0, 21)) v21.exec(migration);
-    v21.exec('PRAGMA user_version = 21');
+    const v21 = oldDatabase(file, 21);
     v21.exec(`INSERT INTO duet_thread (id, chord_id, title, provider, scope, created_at, updated_at, last_used_at) VALUES ('t1', 'c1', 'Laptops', 'claude', 'chord', 1, 2, 3)`);
     const insert = v21.prepare('INSERT INTO duet_message (id, thread_id, role, text, body, created_at) VALUES (?, ?, ?, ?, ?, ?)');
     insert.run('m1', 't1', 'user', 'Compare these laptops', JSON.stringify({ role: 'user', text: 'Compare these laptops', attachments: [] }), 4);

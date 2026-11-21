@@ -132,17 +132,6 @@ describe('importing history', () => {
     expect(db.search('busy', null, t0).history[0]).toMatchObject({ visitCount: 3 });
   });
 
-  it('undoes a big import quickly', () => {
-    const pages = Array.from({ length: 10_000 }, (_, i) => page(`https://many.test/${i}`, `Page ${i}`, [0, 1, 2, 3, 4].map((k) => t0 - (i % 60) * DAY - k * 3_600_000)));
-    for (let at = 0; at < pages.length; at += 500) db.importHistory('big', pages.slice(at, at + 500), t0);
-    expect(db.search('many', null, t0).history.length).toBeGreaterThan(0);
-    const started = performance.now();
-    db.undoImport('big', t0);
-    expect(performance.now() - started).toBeLessThan(5_000);
-    expect(db.search('many', null, t0).history).toEqual([]);
-    expect(visitRows()).toEqual([]);
-  });
-
   it('skips visits it has already, so a file imported twice adds nothing; a typed count takes the larger', () => {
     db.write([], t0, [{ k: 'visit', url: 'https://news.test/', title: 'News', at: t0 - DAY }]);
     const file = (): ImportedPage[] => [

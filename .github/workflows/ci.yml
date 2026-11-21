@@ -34,6 +34,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # The unit perf suite (*.perf.test.ts, docs/testing/performance.md): timed tests, one file at a time, so a budget
+      # measures Chord and not the rest of the suite sharing the CPUs. pnpm test leaves them out.
+      - run: pnpm test:perf
       # 5,000 passwords into a vault of 500, alone so nothing else shares the CPUs: chord-data's longest task during
       # the import is held to 100 ms (S17, Phase 2: import and export; measured 9.4 ms here, 10.6 ms on an SSD and 40 ms
       # on a slower drive on Windows), so a tenfold regression fails.
@@ -161,6 +164,11 @@ jobs:
       # (window-owner.exe, just built), on Linux another user refused. pnpm test runs them on Linux too.
       - name: Agents' transport
         run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/control.test.ts
+      # chord-data's perf rows on Windows' disks too, where a sync to disk costs most: a new profile's database (and
+      # its migrations committed one by one, as before 2026-11-20, for comparison) and a big import's Undo.
+      - name: chord-data's perf rows
+        if: runner.os == 'Windows'
+        run: pnpm test:perf packages/data
 
       # E2E's spelling dictionary: a pinned, hash-checked download served to Chord from this machine
       # (apps/desktop/test/dictionaries.ts), so no test downloads one from Google.
