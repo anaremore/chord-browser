@@ -121,7 +121,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const ud = profile();
     const c = client(ud);
     expect((await c.initialize()).result).toMatchObject({ serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
-    expect(((await c.request('tools/list')).result['tools'] as { name: string }[]).map((t) => t.name)).toEqual(['list_tabs', 'open_tab', 'read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'close_tab']);
+    expect(((await c.request('tools/list')).result['tools'] as { name: string }[]).map((t) => t.name)).toEqual(['list_tabs', 'open_tab', 'read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'close_tab']);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     await chord(ud);
     const listed = await c.call('list_tabs');
@@ -134,7 +134,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const service = await chord(ud);
     const c = client(ud, true);
     await c.initialize();
-    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(7);
+    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(8);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     expect(service.connections.size).toBe(0);
   });
@@ -185,6 +185,28 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     answers[0]!('once');
     expect((await retry).error).toBe(false);
     expect((await c.call('list_tabs')).error).toBe(false);
+  });
+
+  it('Remove in Settings hangs up on that agent, let in for good by that program, and leaves an Allow once one alone', async () => {
+    const ud = profile();
+    // Claude Code is always allowed, kept by its program; Codex was let in once.
+    const ask: Ask = async (who) => (who.name === 'Claude Code' ? { grant: 'always', profileId: null, allowedParent: '/bin/claude' } : { grant: 'once', profileId: null });
+    const service = await chord(ud, ask);
+    const names = () => [...service.connections].map((h) => h.connection.name).sort();
+    const claude = client(ud);
+    await claude.initialize({ protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '1' } });
+    expect((await claude.call('list_tabs')).error).toBe(false);
+    const codex = client(ud);
+    await codex.initialize({ protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '1' } });
+    expect((await codex.call('list_tabs')).error).toBe(false);
+    expect(names()).toEqual(['Claude Code', 'Codex']);
+    // Another program's allowance by the same name: nothing.
+    service.disconnect('Claude Code', '/elsewhere/claude');
+    service.disconnect('Codex', '/bin/claude');
+    await sleep(50);
+    expect(names()).toEqual(['Claude Code', 'Codex']);
+    service.disconnect('Claude Code', '/bin/claude');
+    await expect.poll(names).toEqual(['Codex']);
   });
 
   it('a slow card inside the wait: the call just waits', async () => {

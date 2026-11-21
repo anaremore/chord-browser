@@ -9,13 +9,14 @@
  * Agents' switch (off by default) is the only way here.
  */
 import { execFile } from 'node:child_process';
-import type { AgentHello, Command, ProfileId } from '@chord/core';
+import type { AgentHello, Command, NodeId, ProfileId } from '@chord/core';
 import type { ControlBrowser } from '../control/tools';
 import { startEndpoint, type Endpoint } from './endpoint';
 import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
+import type { AgentShares } from './shares';
 import type { Socket } from 'node:net';
 
 export interface AgentServiceDeps {
@@ -48,6 +49,8 @@ export interface HeldConnection {
   profileId: ProfileId | null;
   /** Let in for good (Always allow, now or before). */
   always: boolean;
+  /** The program its allowance is kept by (Always allow with a known program): Remove matches name and program. */
+  allowedParent: string | null;
 }
 
 /** Messages a connection may send while its code loads (an MCP client sends two or three). */
@@ -61,6 +64,8 @@ export class AgentService {
   chords: AgentChords | null = null;
   /** The DACL helper's run, once per endpoint (Windows). */
   restricted: Promise<number> | null = null;
+  /** Tabs you share with agents (M1e): made with the first share. */
+  shares: AgentShares | null = null;
 
   constructor(private readonly deps: AgentServiceDeps) {}
 
@@ -85,7 +90,13 @@ export class AgentService {
           let held: HeldConnection | null = null;
           let gone = false;
           void Promise.all([import('./connection'), this.deps.chords && !this.chords ? import('./chords') : null]).then(([{ agentConnection }, chordsModule]) => {
-            if (chordsModule && this.deps.chords && !this.chords) this.chords = new chordsModule.AgentChords(this.deps.chords);
+            if (chordsModule && this.deps.chords && !this.chords) {
+              this.chords = new chordsModule.AgentChords(this.deps.chords);
+              // A tab you took over (to a site you keep private) is closed, as far as any agent knows.
+              this.chords.onHandedOver = (nodeId) => {
+                for (const h of this.connections) h.connection.forget(nodeId);
+              };
+            }
             if (gone) return;
             const connection = agentConnection(hello, send, {
               browser: this.deps.browser,
@@ -94,6 +105,7 @@ export class AgentService {
               ...(this.chords ? { chords: this.chords } : {}),
               ...(this.deps.dispatch ? { dispatch: this.deps.dispatch } : {}),
               ...(this.deps.neverSites ? { neverSites: this.deps.neverSites } : {}),
+              shares: () => this.shares,
               allowedProfile: () => held?.profileId ?? null,
               present: async (card, signal) => {
                 if (card.kind !== 'connection' || !held) return 'deny';
@@ -102,11 +114,12 @@ export class AgentService {
                 const answer = await this.deps.ask({ name: held.connection.name, folder: hello.cwd, parent: held.parent }, signal);
                 held.profileId = answer.profileId;
                 held.always = answer.grant === 'always';
+                held.allowedParent = answer.allowedParent ?? null;
                 this.deps.changed?.();
                 return answer.grant;
               },
             });
-            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false };
+            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null };
             held = record;
             this.connections.add(record);
             // Settings → Agents lists the stopped ones: it hears when one stops or goes on.
@@ -155,6 +168,8 @@ export class AgentService {
     if (quitting) {
       this.chords?.dispose();
       this.chords = null;
+      this.shares?.dispose();
+      this.shares = null;
     }
     this.endpoint?.close();
     this.endpoint = null;
@@ -178,9 +193,43 @@ export class AgentService {
     }
   }
 
+  /** The agents let in now (once or always), the one that called last first: those a tab can be shared with. */
+  sharingWith(): { id: string; name: string }[] {
+    return [...this.connections]
+      .filter((h) => h.connection.allowed)
+      .reverse()
+      .sort((a, b) => b.connection.lastCallAt - a.connection.lastCallAt)
+      .map((h) => ({ id: h.connection.agent.id, name: h.connection.name }));
+  }
+
+  /**
+   * Share a tab of yours (M1e): with `agentId`, or the agent that called last. A tab already shared with that agent
+   * (or with any, when none is named) stops being shared instead. `none`: no agent to share with; `no`: the tab
+   * can't be shared (not a web page of yours, or a site you keep private).
+   */
+  async toggleShare(nodeId: NodeId, agentId?: string): Promise<'shared' | 'unshared' | 'none' | 'no'> {
+    const now = this.shares?.sharedWith(nodeId) ?? null;
+    if (now && (!agentId || now.agentId === agentId)) {
+      this.shares!.unshare(nodeId);
+      return 'unshared';
+    }
+    const agent = agentId ? this.sharingWith().find((a) => a.id === agentId) : this.sharingWith()[0];
+    if (!agent) return 'none';
+    const store = this.deps.chords?.store;
+    if (!store) return 'no';
+    if (!this.shares) {
+      const { AgentShares } = await import('./shares');
+      this.shares ??= new AgentShares({ store, neverSites: () => this.deps.neverSites?.() ?? [] });
+    }
+    const held = [...this.connections].find((h) => h.connection.agent.id === agent.id);
+    if (!held) return 'none';
+    const chordId = this.chords?.chordOf(held.connection.agent) ?? '';
+    return this.shares.share(nodeId, { agentId: agent.id, name: agent.name, chordId }) ? 'shared' : 'no';
+  }
+
   /** An agent removed from Allowed in Settings: it's let go now, and asks again next time. */
-  disconnect(name: string): void {
-    for (const held of [...this.connections]) if (held.always && held.connection.name === name) held.socket.destroy();
+  disconnect(name: string, parent: string): void {
+    for (const held of [...this.connections]) if (held.always && held.connection.name === name && held.allowedParent === parent) held.socket.destroy();
   }
 }
 

@@ -9,6 +9,8 @@
  * Windows or Super key (never used on macOS, where ⌘ is `Mod`).
  */
 
+import { AGENTS_RELEASED } from './agent-tools';
+
 export type Platform = 'darwin' | 'win32' | 'linux';
 
 /** Reserved: Chord gets the key even when a page has focus. Page-first: the page sees it first. */
@@ -50,6 +52,8 @@ export type ActionId =
   | 'assistant.toggle'
   /** Stop every outside agent (S18) and every assistant reply at once: Ctrl+. / ⌘. */
   | 'agents.stopAll'
+  /** Share the tab on screen with an outside agent, or stop sharing it (S18 M1e). */
+  | 'agents.share'
   | 'window.new'
   | 'window.newPrivate'
   | 'window.close'
@@ -141,8 +145,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('chord.proxy', 'Proxy for this chord…', 'page-first', []),
   // The assistant (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
   s('assistant.toggle', 'Show or hide the assistant', 'page-first', ['Mod+E']),
-  // Reserved: a page can never keep it from you.
-  s('agents.stopAll', 'Stop every agent and assistant reply', 'reserved', ['Mod+.']),
+  // Reserved: a page can never keep it from you. It names agents only once a release has them.
+  s('agents.stopAll', AGENTS_RELEASED ? 'Stop every agent and assistant reply' : 'Stop the assistant’s reply', 'reserved', ['Mod+.']),
+  // Page-first, as Effects' ⌘⇧E is (S18 M1e): sites that use the key (github.dev deletes a line) keep it.
+  s('agents.share', 'Share this tab with an agent, or stop sharing it', 'page-first', ['Mod+Shift+K']),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

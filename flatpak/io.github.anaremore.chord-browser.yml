@@ -132,4 +132,7 @@ modules:
           # running one's socket and hands it its links instead of opening the
           # profile twice. Flatpak gives each instance its own /tmp.
           - export TMPDIR="${XDG_RUNTIME_DIR}/app/${FLATPAK_ID}"
+          # `flatpak run … mcp` (S18 §2): an agent's relay, often over SSH or with no
+          # display, where Electron stops before Chord runs unless told on argv.
+          - if [ "$1" = mcp ]; then shift; exec zypak-wrapper /app/chord/chord --ozone-platform=headless mcp "$@"; fi
           - exec zypak-wrapper /app/chord/chord "$@"

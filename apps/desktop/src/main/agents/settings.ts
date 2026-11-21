@@ -19,14 +19,22 @@ export interface SetupWhere {
   flatpak: string | null;
 }
 
-/** A path as a terminal takes it: in quotes when it has a space or a character a shell reads. */
-const quote = (path: string) => (/[\s"'$`&()]/.test(path) ? `"${path.replace(/"/g, '\\"')}"` : path);
+/**
+ * A path as a terminal takes it. macOS and Linux: as it is if it's only `[\w@%+=:,./-]`, else in POSIX single quotes
+ * (`'` as `'\''`), so nothing in it is read by the shell. Windows: in double quotes when it has a space or a
+ * character a shell reads (a path there can't hold `"`).
+ */
+export function quote(path: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') return /[\s"'$`&()^%!;,]/.test(path) ? `"${path.replace(/"/g, '')}"` : path;
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
+}
 
 /** The command that runs `chord mcp` here, as a terminal takes it. */
 export function mcpCommand(where: SetupWhere): string {
   if (where.flatpak) return `flatpak run ${where.flatpak} mcp`;
   const exe = where.platform === 'linux' && where.appImage ? where.appImage : where.exe;
-  const program = where.packaged ? quote(exe) : `${quote(exe)} ${quote(where.appPath)}`;
+  const q = (path: string) => quote(path, where.platform);
+  const program = where.packaged ? q(exe) : `${q(exe)} ${q(where.appPath)}`;
   // Linux: with no display (SSH, a headless box) Electron stops before any of Chord runs, unless told so on argv (S18 §2).
   return where.platform === 'linux' ? `${program} --ozone-platform=headless mcp` : `${program} mcp`;
 }

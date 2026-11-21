@@ -59,8 +59,20 @@ export function AgentSections({ state, windowId, appearance }: { state: State; w
  * The bar over an agent's tab: blue while the agent reads it, with Stop (every agent at once, as Ctrl+. / ⌘.); the paused bar's grey while you use the
  * tab, or once you've stopped the agent, with "Let … continue". Main keeps the page below it (AGENT_BAR_HEIGHT).
  */
-export function AgentBar({ agent }: { agent: AgentLive }) {
+export function AgentBar({ agent, nodeId }: { agent: AgentLive; nodeId: string }) {
   const working = agent.state === 'working';
+  // A tab of yours you shared (M1e; the mock's §3): blue, with Stop sharing.
+  if (agent.state === 'shared') {
+    return (
+      <div className={styles.bar} data-working role="status">
+        <span aria-hidden>✳</span>
+        <span className={styles.barText}>Shared with {agent.name}: it can read this tab</span>
+        <button type="button" className={styles.resume} onClick={() => void api.state.dispatch({ t: 'agents.unshare', nodeId })}>
+          Stop sharing
+        </button>
+      </div>
+    );
+  }
   const text = working ? `${agent.name} is reading this tab` : agent.state === 'paused' ? 'Paused while you use this tab' : `${agent.name} is stopped`;
   return (
     <div className={styles.bar} data-working={working || undefined} role="status">

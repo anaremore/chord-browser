@@ -26,6 +26,7 @@ import {
   type AgentHello,
   type Command,
   type Grant,
+  type NodeId,
   type ProfileId,
 } from '@chord/core';
 import { ControlAgent, type CardPresenter, type ControlCard } from '../control/gate';
@@ -34,6 +35,7 @@ import type { ToolOutput } from '../control/scope';
 import { runControlTool, type ControlBrowser } from '../control/tools';
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
+import type { AgentShares } from './shares';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
 
@@ -51,6 +53,8 @@ export interface ConnectionDeps {
   dispatch?(command: Command): void;
   /** The *Never* list. */
   neverSites?(): readonly string[];
+  /** Tabs the user shares with agents (M1e): made with the first share, so often none. */
+  shares?(): AgentShares | null;
   /** The sign-ins of the window where the user let the agent in (M1d's card; the development hook: the window used last). */
   allowedProfile?(): ProfileId | null;
   /** How long open_tab waits for its page to load (LOAD_MS). */
@@ -64,8 +68,10 @@ const WEB_ADDRESS = /^https?:\/\/\S+$/i;
 /** The client's name as it gives it (`clientInfo.title`, else `name`): a hint, never proof (S18 §3). */
 export function clientName(hello: Pick<AgentHello, 'initialize'>): string {
   const info = hello.initialize?.['clientInfo'] as { title?: unknown; name?: unknown } | undefined;
-  const name = typeof info?.title === 'string' && info.title.trim() ? info.title : typeof info?.name === 'string' ? info.name : '';
-  return name.trim().slice(0, 60) || 'An agent';
+  // Control and format characters (bidi overrides, zero-width ones) never reach a card, a bar or Settings.
+  const clean = (v: unknown) => (typeof v === 'string' ? v.replace(/[\p{Cc}\p{Cf}]/gu, '').trim() : '');
+  const name = clean(info?.title) || clean(info?.name);
+  return name.slice(0, 60) || 'An agent';
 }
 
 let lastAgent = 0;
@@ -73,6 +79,12 @@ let lastAgent = 0;
 export interface AgentConnection {
   readonly agent: ControlAgent;
   readonly name: string;
+  /** Let in (once or always): only then can tabs be shared with it. */
+  readonly allowed: boolean;
+  /** When it last called a tool (0: never). */
+  readonly lastCallAt: number;
+  /** A tab of its own it no longer has (you took it over): its ref now says the tab is closed. */
+  forget(nodeId: NodeId): void;
   message(m: Message): void;
   closed(): void;
 }
@@ -82,7 +94,9 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   const agent = new ControlAgent(`agent:${++lastAgent}`, deps.present);
   const neverSites = () => deps.neverSites?.() ?? [];
   const chordId = () => deps.chords?.chordOf(agent) ?? null;
-  const scope = agentScope(agent, { state: () => deps.browser.store.state, chordId, neverSites });
+  const scope = agentScope(agent, { state: () => deps.browser.store.state, chordId, neverSites, shared: () => deps.shares?.()?.tabsOf(agent.id) ?? [] });
+  /** When it last called a tool: the share key shares with the agent that called last. */
+  let lastCallAt = 0;
   const waitMs = deps.waitMs ?? CONTROL_WAIT_MS;
   /** This connection was allowed (once or always): later calls don't ask. */
   let allowed = false;
@@ -117,6 +131,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
     if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
     const chord = deps.chords.chordFor(agent, name, profile);
+    deps.shares?.()?.chordMade(agent.id, chord);
     const nodeId = uuidv7();
     deps.dispatch({ t: 'agent.tab.add', chordId: chord, nodeId, url });
     const ref = scope.refs.refFor(nodeId);
@@ -191,6 +206,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const args = (m.params?.['arguments'] && typeof m.params['arguments'] === 'object' ? m.params['arguments'] : {}) as Record<string, unknown>;
     const cancel = new AbortController();
     calls.set(m.id, cancel);
+    lastCallAt = Date.now();
     try {
       const out = await agent.call(
         null,
@@ -215,6 +231,15 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   return {
     agent,
     name,
+    get allowed() {
+      return allowed;
+    },
+    get lastCallAt() {
+      return lastCallAt;
+    },
+    forget(nodeId) {
+      scope.refs.close(nodeId);
+    },
     message(m) {
       if (m.method === 'tools/call') return void call(m);
       if (m.method === 'tools/list') return reply(m.id, { tools: agentToolList() });
@@ -230,6 +255,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       // asked whether to keep its tabs.
       agent.cancelCards();
       for (const c of calls.values()) c.abort();
+      deps.shares?.()?.agentGone(agent.id);
       deps.chords?.done(agent);
     },
   };

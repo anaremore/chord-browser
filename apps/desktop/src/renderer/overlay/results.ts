@@ -119,6 +119,16 @@ const onWebsite = (state: State, windowId: string) => {
   return tab !== null && /^https?:/i.test(tab.url);
 };
 
+/**
+ * The tab on screen shared with an outside agent (S18 M1e), or not. Offered only with Agents on, never in a
+ * private window; with no agent let in, sharing says so in a toast.
+ */
+const sharedWithAgent = (shared: boolean) => (state: State, windowId: string) => {
+  if (!state.settings.agentsEnabled || state.windows[windowId]?.private || !onWebsite(state, windowId)) return false;
+  const tab = activeTab(state, windowId);
+  return (state.live[tab!.id]?.agent?.state === 'shared') === shared;
+};
+
 /** The site on screen has Effects, wet (`'wet'`) or dry (`'dry'`). */
 const effectsAre = (now: 'wet' | 'dry') => (state: State, windowId: string) => {
   const active = activeTabId(state, windowId);
@@ -172,6 +182,8 @@ const ACTIONS: { action: ActionId; title: string; words: string; when?: (state: 
   { action: 'view.reader', title: 'Show reader view', words: 'reader view mode read article text clean distraction', when: inReader(false) },
   { action: 'view.reader', title: 'Leave reader view', words: 'reader view leave exit close article page', when: inReader(true) },
   // Effects (DESIGN.md §7.15): the card, Dry/Wet for the site and for every site, and hiding an element.
+  { action: 'agents.share', title: 'Share this tab with an agent', words: 'share tab agent claude code codex mcp read', when: sharedWithAgent(false) },
+  { action: 'agents.share', title: 'Stop sharing this tab with the agent', words: 'stop sharing unshare tab agent', when: sharedWithAgent(true) },
   { action: 'effects.open', title: 'Effects for this site', words: 'effects style restyle css boost customize theme look font dark site', when: onWebsite },
   { action: 'effects.site', title: 'Make this site dry', words: 'effects dry off turn off original style site', when: effectsAre('wet') },
   { action: 'effects.site', title: 'Make this site wet', words: 'effects wet on turn on style site', when: effectsAre('dry') },

@@ -36,6 +36,7 @@ import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
 import type { ConnectCards } from './agents/connect';
+import { shareable } from './agents/shares';
 import { pageOf } from './view-page';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
@@ -199,7 +200,7 @@ const downloads = new DownloadManager({
   screen: (urls) => (safeBrowsing.active ? safeBrowsing.check(urls, 'download').then((v) => (v.verdict === 'unsafe' ? v.kind : null)) : null),
   onHeld: (download) => browser?.showHeldDownload(download.privateWindow),
   // An outside agent's tab (S18) downloads nothing: refused, and the agent told.
-  refuse: (contents, _url, filename) => browser?.agentDownload(contents, filename) ?? false,
+  refuse: (contents, url, filename) => browser?.agentDownload(contents, url, filename) ?? false,
 });
 let profileSession: (profileId: string) => Session;
 const updates = new UpdateChecker({
@@ -324,6 +325,9 @@ function registerIpc(): void {
     if (command.t === 'agents.keep') return agents?.service?.chords?.keep(command.windowId, command.chordId);
     if (command.t === 'agents.closeAll') return agents?.service?.chords?.closeAll(command.chordId);
     if (command.t === 'agents.undoClose') return agents?.service?.chords?.undoClose(command.token);
+    if (command.t === 'agents.unshare') return agents?.service?.shares?.unshare(command.nodeId);
+    // An address you typed for an agent's tab: where it goes is yours (a site you keep private makes it a tab of yours).
+    if (command.t === 'tab.navigate') agents?.service?.chords?.userActed(command.nodeId);
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -528,7 +532,7 @@ function registerIpc(): void {
     const service = agents?.service ?? null;
     if (request.do === 'remove') {
       browser!.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: state.settings.agentsAllowed.filter((a) => !(a.name === request.name && a.parent === request.parent)) } });
-      service?.disconnect(request.name);
+      service?.disconnect(request.name, request.parent);
     } else if (request.do === 'continue') service?.continue(request.id);
     const connected = [...(service?.connections ?? [])].map((held) => ({
       id: held.connection.agent.id,
@@ -1108,6 +1112,25 @@ if (!app.requestSingleInstanceLock()) {
         connectCards = cards;
         agentBrowser.agentCardFor = (windowId) => cards.cardFor(windowId);
         agentBrowser.agentWindowClosed = (windowId) => cards.windowClosed(windowId);
+        agentBrowser.agentWindowFocused = (windowId) => cards.windowFocused(windowId);
+        // Sharing a tab (M1e): the key, the command bar and the tab menu. Never in a private window.
+        const neverSites = () => agentBrowser.store.state.settings.assistant.neverSites;
+        agentBrowser.agentShare = (windowId, nodeId, agentId) => {
+          const service = agents?.service;
+          const w = agentBrowser.window(windowId);
+          if (!service || !w || w.isPrivate) return;
+          void service.toggleShare(nodeId, agentId).then((result) => {
+            if (result === 'none') w.toast({ id: 'agents-none', message: 'No agent is connected.' });
+          });
+        };
+        agentBrowser.agentShareMenu = (nodeId) => {
+          const service = agents?.service;
+          if (!service) return null;
+          const now = service.shares?.sharedWith(nodeId);
+          if (now) return { sharedWith: now.name };
+          const list = service.sharingWith();
+          return list.length > 0 && shareable(agentBrowser.store.state, nodeId, neverSites()) ? { agents: list } : null;
+        };
         return new AgentService({
           userData: app.getPath('userData'),
           browser: agentBrowser,
@@ -1131,7 +1154,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Outside agents' tabs (S18): their pages' wiring, and what they held, go to the agents' chords once there are any.
     browser.agentContents = (contents, nodeId) => agents?.service?.chords?.wire(contents, nodeId);
-    browser.agentHeld = (nodeId, what, detail) => agents?.service?.chords?.note(nodeId, what, detail);
+    browser.agentHeld = (nodeId, what, detail, from) => agents?.service?.chords?.note(nodeId, what, detail, from);
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {
       agents?.service?.stopAll();

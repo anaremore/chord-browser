@@ -475,6 +475,10 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
   // Agents (S18) only in builds that have them (AGENTS_RELEASED): elsewhere no section, and #agents opens General.
   const sections = about.agents ? SECTIONS : SECTIONS.filter((s) => s.id !== 'agents');
   const section: SectionId = chosen === 'agents' && !about.agents ? 'general' : chosen;
+  // The address says where you are: #agents that opened General says #general.
+  useEffect(() => {
+    if (chosen === 'agents' && !about.agents) history.replaceState(null, '', '#general');
+  }, [chosen, about.agents]);
   /** A Chord file from a newer Chord: check for updates, and show where the answer is (About). */
   const checkForUpdates = () => {
     void api.settings.checkForUpdates();

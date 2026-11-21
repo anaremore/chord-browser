@@ -136,3 +136,7 @@ A call that needs an answer waits on the card: the first call of a connection wa
 1. **Profiles.** Chord's in-app profiles share one instance. Should the Agent chord use the sign-ins of the window where the user allowed the connection (my suggestion), or always the default profile?
 2. **Stop.** Is Stop "pause this agent until you let it continue" (as above, matching the bar's *Let Claude Code continue*), or "cancel this one call"?
 3. **Tightening the pipe's DACL** with the existing C# helper: M1, or a later hardening slice?
+
+## M2: settled so far
+
+- **Who's calling (planner, 2026-11-21, from #81's review).** In M2 Chord finds the connecting process itself instead of trusting the hello's `parentPid`: `GetNamedPipeClientProcessId` on the pipe (through window-owner.exe, as `restrict-pipe` is), `SO_PEERCRED` on Linux's socket, `LOCAL_PEERPID` on macOS's. The parent chain, the card's *Started by* and *Always allow*'s program are then looked up from that PID. M1 keeps `hello.parentPid`, a hint like everything else on the card (§3).

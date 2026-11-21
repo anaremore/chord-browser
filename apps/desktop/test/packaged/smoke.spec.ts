@@ -307,7 +307,7 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
   try {
     const init = await mcp.request('initialize', hello);
     expect(init.result).toMatchObject({ protocolVersion: '2025-11-25', serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
-    expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(7);
+    expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(8);
     // Settled: one process (GPU and network service in-process), within its memory budget.
     await new Promise((done) => setTimeout(done, 1000));
     const { mb, children } = processInfo(mcp.child.pid!);

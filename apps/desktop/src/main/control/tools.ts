@@ -47,6 +47,9 @@ const PDFS_KEPT = 3;
 
 const NEVER = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
 
+/** Why a tab the scope won't read is refused: the scope's own words if it has them (sharing ended), else NEVER. */
+const unreadable = (scope: ControlScope, node: TabNode): string => scope.whyNot?.(node) ?? NEVER;
+
 const refuse = (why: string, problems?: string[]): ToolOutput => ({ text: toolResult({ refused: why, ...(problems ? { problems } : {}) }, false), isError: true });
 
 /** One call's view of its agent: the scope, the browser, and the call's own Stop. */
@@ -125,7 +128,7 @@ const READABLE_ADDRESS = /^(https?|file):/i;
 function blockedNow(call: Call, nodeId: NodeId, page: ControlPage | null, unread: string, ...urls: string[]): string | null {
   const now = nodeOf(call.browser.store.state, nodeId);
   if (now?.kind !== 'tab') return CONTROL_REFUSALS.closed;
-  if (!call.scope.readable(now)) return NEVER;
+  if (!call.scope.readable(now)) return unreadable(call.scope, now);
   if (page?.gone()) return unread;
   const addresses = [...(page ? [page.url()] : []), ...urls];
   const sites = call.scope.neverSites();
@@ -181,7 +184,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   const found = tool === 'read_selection' && args['tab_id'] === undefined ? (scope.defaultTab() ?? refuse(unknown)) : resolveTab(call, args['tab_id'], unknown);
   if (isOutput(found)) return found;
   const node = found;
-  if (!scope.readable(node)) return refuse(NEVER);
+  if (!scope.readable(node)) return refuse(unreadable(scope, node));
   const verb = tool === 'tab_screenshot' ? 'Take a picture of' : 'Read';
   const refused = await call.card(tool, node, `${verb} “${node.title || safeHost(node.url)}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
   if (refused) return refused;
@@ -290,7 +293,8 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
    */
   const blocked = (at?: string): string | null => {
     const now = nodeOf(browser.store.state, node.id);
-    if (now?.kind !== 'tab' || !scope.readable(now)) return NEVER;
+    if (now?.kind !== 'tab') return NEVER;
+    if (!scope.readable(now)) return unreadable(scope, now);
     const inspect = scope.mayInspect(now, 'page_diagnostics');
     if (inspect) return inspect;
     if (!page || page.gone()) return 'That tab could not be read.';
@@ -340,7 +344,7 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use the tab id from "Attached:".');
   if (isOutput(found)) return found;
   const node = found;
-  if (!scope.readable(node)) return refuse(NEVER);
+  if (!scope.readable(node)) return refuse(unreadable(scope, node));
   const inspect = scope.mayInspect(node, tool);
   if (inspect) return refuse(inspect);
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its form. Ask the user to close reader view first.');
