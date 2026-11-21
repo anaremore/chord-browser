@@ -107,6 +107,15 @@ export const DANGER: Record<Appearance, Oklch> = {
   dark: { l: 0.74, c: 0.15, h: 25 },
 };
 
+/**
+ * An outside agent at work (S18; mocks/agents-s18-m1.html): its bar's text and Stop, the edge of the tab it's
+ * reading, its section in the sidebar. A blue apart from any chord's accent, so it never reads as yours.
+ */
+export const AGENT: Record<Appearance, { fg: Oklch; bg: Oklch; edge: Oklch }> = {
+  light: { fg: { l: 0.55, c: 0.12, h: 250 }, bg: { l: 0.95, c: 0.03, h: 250 }, edge: { l: 0.88, c: 0.04, h: 250 } },
+  dark: { fg: { l: 0.78, c: 0.1, h: 250 }, bg: { l: 0.3, c: 0.05, h: 250 }, edge: { l: 0.38, c: 0.06, h: 250 } },
+};
+
 export function presetStops(id: PresetId): Oklch[] {
   return PRESETS[id].map((swatch) => ({ ...SWATCHES[swatch] }));
 }
@@ -326,6 +335,9 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
       '--color-accent-fg': accentFg,
       '--color-focus-ring': cssOklch(ring),
       '--color-danger': cssOklch(DANGER[appearance]),
+      '--color-agent': cssOklch(AGENT[appearance].fg),
+      '--color-agent-surface': cssOklch(AGENT[appearance].bg),
+      '--color-agent-edge': cssOklch(AGENT[appearance].edge),
       /** Selected rows in lists like the command bar. */
       '--color-selection': cssOklch(accent, light ? 0.14 : 0.22),
       '--color-surface': cssOklch(surface),

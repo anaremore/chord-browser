@@ -62,6 +62,9 @@ export const size = {
   pinnedFade: 14,
   /** A mini window (DESIGN.md §7.9): its bar, and its size until you resize one. */
   miniBar: 36,
+  /** An outside agent's bar over its tab (S18), as core's AGENT_BAR_HEIGHT: main lowers the page by it. And its tab's dot in the sidebar. */
+  agentBar: 36,
+  agentDot: 6,
   miniWidth: 900,
   miniHeight: 640,
   /** Chord Player's bar (DESIGN.md §7.14): the service, Back to Chord, the window's controls. */

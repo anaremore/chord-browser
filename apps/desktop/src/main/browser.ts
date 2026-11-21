@@ -106,7 +106,7 @@ import { spellcheckLanguages } from './spellcheck';
 import { platform, setUiScale, systemInfo } from './platform';
 import { SettingsWindow } from './settings-window';
 import { Store, type Change } from './store';
-import { TabManager } from './tabs';
+import { TabManager, type AgentHeld } from './tabs';
 import { pageOf } from './view-page';
 import { AppWindow, createUiView, hwndOf } from './window';
 
@@ -263,6 +263,12 @@ export class Browser {
   readonly idle: IdleKeeper;
   /** The assistant (set once main has it): the panel's toggle and window bookkeeping. */
   assistant: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
+  /** Ctrl+. / ⌘. (S18): stop every outside agent and every assistant reply. Set by main. */
+  stopAll: (() => void) | null = null;
+  /** An outside agent's tab's page was made (S18): main/agents wires it (the typing pause, leaving without asking). */
+  agentContents: ((contents: WebContents, nodeId: NodeId) => void) | null = null;
+  /** Something an agent's tab held or refused (a dialog, a file picker, a popup, a download), for the agent. */
+  agentHeld: ((nodeId: NodeId, what: AgentHeld, detail: string) => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -420,6 +426,9 @@ export class Browser {
       // The archive is Chord's only page shown as a tab so far.
       createInternalView: () => createUiView(options.uiSession, 'archive'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
+      // Outside agents' tabs (S18): no dialogs, no popups, and what they held goes to the agent (main/agents).
+      agentTab: (nodeId) => this.isAgentNode(nodeId),
+      onAgentRefused: (nodeId, what, detail) => this.agentHeld?.(nodeId, what, detail),
       // A private window's pages never reach history.
       onVisit: (url, title, nodeId) => {
         if (!this.isPrivateNode(nodeId)) options.history({ k: 'visit', url, title, at: Date.now() });
@@ -429,6 +438,7 @@ export class Browser {
       },
       onContentsCreated: (contents, nodeId) => {
         attachShortcuts(contents, this.keyboard);
+        if (this.isAgentNode(nodeId)) this.agentContents?.(contents, nodeId);
         options.passwordDetector.attachPage(contents);
         this.tabOfPage.set(contents, nodeId);
         this.passwordAssist.attachPage(contents);
@@ -815,6 +825,11 @@ export class Browser {
     this.store.subscribe((change) => {
       this.broadcast(change);
       this.runEffects(change.effects);
+      // An agent's bar (S18): the tab on screen that has one shows its page below it.
+      if (change.patches.some((p) => p.path[0] === 'windows' || (p.path[0] === 'live' && (p.path.length === 2 || p.path[2] === 'agent')))) {
+        this.syncAgentBars(change.state);
+        if (change.patches.some((p) => p.path[0] === 'live' && p.path[2] === 'agent')) this.syncParking();
+      }
       this.syncPopovers();
       // A playing tab moved, closed or changed chords: the cards that may show it change.
       if (change.patches.some((p) => p.path[0] === 'nodes' || p.path[0] === 'chords' || p.path[0] === 'windows')) this.syncMedia();
@@ -894,6 +909,28 @@ export class Browser {
     const windowId = uuidv7();
     this.store.dispatch({ t: 'window.create', windowId, ...(from ? { from } : {}), ...(isPrivate ? { privateChordId: uuidv7() } : {}) });
     return windowId;
+  }
+
+  /** Each window's page sits below the agent's bar while the tab on screen (alone, not a split) has one (S18). */
+  private syncAgentBars(state: State): void {
+    for (const w of this.windows.values()) {
+      const shown = shownTabs(state, w.id);
+      w.setAgentBar(shown.length === 1 && Boolean(state.live[shown[0]!]?.agent));
+    }
+  }
+
+  /** A download an outside agent's tab started (S18): refused, and the agent told. False for any other page. */
+  agentDownload(contents: WebContents, filename: string): boolean {
+    const nodeId = this.tabOfPage.get(contents);
+    if (!nodeId || !this.isAgentNode(nodeId)) return false;
+    this.agentHeld?.(nodeId, 'download', filename);
+    return true;
+  }
+
+  /** An outside agent's tab (S18). */
+  private isAgentNode(nodeId: NodeId): boolean {
+    const node = nodeOf(this.store.state, nodeId);
+    return node ? isAgentChord(this.store.state, node.chordId) : false;
   }
 
   /** A private window's tab, or an agent's (S18): neither's visits or history are kept. */
@@ -1359,6 +1396,16 @@ export class Browser {
       const reading = Boolean(this.readers.viewFor(nodeId));
       if (shownIn && !reading && shownIn !== holder) continue;
       const home = holder ?? (reading ? shownIn : undefined) ?? by.map((id) => this.windowShowing(id)).find((id) => id && this.windows.has(id)) ?? this.windowShowing(nodeId);
+      if (home) wanted.set(home, [...(wanted.get(home) ?? []), view]);
+    }
+    // An outside agent's tab while the agent works on it (S18): parked the same way, so its pictures and reads see a
+    // painted page, and only then (parked, a page isn't throttled). In the window used last, if no window has it.
+    for (const [nodeId, live] of Object.entries(state.live)) {
+      if (live.agent?.state !== 'working') continue;
+      const view = this.tabs.get(nodeId);
+      if (!view || !pageOf(view) || Object.values(state.windows).some((m) => shownTabs(state, m.id).includes(nodeId))) continue;
+      const last = this.lastBrowserWindow();
+      const home = windows.find((w) => w.holds(view))?.id ?? (last && !last.isPrivate ? last.id : undefined);
       if (home) wanted.set(home, [...(wanted.get(home) ?? []), view]);
     }
     for (const w of windows) w.park(wanted.get(w.id) ?? []);
@@ -2772,11 +2819,16 @@ export class Browser {
         return true;
       case 'chord.delete': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;
-        if (chordId && Object.keys(this.store.state.chords).length > 1) this.deleteChord(w, chordId);
+        // Your chords only: an agent's (S18) never counts toward the one that must stay.
+        if (chordId && sortedChords(this.store.state).length > 1) this.deleteChord(w, chordId);
         return true;
       }
       case 'assistant.toggle':
         void this.assistant?.act(w.id, { do: 'toggle' });
+        return true;
+      case 'agents.stopAll':
+        // Every outside agent (S18) and every assistant reply, at once.
+        this.stopAll?.();
         return true;
       case 'chord.separateSignIns': {
         const chordId = this.store.state.windows[w.id]?.activeChordId;

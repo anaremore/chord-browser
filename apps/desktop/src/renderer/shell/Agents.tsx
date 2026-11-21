@@ -1,0 +1,80 @@
+/**
+ * Outside agents in the shell (S18 M1c; mocks/agents-s18-m1.html §2): each
+ * agent's tabs in a section of its own below your chord's, and the bar over
+ * an agent's tab while it works there or is held. The section is never in a
+ * private window. What the buttons do happens in main (main/agents).
+ */
+import { agentChords, nodeList, type AgentLive, type State, type TabNode } from '@chord/core';
+import type { Appearance } from '@chord/tokens';
+import { Favicon } from '../shared/Favicon';
+import { api } from './api';
+import styles from './Agents.module.css';
+
+/** Each agent's tabs, oldest first, below your chord's (none in a private window). */
+export function AgentSections({ state, windowId, appearance }: { state: State; windowId: string; appearance: Appearance }) {
+  const win = state.windows[windowId];
+  const chords = agentChords(state);
+  if (!win || win.private || chords.length === 0) return null;
+  const tabs = nodeList(state).filter((n): n is TabNode => n.kind === 'tab');
+  return (
+    <div className={styles.sections}>
+      {chords.map((chord) => {
+        const own = tabs.filter((n) => n.chordId === chord.id).sort((a, b) => a.createdAt - b.createdAt);
+        return (
+          <section key={chord.id} className={styles.section} aria-label={`${chord.name}’s tabs`}>
+            <h2 className={styles.header}>
+              <span aria-hidden>✳</span> {chord.name}
+            </h2>
+            <ul className={styles.list}>
+              {own.map((tab) => {
+                const live = state.live[tab.id];
+                const working = live?.agent?.state === 'working';
+                const shown = win.agentTab === tab.id;
+                return (
+                  <li key={tab.id}>
+                    <button
+                      type="button"
+                      className={styles.row}
+                      data-shown={shown || undefined}
+                      aria-current={shown ? 'page' : undefined}
+                      title={tab.url}
+                      onClick={() => void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
+                    >
+                      <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
+                      <span className={styles.title}>{tab.title || tab.url}</span>
+                      {working && <span className={styles.dot} role="img" aria-label={`${chord.name} is using this tab`} />}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The bar over an agent's tab: blue while the agent reads it, with Stop; the paused bar's grey while you use the
+ * tab, or once you've stopped the agent, with "Let … continue". Main keeps the page below it (AGENT_BAR_HEIGHT).
+ */
+export function AgentBar({ agent }: { agent: AgentLive }) {
+  const working = agent.state === 'working';
+  const text = working ? `${agent.name} is reading this tab` : agent.state === 'paused' ? 'Paused while you use this tab' : `${agent.name} is stopped`;
+  return (
+    <div className={styles.bar} data-working={working || undefined} role="status">
+      {working && <span aria-hidden>✳</span>}
+      <span className={styles.barText}>{text}</span>
+      {working ? (
+        <button type="button" className={styles.stop} onClick={() => void api.state.dispatch({ t: 'agents.stop', chordId: agent.chordId })}>
+          Stop
+        </button>
+      ) : (
+        <button type="button" className={styles.resume} onClick={() => void api.state.dispatch({ t: 'agents.continue', chordId: agent.chordId })}>
+          Let {agent.name} continue
+        </button>
+      )}
+    </div>
+  );
+}

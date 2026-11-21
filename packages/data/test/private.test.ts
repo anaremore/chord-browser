@@ -70,3 +70,16 @@ describe('private windows and persistence', () => {
     expect(ops.some((op) => op.k === 'node' && op.value && 'url' in op.value && op.value.url === 'https://kept.test/')).toBe(true);
   });
 });
+
+describe('outside agents’ chords and persistence (S18)', () => {
+  it('never writes an agent’s chord or its tabs, from patches or a whole state', () => {
+    const { state, ops } = drive(seeded, [
+      { t: 'agent.chord.add', chordId: 'ag', name: 'Claude Code', profileId: 'default' },
+      { t: 'agent.tab.add', chordId: 'ag', nodeId: 'a1', url: 'https://agent.test/' },
+      { t: 'tab.updated', nodeId: 'a1', title: 'Agent page' },
+    ]);
+    expect(ops.filter((op) => op.value !== null && (op.k === 'chord' || op.k === 'node'))).toEqual([]);
+    const whole = opsForState(state);
+    expect(whole.some((op) => op.id === 'ag' || op.id === 'a1')).toBe(false);
+  });
+});

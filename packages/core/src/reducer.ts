@@ -1353,8 +1353,11 @@ function removeAgentTabs(draft: Draft<State>, nodeIds: readonly NodeId[], effect
   }
 }
 
+/** The agent's tabs, as the draft's own (so they can change). */
 const agentTabsOf = (draft: Draft<State>, chordId: ChordId): Draft<TabNode>[] =>
-  nodesOfChord(draft as State, chordId).filter((n): n is TabNode => n.kind === 'tab') as Draft<TabNode>[];
+  nodesOfChord(draft as State, chordId)
+    .filter((n) => n.kind === 'tab')
+    .map((n) => nodeOf(draft, n.id) as Draft<TabNode>);
 
 function runAgent(draft: Draft<State>, cmd: AgentCommand, ctx: Context, effects: Effect[]): void {
   switch (cmd.t) {

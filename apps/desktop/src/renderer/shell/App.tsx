@@ -29,6 +29,7 @@ import { markRender } from '../shared/perf';
 import { displayHost, pageTitle } from '../shared/site';
 import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
+import { AgentBar, AgentSections } from './Agents';
 import styles from './App.module.css';
 import { ArchiveButton, ArchiveFlights } from './ArchiveArc';
 import { ChordHeader, ChordPane, ChordSwitcher, GhostPane, newChordLook, Tint } from './Chords';
@@ -512,7 +513,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
   // (they come on different pipes), so it's found as the chord that wasn't there before, not the active one.
   const [naming, setNaming] = useState<ReadonlySet<string> | null>(null);
   useEffect(() => {
-    const created = naming && Object.keys(state.chords).find((id) => !naming.has(id));
+    // An agent's chord (S18) arriving meanwhile isn't one you made.
+    const created = naming && Object.keys(state.chords).find((id) => !naming.has(id) && !state.chords[id]?.agent);
     if (!created) return;
     setNaming(null);
     setChordEdit({ chordId: created, field: 'name' });
@@ -736,6 +738,9 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
                 })}
               </div>
 
+              {/* Outside agents' tabs (S18), each agent's below your chord's: never in a private window. */}
+              <AgentSections state={state} windowId={windowId} appearance={appearance} />
+
               {/* Collapsed, toasts show in the bar, a peek included: the sidebar would show them twice. */}
               {!collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys mac={info.platform === 'darwin'} />}
 
@@ -848,8 +853,12 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
             data-devtools={docked || undefined}
             // A page is sharing the tab on screen: the frame's edge is tinted (a split's pane, or the page beside its DevTools, says it itself).
             data-shared={(!split && !docked && live?.shared) || undefined}
+            // An outside agent is reading the tab on screen (S18): the frame's edge is its blue.
+            data-agent={(!split && live?.agent?.state === 'working') || undefined}
             data-region="page"
           >
+            {/* The agent's bar (S18): main keeps the page below it while it shows. */}
+            {!split && live?.agent && <AgentBar agent={live.agent} />}
             {!state.settings.onboarded && chord && !isPrivate ? (
               <Onboarding chord={chord} chords={sortedChords(state)} windowId={windowId} info={info} spring={spring} />
             ) : (

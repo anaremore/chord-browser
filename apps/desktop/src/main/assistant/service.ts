@@ -1589,6 +1589,17 @@ export class AssistantService {
     await writeFile(join(this.root, 'panel.json'), JSON.stringify({ drafts: this.drafts, firstUseSeen: this.firstUseSeen, wsl }), { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
   }
 
+  /** Ctrl+. / ⌘. (S18): every reply under way stops, as its panel's Stop would. */
+  stopAll(): void {
+    for (const state of this.threads.values()) {
+      if (!state.streaming) continue;
+      state.queue = [];
+      state.control.stop();
+      if (state.thread) this.live.get(state.thread.id)?.session.stop();
+    }
+    this.schedulePush();
+  }
+
   /** Quitting: replies in flight are kept as interrupted, and every provider process ends. */
   async quit(): Promise<void> {
     for (const state of this.threads.values()) {

@@ -9,10 +9,11 @@
  * the connection card (CHORD_AGENT_APPROVE), and packaged builds never get here.
  */
 import { execFile } from 'node:child_process';
-import type { AgentHello, Grant } from '@chord/core';
+import type { AgentHello, Command, Grant, ProfileId } from '@chord/core';
 import type { CardPresenter } from '../control/gate';
 import type { ControlBrowser } from '../control/tools';
 import { startEndpoint, type Endpoint } from './endpoint';
+import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ProcessInfo } from './parent';
 
@@ -48,6 +49,12 @@ export interface AgentServiceDeps {
   /** How long a call waits on a card (CONTROL_WAIT_MS unless a test says). */
   waitMs?: number;
   log?(...args: unknown[]): void;
+  /** For the agents' chords (M1c), made with the first connection; absent, agents open no tabs. */
+  chords?: AgentChordsDeps;
+  dispatch?(command: Command): void;
+  neverSites?(): readonly string[];
+  /** The sign-ins of the window where the user let an agent in. */
+  allowedProfile?(): ProfileId | null;
 }
 
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
@@ -62,6 +69,8 @@ export class AgentService {
   private endpoint: Endpoint | null = null;
   private starting: Promise<void> | null = null;
   readonly connections = new Set<HeldConnection>();
+  /** The agents' chords: made with the first connection, so with no agent there are none and nothing runs for them. */
+  chords: AgentChords | null = null;
   /** The DACL helper's run, once per endpoint (Windows). */
   restricted: Promise<number> | null = null;
 
@@ -86,12 +95,17 @@ export class AgentService {
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
           let gone = false;
-          void import('./connection').then(({ agentConnection }) => {
+          void Promise.all([import('./connection'), this.deps.chords && !this.chords ? import('./chords') : null]).then(([{ agentConnection }, chordsModule]) => {
+            if (chordsModule && this.deps.chords && !this.chords) this.chords = new chordsModule.AgentChords(this.deps.chords);
             if (gone) return;
             const connection = agentConnection(hello, send, {
               browser: this.deps.browser,
               waitMs: this.deps.waitMs,
               log: this.deps.log,
+              ...(this.chords ? { chords: this.chords } : {}),
+              ...(this.deps.dispatch ? { dispatch: this.deps.dispatch } : {}),
+              ...(this.deps.neverSites ? { neverSites: this.deps.neverSites } : {}),
+              ...(this.deps.allowedProfile ? { allowedProfile: this.deps.allowedProfile } : {}),
               present: (card, signal) => {
                 // Who started it, looked up while the card shows (about 1 s on Windows), never inside a call.
                 if (held && !held.parent) held.parent = import('./parent').then(({ ancestry }) => ancestry(hello.parentPid)).catch(() => []);
@@ -123,9 +137,16 @@ export class AgentService {
     return this.starting;
   }
 
-  /** Agents off, or quitting: every connection ends, and the pipe and the file go. */
-  async stop(): Promise<void> {
+  /**
+   * Agents off, or quitting: every connection ends, and the pipe and the file go. Off, each agent's chord asks
+   * whether to keep its tabs; quitting, nothing asks (the chords, in memory only, go with Chord).
+   */
+  async stop(quitting = false): Promise<void> {
     await this.starting?.catch(() => undefined);
+    if (quitting) {
+      this.chords?.dispose();
+      this.chords = null;
+    }
     this.endpoint?.close();
     this.endpoint = null;
     this.restricted = null;

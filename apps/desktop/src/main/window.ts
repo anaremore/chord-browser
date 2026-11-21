@@ -11,7 +11,7 @@
  * At launch, popover, preview and overlay load once the shell has painted (`deferViews`).
  */
 import { join } from 'node:path';
-import { DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
+import { AGENT_BAR_HEIGHT, DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
@@ -232,6 +232,8 @@ export class AppWindow {
   private paneLayout: PaneLayout | null = null;
   /** Each pane's docked developer tools, in pane order; null where its tab has none open here. */
   private devtools: (DockedDevtools | null)[] = [];
+  /** The tab on screen is an agent's with its bar (S18): the page sits below it. */
+  private agentBar = false;
   private devtoolsSettings: Pick<DevtoolsSettings, 'side' | 'width' | 'height'> = DEFAULT_DEVTOOLS;
   /** The edge between a page and its developer tools is being dragged: their size until it's let go. */
   private devtoolsDrag: number | null = null;
@@ -764,9 +766,22 @@ export class AppWindow {
     return { x, y, width: Math.max(0, width - x - size.frameInset), height: Math.max(0, height - y - size.frameInset) };
   }
 
-  /** Each pane's rect in the frame: a split's, or the frame for one tab. The shell draws them with the same math. */
+  /**
+   * Each pane's rect in the frame: a split's, or the frame for one tab. The shell draws them with the same math. An
+   * agent's tab with its bar (S18) gives the bar the top of the frame.
+   */
   private paneRectsIn(frame: Rect): Rect[] {
-    return this.paneLayout && this.panes.length > 1 ? paneRects(frame, this.paneLayout.direction, this.paneLayout.sizes) : [frame];
+    if (this.paneLayout && this.panes.length > 1) return paneRects(frame, this.paneLayout.direction, this.paneLayout.sizes);
+    if (this.agentBar) return [{ x: frame.x, y: frame.y + AGENT_BAR_HEIGHT, width: frame.width, height: Math.max(0, frame.height - AGENT_BAR_HEIGHT) }];
+    return [frame];
+  }
+
+  /** The tab on screen is an agent's with its bar showing (S18): the page moves down under it, or back. */
+  setAgentBar(on: boolean): void {
+    if (this.agentBar === on || this.window.isDestroyed()) return;
+    this.agentBar = on;
+    this.snapshots.finish();
+    this.layout();
   }
 
   /** Peek's card floats over the focused pane's page. */
