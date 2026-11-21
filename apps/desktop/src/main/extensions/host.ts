@@ -61,7 +61,8 @@ const badgeColor = (color: string | number[] | undefined): string | null => {
 /** How long to wait for a worker to start listening before giving up on telling it something. */
 const WORKER_WAIT_MS = 15_000;
 
-function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+/** `promise`, or undefined once `ms` pass first. */
+export function within<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
   return Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms).unref?.())]);
 }
 

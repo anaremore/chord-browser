@@ -1,7 +1,9 @@
 /**
  * Chrome Web Store packages (ARCHITECTURE.md §12): CRX3 verification the way
  * Chromium's crx_verifier.cc does it, and a ZIP reader that can't write
- * outside its folder. Pure Node, so it's unit-tested without Electron.
+ * outside its folder. Pure Node, so it's unit-tested without Electron. Both
+ * are synchronous and run only in the installer's worker (unpack-worker.ts),
+ * never on main.
  */
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
