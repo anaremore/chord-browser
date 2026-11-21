@@ -147,8 +147,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('assistant.toggle', 'Show or hide the assistant', 'page-first', ['Mod+E']),
   // Reserved: a page can never keep it from you. It names agents only once a release has them.
   s('agents.stopAll', AGENTS_RELEASED ? 'Stop every agent and assistant reply' : 'Stop the assistant’s reply', 'reserved', ['Mod+.']),
-  // Page-first, as Effects' ⌘⇧E is (S18 M1e): sites that use the key (github.dev deletes a line) keep it.
-  s('agents.share', 'Share this tab with an agent, or stop sharing it', 'page-first', ['Mod+Shift+K']),
+  // No key (owner, 2026-11-21: ⌘⇧K / Ctrl+Shift+K is the password generator's "make another"): the tab menu and the
+  // command bar share a tab (S18 M1e).
+  s('agents.share', 'Share this tab with an agent, or stop sharing it', 'page-first', []),
   // Window and view
   s('window.new', 'New window', 'reserved', ['Mod+N']),
   s('window.newPrivate', 'New private window', 'reserved', ['Mod+Shift+N']),

@@ -133,6 +133,8 @@ function blockedNow(call: Call, nodeId: NodeId, page: ControlPage | null, unread
   const addresses = [...(page ? [page.url()] : []), ...urls];
   const sites = call.scope.neverSites();
   if (addresses.some((url) => READABLE_ADDRESS.test(url) && isNeverReadable(url, sites))) return NEVER;
+  // A tab shared on one site is never read on another (an outside agent's scope).
+  if (call.scope.siteOk && addresses.some((url) => READABLE_ADDRESS.test(url) && !call.scope.siteOk!(now, url))) return unreadable(call.scope, now);
   return addresses.every((url) => READABLE_ADDRESS.test(url)) ? null : unread;
 }
 
@@ -248,7 +250,7 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
   if (!pdf || pdf.url !== url || start === 0) {
     try {
       // The address the tab shows now, and where the download ends up, must both be readable.
-      const readable = (address: string) => !isNeverReadable(address, call.scope.neverSites());
+      const readable = (address: string) => !isNeverReadable(address, call.scope.neverSites()) && (call.scope.siteOk?.(node, address) ?? true);
       if (!readable(url)) throw new PdfError('never');
       const bytes = await page.fetchPdf(url, readable);
       const { pages, totalPages } = await extractPdf(bytes, ASSISTANT_PDF_MAX_PAGES);
@@ -300,6 +302,7 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
     if (!page || page.gone()) return 'That tab could not be read.';
     // Where the page is, which can be ahead of the tab's saved address.
     if (isNeverReadable(page.url(), scope.neverSites())) return NEVER;
+    if (scope.siteOk && !scope.siteOk(now, page.url())) return unreadable(scope, now);
     if (at !== undefined && page.url() !== at) return 'The page went to another address while Chord was reading it. Ask the user to ask again once it has loaded.';
     return null;
   };

@@ -36,7 +36,6 @@ import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
 import type { ConnectCards } from './agents/connect';
-import { shareable } from './agents/shares';
 import { pageOf } from './view-page';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
@@ -1114,24 +1113,14 @@ if (!app.requestSingleInstanceLock()) {
         agentBrowser.agentCardFor = (windowId) => cards.cardFor(windowId);
         agentBrowser.agentWindowClosed = (windowId) => cards.windowClosed(windowId);
         agentBrowser.agentWindowFocused = (windowId) => cards.windowFocused(windowId);
-        // Sharing a tab (M1e): the key, the command bar and the tab menu. Never in a private window.
-        const neverSites = () => agentBrowser.store.state.settings.assistant.neverSites;
+        // Sharing a tab (M1e): the tab menu and the command bar, which offer it only when it can be done. Never in a
+        // private window.
         agentBrowser.agentShare = (windowId, nodeId, agentId) => {
-          const service = agents?.service;
           const w = agentBrowser.window(windowId);
-          if (!service || !w || w.isPrivate) return;
-          void service.toggleShare(nodeId, agentId).then((result) => {
-            if (result === 'none') w.toast({ id: 'agents-none', message: 'No agent is connected.' });
-          });
+          if (w && !w.isPrivate) void agents?.service?.toggleShare(nodeId, agentId);
         };
-        agentBrowser.agentShareMenu = (nodeId) => {
-          const service = agents?.service;
-          if (!service) return null;
-          const now = service.shares?.sharedWith(nodeId);
-          if (now) return { sharedWith: now.name };
-          const list = service.sharingWith();
-          return list.length > 0 && shareable(agentBrowser.store.state, nodeId, neverSites()) ? { agents: list } : null;
-        };
+        agentBrowser.agentShareMenu = (nodeId) => agents?.service?.shareMenu(nodeId) ?? null;
+        agentBrowser.agentSharing = () => agents?.service?.sharing ?? false;
         return new AgentService({
           userData: app.getPath('userData'),
           browser: agentBrowser,

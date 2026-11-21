@@ -187,6 +187,29 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect((await c.call('list_tabs')).error).toBe(false);
   });
 
+  it('the store hears how many agents are let in (the command bar offers sharing only then); a denied one doesn’t count', async () => {
+    const ud = profile();
+    const counts: number[] = [];
+    const ask: Ask = async (who) => ({ grant: who.name === 'Codex' ? 'once' : 'deny', profileId: null });
+    const service = new AgentService({ userData: ud, browser, ask, helper: null, waitMs: 2000, dispatch: (c) => void (c.t === 'agents.letIn' && counts.push(c.count)) });
+    await service.start();
+    cleanup.push(() => service.stop());
+    const codex = client(ud);
+    await codex.initialize({ protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex-mcp-client', title: 'Codex', version: '1' } });
+    expect((await codex.call('list_tabs')).error).toBe(false);
+    expect(counts.at(-1)).toBe(1);
+    const other = client(ud);
+    await other.initialize();
+    expect((await other.call('list_tabs')).error).toBe(true);
+    expect(counts.at(-1)).toBe(1);
+    expect(service.sharingWith().map((a) => a.name)).toEqual(['Codex']);
+    // No store for tabs here: the menu offers nothing, and nothing is shared.
+    expect(service.shareMenu('any-tab')).toBeNull();
+    expect(service.sharing).toBe(false);
+    codex.close();
+    await expect.poll(() => counts.at(-1)).toBe(0);
+  });
+
   it('Remove in Settings hangs up on that agent, let in for good by that program, and leaves an Allow once one alone', async () => {
     const ud = profile();
     // Claude Code is always allowed, kept by its program; Codex was let in once.

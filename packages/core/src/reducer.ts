@@ -176,6 +176,8 @@ export type Command =
   | { t: 'presenting.set'; on: boolean; by: Presenting }
   /** The Chord windows a page is sharing now, as a window or on a shared screen (their edge is tinted). */
   | { t: 'sharing.windows'; windowIds: WindowId[] }
+  /** Main's (S18 M1e): how many outside agents are let in now. */
+  | { t: 'agents.letIn'; count: number }
   | { t: 'chord.theme'; chordId: ChordId; theme: Partial<ChordThemeSpec> }
   /** A new chord after the others, switched to in this window. */
   | { t: 'chord.create'; windowId: WindowId; name: string; icon: string; theme: ChordThemeSpec }
@@ -2225,6 +2227,12 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       } else if (draft.presenting === 'share') {
         draft.presenting = null;
       }
+      return;
+    }
+
+    case 'agents.letIn': {
+      const count = Math.max(0, Math.floor(cmd.count));
+      if (draft.agentsLetIn !== count) draft.agentsLetIn = count;
       return;
     }
 

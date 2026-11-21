@@ -129,3 +129,29 @@ describe('A shared tab in the agent’s scope', () => {
     expect(scope.refs.refFor(t.mine)).toBe('a2');
   });
 });
+
+describe('Share polish (#89’s review)', () => {
+  it('a shared tab is read only on the site it was shared on; the agent’s own tabs anywhere readable', () => {
+    const t = setup();
+    const sharedSite = (id: string) => t.shares.siteOf(id);
+    const scope = agentScope(new ControlAgent('agent:1', async () => 'once'), { state: () => t.store.state, chordId: () => 'agent-chord', neverSites: () => [], shared: () => t.shares.tabsOf('agent:1'), sharedSite });
+    t.shares.share(t.mine, CODEX);
+    // Listed, as the agent sees it: s1.
+    expect(scope.refs.refFor(t.mine)).toBe('s1');
+    const node = nodeOf(t.store.state, t.mine) as Parameters<typeof scope.readable>[0];
+    // [address the page or the read is at, may be read]
+    const table: [string, boolean][] = [
+      ['https://docs.example.com/a', true],
+      ['https://www.example.com/other', true],
+      ['https://elsewhere.test/', false],
+      ['https://example.com.evil.test/', false],
+      ['http://127.0.0.1/', false],
+    ];
+    for (const [url, ok] of table) expect(scope.siteOk!(node, url), url).toBe(ok);
+    expect(scope.whyNot?.(node)).toBe(NOT_SHARED);
+    // Its own tab (in its chord): any site.
+    const own = { ...node, chordId: 'agent-chord' };
+    expect(scope.siteOk!(own, 'https://elsewhere.test/')).toBe(true);
+    expect(t.shares.count).toBe(1);
+  });
+});

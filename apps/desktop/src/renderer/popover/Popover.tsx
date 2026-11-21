@@ -508,6 +508,9 @@ export function AuthCard({ prompt }: { prompt: AuthPrompt }) {
   );
 }
 
+/** How long after the popover shows its connect card the card is announced (the view must be on screen first). */
+const ANNOUNCE_DELAY_MS = 150;
+
 /** What an outside agent may do, as the connect card lists it (mocks/agents-s18-m1.html §1). */
 const AGENT_MAY = ['Open and read pages in its own Agent chord', 'Read a tab of yours only when you share it', 'Never see your passwords'];
 
@@ -1196,6 +1199,17 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
 
   const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
 
+  // The connect card never takes the keyboard, so it's announced. A live region only speaks a change it saw: the text
+  // comes a moment after the view (hidden with no cards) shows, never with it.
+  const card = menuOnly ? null : state.agentCard;
+  const [announced, setAnnounced] = useState('');
+  useEffect(() => {
+    setAnnounced('');
+    if (!card) return;
+    const timer = setTimeout(() => setAnnounced(`${card.name} wants to use Chord`), ANNOUNCE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [card?.id, card?.name]);
+
   useRootColorScheme(appearance);
   if (menuOnly)
     return (
@@ -1205,9 +1219,9 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
     );
   return (
     <div ref={root} className={styles.root} style={style}>
-      {/* The connect card never takes the keyboard, so it's announced instead (politely: it waits for you). */}
+      {/* Politely: the card waits for you. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {state.agentCard ? `${state.agentCard.name} wants to use Chord` : ''}
+        {announced}
       </p>
       {state.find && <FindBar find={state.find} />}
       {state.agentCard && <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />}

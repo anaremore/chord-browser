@@ -10,6 +10,7 @@
 import { CONTROL_WAIT_MS, isNeverReadable, nodeOf, nodesOfChord, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
 import type { ControlScope } from '../control/scope';
+import { siteOfUrl } from './shares';
 
 export interface AgentScopeDeps {
   state(): State;
@@ -19,6 +20,8 @@ export interface AgentScopeDeps {
   neverSites(): readonly string[];
   /** The tabs the user shares with it now, in the order they were shared (M1e). */
   shared?(): readonly NodeId[];
+  /** The site a shared tab was shared on: it's never read anywhere else. */
+  sharedSite?(nodeId: NodeId): string | null;
 }
 
 /** A web address on the *Never* list (a blank or unloaded page is none). */
@@ -66,7 +69,9 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     },
     defaultTab: () => null,
     readable: (node) => mine(node) && !isNeverReadable(node.url, deps.neverSites()),
-    whyNot: (node) => (!mine(node) && everShared.has(node.id) ? NOT_SHARED : null),
+    // Its own tabs anywhere `readable` allows; a shared one only on the site it was shared on.
+    siteOk: (node, url) => own(node) || (deps.sharedSite?.(node.id) ?? null) === siteOfUrl(url),
+    whyNot: (node) => (!own(node) && everShared.has(node.id) ? NOT_SHARED : null),
     neverSites: () => deps.neverSites(),
     needsCard: () => null,
     mayInspect: (node) => (mine(node) ? null : everShared.has(node.id) ? NOT_SHARED : NOT_YOURS),
