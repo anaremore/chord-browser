@@ -39,9 +39,9 @@ export function unpackInWorker(workerPath: string, job: UnpackJob, timeoutMs = U
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      void worker.terminate();
-      if (reply.ok) resolve(reply.files);
-      else reject(new Error(reply.error));
+      // Settled only once the thread is gone, so main never removes a folder the worker is still writing.
+      const ended = worker.terminate().catch(() => undefined);
+      void ended.then(() => (reply.ok ? resolve(reply.files) : reject(new Error(reply.error))));
     };
     const timer = setTimeout(() => finish({ ok: false, error: 'Unpacking the extension took too long.' }), timeoutMs);
     worker.once('message', (reply: UnpackReply) => finish(reply));

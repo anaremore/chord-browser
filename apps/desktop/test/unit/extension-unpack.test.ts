@@ -7,13 +7,13 @@
  */
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { build } from 'rolldown';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { idFromKey, type ExtractLimits } from '../../src/main/extensions/crx';
 import { unpackInWorker, WORKER_STOPPED } from '../../src/main/extensions/unpack';
 import { unpack } from '../../src/main/extensions/unpack-worker';
 import { crx3, extensionIdOf, keyPair, sha256Hex, spki, zip } from '../fixtures/crx';
+import { buildUnpackWorker } from '../fixtures/extension-worker';
 
 const developer = keyPair('rsa');
 const ecDeveloper = keyPair('ec');
@@ -29,15 +29,7 @@ let workerPath: string;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'chord-ext-unpack-'));
-  workerPath = join(dir, 'extension-unpack.mjs');
-  // The worker as the app ships it: one bundled file (electron.vite.config.ts builds the same entry).
-  await build({
-    input: resolve(import.meta.dirname, '../../src/main/extensions/unpack-worker.ts'),
-    platform: 'node',
-    write: true,
-    logLevel: 'silent',
-    output: { file: workerPath, format: 'esm' },
-  });
+  workerPath = await buildUnpackWorker(dir);
 }, 60_000);
 
 afterAll(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
@@ -51,6 +43,8 @@ interface Case {
   expectedId?: string;
   version?: string;
   limits?: ExtractLimits;
+  /** The hash the store announced: the package's own unless a case says otherwise. */
+  sha256?: (crx: Buffer) => string | undefined;
   /** The error, or null when it's accepted. */
   error: RegExp | null;
 }
@@ -79,6 +73,9 @@ const cases: Case[] = [
     },
     error: /signature/i,
   },
+  { name: 'a download that doesn’t match the hash the store announced', crx: () => crx3(archive, developer, [developer, publisher]), sha256: () => sha256Hex('something else'), error: /doesn’t match what the Chrome Web Store described/ },
+  { name: 'the announced hash in capitals (as the store sends it)', crx: () => crx3(archive, developer, [developer, publisher]), sha256: (crx) => sha256Hex(crx).toUpperCase(), error: null },
+  { name: 'no announced hash (the signatures still hold)', crx: () => crx3(archive, developer, [developer, publisher]), sha256: () => undefined, error: null },
   { name: 'the wrong ID', crx: () => crx3(archive, developer, [developer, publisher]), expectedId: 'a'.repeat(32), error: /not a{32}/ },
   { name: 'no publisher signature', crx: () => crx3(archive, developer, [developer]), error: /Chrome Web Store/ },
   { name: 'no developer signature', crx: () => crx3(archive, developer, [stranger, publisher]), error: /developer/ },
@@ -102,9 +99,11 @@ const cases: Case[] = [
 ];
 
 describe('unpacking a Web Store package in the worker', () => {
-  it.each(cases)('$name', async ({ crx, expectedId = id, version = '1.0', limits, error }) => {
+  it.each(cases)('$name', async ({ crx: make, expectedId = id, version = '1.0', limits, sha256 = (c) => sha256Hex(c), error }) => {
     const folder = dest();
-    const run = unpackInWorker(workerPath, { crx: crx(), id: expectedId, version, dest: folder, publisherKeyHash, ...(limits ? { limits } : {}) });
+    const crx = make();
+    const announced = sha256(crx);
+    const run = unpackInWorker(workerPath, { crx, id: expectedId, version, dest: folder, publisherKeyHash, ...(announced ? { sha256: announced } : {}), ...(limits ? { limits } : {}) });
     if (error) {
       await expect(run).rejects.toThrow(error);
       // Nothing is left behind: not the folder, and nothing beside it.
@@ -203,11 +202,13 @@ function largePackage(version: string): Buffer {
  */
 describe('main-thread budget', () => {
   it('installing a large package blocks main ≤ 50 ms', async () => {
-    const onMain = await mainBlocking(() => unpack({ crx: largePackage('3.1.4'), id, version: '3.1.4', dest: dest(), publisherKeyHash }));
+    const first = largePackage('3.1.4');
+    const onMain = await mainBlocking(() => unpack({ crx: first, sha256: sha256Hex(first), id, version: '3.1.4', dest: dest(), publisherKeyHash }));
     expect(onMain.result).toEqual({ ok: true, files: 401 });
     const crx = largePackage('3.1.5');
     const size = crx.length;
-    const inWorker = await mainBlocking(() => unpackInWorker(workerPath, { crx, id, version: '3.1.5', dest: dest(), publisherKeyHash }));
+    const sha256 = sha256Hex(crx);
+    const inWorker = await mainBlocking(() => unpackInWorker(workerPath, { crx, sha256, id, version: '3.1.5', dest: dest(), publisherKeyHash }));
     expect(inWorker.result).toBe(401);
     const ms = (n: number) => `${n.toFixed(1)} ms`;
     console.log(

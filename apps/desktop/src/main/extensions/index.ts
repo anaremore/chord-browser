@@ -105,6 +105,14 @@ export class Extensions {
   private readonly barSent = new Map<WindowId, string>();
   private readonly iconCache = new Map<string, string | null>();
   private readonly installing = new Map<string, Promise<InstallResult>>();
+  /**
+   * Updates in flight (by extensionKey). Reconcile leaves these alone, and an
+   * install of the same extension (removed, then added again) waits for it:
+   * both would unpack into the same version's folder.
+   */
+  private readonly updating = new Map<string, Promise<boolean>>();
+  /** The update check running now: a second caller (the timer, Settings) gets the same one. */
+  private updateCheck: Promise<number> | null = null;
   private readonly popupWindows = new Set<BrowserWindow>();
   /** Extensions loading again after Undo, and ones that wouldn't load (by extensionKey). */
   private readonly loading = new Set<string>();
@@ -506,7 +514,9 @@ export class Extensions {
     if (existing) return Promise.resolve({ ok: true, name: existing.name });
     const running = this.installing.get(key);
     if (running) return running;
-    const task = this.installFromStore(profileId, id)
+    const updating = this.updating.get(key);
+    const task = (updating ? updating.catch(() => false) : Promise.resolve())
+      .then(() => this.installFromStore(profileId, id))
       .then((record): InstallResult => ({ ok: true, name: record.name }))
       .catch((error: unknown): InstallResult => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
       .then((result) => {
@@ -526,7 +536,7 @@ export class Extensions {
     if (!info || info.status !== 'ok' || !info.version || !info.codebase) {
       throw new Error(info?.status === 'noupdate' || info?.status?.includes('unknown') ? 'The Chrome Web Store doesn’t have it.' : `The Chrome Web Store said “${info?.status ?? 'nothing'}”.`);
     }
-    const path = await this.unpackFromStore(profileId, id, info.version, await this.deps.webStore.download(info));
+    const path = await this.unpackFromStore(profileId, id, info.version, await this.deps.webStore.download(info), info.sha256);
     const host = this.host(profileId, true)!;
     let ext: Electron.Extension;
     try {
@@ -551,11 +561,18 @@ export class Extensions {
    * Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_0, keeping the store's ID.
    * All of it (signatures, inflating, writing, the manifest's key) happens in a worker thread, never on main.
    */
-  private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer): Promise<string> {
+  private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer, sha256: string | null): Promise<string> {
     await this.cleanup;
     const path = join(this.deps.root, profileId, id, `${version.replace(/[^\d.]/g, '')}_0`);
     try {
-      await unpackInWorker(this.deps.unpackWorkerPath, { crx, id, version, dest: path, ...(this.deps.publisherKeyHash ? { publisherKeyHash: this.deps.publisherKeyHash } : {}) });
+      await unpackInWorker(this.deps.unpackWorkerPath, {
+        crx,
+        id,
+        version,
+        dest: path,
+        ...(sha256 ? { sha256 } : {}),
+        ...(this.deps.publisherKeyHash ? { publisherKeyHash: this.deps.publisherKeyHash } : {}),
+      });
     } catch (error) {
       // The worker removes what it wrote; if it died partway, this does.
       await this.removeFolder(path);
@@ -591,8 +608,18 @@ export class Extensions {
     if (current && current.version === record.version) this.deps.dispatch({ t: 'extension.record', extension: { ...current, notifiedVersion: record.version } });
   }
 
-  /** Ask the Web Store about every store extension and update the ones that are behind. Resolves with how many were updated. */
-  async checkForUpdates(): Promise<number> {
+  /**
+   * Ask the Web Store about every store extension and update the ones that are behind. Resolves with how many were updated.
+   * One check at a time: a check asked for while one runs gets that one's result.
+   */
+  checkForUpdates(): Promise<number> {
+    this.updateCheck ??= this.runUpdateCheck().finally(() => {
+      this.updateCheck = null;
+    });
+    return this.updateCheck;
+  }
+
+  private async runUpdateCheck(): Promise<number> {
     const store = Object.values(this.deps.state().extensions).filter((e) => e.source === 'store');
     if (store.length === 0) return 0;
     let infos;
@@ -606,11 +633,18 @@ export class Extensions {
     for (const e of store) {
       const info = infos.find((i) => i.id === e.id);
       if (!info || info.status !== 'ok' || !info.version || !isNewerVersion(info.version, e.version)) continue;
+      const key = extensionKey(e.profileId, e.id);
+      // Removed (or changed) since the check began, or being installed again: skip it.
+      if (!this.stillCurrent(e) || this.installing.has(key)) continue;
+      const version = info.version;
+      const task = this.deps.webStore.download(info).then((crx) => this.updateFromStore(e, version, crx, info.sha256));
+      this.updating.set(key, task);
       try {
-        await this.updateFromStore(e, info.version, await this.deps.webStore.download(info));
-        updated++;
+        if (await task) updated++;
       } catch (error) {
         console.error(`Updating ${e.name} failed:`, error);
+      } finally {
+        this.updating.delete(key);
       }
     }
     if (updated > 0) {
@@ -620,8 +654,19 @@ export class Extensions {
     return updated;
   }
 
-  private async updateFromStore(e: InstalledExtension, version: string, crx: Buffer): Promise<void> {
-    const path = await this.unpackFromStore(e.profileId, e.id, version, crx);
+  /** Is `e` still the installed record, as it was when its update began? Removing it, or a newer version, changes that. */
+  private stillCurrent(e: InstalledExtension): boolean {
+    const now = this.deps.state().extensions[extensionKey(e.profileId, e.id)];
+    return now !== undefined && now.version === e.version && now.path === e.path;
+  }
+
+  /** Update one extension. False when it was removed partway, so there was nothing to update. */
+  private async updateFromStore(e: InstalledExtension, version: string, crx: Buffer, sha256: string | null): Promise<boolean> {
+    const path = await this.unpackFromStore(e.profileId, e.id, version, crx, sha256);
+    if (!this.stillCurrent(e)) {
+      await this.removeFolder(path);
+      return false;
+    }
     const host = this.host(e.profileId, true)!;
     host.unload(e.id);
     try {
@@ -629,13 +674,20 @@ export class Extensions {
     } catch (error) {
       // Back to the version that worked.
       await this.removeFolder(path);
-      await host.load(e.path).catch(() => undefined);
+      if (this.stillCurrent(e)) await host.load(e.path).catch(() => undefined);
       throw error;
+    }
+    if (!this.stillCurrent(e)) {
+      // Removed while the new version loaded: it doesn't stay loaded.
+      host.unload(e.id);
+      await this.removeFolder(path);
+      return false;
     }
     const record: InstalledExtension = { ...e, version, path, updatedAt: Date.now() };
     this.deps.dispatch({ t: 'extension.record', extension: record });
     if (e.path !== path) await this.removeFolder(e.path);
     await this.finishInstall(record);
+    return true;
   }
 
   /**
@@ -665,7 +717,7 @@ export class Extensions {
   reconcile(): void {
     for (const e of Object.values(this.deps.state().extensions)) {
       const key = extensionKey(e.profileId, e.id);
-      if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key)) continue;
+      if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key) || this.updating.has(key)) continue;
       const host = this.host(e.profileId, true)!;
       if (host.get(e.id)) continue;
       this.loading.add(key);

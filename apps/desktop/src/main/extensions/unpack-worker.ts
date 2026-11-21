@@ -1,13 +1,15 @@
 /**
  * Installing and updating Web Store extensions, off main (ARCHITECTURE.md
  * §12, performance rule 1): a worker thread verifies the CRX3 (signatures,
- * the developer's and the store's keys, the ID asked for), unpacks its ZIP
+ * the developer's and the store's keys, the ID asked for, the hash the store
+ * announced), unpacks its ZIP
  * within the size and file limits, checks the manifest's version and writes
  * the developer key into it. A large package (a password manager, an ad
  * blocker) takes seconds of RSA, inflate and file writes; none of it runs on
  * the thread that draws windows. Built as out/main/extension-unpack.js;
  * started for one package and ended after.
  */
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
@@ -16,6 +18,8 @@ import { extractZip, verifyCrx3, type ExtractLimits } from './crx';
 export interface UnpackJob {
   /** The downloaded package (its memory is handed to the worker, not copied). */
   crx: Uint8Array;
+  /** SHA-256 (hex) the Web Store's update service announced for the download, when it did. */
+  sha256?: string;
   /** The extension ID the package must be for. */
   id: string;
   /** The version the store said it is; the manifest must agree. */
@@ -35,6 +39,9 @@ export async function unpack(job: UnpackJob): Promise<UnpackReply> {
   const crx = Buffer.from(job.crx.buffer, job.crx.byteOffset, job.crx.byteLength);
   let created = false;
   try {
+    if (job.sha256 && createHash('sha256').update(crx).digest('hex') !== job.sha256.toLowerCase()) {
+      throw new Error('The download doesn’t match what the Chrome Web Store described');
+    }
     const { archive, publicKey } = verifyCrx3(crx, job.id, job.publisherKeyHash ? { publisherKeyHash: job.publisherKeyHash } : {});
     await rm(job.dest, { recursive: true, force: true });
     await mkdir(job.dest, { recursive: true });
