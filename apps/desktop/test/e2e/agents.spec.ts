@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
-import { audit, capturesDir, closeSettings, dispatch, expectClean, isPopover, isSettings, isShell, pageWhere, pressReal, runAction, settle, where } from './a11y-kit';
+import { audit, capturesDir, closeSettings, dispatch, expectClean, isOverlay, isPopover, isSettings, isShell, pageWhere, pressReal, runAction, settle, where } from './a11y-kit';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -362,22 +362,40 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
 test('you share a tab: the agent reads it and your selection, can’t close it, and once it leaves the site it’s refused', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  const app = await launch(profile, {});
   try {
     const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    // Agents on, as Settings → Agents turns it on.
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ agentsEnabled: true }));
+    await closeSettings(app);
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const { windowId } = await where(shell);
     await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/notes` });
     const page = await pageWhere(app, (url) => url.startsWith(`${site.origin}/notes`));
     await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
-    // The key from the page, as you'd press it; where menu accelerators can't fire from injected keys (macOS: no
-    // NSEvent; headless Weston: no active window) the same action, as the menu's accelerator runs it.
-    const keyWorks = process.platform !== 'darwin' && process.env['XDG_SESSION_TYPE'] !== 'wayland';
-    const shareKey = () => (keyWorks ? pressReal(app, `${site.origin}/notes`, 'K', ['control', 'shift']) : runAction(shell, 'agents.share'));
+    // The command bar's entries for sharing (there's no key): what it offers for "share", and choosing one.
+    const sharing = /^(Share this tab with an agent|Stop sharing this tab with the agent)/;
+    const offered = async (want: string[]): Promise<void> => {
+      await runAction(shell, 'tab.new');
+      await expect(overlay.getByRole('combobox')).toBeFocused();
+      await overlay.keyboard.type('shar');
+      // The web search row always shows: once it's there, the actions for the query are too.
+      await expect(overlay.getByRole('option', { name: /Search/ }).first()).toBeVisible();
+      await expect.poll(async () => (await overlay.getByRole('option').allTextContents()).filter((n) => sharing.test(n)).map((n) => n.match(sharing)![1])).toEqual(want);
+    };
+    const choose = async (name: string) => {
+      await runAction(shell, 'tab.new');
+      await expect(overlay.getByRole('combobox')).toBeFocused();
+      await overlay.keyboard.type('shar');
+      await overlay.getByRole('option', { name: new RegExp(`^${name}`) }).click();
+    };
 
-    // No agent yet: the key says so.
-    await shareKey();
-    await expect(shell.getByText('No agent is connected.')).toBeVisible();
+    // No agent let in yet: nothing offers sharing (no toast, no entry).
+    await offered([]);
+    await overlay.keyboard.press('Escape');
 
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
@@ -385,8 +403,11 @@ test('you share a tab: the agent reads it and your selection, can’t close it, 
     await answer(app, 'Codex', 'Allow once');
     expect(JSON.parse((await first).text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
 
-    // The key shares the tab on screen with the agent that called last: its bar, and the ✳ on its row.
-    await shareKey();
+    // Now the command bar offers it, and shares the tab on screen with the agent that called last: its bar, and the
+    // ✳ on its row.
+    await offered(['Share this tab with an agent']);
+    await overlay.keyboard.press('Escape');
+    await choose('Share this tab with an agent');
     const bar = shell.getByRole('status').filter({ hasText: 'Shared with Codex: it can read this tab' });
     await expect(bar).toBeVisible();
     await expect(shell.getByRole('img', { name: 'Shared with Codex' })).toBeVisible();
@@ -416,10 +437,14 @@ test('you share a tab: the agent reads it and your selection, can’t close it, 
     expect(await mcp.call('read_tab', { tab_id: 's1' })).toMatchObject({ isError: true, text: 'The user isn’t sharing that tab with you any more. Use list_tabs for the tabs you can use.' });
     expect(JSON.parse((await mcp.call('list_tabs')).text).data.tabs).toEqual([]);
 
-    // Shared again (the key toggles), then Stop sharing on the bar.
+    // Shared again; the command bar's Stop sharing, then sharing once more and the bar's Stop sharing.
     await page.evaluate((url) => (location.href = url), `${site.origin}/notes`);
     await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
-    await shareKey();
+    await choose('Share this tab with an agent');
+    await expect(bar).toBeVisible();
+    await choose('Stop sharing this tab with the agent');
+    await expect(bar).toHaveCount(0);
+    await choose('Share this tab with an agent');
     await expect(bar).toBeVisible();
     await bar.getByRole('button', { name: 'Stop sharing' }).click();
     await expect(bar).toHaveCount(0);

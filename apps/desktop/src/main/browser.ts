@@ -286,6 +286,8 @@ export class Browser {
   agentShare: ((windowId: WindowId, nodeId: NodeId, agentId?: string) => void) | null = null;
   /** The tab menu's item for a tab: whom it can be shared with, or whom it's shared with now; null for none. Set by main. */
   agentShareMenu: ((nodeId: NodeId) => AgentShareMenu | null) | null = null;
+  /** Whether any tab is shared with an agent now (its bar). Set by main. */
+  agentSharing: (() => boolean) | null = null;
   /** A normal window came to the front: a connect card waiting for one shows there (S18). */
   agentWindowFocused: ((windowId: WindowId) => void) | null = null;
 
@@ -955,8 +957,9 @@ export class Browser {
    * no agent's chord and no bar up, there's nothing to do.
    */
   private syncAgentBars(state: State): void {
-    // A tab you shared has a bar too (M1e), though its agent may have no chord.
-    if (!this.agentBars && agentChords(state).length === 0 && !this.agentShareMenu) return;
+    // A tab you shared has a bar too (M1e), though its agent may have no chord: with no bar up, no agent's chord and
+    // nothing shared, there's nothing to do.
+    if (!this.agentBars && agentChords(state).length === 0 && !this.agentSharing?.()) return;
     let any = false;
     for (const w of this.windows.values()) {
       const shown = shownTabs(state, w.id);
@@ -1818,7 +1821,8 @@ export class Browser {
     }
     const popover = this.popoverState(w);
     // Centered only while the connect card is all it shows: find and the page's prompts keep their corner.
-    const { agentCard, theme: _theme, interface: _interface, passwordMenu: _menu, ...others } = popover;
+    // The password menu counts as something else it shows (it hangs from its field, not the page's top).
+    const { agentCard, theme: _theme, interface: _interface, ...others } = popover;
     w.setPopoverCentered(Boolean(agentCard) && Object.values(others).every((v) => !v));
     const json = JSON.stringify(popover);
     if (this.popoverSent.get(w.id) === json) return;

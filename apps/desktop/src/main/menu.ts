@@ -322,10 +322,10 @@ export type AgentShareMenu = { sharedWith: string } | { agents: { id: string; na
 function agentShareItems(a: TabMenuActions): MenuItemConstructorOptions[] {
   const share = a.agentShare;
   if (!share) return [];
-  const accelerator = acceleratorFor('agents.share');
-  if ('sharedWith' in share) return [{ label: `Stop sharing with ${share.sharedWith}`, accelerator, click: () => a.shareWithAgent() }];
+  // No key (owner, 2026-11-21): the menu and the command bar only.
+  if ('sharedWith' in share) return [{ label: `Stop sharing with ${share.sharedWith}`, click: () => a.shareWithAgent() }];
   if (share.agents.length === 0) return [];
-  if (share.agents.length === 1) return [{ label: `Share with ${share.agents[0]!.name}`, accelerator, click: () => a.shareWithAgent(share.agents[0]!.id) }];
+  if (share.agents.length === 1) return [{ label: `Share with ${share.agents[0]!.name}`, click: () => a.shareWithAgent(share.agents[0]!.id) }];
   return [{ label: 'Share with', submenu: share.agents.map((agent) => ({ label: agent.name, click: () => a.shareWithAgent(agent.id) })) }];
 }
 

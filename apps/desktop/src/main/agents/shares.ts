@@ -37,7 +37,7 @@ interface Share extends SharedWith {
 }
 
 /** A web address's site (example.co.uk for www.example.co.uk); null for anything else. */
-function siteOfUrl(url: string): string | null {
+export function siteOfUrl(url: string): string | null {
   if (!/^https?:/i.test(url)) return null;
   const host = hostOf(url);
   return host ? siteOf(host) : null;
@@ -78,6 +78,16 @@ export class AgentShares {
 
   unshare(nodeId: NodeId): void {
     if (this.shares.has(nodeId)) this.end(nodeId);
+  }
+
+  /** How many tabs are shared now. */
+  get count(): number {
+    return this.shares.size;
+  }
+
+  /** The site a tab was shared on (nothing from another site is ever read from it); null if it isn't shared. */
+  siteOf(nodeId: NodeId): string | null {
+    return this.shares.get(nodeId)?.site ?? null;
   }
 
   /** Who the tab is shared with, if anyone. */

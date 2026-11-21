@@ -751,6 +751,11 @@ export interface State {
   presenting: Presenting | null;
   /** Chord windows a page is sharing, as a window or on a shared screen: their edge is tinted (not persisted). */
   sharedWindows: WindowId[];
+  /**
+   * Outside agents let in now (S18 M1e; not persisted): a tab can be shared only while there's one, so the tab menu
+   * and the command bar offer it only then. Always 0 in a build without Agents.
+   */
+  agentsLetIn: number;
 }
 
 export interface DeletedFolder {
@@ -795,6 +800,7 @@ export const emptyState = (): State => ({
   imports: {},
   presenting: null,
   sharedWindows: [],
+  agentsLetIn: 0,
 });
 
 export const IDLE_LIVE: LiveTab = { agent: null, loading: false, canGoBack: false, canGoForward: false, audible: false, crashed: false, error: null, pip: false, sharing: false, shared: false, threat: null, readable: false, reader: false, player: false, badge: null, effects: null, devtools: null };

@@ -1196,6 +1196,25 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
 
   const { style, appearance } = chordStyle(state.theme ? { theme: state.theme } : null, info, state.interface);
 
+  // The connect card never takes the keyboard, so it's announced. A live region only speaks a change it saw while on
+  // screen, and the view is hidden while it has no cards: the text comes once main has answered the card's size,
+  // which it shows the view with, never with the card itself.
+  const card = menuOnly ? null : state.agentCard;
+  const [announced, setAnnounced] = useState('');
+  useEffect(() => {
+    setAnnounced('');
+    const el = root.current;
+    if (!card || !el) return;
+    let current = true;
+    const { width, height } = el.getBoundingClientRect();
+    void api.popover.size(width, height).then(() => {
+      if (current) setAnnounced(`${card.name} wants to use Chord`);
+    });
+    return () => {
+      current = false;
+    };
+  }, [card?.id, card?.name]);
+
   useRootColorScheme(appearance);
   if (menuOnly)
     return (
@@ -1205,9 +1224,9 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
     );
   return (
     <div ref={root} className={styles.root} style={style}>
-      {/* The connect card never takes the keyboard, so it's announced instead (politely: it waits for you). */}
+      {/* Politely: the card waits for you. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {state.agentCard ? `${state.agentCard.name} wants to use Chord` : ''}
+        {announced}
       </p>
       {state.find && <FindBar find={state.find} />}
       {state.agentCard && <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />}

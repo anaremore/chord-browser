@@ -140,3 +140,4 @@ A call that needs an answer waits on the card: the first call of a connection wa
 ## M2: settled so far
 
 - **Who's calling (planner, 2026-11-21, from #81's review).** In M2 Chord finds the connecting process itself instead of trusting the hello's `parentPid`: `GetNamedPipeClientProcessId` on the pipe (through window-owner.exe, as `restrict-pipe` is), `SO_PEERCRED` on Linux's socket, `LOCAL_PEERPID` on macOS's. The parent chain, the card's *Started by* and *Always allow*'s program are then looked up from that PID. M1 keeps `hello.parentPid`, a hint like everything else on the card (§3).
+- **Your hands, not a script's (planner, 2026-11-21, from #89's review).** M1 counts a key, a click or a typed address in an agent's tab within 15 s (`USER_MS`) as yours: a tab you take to a *Never* site becomes yours instead of closing. Once M2 acts on pages, check that the input it sends (`sendInputEvent`) never counts as the user's there.

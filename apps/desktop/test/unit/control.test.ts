@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, type ControlBrowser } from '../../src/main/control/tools';
+import { NOT_SHARED } from '../../src/main/agents/scope';
+import { siteOfUrl } from '../../src/main/agents/shares';
 
 afterEach(() => vi.useRealTimers());
 
@@ -167,7 +169,19 @@ type Go = (id: NodeId, url: string, pageOnly?: boolean) => void;
 /** What a test does to a tab meanwhile: it goes somewhere, or closes. */
 type Meanwhile = { go: Go; close(id: NodeId): void };
 
-function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answer; cardWaitMs?: number; onCard?: (t: Meanwhile) => void; onEnsure?: (t: Meanwhile) => void; onCapture?: (t: Meanwhile) => void } = {}) {
+function setup(
+  opts: {
+    needsCard?: boolean;
+    answer?: Grant | 'hold';
+    read?: Answer;
+    cardWaitMs?: number;
+    onCard?: (t: Meanwhile) => void;
+    onEnsure?: (t: Meanwhile) => void;
+    onCapture?: (t: Meanwhile) => void;
+    /** A scope that reads only on this site, as an outside agent's does a shared tab (S18 M1e). */
+    sharedOn?: string;
+  } = {},
+) {
   let nodes = [tab('n1', 'https://news.test/a'), tab('n2', 'https://private.test/'), tab('n3', 'https://news.test/b')];
   let state = stateWith(nodes);
   const pages = new Map<NodeId, ReturnType<typeof fakePage>>(nodes.map((n) => [n.id, fakePage(n.url, opts.read ?? { text: `Text of ${n.id}` })]));
@@ -212,6 +226,7 @@ function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answ
     needsCard: (tool) => (opts.needsCard ? { kind: 'read', subject: tool } : null),
     mayInspect: (node) => (node.id === 'n1' ? null : 'Not that one.'),
     ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
+    ...(opts.sharedOn ? { siteOk: (_node: TabNode, url: string) => siteOfUrl(url) === opts.sharedOn, whyNot: () => NOT_SHARED } : {}),
     activity: async (_tool, summary) => void activity.push(summary),
   };
   const call = (name: string, args: Record<string, unknown> = {}) => runControlTool(scope, browser, name, args);
@@ -451,5 +466,41 @@ describe('Never read, through a redirect (security review)', () => {
     expect([...scope.memory.read]).toEqual([]);
     expect(scope.memory.form).toBeNull();
     expect(activity).toEqual([]);
+  });
+});
+
+describe('A shared tab is read only on its site (S18 M1e, review 1 of #96)', () => {
+  const ELSEWHERE = 'https://elsewhere.test/page';
+  const formAt = (url: string) => async () => ({ url, forms: [], controls: [], truncated: false });
+  const readAt = (url: string) => async () => ({ title: 'Elsewhere', url, contentType: 'text/html', text: 'secret', selection: 'secret' });
+  // [tool, how the tab left news.test, the setup that makes it so]
+  const table: [string, string, Parameters<typeof setup>[0]][] = [
+    ['read_tab', 'went elsewhere while the card was up', { needsCard: true, onCard: ({ go }) => go('n1', ELSEWHERE) }],
+    ['read_tab', 'was redirected as it loaded', { onEnsure: ({ go }) => go('n1', ELSEWHERE, true) }],
+    ['read_tab', 'committed elsewhere mid-read', { read: readAt(ELSEWHERE) }],
+    ['read_selection', 'committed elsewhere mid-read', { read: readAt(ELSEWHERE) }],
+    ['read_form', 'was redirected as it loaded', { onEnsure: ({ go }) => go('n1', ELSEWHERE, true) }],
+    ['read_form', 'committed elsewhere mid-read', { read: formAt(ELSEWHERE) }],
+    ['tab_screenshot', 'was redirected as it loaded', { onEnsure: ({ go }) => go('n1', ELSEWHERE, true) }],
+    ['tab_screenshot', 'went elsewhere while the picture was taken', { onCapture: ({ go }) => go('n1', ELSEWHERE, true) }],
+    ['page_diagnostics', 'went elsewhere while the card was up', { needsCard: true, onCard: ({ go }) => go('n1', ELSEWHERE, true) }],
+  ];
+  it.each(table)('%s on a tab shared on news.test that %s: refused as no longer shared, and nothing read is kept', async (tool, _how, opts) => {
+    const { scope, call, activity } = setup({ ...opts, sharedOn: 'news.test' });
+    const out = await call(tool, { tab_id: scope.refs.refFor('n1') });
+    expect(out.isError).toBe(true);
+    expect(out.image).toBeUndefined();
+    expect(refusal(out).refused).toBe(NOT_SHARED);
+    expect(out.text).not.toContain('secret');
+    expect([...scope.memory.read]).toEqual([]);
+    expect(scope.memory.form).toBeNull();
+    expect(activity).toEqual([]);
+  });
+
+  it('on its own site (another page of it) the read goes through', async () => {
+    const { scope, call } = setup({ sharedOn: 'news.test', read: readAt('https://www.news.test/other') });
+    const out = await call('read_tab', { tab_id: scope.refs.refFor('n1') });
+    expect(out.isError).toBeFalsy();
+    expect(out.text).toContain('secret');
   });
 });

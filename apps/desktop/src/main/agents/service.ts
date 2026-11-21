@@ -16,7 +16,8 @@ import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
-import type { AgentShares } from './shares';
+// The service loads with the first time Agents is on, never at launch: so does what decides a tab can be shared.
+import { shareable, type AgentShares } from './shares';
 import type { Socket } from 'node:net';
 
 export interface AgentServiceDeps {
@@ -51,6 +52,8 @@ export interface HeldConnection {
   always: boolean;
   /** The program its allowance is kept by (Always allow with a known program): Remove matches name and program. */
   allowedParent: string | null;
+  /** Let in (once or always): a tab can be shared with it. */
+  letIn: boolean;
 }
 
 /** Messages a connection may send while its code loads (an MCP client sends two or three). */
@@ -115,11 +118,13 @@ export class AgentService {
                 held.profileId = answer.profileId;
                 held.always = answer.grant === 'always';
                 held.allowedParent = answer.allowedParent ?? null;
+                held.letIn = answer.grant !== 'deny';
+                this.publishLetIn();
                 this.deps.changed?.();
                 return answer.grant;
               },
             });
-            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null };
+            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null, letIn: false };
             held = record;
             this.connections.add(record);
             // Settings → Agents lists the stopped ones: it hears when one stops or goes on.
@@ -149,6 +154,7 @@ export class AgentService {
               if (!held) return;
               held.connection.closed();
               this.connections.delete(held);
+              this.publishLetIn();
               this.deps.changed?.();
             },
           };
@@ -176,6 +182,7 @@ export class AgentService {
     this.restricted = null;
     for (const held of this.connections) held.connection.closed();
     this.connections.clear();
+    this.publishLetIn();
   }
 
   /** Stop for every agent (Ctrl+. / ⌘. in M1c): calls in flight answer now, later ones are refused. */
@@ -193,13 +200,37 @@ export class AgentService {
     }
   }
 
+  /** How many agents are let in, for the store (`agentsLetIn`): the command bar offers sharing only then. */
+  private publishLetIn(): void {
+    let count = 0;
+    for (const held of this.connections) if (held.letIn) count++;
+    this.deps.dispatch?.({ t: 'agents.letIn', count });
+  }
+
   /** The agents let in now (once or always), the one that called last first: those a tab can be shared with. */
   sharingWith(): { id: string; name: string }[] {
     return [...this.connections]
-      .filter((h) => h.connection.allowed)
+      .filter((h) => h.letIn)
       .reverse()
       .sort((a, b) => b.connection.lastCallAt - a.connection.lastCallAt)
       .map((h) => ({ id: h.connection.agent.id, name: h.connection.name }));
+  }
+
+  /**
+   * The tab menu's sharing item for a tab (M1e): whom it's shared with, or whom it can be shared with; null when no
+   * agent is let in or the tab can't be shared (the item isn't there).
+   */
+  shareMenu(nodeId: NodeId): { sharedWith: string } | { agents: { id: string; name: string }[] } | null {
+    const now = this.shares?.sharedWith(nodeId);
+    if (now) return { sharedWith: now.name };
+    const store = this.deps.chords?.store;
+    const agents = this.sharingWith();
+    return store && agents.length > 0 && shareable(store.state, nodeId, this.deps.neverSites?.() ?? []) ? { agents } : null;
+  }
+
+  /** Whether any tab is shared now: the window's bars need syncing only then (or with agents' chords). */
+  get sharing(): boolean {
+    return (this.shares?.count ?? 0) > 0;
   }
 
   /**

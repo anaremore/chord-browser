@@ -34,6 +34,7 @@ import {
   type ArchivedTab,
   type Chord,
   type SiteKeyword,
+  isNeverReadable,
   type State,
   type TabNode,
   type ImageSearchEngine,
@@ -120,13 +121,16 @@ const onWebsite = (state: State, windowId: string) => {
 };
 
 /**
- * The tab on screen shared with an outside agent (S18 M1e), or not. Offered only with Agents on, never in a
- * private window; with no agent let in, sharing says so in a toast.
+ * The tab on screen shared with an outside agent (S18 M1e), or one that could be. Share is offered only while an agent
+ * is let in (`agentsLetIn`, which only a build with Agents ever sets), on a web page of yours, never in a private
+ * window or on a site you keep private; Stop sharing on a shared tab.
  */
 const sharedWithAgent = (shared: boolean) => (state: State, windowId: string) => {
-  if (!state.settings.agentsEnabled || state.windows[windowId]?.private || !onWebsite(state, windowId)) return false;
-  const tab = activeTab(state, windowId);
-  return (state.live[tab!.id]?.agent?.state === 'shared') === shared;
+  if (!state.settings.agentsEnabled || state.agentsLetIn === 0 || state.windows[windowId]?.private || !onWebsite(state, windowId)) return false;
+  const tab = activeTab(state, windowId)!;
+  const now = state.live[tab.id]?.agent?.state === 'shared';
+  if (shared) return now;
+  return !now && !state.chords[tab.chordId]?.agent && !isNeverReadable(tab.url, state.settings.assistant.neverSites);
 };
 
 /** The site on screen has Effects, wet (`'wet'`) or dry (`'dry'`). */
