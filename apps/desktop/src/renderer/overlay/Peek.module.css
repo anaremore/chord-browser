@@ -1,9 +1,15 @@
-/* Peek (DESIGN.md §7.9): scrim, and a card with a 40 px header; main places the page below it. Tokens only. */
+/* Peek (DESIGN.md §7.9, §8.5): scrim, and a card with a 40 px header; main places the page below it. Tokens only. */
 
 .scrim {
   position: absolute;
   inset: 0;
   background: var(--color-scrim);
+}
+
+/* The card and the band around it where its edges and corners take the pointer (Peek.tsx sets its box and cursor). */
+.frame {
+  position: absolute;
+  touch-action: none;
 }
 
 .card {
@@ -13,6 +19,11 @@
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: var(--shadow-modal);
+}
+
+/* Moving, it lifts a little: a stronger shadow, as a dragged row gets. */
+.card[data-lifted] {
+  box-shadow: var(--shadow-modal), var(--shadow-lift);
 }
 
 .header {
@@ -32,6 +43,14 @@
   color: var(--color-fg-subtle);
 }
 
+/* The site's name and title click as they did; only the header's empty part moves the card. */
+.siteIcon,
+.host,
+.title,
+.action {
+  cursor: default;
+}
+
 .host {
   flex: none;
   color: var(--color-fg);
@@ -45,8 +64,11 @@
   white-space: nowrap;
 }
 
+/* The header's empty part, where the card is dragged from: a long title never squeezes it out. */
 .flex {
   flex: 1;
+  align-self: stretch;
+  min-inline-size: var(--space-12);
 }
 
 .action {

@@ -217,6 +217,32 @@ function table(): string {
 
 /* ---------- Launching ---------- */
 
+/** A page that repaints a full-size canvas every frame: moving gradients and a few hundred shapes, a stand-in for video. */
+const PLAYING = `<title>Playing</title><style>html,body{margin:0;height:100%;overflow:hidden;background:#000}canvas{display:block;width:100vw;height:100vh}</style>
+<canvas></canvas><script>
+const canvas = document.querySelector('canvas');
+const g = canvas.getContext('2d');
+const fit = () => { canvas.width = innerWidth * devicePixelRatio; canvas.height = innerHeight * devicePixelRatio; };
+addEventListener('resize', fit);
+fit();
+const draw = (t) => {
+  const w = canvas.width, h = canvas.height;
+  const fill = g.createLinearGradient(0, 0, w, h);
+  fill.addColorStop(0, 'hsl(' + (t / 20) % 360 + ' 60% 40%)');
+  fill.addColorStop(1, 'hsl(' + (t / 20 + 120) % 360 + ' 60% 30%)');
+  g.fillStyle = fill;
+  g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 300; i++) {
+    g.fillStyle = 'hsla(' + (i * 7 + t / 10) % 360 + ' 70% 60% / 0.5)';
+    g.beginPath();
+    g.arc((Math.sin(t / 900 + i) * 0.5 + 0.5) * w, (Math.cos(t / 700 + i * 1.3) * 0.5 + 0.5) * h, 20 + (i % 40), 0, 2 * Math.PI);
+    g.fill();
+  }
+  requestAnimationFrame(draw);
+};
+requestAnimationFrame(draw);
+</script>`;
+
 /** Made-up pages for the seeded tabs (CHORD_PERF_TABS), so nothing needs the network. */
 function startSite(): Promise<{ server: Server; origin: string }> {
   const server = createServer((req, res) => {
@@ -224,6 +250,9 @@ function startSite(): Promise<{ server: Server; origin: string }> {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     // A sign-in page, for the passwords agent's cost when it wakes (S17 §8).
     if (req.url === '/signin') return void res.end('<title>Sign in</title><form><input name="email" type="email"><input name="password" type="password"><button>Sign in</button></form>');
+    // Peek over a page that draws every frame, as a playing video does (the *peek:* test).
+    if (req.url === '/peek-from') return void res.end('<title>Peek from</title><p><a id="playing" href="/playing">Playing</a></p>');
+    if (req.url === '/playing') return void res.end(PLAYING);
     res.end(n ? `<title>Page ${n}</title><h1>Page ${n}</h1><p>${'Words on a page. '.repeat(40)}</p>` : '<title>Home</title><p>Home</p>');
   });
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` })));
@@ -614,6 +643,204 @@ test('passwords: the sentinel on a page without a sign-in field, and the agent w
       checks: [],
       detail: { memoryMb: round(med(signIn, 'memoryMb')), overPlainOffMb: round(med(signIn, 'memoryMb') - med(plain.off, 'memoryMb')), loadMs: round(med(signIn, 'loadMs')) },
     });
+  } finally {
+    await app.close();
+  }
+});
+
+/* ---------- Peek ---------- */
+
+/** Starts counting a page's frames (requestAnimationFrame); the function returned stops and gives the gaps between them. */
+async function countFrames(page: Page): Promise<() => Promise<number[]>> {
+  await page.evaluate(() => {
+    const probe = { times: [] as number[], on: true };
+    (window as unknown as { __chordPeekFrames?: typeof probe }).__chordPeekFrames = probe;
+    const step = (t: number) => {
+      probe.times.push(t);
+      if (probe.on) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+  return async () => {
+    const times = await page.evaluate(() => {
+      const probe = (window as unknown as { __chordPeekFrames: { times: number[]; on: boolean } }).__chordPeekFrames;
+      probe.on = false;
+      return probe.times;
+    });
+    return times.slice(1).map((t, i) => t - times[i]!);
+  };
+}
+
+/**
+ * Moving and resizing Peek (DESIGN.md §8.5) over a page that draws every frame, as a playing video does. The card
+ * follows the pointer in the overlay once a frame, and main moves only Peek's page under it, from the latest box
+ * (`peek:move`): never the tab underneath, never more than once a frame. Measured with Peek still (before) and while a
+ * hand drags it around and resizes it (after), the pointer sending moves faster than frames come.
+ */
+test('peek: moving and resizing Peek over a page that draws every frame', async () => {
+  test.setTimeout(180_000);
+  cpuBusy = await measureCpuBusy();
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/peek-from` });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    const from = await pageWhere(app, (u) => u === `${site.origin}/peek-from`);
+    await bringToFront(app, shell);
+    await setMotion(app, shell, overlay, true);
+    environment ??= await readEnvironment(app, shell);
+
+    // Open link in Peek, from the page's menu.
+    type Hooks = { chordTestHooks: { contextMenu(id: number): string[] | null; chooseContextMenuItem(id: number, label: string): void } };
+    const fromId = await app.evaluate(({ webContents }, u) => webContents.getAllWebContents().find((c) => c.getURL() === u)!.id, `${site.origin}/peek-from`);
+    await from.locator('#playing').click({ button: 'right' });
+    await expect.poll(() => app.evaluate((_electron, i) => (globalThis as unknown as Hooks).chordTestHooks.contextMenu(i), fromId)).toContain('Open link in Peek');
+    await app.evaluate((_electron, i) => (globalThis as unknown as Hooks).chordTestHooks.chooseContextMenuItem(i, 'Open link in Peek'), fromId);
+    const card = overlay.getByRole('dialog', { name: /^Peek/ });
+    await expect(card).toBeVisible();
+    const playing = await pageWhere(app, (u) => u === `${site.origin}/playing`);
+    await bringToFront(app, shell);
+
+    // Each view's moves in main (`setBounds`): Peek's page, once it's in its card, and the tab underneath.
+    const urls = { peek: `${site.origin}/playing`, tab: `${site.origin}/peek-from` };
+    await expect
+      .poll(() =>
+        app.evaluate(({ BaseWindow }, u) => {
+          type Watched = { setBounds(b: unknown): void; webContents?: { getURL(): string }; chordMoves?: number };
+          const views = BaseWindow.getAllWindows()[0]!.contentView.children as unknown as Watched[];
+          const peek = views.find((v) => v.webContents?.getURL() === u.peek);
+          const tab = views.find((v) => v.webContents?.getURL() === u.tab);
+          if (!peek || !tab) return false;
+          for (const view of [peek, tab]) {
+            const setBounds = view.setBounds.bind(view);
+            view.chordMoves = 0;
+            view.setBounds = (b) => {
+              view.chordMoves = (view.chordMoves ?? 0) + 1;
+              setBounds(b);
+            };
+          }
+          (globalThis as { chordPeekWatch?: Record<string, Watched> }).chordPeekWatch = { peek, tab };
+          return true;
+        }, urls),
+      )
+      .toBe(true);
+    const takeMoves = () =>
+      app.evaluate(() => {
+        const w = (globalThis as unknown as { chordPeekWatch: Record<'peek' | 'tab', { chordMoves: number }> }).chordPeekWatch;
+        const moves = { peek: w.peek.chordMoves, tab: w.tab.chordMoves };
+        w.peek.chordMoves = 0;
+        w.tab.chordMoves = 0;
+        return moves;
+      });
+    const pids = await app.evaluate(
+      ({ webContents }, u) => {
+        const all = webContents.getAllWebContents();
+        return { overlay: all.find((c) => /overlay/.test(c.getURL()))!.getOSProcessId(), page: all.find((c) => c.getURL() === u)!.getOSProcessId() };
+      },
+      urls.peek,
+    );
+    const cdp = await shell.context().newCDPSession(shell);
+
+    /** While `act` runs: the overlay's and Peek's page's frames (gaps, and the overlay's work from a trace), main's longest task, the views' moves. */
+    const measure = async (act: () => Promise<void>) => {
+      const locked = screenLocked();
+      await takeMoves();
+      const stops = await Promise.all([countFrames(overlay), countFrames(playing)]);
+      const events = await trace(cdp, act);
+      const [overlayGaps, pageGaps] = await Promise.all(stops.map((stop) => stop()));
+      const frames = framesOf(events, pids.overlay);
+      const main = browserPid(events);
+      return {
+        locked,
+        overlayGaps: overlayGaps!,
+        pageGaps: pageGaps!,
+        overlayTask: longestTask(events, pids.overlay).ms,
+        overlayWork: frames.map((f) => f.work),
+        worst: frames.reduce<Frame | null>((w, f) => (!w || f.work > w.work ? f : w), null),
+        mainTask: main === undefined ? NaN : longestTask(events, main, 'CrBrowserMain').ms,
+        moves: await takeMoves(),
+      };
+    };
+
+    // Before: Peek open and still, its page drawing every frame.
+    const still = await measure(() => overlay.waitForTimeout(2000));
+
+    // After: a hand drags it around by its header for 2 s, then resizes it from a corner for 1 s.
+    const header = (await overlay.locator('[title="Drag to move"]').boundingBox())!;
+    const grab = { x: header.x + header.width / 2, y: header.y + header.height / 2 };
+    let pointerMoves = 0;
+    const sweep = async (at: { x: number; y: number }, ms: number, path: (k: number) => { x: number; y: number }) => {
+      await overlay.mouse.move(at.x, at.y);
+      await overlay.mouse.down();
+      const start = Date.now();
+      for (let t = 0; t < ms; t = Date.now() - start) {
+        // Four moves at a time, a millisecond's travel apart: more pointer moves than frames, as a fast mouse sends.
+        await Promise.all(
+          [3, 2, 1, 0].map((back) => {
+            const p = path(Math.max(0, t - back) / ms);
+            pointerMoves++;
+            return overlay.mouse.move(at.x + p.x, at.y + p.y);
+          }),
+        );
+      }
+      await overlay.mouse.up();
+    };
+    const dragging = await measure(async () => {
+      // Two laps of an ellipse that keeps the card inside the window, then a corner pulled in and out.
+      await sweep(grab, 2000, (k) => ({ x: 60 * Math.sin(k * 4 * Math.PI), y: 30 * (1 - Math.cos(k * 4 * Math.PI)) }));
+      const b = (await card.boundingBox())!;
+      await sweep({ x: b.x + b.width + 2, y: b.y + b.height + 2 }, 1000, (k) => ({ x: -200 * Math.sin(k * Math.PI), y: -120 * Math.sin(k * Math.PI) }));
+    });
+    const overlayFrames = dragging.overlayWork.length;
+    const locked = dragging.locked;
+    const summary = (r: typeof still) => ({
+      overlayMedianGapMs: round(median(r.overlayGaps)),
+      overlayP95GapMs: round(percentile(r.overlayGaps, 0.95)),
+      overlayMaxGapMs: round(max(r.overlayGaps)),
+      overlayWorstFrameMs: round(max(r.overlayWork)),
+      overlayLongestTaskMs: round(r.overlayTask),
+      pageMedianGapMs: round(median(r.pageGaps)),
+      pageP95GapMs: round(percentile(r.pageGaps, 0.95)),
+      pageMaxGapMs: round(max(r.pageGaps)),
+      mainLongestTaskMs: round(r.mainTask),
+      moves: r.moves,
+      worstFrame: r.worst && {
+        script: round(r.worst.script),
+        styleLayout: round(r.worst.styleLayout),
+        paint: round(r.worst.paint),
+        calls: r.worst.calls.map((c) => `${c.name} ${round(c.ms)} ms`),
+      },
+    });
+    record({
+      group: 'frames',
+      name: 'Drag and resize Peek',
+      scenario: 'page drawing',
+      motion: 'on',
+      locked,
+      checks: [
+        check('task', dragging.overlayTask, BUDGET.frameMs, { locked }),
+        check('frame', max(dragging.overlayWork), BUDGET.frameMs, { display: true, locked }),
+        check('gap', max(dragging.overlayGaps), 20, { display: true, locked }),
+        // Peek's page goes on drawing every frame as its view moves.
+        check('page gap', max(dragging.pageGaps), 20, { display: true, locked }),
+        check('main task', dragging.mainTask, BUDGET.frameMs, { locked }),
+      ],
+      detail: { before: summary(still), after: summary(dragging), pointerMoves, overlayFrames },
+    });
+    record({
+      group: 'page view',
+      name: 'Drag and resize Peek: page view moves',
+      scenario: 'page drawing',
+      motion: 'on',
+      locked,
+      checks: [
+        // One move of Peek's page a frame at most, however many pointer moves came in it (and one as each gesture ends,
+        // its last box sent at once); the tab underneath never.
+        check('Peek', dragging.moves.peek, overlayFrames + 2, { locked, unit: 'moves' }),
+        check('tab', dragging.moves.tab, 0, { locked, unit: 'moves' }),
+      ],
+      detail: { peekMoves: dragging.moves.peek, tabMoves: dragging.moves.tab, pointerMoves, overlayFrames, stillMoves: still.moves },
+    });
+    expect(dragging.moves.peek, 'Peek’s page moved with the card').toBeGreaterThan(10);
   } finally {
     await app.close();
   }

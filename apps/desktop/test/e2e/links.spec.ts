@@ -335,6 +335,107 @@ test('a pinned tab’s link to another site opens in Peek: Esc or a click outsid
   }
 });
 
+/** A page's view in main, by its address: where it's placed in its window, in window pixels. */
+const viewBounds = (app: ElectronApplication, url: string) =>
+  app.evaluate(({ BaseWindow }, u) => {
+    for (const w of BaseWindow.getAllWindows()) {
+      const view = w.contentView.children.find((v) => 'webContents' in v && (v as Electron.WebContentsView).webContents.getURL() === u);
+      if (view) return view.getBounds();
+    }
+    return null;
+  }, url);
+
+test('Peek moves and resizes: dragged, resized, remembered for the next Peek, and back to the center', async () => {
+  const app = await launch({ CHORD_HOME_URL: `${site.origin}/pinned`, CHORD_E2E_HOOKS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const overlay = await pageWhere(app, isOverlay);
+    await runAction(shell, 'tab.pin');
+    await expect(shell.getByRole('tree', { name: 'Pinned', exact: true })).toContainText('Pinned');
+    const peek = overlay.getByRole('dialog', { name: /^Peek/ });
+    const box = async () => {
+      const b = (await peek.boundingBox())!;
+      return { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) };
+    };
+    type Box = Awaited<ReturnType<typeof box>>;
+    // Peek's page sits in the card below its 40 px header (the interface at 100%: CSS pixels are window pixels).
+    const pageIn = (card: Box) => ({ x: card.x, y: card.y + 40, width: card.width, height: card.height - 40 });
+    const expectPageIn = (card: Box) => expect.poll(() => viewBounds(app, `${site.other}/other`)).toEqual(pageIn(card));
+    const empty = overlay.locator('[title="Drag to move"]');
+    const centerOf = async (target: typeof empty) => {
+      const b = (await target.boundingBox())!;
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    };
+    const press = async (at: { x: number; y: number }, by: { x: number; y: number }, during?: () => Promise<void>) => {
+      await overlay.mouse.move(at.x, at.y);
+      await overlay.mouse.down();
+      await overlay.mouse.move(at.x + by.x / 2, at.y + by.y / 2, { steps: 6 });
+      await overlay.mouse.move(at.x + by.x, at.y + by.y, { steps: 6 });
+      await during?.();
+      await overlay.mouse.up();
+    };
+
+    await clickLink(app, `${site.origin}/pinned`, '#out');
+    await expect(peek).toBeVisible();
+    await pageWhere(app, (url) => url === `${site.other}/other`);
+    // Grown in from the click, at home: its page goes in once the card has landed.
+    await expect.poll(async () => (await viewBounds(app, `${site.other}/other`))?.width ?? 0).toBeGreaterThan(0);
+    const home = await box();
+    await expectPageIn(home);
+
+    // Resized from its bottom-right corner (just outside the card: the page covers the card itself).
+    await press({ x: home.x + home.width + 2, y: home.y + home.height + 2 }, { x: -300, y: -200 });
+    const resized = { ...home, width: home.width - 300, height: home.height - 200 };
+    expect(await box()).toEqual(resized);
+    await expectPageIn(resized);
+
+    // Dragged by the header's empty part: it lifts while it moves, and its page follows.
+    await press(await centerOf(empty), { x: 120, y: 60 }, () => expect(peek).toHaveAttribute('data-lifted'));
+    await expect(peek).not.toHaveAttribute('data-lifted');
+    const moved = { ...resized, x: resized.x + 120, y: resized.y + 60 };
+    expect(await box()).toEqual(moved);
+    await expectPageIn(moved);
+    // The site's name doesn't move it.
+    await press(await centerOf(peek.getByText('localhost', { exact: true })), { x: 80, y: 80 });
+    expect(await box()).toEqual(moved);
+
+    // Dragged far past the window's corner: it stops inside the page area.
+    await press(await centerOf(empty), { x: -3000, y: -3000 });
+    const cornered = await box();
+    expect(cornered).toMatchObject({ width: resized.width, height: resized.height });
+    expect(cornered.x).toBeGreaterThanOrEqual(0);
+    expect(cornered.y).toBeGreaterThanOrEqual(0);
+    expect(cornered.x).toBeLessThan(home.x);
+    expect(cornered.y).toBeLessThan(home.y);
+    await expectPageIn(cornered);
+
+    // Closed by ×, which still clicks: the next Peek opens where this one was left.
+    await peek.getByRole('button', { name: 'Close Peek' }).click();
+    await expect(peek).toBeHidden();
+    await clickLink(app, `${site.origin}/pinned`, '#out');
+    await expect(peek).toBeVisible();
+    await expect.poll(box).toEqual(cornered);
+    await expectPageIn(cornered);
+
+    // A double-click on the header's empty part: back home, at the default size.
+    const center = await centerOf(empty);
+    await overlay.mouse.dblclick(center.x, center.y);
+    await expect.poll(box).toEqual(home);
+    await expectPageIn(home);
+
+    // Esc, in Peek's page, closes it as before.
+    await app.evaluate(({ webContents }, u) => {
+      const c = webContents.getAllWebContents().find((w) => w.getURL() === u)!;
+      c.focus();
+      c.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+      c.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    }, `${site.other}/other`);
+    await expect(peek).toBeHidden();
+  } finally {
+    await app.close();
+  }
+});
+
 test('a link route sends a site’s links to its chord, from other apps and the command bar, and Chord offers one', async () => {
   const app = await launch({ CHORD_HOME_URL: `${site.origin}/a` });
   try {

@@ -26,6 +26,7 @@ export * from './password-forms';
 export * from './password-recipes';
 export * from './password-parser';
 export * from './password-import';
+export * from './peek';
 export * from './proxy';
 export * from './rank';
 export * from './reader';

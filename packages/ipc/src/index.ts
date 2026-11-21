@@ -525,8 +525,12 @@ export interface PeekState {
   url: string;
   host: string;
   title: string;
-  /** The card, in window coordinates; the page sits in it below the header. */
+  /** The card, in window coordinates; the page sits in it below the header. Where it was left in this window, or `home`. */
   card: Rect;
+  /** Where the card goes at its default size, centered over the focused pane: a double-click on the header puts it back. */
+  home: Rect;
+  /** The window's page area: the card stays wholly inside it as it's moved or resized (`clampPeekCard`). */
+  area: Rect;
   /** Where the card grows from: the click that opened it. */
   origin: { x: number; y: number } | null;
 }
@@ -1874,6 +1878,16 @@ export const invokeChannels = {
   'mini:copyLink': { roles: ['mini'], request: z.void(), response: z.void() },
   /** Peek's "Open in Today": the page becomes a tab, history and all. Closing goes through overlay:close. */
   'peek:expand': { roles: ['overlay'], request: z.void(), response: z.void() },
+  /**
+   * Peek's card moved or resized (a drag, or a frame of going back to the center): main places Peek's page in it and
+   * remembers it for the window's next Peek. Null: back home, the default box. At most one a frame, the latest.
+   * Answers with the card as placed (kept inside the page area), or null with no Peek open.
+   */
+  'peek:move': {
+    roles: ['overlay'],
+    request: z.strictObject({ card: z.strictObject({ x: z.number(), y: z.number(), width: z.number().min(0), height: z.number().min(0) }).nullable() }),
+    response: z.custom<Rect | null>(),
+  },
   // Screen sharing (ARCHITECTURE.md §9): the picker answers (a source's id, SYSTEM_SHARE_SOURCE, or null to refuse);
   // the sidebar's Stop ends a share, from the sharing tab's row or the shared tab's.
   'share:respond': {
@@ -1985,7 +1999,7 @@ export interface EventPayloads {
   'overlay:dismiss': { seq: number };
   /** The window is up (its shell painted): the command bar may warm itself for its first opening now. */
   'overlay:warm': null;
-  /** Peek's page moved on (title, address) or its card moved (the window resized). */
+  /** Peek's page moved on (title, address), or its card or page area changed (the window resized, the sidebar docked). */
   'peek:state': PeekState;
   'assistant:state': AssistantView;
   /** The frame changes size by its snapshot (ARCHITECTURE.md §5): pictures of the pages to show, move, then drop. */
@@ -2491,10 +2505,12 @@ export interface OverlayApi {
     image(engine: 'google' | 'bing', image: { bytes: Uint8Array<ArrayBuffer>; width: number; height: number; originalWidth: number; originalHeight: number }, where: 'current' | 'front' | 'background'): Promise<void>;
   };
   archive: { restore(archiveId: string): Promise<void> };
-  /** Peek's chrome: its page's title and address as they change, and "Open in Today". */
+  /** Peek's chrome: its page's title and address as they change, "Open in Today", and moving its card. */
   peek: {
     onState(listener: (state: PeekState) => void): () => void;
     expand(): Promise<void>;
+    /** The card's new box (null: back home); resolves with the card as main placed it, or null with no Peek open. */
+    move(card: Rect | null): Promise<Rect | null>;
   };
   /** @chats: assistant chats by their words, and opening one; and asking about a pasted image. */
   assistant: {
