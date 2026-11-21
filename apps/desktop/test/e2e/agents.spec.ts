@@ -128,7 +128,7 @@ test('Settings → Agents turns it on; the card asks, Deny refuses, Allow once l
     // It never takes the keyboard, so it's announced, politely.
     await expect(popover.locator('[role="status"][aria-live="polite"]').filter({ hasText: 'Codex wants to use Chord' })).toHaveCount(1);
     for (const line of ['Open and read pages in its own Agent chord', 'Read a tab of yours only when you share it', 'Never see your passwords']) await expect(card).toContainText(line);
-    expect(await app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? '')).not.toContain('popover');
+    await expect.poll(() => app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? '')).not.toContain('popover');
     mkdirSync(capturesDir, { recursive: true });
     await popover.waitForTimeout(600);
     await card.screenshot({ path: join(capturesDir, 'agents-connect-card.png') });
