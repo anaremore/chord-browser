@@ -194,7 +194,7 @@ describe('Always allow', () => {
       ['/Users/me/.claude/versions/v1.0.58-beta.1/claude', '/Users/me/.claude/versions/v1.0.60/claude', true],
       ['/home/me/.local/share/claude/versions/2.1.3/claude', '/home/me/.local/share/claude/versions/2.1.4/codex', false],
       ['/home/me/a/versions/2.1.3/claude', '/home/me/b/versions/2.1.3/claude', false],
-      ['C:\Tools\claude.exe', 'C:\Tools\claude.exe', true],
+      ['C:\\Tools\\claude.exe', 'C:\\Tools\\claude.exe', true],
     ];
     for (const [kept, next, same] of table) expect(unversioned(kept) === unversioned(next), `${kept} → ${next}`).toBe(same);
     const t = setup();

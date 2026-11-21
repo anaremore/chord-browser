@@ -60,7 +60,7 @@ export interface AntigravityUndo {
 /** `invalid`: not JSONC Chord can read, or not an object; `link`: a symbolic link; `unwritable`: couldn't be read or written; `changed`: Chord's entry isn't the one it wrote any more. */
 export type AntigravityProblem = 'invalid' | 'link' | 'unwritable' | 'changed';
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: '\n' } };
 
 type Json = Record<string, unknown>;
@@ -84,7 +84,7 @@ function load(file: string): { text: string | null; config: Json; mode: number |
       return 'unwritable';
     }
   }
-  const body = (text ?? '').replace(/^﻿/, '');
+  const body = (text ?? '').replace(/^\uFEFF/, '');
   if (body.trim() === '') return { text, config: {}, mode };
   const errors: ParseError[] = [];
   const config: unknown = parse(body, errors, { allowTrailingComma: true, disallowComments: false });
@@ -97,7 +97,7 @@ function load(file: string): { text: string | null; config: Json; mode: number |
 /** `chord`'s new value (undefined: none) set in the file's text, keeping everything else as it was. */
 function edited(text: string | null, value: unknown): string {
   const bom = text?.startsWith(BOM) ? BOM : '';
-  const body = (text ?? '').replace(/^﻿/, '');
+  const body = (text ?? '').replace(/^\uFEFF/, '');
   const base = body.trim() === '' ? '{}' : body;
   const next = applyEdits(base, modify(base, ['mcpServers', 'chord'], value, FORMAT));
   return bom + (next.endsWith('\n') || body.trim() !== '' ? next : `${next}\n`);
