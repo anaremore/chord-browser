@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, nodeOf, nodeList, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
+import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
@@ -13,6 +13,7 @@ import { trimNavState } from './nav';
 import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
+import { TabIconIndex } from './site-icons';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -97,8 +98,12 @@ export class TabManager {
    * page that never names its icon, or whose icon can't be fetched, keeps it.
    */
   private readonly siteIcons = new WeakMap<Session, Map<string, string>>();
+  /** Tabs with an icon, by site, kept up to date as tabs change: no pass over every tab to find one. */
+  private readonly tabIcons: TabIconIndex;
 
-  constructor(private readonly deps: TabManagerDeps) {}
+  constructor(private readonly deps: TabManagerDeps) {
+    this.tabIcons = new TabIconIndex(() => deps.state());
+  }
 
   /** Load in `contents` once its session's proxy is in place: at once when it is (no proxy, or set long ago). */
   private whenProxied(contents: WebContents, load: () => void): void {
@@ -120,13 +125,17 @@ export class TabManager {
     if (icons.size > SITE_ICONS) icons.delete(icons.keys().next().value!);
   }
 
+  /** Read every tab into the icon index now (after launch), rather than on the first navigation that needs it. */
+  warmIcons(): void {
+    this.tabIcons.warm();
+  }
+
   /** A site's icon if Chord has one: kept from earlier, or on another of this session's tabs there. */
   private knownIcon(session: Session, site: string): string | null {
     const kept = this.siteIcons.get(session)?.get(site);
     if (kept) return kept;
-    for (const node of nodeList(this.deps.state())) {
-      if (node.kind !== 'tab' || !node.favicon || (node.url !== site && !node.url.startsWith(`${site}/`))) continue;
-      if (this.deps.sessionFor(node) !== session) continue;
+    for (const node of this.tabIcons.tabsOn(site)) {
+      if (!node.favicon || this.deps.sessionFor(node) !== session) continue;
       this.rememberIcon(session, node.url, node.favicon);
       return node.favicon;
     }

@@ -10,7 +10,7 @@ import {
   isPrivateProfile,
   tabsInOrder,
   nodeOf,
-  nodeIds,
+  uuidv7,
   type Command,
   type InstalledExtension,
   type NodeId,
@@ -180,10 +180,9 @@ export class Extensions {
         const named = base ? this.windowForBase(base) : undefined;
         const w = (named && !named.isPrivate ? named : undefined) || this.deps.lastWindow();
         if (!w) throw new Error('No window to open a tab in');
-        const before = new Set(nodeIds(this.deps.state()));
-        this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: url ?? NEW_TAB_URL, background: !active });
-        const nodeId = nodeIds(this.deps.state()).find((id) => !before.has(id));
-        const contents = nodeId ? this.deps.ensureTab(nodeId) : undefined;
+        const nodeId = uuidv7();
+        this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: url ?? NEW_TAB_URL, background: !active, id: nodeId });
+        const contents = nodeOf(this.deps.state(), nodeId) ? this.deps.ensureTab(nodeId) : undefined;
         if (!contents) throw new Error('The tab could not be opened');
         if (contents.session !== this.host(profileId, false)?.session) throw new Error('The tab opened in another profile');
         return [contents, w.window];
