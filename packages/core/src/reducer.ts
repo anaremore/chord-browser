@@ -53,6 +53,7 @@ import {
   type TabNode,
   type WindowId,
   type WindowModel,
+  cleanAgentsAllowed,
 } from './model';
 import { routeFor, routeKey } from './links';
 import { emptyMergeUndo, type MergePart, type MergeUndo } from './merge';
@@ -2111,6 +2112,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       if (checkForUpdates !== undefined && draft.settings.checkForUpdates !== checkForUpdates) draft.settings.checkForUpdates = checkForUpdates;
       const { agentsEnabled } = cmd.settings;
       if (agentsEnabled !== undefined && draft.settings.agentsEnabled !== agentsEnabled) draft.settings.agentsEnabled = agentsEnabled;
+      if (cmd.settings.agentsAllowed) draft.settings.agentsAllowed = cleanAgentsAllowed(cmd.settings.agentsAllowed);
       const { autoPip, pagePreviews, keepScreenshots, uiScale } = cmd.settings;
       if (isUiScale(uiScale) && draft.settings.uiScale !== uiScale) draft.settings.uiScale = uiScale;
       if (autoPip !== undefined && draft.settings.autoPip !== autoPip) draft.settings.autoPip = autoPip;

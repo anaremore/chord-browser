@@ -1,8 +1,7 @@
 /**
  * Outside agents' transport (S18 M1b), every path of M0's self-test as units, on
  * every CI OS: the bridge (`chord mcp`'s relay, in-process on streams) against a
- * real endpoint and AgentService, with the development hook for the connection
- * card. Plus Claude Code's and Codex's recorded `initialize`, the token, zero cost
+ * real endpoint and AgentService, with the connect card answered by the test. Plus Claude Code's and Codex's recorded `initialize`, the token, zero cost
  * with Agents off, the Windows DACL (window-owner.exe's restrict-pipe) and, on
  * Linux, another user refused.
  */
@@ -18,7 +17,6 @@ import {
   DEFAULT_SETTINGS,
   agentToolList,
   agentToolsVersion,
-  agentsAvailable,
   agentsServe,
   isMcpArgv,
   type Grant,
@@ -28,9 +26,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runBridge } from '../../src/main/agents/bridge';
 import { connectEndpoint, endpointPath, lines, readEndpoint } from '../../src/main/agents/endpoint';
 import { privateFolder, relayFolder, relayUserData, userCache } from '../../src/main/agents/relay-folder';
-import { AgentService, devApproval, devPresenter } from '../../src/main/agents/service';
+import type { ConnectAnswer, ConnectingAgent } from '../../src/main/agents/connect';
+import { AgentService } from '../../src/main/agents/service';
 import { watchAgents } from '../../src/main/agents/switch';
-import type { CardPresenter } from '../../src/main/control/gate';
 import type { ControlBrowser } from '../../src/main/control/tools';
 import type { Change } from '../../src/main/store';
 
@@ -47,19 +45,31 @@ const profile = () => {
 
 const browser: ControlBrowser = { store: { state: { nodes: {} } as unknown as State }, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } };
 
+type Ask = (who: ConnectingAgent, signal: AbortSignal) => Promise<ConnectAnswer>;
+
+/** The connect card, answered as told (after `delayMs`), or no when it's taken down. */
+function answering(grant: Grant, delayMs = 0): Ask {
+  return (_who, signal) =>
+    new Promise<ConnectAnswer>((resolve) => {
+      signal.addEventListener('abort', () => resolve({ grant: 'deny', profileId: null }), { once: true });
+      if (delayMs) setTimeout(() => resolve({ grant, profileId: null }), delayMs).unref?.();
+      else resolve({ grant, profileId: null });
+    });
+}
+
 /** A held card the test answers itself, counting how many cards were shown. */
 function heldCards() {
   const answers: ((g: Grant) => void)[] = [];
-  const present: CardPresenter = (_card, signal) =>
-    new Promise<Grant>((resolve) => {
-      answers.push(resolve);
-      signal.addEventListener('abort', () => resolve('deny'), { once: true });
+  const present: Ask = (_who, signal) =>
+    new Promise<ConnectAnswer>((resolve) => {
+      answers.push((grant) => resolve({ grant, profileId: null }));
+      signal.addEventListener('abort', () => resolve({ grant: 'deny', profileId: null }), { once: true });
     });
   return { answers, present };
 }
 
-async function chord(userData: string, present: CardPresenter = devPresenter('once'), waitMs = 2000, helper: string | null = null) {
-  const service = new AgentService({ userData, browser, present, helper, waitMs });
+async function chord(userData: string, ask: Ask = answering('once'), waitMs = 2000, helper: string | null = null) {
+  const service = new AgentService({ userData, browser, ask, helper, waitMs });
   await service.start();
   cleanup.push(() => service.stop());
   return service;
@@ -168,7 +178,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
 
   it('a slow card inside the wait: the call just waits', async () => {
     const ud = profile();
-    await chord(ud, devPresenter(devApproval('delay:300')), 2000);
+    await chord(ud, answering('once', 300), 2000);
     const c = client(ud);
     await c.initialize();
     expect((await c.call('list_tabs')).error).toBe(false);
@@ -261,14 +271,14 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
   it.each(clients)('%s: answered in its own protocol version, with the tools and listChanged; its name reaches the card', async (name, params) => {
     const ud = profile();
     const shown: string[] = [];
-    await chord(ud, (card) => (shown.push(card.description), Promise.resolve('once')));
+    await chord(ud, (who) => (shown.push(who.name), Promise.resolve({ grant: 'once', profileId: null })));
     const c = client(ud);
     const init = (await c.initialize(params)).result;
     expect(init).toMatchObject({ protocolVersion: params['protocolVersion'], capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'chord', title: 'Chord' } });
     expect(String(init['instructions'])).toContain('untrusted');
     expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList());
     expect((await c.call('list_tabs')).error).toBe(false);
-    expect(shown).toEqual([`“${name}” wants to use Chord`]);
+    expect(shown).toEqual([name]);
     // Connected, tools/list is Chord's own.
     expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList());
   });
@@ -287,10 +297,11 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
 });
 
 describe('Zero cost, and off in packaged builds', () => {
-  it('packaged builds never serve, whatever the setting or CHORD_AGENTS says', () => {
+  it('the setting serves in every build; CHORD_AGENTS only in development ones', () => {
     // [packaged, setting, CHORD_AGENTS, serves]
     const table: [boolean, boolean, string | undefined, boolean][] = [
-      [true, true, '1', false],
+      [true, true, undefined, true],
+      [true, false, '1', false],
       [true, false, undefined, false],
       [false, false, undefined, false],
       [false, true, undefined, true],
@@ -298,7 +309,6 @@ describe('Zero cost, and off in packaged builds', () => {
       [false, false, '0', false],
     ];
     for (const [packaged, setting, dev, serves] of table) expect(agentsServe({ packaged }, setting, dev), JSON.stringify([packaged, setting, dev])).toBe(serves);
-    expect(agentsAvailable({ packaged: true })).toBe(false);
   });
 
   function store(on: boolean) {
@@ -320,16 +330,20 @@ describe('Zero cost, and off in packaged builds', () => {
     };
   }
 
-  it('packaged: nothing is even watched; off: nothing is made or written until the setting turns on, and off again removes it', async () => {
+  it('packaged: CHORD_AGENTS does nothing; off: nothing is made or written until the setting turns on, and off again removes it', async () => {
     const ud = profile();
     let made = 0;
     const make = async () => {
       made++;
-      return new AgentService({ userData: ud, browser, present: devPresenter('once'), helper: null });
+      return new AgentService({ userData: ud, browser, ask: answering('once'), helper: null });
     };
-    expect(watchAgents({ packaged: true, store: store(true), devSwitch: '1', make })).toBeNull();
+    const packaged = watchAgents({ packaged: true, store: store(false), devSwitch: '1', make });
+    cleanup.push(() => packaged.quit());
+    await packaged.settled();
+    expect(made).toBe(0);
+    expect(existsSync(join(ud, AGENT_ENDPOINT_FILE))).toBe(false);
     const s = store(false);
-    const agents = watchAgents({ packaged: false, store: s, devSwitch: undefined, make })!;
+    const agents = watchAgents({ packaged: false, store: s, devSwitch: undefined, make });
     cleanup.push(() => agents.quit());
     await agents.settled();
     expect(made).toBe(0);
@@ -400,7 +414,7 @@ describe('Who can reach the endpoint', () => {
     spawnSync(process.execPath, [resolve(import.meta.dirname, '../../scripts/build-window-owner.mjs')], { stdio: 'inherit' });
     expect(existsSync(helper)).toBe(true);
     const ud = profile();
-    const service = await chord(ud, devPresenter('once'), 2000, helper);
+    const service = await chord(ud, answering('once'), 2000, helper);
     const dacl = () => execFileSync(helper, ['pipe-dacl', service.serving!.path], { encoding: 'utf8' }).trim();
     expect(dacl()).toMatch(/\(A;;FR;;;WD\)/);
     // Any connection, even one that never says hello, starts it.
@@ -466,7 +480,7 @@ describe('No work while no agent connects (S18 M1c)', () => {
     const ud = profile();
     let subscribed = 0;
     const store = { state: { nodes: {}, chords: {}, windows: {}, live: {} } as unknown as State, dispatch: () => undefined, subscribe: () => (subscribed++, () => undefined) };
-    const service = new AgentService({ userData: ud, browser, present: devPresenter('once'), helper: null, waitMs: 2000, chords: { store, page: () => undefined, lastWindow: () => null } });
+    const service = new AgentService({ userData: ud, browser, ask: answering('once'), helper: null, waitMs: 2000, chords: { store, page: () => undefined, lastWindow: () => null } });
     await service.start();
     cleanup.push(() => service.stop());
     expect(service.chords).toBeNull();

@@ -34,6 +34,7 @@ import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
+import type { ConnectCards } from './agents/connect';
 import { pageOf } from './view-page';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
@@ -106,6 +107,8 @@ let persistence: Persistence | undefined;
 let assistant: AssistantService | undefined;
 /** Outside agents (S18): null in packaged builds, which have none yet. */
 let agents: AgentSwitch | null = null;
+/** The connect card (S18 M1d), made with the agents' service. */
+let connectCards: ConnectCards | null = null;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
@@ -510,6 +513,30 @@ function registerIpc(): void {
   handle('auth:respond', async ({ id, credentials, remember }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');
     if (windowId) await httpAuth.respond(id, credentials, remember, windowId);
+  });
+  // The connect card (S18 M1d): only the popover of the window it shows in answers it.
+  handle('agents:card', ({ id, answer }, sender) => {
+    const windowId = browser?.popoverWindow(sender, 'cards');
+    if (windowId) connectCards?.answer(id, answer, windowId);
+  });
+  // Settings → Agents (S18 M1d): its view, Remove an allowed agent, let a stopped one continue.
+  handle('settings:agents', async (request) => {
+    const { agentsView, setupLines } = await import('./agents/settings');
+    const state = browser!.store.state;
+    const service = agents?.service ?? null;
+    if (request.do === 'remove') {
+      browser!.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: state.settings.agentsAllowed.filter((a) => !(a.name === request.name && a.parent === request.parent)) } });
+      service?.disconnect(request.name);
+    } else if (request.do === 'continue') service?.continue(request.id);
+    const connected = [...(service?.connections ?? [])].map((held) => ({
+      id: held.connection.agent.id,
+      name: held.connection.name,
+      always: held.always,
+      stopped: held.connection.agent.isStopped,
+      chordId: service?.chords?.chordOf(held.connection.agent) ?? null,
+    }));
+    const setup = setupLines({ platform: process.platform, packaged: app.isPackaged, exe: app.getPath('exe'), appPath: app.getAppPath(), appImage: process.env['APPIMAGE'], flatpak: inFlatpak ? (process.env['FLATPAK_ID'] ?? null) : null });
+    return agentsView(browser!.store.state, connected, setup);
   });
   handle('auth:unlock', async ({ id }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');
@@ -1059,35 +1086,35 @@ if (!app.requestSingleInstanceLock()) {
       save: async (filename, bytes, mime) => void (await downloads.addFile(filename, bytes, mime, '', null)),
     });
     browser.assistant = assistant;
-    // Outside agents (S18, development builds until Settings → Agents): off, nothing; on, one pipe and one token file,
-    // started without waiting for it; the rest waits for an agent to connect.
+    // Outside agents (S18): Settings → Agents off (the default), nothing; on, one pipe and one token file, started without
+    // waiting for it; the rest (the connect card's code, the gate, the agents' chords) waits for an agent to connect.
     const agentBrowser = browser;
     agents = watchAgents({
       packaged: app.isPackaged,
       store: browser.store,
       devSwitch: devEnv('CHORD_AGENTS'),
       make: async () => {
-        const { AgentService, devApproval, devPresenter } = await import('./agents/service');
+        const [{ AgentService }, { ConnectCards }] = await Promise.all([import('./agents/service'), import('./agents/connect')]);
         const helper = process.platform === 'win32' ? join(app.getAppPath(), 'out/window-owner/window-owner.exe') : null;
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
-        // The window an agent was let in from (the development hook's card: the window used last) gives its chord its sign-ins.
+        // The window used last (never a private one): where the connect card and an agent's toasts go.
         const lastWindow = () => {
           const w = agentBrowser.lastBrowserWindow();
           return w && !w.isPrivate ? w : null;
         };
+        const cards = new ConnectCards({ store: agentBrowser.store, lastWindow: () => lastWindow()?.id ?? null, changed: () => agentBrowser.refreshPopovers() });
+        connectCards = cards;
+        agentBrowser.agentCardFor = (windowId) => cards.cardFor(windowId);
+        agentBrowser.agentWindowClosed = (windowId) => cards.windowClosed(windowId);
         return new AgentService({
           userData: app.getPath('userData'),
           browser: agentBrowser,
-          present: devPresenter(devApproval(devEnv('CHORD_AGENT_APPROVE'))),
+          ask: (who, signal) => cards.ask(who, signal),
+          changed: () => agentBrowser.agentsChanged(),
           helper: helper && existsSync(helper) ? helper : null,
           waitMs,
           dispatch: (command) => agentBrowser.store.dispatch(command),
           neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
-          allowedProfile: () => {
-            const w = lastWindow();
-            const state = agentBrowser.store.state;
-            return w ? (state.chords[state.windows[w.id]?.activeChordId ?? '']?.profileId ?? null) : null;
-          },
           chords: {
             store: agentBrowser.store,
             page: (nodeId) => pageOf(agentBrowser.tabs.get(nodeId)),

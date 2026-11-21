@@ -61,7 +61,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
+import type { AgentConnectCard, ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
 import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
 import { createChordTheme, durations, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
@@ -266,6 +266,23 @@ export class Browser {
   assistant: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
   /** Some window shows an agent's bar (S18): syncAgentBars has bars to take down even once no agent is left. */
   private agentBars = false;
+  /** An outside agent's connect card for a window (S18 M1d). Set by main once there's an agent service. */
+  agentCardFor: ((windowId: WindowId) => AgentConnectCard | null) | null = null;
+
+  /** Settings → Agents asks for its view again (an agent connected, went, stopped or continued). */
+  agentsChanged(): void {
+    const contents = this.settingsWindow?.view.webContents;
+    if (contents && !contents.isDestroyed()) send(contents, 'settings:agentsChanged', null);
+  }
+
+  /** A window closed: an agent's connect card in it moves on (S18 M1d). Set by main. */
+  agentWindowClosed: ((windowId: WindowId) => void) | null = null;
+
+  /** Every window's popover again (the agents' connect cards changed). */
+  refreshPopovers(): void {
+    this.syncPopovers();
+  }
+
   /** Ctrl+. / ⌘. (S18): stop every outside agent and every assistant reply. Set by main. */
   stopAll: (() => void) | null = null;
   /** An outside agent's tab's page was made (S18): main/agents wires it (the typing pause, leaving without asking). */
@@ -1078,6 +1095,8 @@ export class Browser {
     }
     w.window.on('closed', () => {
       this.assistant?.forgetWindow(windowId);
+      // An agent's connect card there (S18) moves to the window used last, or is a no.
+      this.agentWindowClosed?.(windowId);
       this.options.screenshots.windowClosed(windowId);
       this.options.passwords.windowClosed(windowId);
       this.passwordAssist.windowClosed(windowId);
@@ -1522,6 +1541,8 @@ export class Browser {
       // A tab whose service plays in Chord Player says so in its frame instead.
       drm: state.settings.onboarded || w.isPrivate ? (this.tabInPlayer(w) ? null : this.drmNotice(w)) : null,
       effects: this.effects.cardFor(w.id),
+      // An outside agent asking to use Chord (S18): never in a private window.
+      agentCard: w.isPrivate ? null : (this.agentCardFor?.(w.id) ?? null),
     };
   }
 
@@ -1778,6 +1799,7 @@ export class Browser {
       }
     }
     const popover = this.popoverState(w);
+    w.setPopoverCentered(Boolean(popover.agentCard));
     const json = JSON.stringify(popover);
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
@@ -1945,6 +1967,7 @@ export class Browser {
       safeBrowsingOffer: false,
       drm: null,
       effects: null,
+      agentCard: null,
     };
   }
 

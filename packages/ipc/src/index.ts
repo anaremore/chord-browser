@@ -274,6 +274,8 @@ export const SettingsPatch = z.strictObject({
   extensionButtons: z.enum(['sidebar', 'titleBar']).optional(),
   searchSuggestions: z.boolean().optional(),
   checkForUpdates: z.boolean().optional(),
+  // Settings → Agents' switch (S18 M1d). Who's allowed goes through settings:agents, never this.
+  agentsEnabled: z.boolean().optional(),
   googleFree: z.boolean().optional(),
   // Settings → Privacy's switch, with the notice beside it (main ignores it in Google-free mode).
   safeBrowsing: z.boolean().optional(),
@@ -937,7 +939,32 @@ export interface PopoverState {
   drm: DrmNotice | null;
   /** The Effects card for the site on screen (DESIGN.md §7.15); `opened` changes each time it opens, and it takes the keyboard. */
   effects: { host: string; opened: number } | null;
+  /** An outside agent asks to use Chord (S18 M1d): centered at the top of the page, never taking the keyboard. */
+  agentCard: AgentConnectCard | null;
 }
+
+/** The connect card (S18 M1d; mocks/agents-s18-m1.html §1). */
+export interface AgentConnectCard {
+  id: string;
+  /** The name the agent gives (a hint, never proof). */
+  name: string;
+  /** The folder its client runs in. */
+  folder: string;
+  /** The program that started it (claude.exe), once Chord has looked; null until then, or if it can't tell. */
+  startedBy: string | null;
+}
+
+/** Settings → Agents (S18 M1d; mocks/agents-s18-m1.html §4). */
+export interface AgentsView {
+  /** The lines to paste into a terminal, from this Chord's own executable. */
+  setup: { claude: string; codex: string };
+  /** Connected agents you stopped, each to let continue. */
+  stopped: { id: string; name: string; tabs: number }[];
+  /** Agents let in for good. */
+  allowed: { name: string; parent: string | null; signIns: string; connected: boolean; tabs: number; lastUsedAt: number }[];
+}
+
+export type AgentsRequest = { do: 'view' } | { do: 'remove'; name: string; parent: string | null } | { do: 'continue'; id: string };
 
 export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
 export type OtherBrowserId = (typeof OTHER_BROWSERS)[number];
@@ -1681,6 +1708,18 @@ export const invokeChannels = {
   'assistant:search': { roles: ['overlay'], request: z.strictObject({ query: z.string().max(200) }), response: z.custom<AssistantHit[]>() },
   'assistant:openHit': { roles: ['overlay'], request: z.strictObject({ chordId: id, threadId: id }), response: z.void() },
   /** Settings → Assistant: the providers on this computer, sign in, clear all chats. */
+  /** Settings → Agents (S18 M1d): what it shows, Remove an allowed agent, let a stopped one continue. */
+  'settings:agents': {
+    roles: ['internal'],
+    request: z.discriminatedUnion('do', [
+      z.strictObject({ do: z.literal('view') }),
+      z.strictObject({ do: z.literal('remove'), name: z.string().min(1).max(60), parent: z.string().max(1000).nullable() }),
+      z.strictObject({ do: z.literal('continue'), id: z.string().min(1).max(40) }),
+    ]),
+    response: z.custom<AgentsView>(),
+  },
+  /** The connect card's answer (S18 M1d): Deny (or ×), Allow once, Always allow. */
+  'agents:card': { roles: ['popover'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{16}$/), answer: z.enum(['deny', 'once', 'always']) }), response: z.void() },
   'settings:assistant': {
     roles: ['internal'],
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: AssistantProviderSchema }), z.object({ do: z.literal('clearAll') })]),
@@ -1974,6 +2013,8 @@ export interface EventPayloads {
   'state:patch': StatePatchEvent;
   'overlay:open': OverlayOpenEvent;
   'settings:changed': SettingsSnapshot;
+  /** Settings → Agents changed (an agent connected, went, stopped or continued): ask for its view again. */
+  'settings:agentsChanged': null;
   'popover:state': PopoverState;
   /** What the hover preview shows, or null to clear it. */
   'preview:card': PreviewCard | null;
@@ -2245,6 +2286,9 @@ export interface SettingsApi {
     about(): Promise<AboutInfo>;
     /** Settings → Assistant: which providers are installed and signed in; sign in; clear all chats. */
     assistant(request: { do: 'detect' } | { do: 'signIn'; provider: AssistantProvider } | { do: 'clearAll' }): Promise<AssistantProviderInfo[]>;
+    /** Settings → Agents (S18 M1d). */
+    agents(request: AgentsRequest): Promise<AgentsView>;
+    onAgentsChange(listener: () => void): () => void;
     openUrl(url: string): Promise<void>;
     /** Settings → Privacy → Safe Browsing: available in this build, and how its lists are doing. */
     safeBrowsing(): Promise<SafeBrowsingStatus>;
@@ -2456,6 +2500,8 @@ export interface PopoverApi {
   };
   /** Choosing a passkey: one the prompt offered, or null to decline. */
   passkey: { respond(id: number, credentialId: string | null): Promise<void> };
+  /** The connect card (S18 M1d). */
+  agents: { respond(id: string, answer: 'deny' | 'once' | 'always'): Promise<void> };
   /** Unlock passwords: the passphrase, or null to cancel. The menu under a field, and the save card. */
   passwords: {
     unlock(id: number, passphrase: string | null, keep: boolean): Promise<void>;

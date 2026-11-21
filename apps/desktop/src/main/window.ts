@@ -234,6 +234,8 @@ export class AppWindow {
   private devtools: (DockedDevtools | null)[] = [];
   /** The tab on screen is an agent's with its bar (S18): the page sits below it. */
   private agentBar = false;
+  /** The popover shows an agent's connect card (S18): it's placed centered. */
+  private popoverCentered = false;
   private devtoolsSettings: Pick<DevtoolsSettings, 'side' | 'width' | 'height'> = DEFAULT_DEVTOOLS;
   /** The edge between a page and its developer tools is being dragged: their size until it's let go. */
   private devtoolsDrag: number | null = null;
@@ -800,6 +802,13 @@ export class AppWindow {
     if (this.paneLayout && this.panes.length > 1) return paneRects(frame, this.paneLayout.direction, this.paneLayout.sizes);
     if (this.agentBar) return [{ x: frame.x, y: frame.y + AGENT_BAR_HEIGHT, width: frame.width, height: Math.max(0, frame.height - AGENT_BAR_HEIGHT) }];
     return [frame];
+  }
+
+  /** The popover holds an agent's connect card (S18): centered at the page's top, not at its corner. */
+  setPopoverCentered(on: boolean): void {
+    if (this.popoverCentered === on || this.window.isDestroyed()) return;
+    this.popoverCentered = on;
+    this.layout();
   }
 
   /** The tab on screen is an agent's with its bar showing (S18): the page moves down under it, or back. */
@@ -1390,8 +1399,10 @@ export class AppWindow {
       return;
     }
     // The popover (find, permission prompts) hangs from the focused page's top-right corner; its cards carry their own margin.
+    // An agent's connect card (S18) is centered at the page's top, as its mock draws it.
     const pane = this.pageRectsIn(frame)[this.focusedPane] ?? frame;
-    place(this.popover, toWindowRect({ x: Math.max(pane.x, pane.x + pane.width - pw), y: pane.y, width: pw, height: ph }));
+    const x = this.popoverCentered ? pane.x + Math.max(0, Math.round((pane.width - pw) / 2)) : Math.max(pane.x, pane.x + pane.width - pw);
+    place(this.popover, toWindowRect({ x, y: pane.y, width: pw, height: ph }));
     this.placementChanged();
   }
 

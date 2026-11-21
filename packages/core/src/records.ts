@@ -357,6 +357,7 @@ export const SETTING_TRAVEL: Record<keyof Settings, SettingTravel> = {
   extensionButtons: 'sync',
   checkForUpdates: 'computer',
   agentsEnabled: 'computer',
+  agentsAllowed: 'computer',
   separateSignIns: 'sync',
   onboarded: 'once',
   archiveAfter: 'sync',

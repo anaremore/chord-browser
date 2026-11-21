@@ -5,7 +5,7 @@
  */
 import { DEFAULT_PROFILE, DEFAULT_SETTINGS, keycapFor, SEARCH_ENGINES, searchEngine, type ArchiveAfter, type MotionSettings } from '@chord/core';
 import type { AboutInfo, DefaultBrowserStatus, SettingsSnapshot, SystemInfo, UpdateStatus } from '@chord/ipc';
-import { ArrowDownUp, Blend, Check, EyeOff, Info, Keyboard, KeyRound, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowDownUp, Asterisk, Blend, Check, EyeOff, Info, Keyboard, KeyRound, Palette, Puzzle, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { ChordMark } from '../shared/ChordMark';
 import { AssistantIcon } from '../shared/icons';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
@@ -14,6 +14,7 @@ import { useLive, type Live } from '../shared/live';
 import { applyMotion, reducedMotionMode, springsFor } from '../shared/motion';
 import { chordStyle, useRootColorScheme } from '../shared/theme';
 import { api } from './api';
+import { AgentsSettings } from './AgentsSettings';
 import { AssistantSettings } from './AssistantSettings';
 import { AppearanceSection } from './Appearance';
 import { ShortcutsSection } from './Shortcuts';
@@ -41,6 +42,8 @@ const SECTIONS = [
   // Export, and import from another browser or (next) a Chord file: one place for your data, in and out (S15 question 5).
   { id: 'data', label: 'Your data', icon: ArrowDownUp },
   { id: 'assistant', label: 'Assistant', icon: AssistantIcon },
+  // Outside agents (S18 M1d): its ✳ is the one on their cards and bar.
+  { id: 'agents', label: 'Agents', icon: Asterisk },
   { id: 'shortcuts', label: 'Keyboard shortcuts', icon: Keyboard },
   { id: 'about', label: 'About', icon: Info },
 ] as const;
@@ -554,6 +557,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'data' && <YourDataSection snapshot={snapshot} info={info} onUpdates={checkForUpdates} />}
               {section === 'assistant' && <AssistantSettings snapshot={snapshot} />}
+              {section === 'agents' && <AgentsSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>

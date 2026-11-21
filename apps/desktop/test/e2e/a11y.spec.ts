@@ -644,6 +644,7 @@ test('screen readers get the structure: the sidebar tree, the command bar combob
       - button "Site permissions"
       - button "Extensions"
       - button "Assistant"
+      - button "Agents"
       - button "Keyboard shortcuts"
       - button "About"
     `);

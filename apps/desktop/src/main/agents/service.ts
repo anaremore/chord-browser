@@ -5,45 +5,26 @@
  * Everything else waits for the first connection: the connection's code and
  * the gate (connection.ts), the Windows DACL helper, the parent lookup.
  *
- * Until Settings → Agents and its card (M1d), a development-only hook answers
- * the connection card (CHORD_AGENT_APPROVE), and packaged builds never get here.
+ * The connection card is the connect card (connect.ts, M1d), and Settings →
+ * Agents' switch (off by default) is the only way here.
  */
 import { execFile } from 'node:child_process';
-import type { AgentHello, Command, Grant, ProfileId } from '@chord/core';
-import type { CardPresenter } from '../control/gate';
+import type { AgentHello, Command, ProfileId } from '@chord/core';
 import type { ControlBrowser } from '../control/tools';
 import { startEndpoint, type Endpoint } from './endpoint';
 import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
+import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
-
-/**
- * The development hook's answer to a connection card: `once` (the default), `always`, `deny`,
- * `hold` (never answers: *waiting*), or `delay:<ms>` then once.
- */
-export type DevApproval = 'once' | 'always' | 'deny' | 'hold' | `delay:${number}`;
-
-export function devApproval(value: string | undefined): DevApproval {
-  if (value === 'always' || value === 'deny' || value === 'hold') return value;
-  if (value && /^delay:\d{1,6}$/.test(value)) return value as DevApproval;
-  return 'once';
-}
-
-/** The hook as a card presenter: it answers as told, or no when the card is taken down. */
-export function devPresenter(approval: DevApproval): CardPresenter {
-  return (_card, signal) =>
-    new Promise<Grant>((resolve) => {
-      signal.addEventListener('abort', () => resolve('deny'), { once: true });
-      if (approval === 'hold') return;
-      if (approval.startsWith('delay:')) setTimeout(() => resolve('once'), Number(approval.slice(6))).unref?.();
-      else resolve(approval as Grant);
-    });
-}
+import type { Socket } from 'node:net';
 
 export interface AgentServiceDeps {
   userData: string;
   browser: ControlBrowser;
-  present: CardPresenter;
+  /** The connect card (connect.ts): asks you, or lets in an agent you allowed for good. */
+  ask(who: ConnectingAgent, signal: AbortSignal): Promise<ConnectAnswer>;
+  /** What Settings → Agents shows changed: an agent connected, went, stopped or continued. */
+  changed?(): void;
   /** Windows: window-owner.exe, for the pipe's DACL; null where there's none. */
   helper: string | null;
   /** How long a call waits on a card (CONTROL_WAIT_MS unless a test says). */
@@ -53,8 +34,6 @@ export interface AgentServiceDeps {
   chords?: AgentChordsDeps;
   dispatch?(command: Command): void;
   neverSites?(): readonly string[];
-  /** The sign-ins of the window where the user let an agent in. */
-  allowedProfile?(): ProfileId | null;
 }
 
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
@@ -62,7 +41,13 @@ export interface HeldConnection {
   connection: AgentConnection;
   /** Its hello, without the token: nothing keeps the token but the endpoint. */
   hello: Omit<AgentHello, 'token'>;
+  /** Its end of the endpoint: Remove in Settings hangs up on it. */
+  socket: Socket;
   parent: Promise<ProcessInfo[]> | null;
+  /** The sign-ins it was let in with (the window you answered in, or those of its Always allow). */
+  profileId: ProfileId | null;
+  /** Let in for good (Always allow, now or before). */
+  always: boolean;
 }
 
 export class AgentService {
@@ -105,15 +90,29 @@ export class AgentService {
               ...(this.chords ? { chords: this.chords } : {}),
               ...(this.deps.dispatch ? { dispatch: this.deps.dispatch } : {}),
               ...(this.deps.neverSites ? { neverSites: this.deps.neverSites } : {}),
-              ...(this.deps.allowedProfile ? { allowedProfile: this.deps.allowedProfile } : {}),
-              present: (card, signal) => {
+              allowedProfile: () => held?.profileId ?? null,
+              present: async (card, signal) => {
+                if (card.kind !== 'connection' || !held) return 'deny';
                 // Who started it, looked up while the card shows (about 1 s on Windows), never inside a call.
-                if (held && !held.parent) held.parent = import('./parent').then(({ ancestry }) => ancestry(hello.parentPid)).catch(() => []);
-                return this.deps.present(card, signal);
+                held.parent ??= import('./parent').then(({ ancestry }) => ancestry(hello.parentPid)).catch(() => []);
+                const answer = await this.deps.ask({ name: held.connection.name, folder: hello.cwd, parent: held.parent }, signal);
+                held.profileId = answer.profileId;
+                held.always = answer.grant === 'always';
+                this.deps.changed?.();
+                return answer.grant;
               },
             });
-            held = { connection, hello, parent: null };
-            this.connections.add(held);
+            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false };
+            held = record;
+            this.connections.add(record);
+            // Settings → Agents lists the stopped ones: it hears when one stops or goes on.
+            let stopped = false;
+            connection.agent.listen(() => {
+              if (connection.agent.isStopped === stopped) return;
+              stopped = connection.agent.isStopped;
+              this.deps.changed?.();
+            });
+            this.deps.changed?.();
             for (const m of queued.splice(0)) connection.message(m);
           }).catch((error: unknown) => {
             // The connection's code didn't load: hang up, so the relay says Chord isn't open rather than waiting forever.
@@ -128,6 +127,7 @@ export class AgentService {
               if (!held) return;
               held.connection.closed();
               this.connections.delete(held);
+              this.deps.changed?.();
             },
           };
         },
@@ -157,6 +157,21 @@ export class AgentService {
   /** Stop for every agent (Ctrl+. / ⌘. in M1c): calls in flight answer now, later ones are refused. */
   stopAll(): void {
     for (const held of this.connections) held.connection.agent.stop();
+  }
+
+  /** Settings → Agents' "Let … continue", for a stopped agent by its gate's id (tabs or none). */
+  continue(agentId: string): void {
+    for (const held of this.connections) {
+      if (held.connection.agent.id !== agentId) continue;
+      const chordId = this.chords?.chordOf(held.connection.agent);
+      if (chordId) this.chords!.continue(chordId);
+      else held.connection.agent.resume();
+    }
+  }
+
+  /** An agent removed from Allowed in Settings: it's let go now, and asks again next time. */
+  disconnect(name: string): void {
+    for (const held of [...this.connections]) if (held.always && held.connection.name === name) held.socket.destroy();
   }
 }
 
