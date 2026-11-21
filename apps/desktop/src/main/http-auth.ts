@@ -85,6 +85,12 @@ export interface AuthDeps {
   nodeFor(contents: WebContents): NodeId | undefined;
   /** The prompts changed: refresh every window's popover. */
   onChange(): void;
+  /**
+   * An outside agent's tab (S18): Chord signs no agent in, so its sign-in box never shows (its tab is hidden
+   * anyway). The request is cancelled, and `refused` tells the agent.
+   */
+  agentTab?(nodeId: NodeId): boolean;
+  agentRefused?(nodeId: NodeId, detail: string): void;
   /** The node's chord and whether it's a private window's; without it (or `vault`), the box neither fills nor remembers. */
   tabOf?(nodeId: NodeId): AuthTab | null;
   /** The window a node is shown in: the unlock card's, and the only popover whose answers count. */
@@ -456,6 +462,11 @@ export class AuthBroker {
     const top = originOf(contents!.getURL());
     // A page's own images and scripts from another site don't get to ask.
     if (!info.isProxy && !details.isRequestForNavigation && origin !== top) return false;
+    // An agent's tab: no box, ever. Not answering cancels the request; the agent hears why.
+    if (this.deps.agentTab?.(nodeId)) {
+      this.deps.agentRefused?.(nodeId, info.isProxy ? `The proxy ${origin} asked for a sign-in; Chord doesn’t sign agents in.` : `The site ${origin} asked for a sign-in; Chord doesn’t sign agents in.`);
+      return false;
+    }
     const realm = info.realm.replace(/\s+/g, ' ').trim().slice(0, REALM_MAX);
     const retry = !details.firstAuthAttempt;
     const asking = !info.isProxy && details.isRequestForNavigation ? this.navigationsAsking(contents!, details.url) : [];

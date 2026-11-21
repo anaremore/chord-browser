@@ -69,13 +69,14 @@ export class AgentChords {
     // Leaving a tab you paused lets the agent go on there; your closing an agent's last tab ends its chord once it's done.
     this.unsubscribe = deps.store.subscribe((change) => {
       if (!change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'nodes')) return;
-      for (const chord of this.chords.values()) this.settle(chord);
+      for (const chord of [...this.chords.values()]) this.settle(chord);
+      this.prune();
     });
   }
 
   /** The agent's chord, made now if it has none: its sign-ins are those of the window used last. */
   chordFor(agent: ControlAgent, name: string, profileId: ProfileId | null): ChordId {
-    for (const chord of this.chords.values()) if (chord.agent === agent) return chord.chordId;
+    for (const chord of this.chords.values()) if (chord.agent === agent && !chord.done) return chord.chordId;
     const state = this.deps.store.state;
     const windowId = this.deps.lastWindow()?.id;
     const profile = profileId ?? (windowId ? state.chords[state.windows[windowId]?.activeChordId ?? '']?.profileId : undefined) ?? 'default';
@@ -146,10 +147,20 @@ export class AgentChords {
   private forget(chord: AgentChord): void {
     chord.unlisten();
     this.chords.delete(chord.chordId);
+    this.prune();
+  }
+
+  /** What's kept per tab goes with the tab. */
+  private prune(): void {
+    const state = this.deps.store.state;
+    for (const id of [...this.shown.keys()]) if (!nodeOf(state, id)) this.shown.delete(id);
+    for (const id of [...this.unthrottled]) if (!nodeOf(state, id)) this.unthrottled.delete(id);
   }
 
   /** An agent tab's page was made: a key you press there pauses the agent on it; leaving it never asks (beforeunload). */
   wire(contents: WebContents, nodeId: NodeId): void {
+    // Made while the agent already works on the tab (its first load, or after it slept): full speed now too.
+    if (this.unthrottled.has(nodeId)) contents.setBackgroundThrottling(false);
     contents.on('before-input-event', (_event, input) => {
       if (input.type !== 'keyDown') return;
       const chord = this.chordOfTab(nodeId);
@@ -181,10 +192,6 @@ export class AgentChords {
 
   /* ---------- Stop, continue, and when it's done ---------- */
 
-  stop(chordId: ChordId): void {
-    this.chords.get(chordId)?.agent.stop();
-  }
-
   /** "Let … continue": after Stop, or a tab you paused. */
   continue(chordId: ChordId): void {
     const chord = this.chords.get(chordId);
@@ -213,6 +220,11 @@ export class AgentChords {
       this.deps.store.dispatch({ t: 'agent.chord.remove', chordId: chord.chordId });
       return this.forget(chord);
     }
+    this.askToKeep(chord);
+  }
+
+  /** "… finished. Keep these tabs?": Keep, or Close all. */
+  private askToKeep(chord: AgentChord): void {
     const w = this.deps.lastWindow();
     w?.toast({
       id: `agent-done:${chord.chordId}`,
@@ -224,7 +236,8 @@ export class AgentChords {
 
   /** Keep: the agent's tabs move into the window's chord. */
   keep(windowId: WindowId, chordId: ChordId): void {
-    if (!isAgentChord(this.deps.store.state, chordId)) return;
+    // Only once the agent's done: a toast from before can't take tabs from an agent still at work.
+    if (!isAgentChord(this.deps.store.state, chordId) || !this.chords.get(chordId)?.done) return;
     this.deps.store.dispatch({ t: 'agent.chord.keep', chordId, windowId });
     const chord = this.chords.get(chordId);
     if (chord) this.forget(chord);
@@ -234,7 +247,7 @@ export class AgentChords {
   closeAll(chordId: ChordId): void {
     const state = this.deps.store.state;
     const chord = state.chords[chordId];
-    if (!chord?.agent) return;
+    if (!chord?.agent || !this.chords.get(chordId)?.done) return;
     const tabs = this.tabsOf(chordId);
     const token = randomBytes(12).toString('hex');
     const held = this.chords.get(chordId) ?? null;
@@ -255,8 +268,11 @@ export class AgentChords {
     if (!undo) return;
     this.undos.delete(token);
     // Back as it was when closed: a finished agent's chord, which goes once its last tab does.
-    if (undo.record) this.chords.set(undo.chord.id, { ...undo.record, done: true, unlisten: () => undefined });
+    const record: AgentChord | null = undo.record ? { ...undo.record, done: true, unlisten: () => undefined } : null;
+    if (record) this.chords.set(undo.chord.id, record);
     this.deps.store.dispatch({ t: 'agent.chord.restore', chord: undo.chord, tabs: undo.tabs });
+    // Back where it was: you're asked again what becomes of its tabs.
+    if (record) this.askToKeep(record);
   }
 
   dispose(): void {

@@ -198,6 +198,8 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
     await expect(section).toHaveCount(0);
     await shell.getByRole('button', { name: 'Undo' }).click();
     await expect(shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Release notes/ })).toBeVisible();
+    // Back where it was: asked again.
+    await expect(shell.getByRole('button', { name: 'Keep', description: 'Codex finished. Keep these tabs?' })).toBeVisible();
 
     // Another agent, done: Keep moves its tab into your chord.
     mcp = relay(profile);
@@ -206,7 +208,7 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
     mcp.child.stdin!.end();
     await mcp.exited;
     await expect(shell.getByText('Claude Code finished. Keep these tabs?')).toBeVisible();
-    await shell.getByRole('button', { name: 'Keep' }).click();
+    await shell.getByRole('button', { name: 'Keep', description: 'Claude Code finished. Keep these tabs?' }).click();
     await expect(shell.getByRole('region', { name: 'Claude Code’s tabs' })).toHaveCount(0);
     await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Release notes');
   } finally {

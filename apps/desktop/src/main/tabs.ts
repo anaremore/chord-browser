@@ -64,7 +64,7 @@ export interface TabManagerDeps {
 }
 
 /** What an agent's tab held or refused: a page dialog, a file picker, a popup or new tab, a download. */
-export type AgentHeld = 'dialog' | 'file' | 'popup' | 'download';
+export type AgentHeld = 'dialog' | 'file' | 'popup' | 'download' | 'signin';
 
 /** What an agent's tab's preload looks for in its arguments (preload/page.ts has the same). */
 export const AGENT_TAB_ARG = '--chord-agent-tab';

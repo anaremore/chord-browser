@@ -94,6 +94,8 @@ describe('An agent’s chord', () => {
     ['deleting its chord', () => ({ t: 'chord.delete', chordId: 'ag' })],
     ['moving your tab into it', (t) => ({ t: 'node.moveToChord', nodeId: t.mine, chordId: 'ag' })],
     ['archiving it', () => ({ t: 'tab.archive', nodeIds: ['a1'], reason: 'cleared' })],
+    ['splitting with it', (t) => ({ t: 'split.join', windowId: 'w1', splitId: 's1', nodeIds: [t.mine, 'a1'], direction: 'row' })],
+    ['adding a pane beside it', () => ({ t: 'split.add', windowId: 'w1', withId: 'a1', url: 'https://x.test/' })],
   ];
   it.each(refused)('refuses %s', (_name, command) => {
     const t = setup();
@@ -111,6 +113,18 @@ describe('An agent’s chord', () => {
     expect(t.state.windows['w1']!.agentTab).toBeUndefined();
     expect(effects).toContainEqual({ e: 'view.show', windowId: 'w1', nodeId: t.mine });
     expect(effects).toContainEqual({ e: 'view.destroy', nodeId: 'a1' });
+  });
+
+  it('Keep closes its pages even with the same sign-ins: they come back as tabs of yours, not an agent’s', () => {
+    const t = setup();
+    t.run({ t: 'tab.live', nodeId: 'a1', live: { loading: false } });
+    expect(t.state.live['a1']).toBeDefined();
+    // The same sign-ins: the agent's chord and Personal both use the default profile.
+    expect(t.state.chords['ag']!.profileId).toBe(t.state.chords['c1']!.profileId);
+    const { effects } = t.run({ t: 'agent.chord.keep', chordId: 'ag', windowId: 'w1' });
+    expect((nodeOf(t.state, 'a1') as TabNode).chordId).toBe('c1');
+    expect(t.state.live['a1']).toBeUndefined();
+    expect(effects).toEqual(expect.arrayContaining([{ e: 'view.destroy', nodeId: 'a1' }, { e: 'view.destroy', nodeId: 'a2' }]));
   });
 
   it('Keep moves its tabs into the window’s chord; Close all removes it; Undo brings it back', () => {

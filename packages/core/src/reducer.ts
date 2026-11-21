@@ -309,10 +309,11 @@ export type Command =
   | { t: 'assistant.undoFill'; token: string }
   /**
    * Outside agents (S18), from the agent's bar and its toasts; main takes them over (main/agents), since the
-   * agents' gates live there: Stop an agent, let it continue, keep its tabs in the window's chord when it's
+   * agents' gates live there: Stop every agent, let one continue, keep its tabs in the window's chord when it's
    * done, close them all, and that's Undo.
    */
-  | { t: 'agents.stop'; chordId: ChordId }
+  /** The bar's Stop: every agent and every assistant reply, as Ctrl+. / ⌘. (the mock's rule). */
+  | { t: 'agents.stopAll' }
   | { t: 'agents.continue'; chordId: ChordId }
   | { t: 'agents.keep'; windowId: WindowId; chordId: ChordId }
   | { t: 'agents.closeAll'; chordId: ChordId }
@@ -1316,6 +1317,9 @@ function refusedForAgents(state: State, cmd: Command): boolean {
   if ('chordId' in cmd && typeof cmd.chordId === 'string' && isAgentChord(state, cmd.chordId)) return true;
   if (cmd.t === 'tab.archive') return cmd.nodeIds.some((id) => isAgentChord(state, nodeOf(state, id)?.chordId ?? ''));
   if (cmd.t === 'closed.restore') return cmd.nodeIds.some((id) => isAgentChord(state, nodeOf(state, id)?.chordId ?? ''));
+  // A split never takes an agent's tab, whichever field names it.
+  if (cmd.t === 'split.join') return cmd.nodeIds.some((id) => isAgentChord(state, nodeOf(state, id)?.chordId ?? ''));
+  if (cmd.t === 'split.add') return isAgentChord(state, nodeOf(state, cmd.withId)?.chordId ?? '');
   return false;
 }
 
@@ -1422,11 +1426,10 @@ function runAgent(draft: Draft<State>, cmd: AgentCommand, ctx: Context, effects:
         tab.section = 'today';
         tab.parentId = null;
         tab.rank = topOfToday(draft, to.id);
-        // A page can't change session: with other sign-ins it closes, and loads again when shown.
-        if (agent.profileId !== to.profileId && draft.live[tab.id]) {
-          delete draft.live[tab.id];
-          effects.push({ e: 'view.destroy', nodeId: tab.id });
-        }
+        // Its page goes, whatever the sign-ins: it was made as an agent's (no dialogs, no file pickers, leaving never
+        // asks), and loads again as a tab of yours when shown.
+        delete draft.live[tab.id];
+        effects.push({ e: 'view.destroy', nodeId: tab.id });
         // A window showing it over its chord now shows it as a tab of that chord, where it's the chord it shows.
         for (const w of Object.values(draft.windows)) {
           if (w.agentTab !== tab.id) continue;
@@ -2729,7 +2732,7 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
       // Main's: what a fill replaced stays in the page.
       return;
 
-    case 'agents.stop':
+    case 'agents.stopAll':
     case 'agents.continue':
     case 'agents.keep':
     case 'agents.closeAll':

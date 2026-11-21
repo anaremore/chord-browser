@@ -314,7 +314,8 @@ function registerIpc(): void {
     // A toast's Undo for a form the assistant filled: the page puts back what it had (main/assistant).
     if (command.t === 'assistant.undoFill') return assistant?.undoFill(command.token);
     // An outside agent's bar and toasts (S18): its gate and chord live in main.
-    if (command.t === 'agents.stop') return agents?.service?.chords?.stop(command.chordId);
+    // The bar's Stop is Ctrl+. / ⌘.: every agent, and every assistant reply.
+    if (command.t === 'agents.stopAll') return browser!.stopAll?.();
     if (command.t === 'agents.continue') return agents?.service?.chords?.continue(command.chordId);
     if (command.t === 'agents.keep') return agents?.service?.chords?.keep(command.windowId, command.chordId);
     if (command.t === 'agents.closeAll') return agents?.service?.chords?.closeAll(command.chordId);

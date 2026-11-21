@@ -149,14 +149,23 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     );
   };
 
-  /** close_tab: one of its own tabs, never yours. */
-  const closeTab = (args: Record<string, unknown>): ToolOutput => {
+  /** close_tab: one of its own tabs, never yours; through the gate on that tab, so it waits while you're using it. */
+  const closeTab = async (args: Record<string, unknown>): Promise<ToolOutput> => {
     const state = deps.browser.store.state;
     const found = scope.refs.resolve(args['tab_id'], (id) => nodeOf(state, id)?.kind === 'tab');
     if (!found.ok) return { text: found.why === 'closed' ? CONTROL_REFUSALS.closed : 'No such tab. Use list_tabs.', isError: true };
     if (nodeOf(state, found.id)?.chordId !== chordId()) return { text: NOT_YOURS, isError: true };
-    deps.dispatch?.({ t: 'agent.tab.remove', nodeId: found.id });
-    return { text: 'Closed.' };
+    return agent.call(
+      found.id,
+      async (signal) => {
+        if (signal.aborted) return refused('stopped');
+        // Closed meanwhile (by you): nothing more to do.
+        if (nodeOf(deps.browser.store.state, found.id)?.kind !== 'tab') return { text: CONTROL_REFUSALS.closed, isError: true };
+        deps.dispatch?.({ t: 'agent.tab.remove', nodeId: found.id });
+        return { text: 'Closed.' };
+      },
+      refused,
+    );
   };
 
   /** What its tabs held since its last result, as untrusted data after it. */
@@ -164,7 +173,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const notes = deps.chords?.drain(agent) ?? [];
     if (notes.length === 0) return [];
     const list = notes.map((n) => ({ tab_id: scope.refs.refFor(n.nodeId), what: n.what, detail: n.detail }));
-    const note = 'Chord held or refused these in your tabs: page dialogs (answered at once: OK, Cancel, nothing typed), file pickers, new windows and downloads.';
+    const note = 'Chord held or refused these in your tabs: page dialogs (answered at once: OK, Cancel, nothing typed), file pickers, new windows, downloads and sign-in boxes (cancelled: Chord doesn’t sign agents in).';
     return [{ type: 'text', text: JSON.stringify({ trust: 'untrusted', held: list, note }) }];
   };
 

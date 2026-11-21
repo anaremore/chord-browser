@@ -235,7 +235,7 @@ export const RendererCommand = z.discriminatedUnion('t', [
   // A toast's Undo for a form the assistant filled (main takes it over: what was there before stays in the page).
   z.object({ t: z.literal('assistant.undoFill'), token: z.string().regex(/^[0-9a-f]{16,32}$/) }),
   // Outside agents (S18; main takes them over): the bar's Stop and continue, and the toasts when an agent's done.
-  z.object({ t: z.literal('agents.stop'), chordId: id }),
+  z.object({ t: z.literal('agents.stopAll') }),
   z.object({ t: z.literal('agents.continue'), chordId: id }),
   z.object({ t: z.literal('agents.keep'), windowId: id, chordId: id }),
   z.object({ t: z.literal('agents.closeAll'), chordId: id }),

@@ -56,7 +56,7 @@ export function AgentSections({ state, windowId, appearance }: { state: State; w
 }
 
 /**
- * The bar over an agent's tab: blue while the agent reads it, with Stop; the paused bar's grey while you use the
+ * The bar over an agent's tab: blue while the agent reads it, with Stop (every agent at once, as Ctrl+. / ⌘.); the paused bar's grey while you use the
  * tab, or once you've stopped the agent, with "Let … continue". Main keeps the page below it (AGENT_BAR_HEIGHT).
  */
 export function AgentBar({ agent }: { agent: AgentLive }) {
@@ -67,7 +67,7 @@ export function AgentBar({ agent }: { agent: AgentLive }) {
       {working && <span aria-hidden>✳</span>}
       <span className={styles.barText}>{text}</span>
       {working ? (
-        <button type="button" className={styles.stop} onClick={() => void api.state.dispatch({ t: 'agents.stop', chordId: agent.chordId })}>
+        <button type="button" className={styles.stop} onClick={() => void api.state.dispatch({ t: 'agents.stopAll' })}>
           Stop
         </button>
       ) : (

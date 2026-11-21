@@ -6,12 +6,14 @@
  * agent connects.
  */
 import { EventEmitter } from 'node:events';
-import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, emptyState, findShortcut, nodeOf, type Command, type State, type TabNode } from '@chord/core';
+import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, agentToolsVersion, emptyState, findShortcut, nodeOf, type Command, type State, type TabNode } from '@chord/core';
 import { size } from '@chord/tokens';
 import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentChords } from '../../src/main/agents/chords';
+import { agentConnection } from '../../src/main/agents/connection';
+import { AuthBroker } from '../../src/main/http-auth';
 import { agentScope, NOT_YOURS } from '../../src/main/agents/scope';
 import { ControlAgent } from '../../src/main/control/gate';
 import { DownloadManager } from '../../src/main/downloads';
@@ -87,7 +89,7 @@ describe('The bar, throttling and your hands', () => {
     await running;
     expect(agentLive(t.store, 'a1')).toBeNull();
     expect(t.pages.get('a1')!.throttled).toBe(true);
-    t.chords.stop(t.chordId);
+    t.chords.stopAll();
     expect([agentLive(t.store, 'a1')?.state, agentLive(t.store, 'a2')?.state]).toEqual(['stopped', 'stopped']);
     await expect(t.agent.call('a1', async () => 'ran', (why) => why)).resolves.toBe('stopped');
     t.chords.continue(t.chordId);
@@ -262,5 +264,81 @@ describe('Stop everything, and the bar’s size', () => {
 
   it('main lowers the page by the height the shell draws the bar at', () => {
     expect(size.agentBar).toBe(AGENT_BAR_HEIGHT);
+  });
+});
+
+describe('Review 1 of #77', () => {
+  it('an agent’s tab gets no sign-in box: the request is cancelled, and the agent hears why', () => {
+    const broker = new AuthBroker();
+    const refused: string[] = [];
+    broker.connect({
+      nodeFor: (contents) => (contents as unknown as { nodeId: string }).nodeId as never,
+      onChange: vi.fn(),
+      agentTab: (nodeId) => nodeId === 'a1',
+      agentRefused: (_nodeId, detail) => void refused.push(detail),
+    });
+    const pageAt = (url: string, nodeId: string) => ({ nodeId, getURL: () => url, isDestroyed: () => false }) as unknown as WebContents;
+    const details = { url: 'https://intranet.test/', pid: 1, isRequestForNavigation: true, firstAuthAttempt: true, responseHeaders: {} } as never;
+    const info = { isProxy: false, scheme: 'basic', host: 'intranet.test', port: 443, realm: 'Staff' } as never;
+    // Not answered by Chord: Electron's default cancels it.
+    expect(broker.login(pageAt('https://intranet.test/', 'a1'), details, info, vi.fn())).toBe(false);
+    expect(broker.promptFor('a1' as never)).toBeNull();
+    expect(refused).toEqual(['The site https://intranet.test asked for a sign-in; Chord doesn’t sign agents in.']);
+    // Your tab still gets its box.
+    expect(broker.login(pageAt('https://intranet.test/', 'mine'), details, info, vi.fn())).toBe(true);
+  });
+
+  it('close_tab waits while you use the tab: it answers paused, and the tab stays', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const sent: { id?: number; result?: { content: { text: string }[]; isError: boolean } }[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() }, (m) => void sent.push(m as never), {
+      present: async () => 'once',
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+    });
+    const chordId = t.chords.chordFor(connection.agent, 'Claude Code', null);
+    t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'b1', url: 'https://agent.test/b1' });
+    const answer = async (id: number, name: string, args: Record<string, unknown> = {}) => {
+      connection.message({ id, method: 'tools/call', params: { name, arguments: args } });
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    await answer(1, 'list_tabs');
+    connection.agent.pause('b1', true);
+    await answer(2, 'close_tab', { tab_id: 'a1' });
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(sent.find((m) => m.id === 2)?.result).toMatchObject({ isError: true, content: [{ text: CONTROL_REFUSALS.paused }] });
+    expect(nodeOf(t.store.state, 'b1')).toBeDefined();
+    // Once you leave it, it closes.
+    connection.agent.pause('b1', false);
+    await answer(3, 'close_tab', { tab_id: 'a1' });
+    expect(sent.find((m) => m.id === 3)?.result).toMatchObject({ isError: false, content: [{ text: 'Closed.' }] });
+    expect(nodeOf(t.store.state, 'b1')).toBeUndefined();
+  });
+
+  it('Keep and Close all wait until the agent is done; Undo asks again; a page made while it works runs at full speed', async () => {
+    const t = setup();
+    // Still at work: a toast from before can't take its tabs.
+    t.chords.keep('w1', t.chordId);
+    t.chords.closeAll(t.chordId);
+    expect(nodeOf(t.store.state, 'a1')).toMatchObject({ chordId: t.chordId });
+    // A page made while a call runs on its tab gets full speed at once.
+    let finish!: () => void;
+    const running = t.agent.call('a1', () => new Promise<void>((r) => (finish = r)), () => undefined);
+    const late = t.page('a1');
+    (late as unknown as { throttled: boolean }).throttled = true;
+    t.chords.wire(late, 'a1');
+    expect((late as unknown as { throttled: boolean }).throttled).toBe(false);
+    finish();
+    await running;
+    t.chords.done(t.agent);
+    t.chords.closeAll(t.chordId);
+    const undo = t.toasts.at(-1)!;
+    t.chords.undoClose((undo.action as { command: { token: string } }).command.token);
+    expect(t.toasts.at(-1)).toMatchObject({ message: 'Claude Code finished. Keep these tabs?' });
+    // And Keep works on the chord that came back.
+    t.chords.keep('w1', t.chordId);
+    expect(nodeOf(t.store.state, 'a1')).toMatchObject({ chordId: 'c1' });
   });
 });

@@ -19,6 +19,7 @@ import {
   isCrossSite,
   effectsHost,
   isInternalUrl,
+  agentChords,
   isAgentChord,
   isPrivateChord,
   passwordsOnIn,
@@ -263,6 +264,8 @@ export class Browser {
   readonly idle: IdleKeeper;
   /** The assistant (set once main has it): the panel's toggle and window bookkeeping. */
   assistant: { act(windowId: WindowId, action: { do: 'toggle' }): Promise<void>; forgetWindow(windowId: WindowId): void } | null = null;
+  /** Some window shows an agent's bar (S18): syncAgentBars has bars to take down even once no agent is left. */
+  private agentBars = false;
   /** Ctrl+. / ⌘. (S18): stop every outside agent and every assistant reply. Set by main. */
   stopAll: (() => void) | null = null;
   /** An outside agent's tab's page was made (S18): main/agents wires it (the typing pause, leaving without asking). */
@@ -757,6 +760,9 @@ export class Browser {
       },
     });
     options.httpAuth.connect({
+      // Outside agents' tabs (S18): no sign-in box; the agent is told instead.
+      agentTab: (nodeId) => this.isAgentNode(nodeId),
+      agentRefused: (nodeId, detail) => this.agentHeld?.(nodeId, 'signin', detail),
       // A tab's page, or Peek's (its box shows over Peek). A mini window has no popover to ask in.
       nodeFor: (contents) => {
         const floating = this.tabs.floatingNodeFor(contents);
@@ -911,12 +917,20 @@ export class Browser {
     return windowId;
   }
 
-  /** Each window's page sits below the agent's bar while the tab on screen (alone, not a split) has one (S18). */
+  /**
+   * Each window's page sits below the agent's bar while the tab on screen (alone, not a split) has one (S18). With
+   * no agent's chord and no bar up, there's nothing to do.
+   */
   private syncAgentBars(state: State): void {
+    if (!this.agentBars && agentChords(state).length === 0) return;
+    let any = false;
     for (const w of this.windows.values()) {
       const shown = shownTabs(state, w.id);
-      w.setAgentBar(shown.length === 1 && Boolean(state.live[shown[0]!]?.agent));
+      const on = shown.length === 1 && Boolean(state.live[shown[0]!]?.agent);
+      w.setAgentBar(on);
+      any ||= on;
     }
+    this.agentBars = any;
   }
 
   /** A download an outside agent's tab started (S18): refused, and the agent told. False for any other page. */
