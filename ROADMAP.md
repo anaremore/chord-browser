@@ -492,6 +492,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 - ~~**A built-in password store** (D12)~~ Reversed 2026-11-15: Chord builds its own ([S17](docs/decisions/S17-passwords.md)); see *Next, in order* above.
 - **Assistant developer mode, your own API keys, local models.** The assistant stays a chat that can read the browser; Effects use the same apps.
 - **Connect an agent** (the Chord MCP server for your own Claude Code or Codex) is parked, not deleted. It goes beyond chat, and can come back if you want it.
+  - Unparked as [S18](docs/decisions/S18-agent-mcp.md) (2026-11-19). M1 is on main but **hidden in release builds until 0.14.0** (decided 2026-11-21, for the 0.13.1 security release): packaged builds have no Settings → Agents, never serve the endpoint, and `chord mcp` answers that Chord isn't open. Development and E2E builds have all of it. Flip `AGENTS_RELEASED` (packages/core/src/agent-tools.ts) in the 0.14.0 release commit.
 - *Moved to After 0.1 on 2026-10-24:* built-in ad blocking (D5 reversed) and importing from other browsers.
 
 ---

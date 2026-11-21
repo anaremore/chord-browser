@@ -27,6 +27,8 @@ export interface BridgeOptions {
   log?(...args: unknown[]): void;
   parentPid?: number;
   cwd?: string;
+  /** This build has no Agents (a packaged one before AGENTS_RELEASED): never connects, so every call says Chord isn't open. */
+  closed?: boolean;
 }
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: Record<string, unknown> } & Record<string, unknown>;
@@ -42,6 +44,7 @@ export function runBridge(options: BridgeOptions): { close(): void } {
   const pending = new Set<Message['id']>();
 
   const connectToChord = (): Promise<Socket | null> => {
+    if (options.closed) return Promise.resolve(null);
     if (chord) return Promise.resolve(chord);
     connecting ??= (async () => {
       const socket = await connectEndpoint(options.userData, {

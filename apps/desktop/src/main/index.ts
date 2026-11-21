@@ -7,6 +7,7 @@ import {
   BATTERY_SLEEP_AFTER_MS,
   IDLE_CHECK_MS,
   MEMORY_CHECK_MS,
+  AGENTS_RELEASED,
   PRESSURE_SLEEP_AFTER_MS,
   SLEEP_AFTER_MS,
   isPrivateProfile,
@@ -440,6 +441,7 @@ function registerIpc(): void {
     node: process.versions.node,
     platform: systemInfo().platform,
     arch: process.arch,
+    agents: !app.isPackaged || AGENTS_RELEASED,
   }));
   handle('settings:openUrl', ({ url }) => browser!.openUrlInLastWindow(url));
   handle('settings:saveTheme', ({ theme }) => browser!.store.dispatch({ t: 'theme.save', theme }));

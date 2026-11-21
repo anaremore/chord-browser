@@ -13,6 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
   AGENT_ENDPOINT_FILE,
+  AGENTS_RELEASED,
   CONTROL_REFUSALS,
   DEFAULT_SETTINGS,
   agentToolList,
@@ -76,7 +77,7 @@ async function chord(userData: string, ask: Ask = answering('once'), waitMs = 20
 }
 
 /** An MCP client on a bridge in this process: as an agent would talk to `chord mcp`. */
-function client(userData: string) {
+function client(userData: string, closed?: boolean) {
   const input = new PassThrough();
   const output = new PassThrough();
   const waiting = new Map<number, (m: Record<string, unknown>) => void>();
@@ -87,7 +88,7 @@ function client(userData: string) {
     if (m.method) notifications.push(m.method);
     if (typeof m.id === 'number') waiting.get(m.id)?.(m);
   });
-  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd: userData });
+  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd: userData, closed });
   let id = 0;
   const request = (method: string, params: unknown = {}) =>
     new Promise<{ result: Record<string, unknown> }>((done) => {
@@ -126,6 +127,16 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const listed = await c.call('list_tabs');
     expect(listed.error).toBe(false);
     expect(JSON.parse(listed.text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
+  });
+
+  it('a build without Agents (packaged, before AGENTS_RELEASED): calls say Chord isn’t open even while one serves', async () => {
+    const ud = profile();
+    const service = await chord(ud);
+    const c = client(ud, true);
+    await c.initialize();
+    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(7);
+    expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
+    expect(service.connections.size).toBe(0);
   });
 
   it('allowed: tools run through the shared layer on the agent’s own tabs (none yet), refusing in one sentence', async () => {
@@ -297,18 +308,30 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
 });
 
 describe('Zero cost, and off in packaged builds', () => {
-  it('the setting serves in every build; CHORD_AGENTS only in development ones', () => {
-    // [packaged, setting, CHORD_AGENTS, serves]
-    const table: [boolean, boolean, string | undefined, boolean][] = [
-      [true, true, undefined, true],
-      [true, false, '1', false],
-      [true, false, undefined, false],
-      [false, false, undefined, false],
-      [false, true, undefined, true],
-      [false, false, '1', true],
-      [false, false, '0', false],
+  it('the setting serves in development builds, and in packaged ones once released; CHORD_AGENTS only in development ones', () => {
+    // [packaged, setting, CHORD_AGENTS, AGENTS_RELEASED, serves]
+    const table: [boolean, boolean, string | undefined, boolean, boolean][] = [
+      // Packaged, before 0.14.0: never, whatever the setting or the switch.
+      [true, true, undefined, false, false],
+      [true, true, '1', false, false],
+      [true, false, '1', false, false],
+      [true, false, undefined, false, false],
+      // Packaged, released.
+      [true, true, undefined, true, true],
+      [true, false, '1', true, false],
+      [true, false, undefined, true, false],
+      // Development: the same either way.
+      ...[false, true].flatMap((released): [boolean, boolean, string | undefined, boolean, boolean][] => [
+        [false, false, undefined, released, false],
+        [false, true, undefined, released, true],
+        [false, false, '1', released, true],
+        [false, false, '0', released, false],
+      ]),
     ];
-    for (const [packaged, setting, dev, serves] of table) expect(agentsServe({ packaged }, setting, dev), JSON.stringify([packaged, setting, dev])).toBe(serves);
+    for (const [packaged, setting, dev, released, serves] of table) expect(agentsServe({ packaged }, setting, dev, released), JSON.stringify([packaged, setting, dev, released])).toBe(serves);
+    // The default is this build's AGENTS_RELEASED.
+    expect(agentsServe({ packaged: true }, true, undefined)).toBe(AGENTS_RELEASED);
+    expect(agentsServe({ packaged: false }, true, undefined)).toBe(true);
   });
 
   function store(on: boolean) {
@@ -342,6 +365,21 @@ describe('Zero cost, and off in packaged builds', () => {
     await packaged.settled();
     expect(made).toBe(0);
     expect(existsSync(join(ud, AGENT_ENDPOINT_FILE))).toBe(false);
+    // Packaged with the setting saved on, or turned on: serves only once AGENTS_RELEASED (0.14.0).
+    const savedOn = store(true);
+    const packagedOn = watchAgents({ packaged: true, store: savedOn, devSwitch: undefined, make });
+    cleanup.push(() => packagedOn.quit());
+    await packagedOn.settled();
+    if (!AGENTS_RELEASED) {
+      savedOn.set(false);
+      savedOn.set(true);
+      await packagedOn.settled();
+      expect(made).toBe(0);
+      expect(existsSync(join(ud, AGENT_ENDPOINT_FILE))).toBe(false);
+    } else {
+      await packagedOn.quit();
+      made = 0;
+    }
     const s = store(false);
     const agents = watchAgents({ packaged: false, store: s, devSwitch: undefined, make });
     cleanup.push(() => agents.quit());
