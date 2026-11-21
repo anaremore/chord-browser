@@ -1027,6 +1027,7 @@ if (!app.requestSingleInstanceLock()) {
       extensions: {
         root: join(app.getPath('userData'), 'Extensions'),
         preloadPath: join(import.meta.dirname, '../preload/extensions.cjs'),
+        unpackWorkerPath: join(import.meta.dirname, 'extension-unpack.js'),
         webStore: new WebStore({
           fetch: async (url, init) => {
             await proxies.ready(session.defaultSession);

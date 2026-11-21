@@ -19,15 +19,24 @@ import {
 } from '@chord/core';
 import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult, Rect, Toast } from '@chord/ipc';
 import { BaseWindow, BrowserWindow, Menu, nativeImage, type ContextMenuParams, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { readdir, rm } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { send } from '../ipc';
 import type { AppWindow } from '../window';
-import { extensionIdFrom, extractZip, verifyCrx3 } from './crx';
-import { ExtensionHost, type HostCallbacks } from './host';
+import { extensionIdFrom } from './crx';
+import { ExtensionHost, within, type HostCallbacks } from './host';
 import { ExtensionPopup } from './popup';
+import { unpackInWorker } from './unpack';
 import { isNewerVersion, type WebStore } from './webstore';
 
+/**
+ * One extension's update (download, unpack, load, the install step) fails if
+ * it takes longer than this, so a step that never settles can't hold every
+ * later check. Far beyond a real update: downloading and unpacking each give
+ * up at five minutes on their own.
+ */
+const UPDATE_DEADLINE_MS = 15 * 60_000;
 /** Chrome checks for extension updates about every five hours. */
 const UPDATE_INTERVAL_MS = 5 * 60 * 60 * 1000;
 const FIRST_UPDATE_CHECK_MS = 60 * 1000;
@@ -43,9 +52,13 @@ export interface ExtensionsDeps {
   root: string;
   /** The library's preload, as built (out/preload/extensions.cjs). */
   preloadPath: string;
+  /** The worker that verifies and unpacks Web Store packages, as built (out/main/extension-unpack.js). */
+  unpackWorkerPath: string;
   webStore: WebStore;
   /** SHA-256 of the key every package must also be signed with: the Web Store's, except in tests. */
   publisherKeyHash?: string;
+  /** Tests only: how long one extension's update may take (UPDATE_DEADLINE_MS otherwise). */
+  updateDeadlineMs?: number;
   windows(): Iterable<AppWindow>;
   windowById(windowId: WindowId): AppWindow | undefined;
   lastWindow(): AppWindow | undefined;
@@ -101,10 +114,20 @@ export class Extensions {
   private readonly barSent = new Map<WindowId, string>();
   private readonly iconCache = new Map<string, string | null>();
   private readonly installing = new Map<string, Promise<InstallResult>>();
+  /**
+   * Updates in flight (by extensionKey). Reconcile leaves these alone, and an
+   * install of the same extension (removed, then added again) waits for it:
+   * both would unpack into the same version's folder.
+   */
+  private readonly updating = new Map<string, Promise<boolean>>();
+  /** The update check running now: a second caller (the timer, Settings) gets the same one. */
+  private updateCheck: Promise<number> | null = null;
   private readonly popupWindows = new Set<BrowserWindow>();
   /** Extensions loading again after Undo, and ones that wouldn't load (by extensionKey). */
   private readonly loading = new Set<string>();
   private readonly unloadable = new Set<string>();
+  /** Launch's removal of folders nothing uses; installs wait for it. */
+  private cleanup: Promise<void> = Promise.resolve();
   private updateTimer: ReturnType<typeof setTimeout> | undefined;
   private syncQueued = false;
 
@@ -416,11 +439,8 @@ export class Extensions {
    * start checking for updates.
    */
   async start(devFolders: readonly string[] = []): Promise<void> {
-    try {
-      this.removeOrphanFolders();
-    } catch (error) {
-      console.error('Cleaning up old extension folders failed:', error);
-    }
+    // Off the launch path; installs and updates wait for it, so it never sees a folder they're writing.
+    this.cleanup = this.removeOrphanFolders().catch((error: unknown) => console.error('Cleaning up old extension folders failed:', error));
     const installed = Object.values(this.deps.state().extensions);
     await Promise.all(
       installed.map(async (e) => {
@@ -503,7 +523,9 @@ export class Extensions {
     if (existing) return Promise.resolve({ ok: true, name: existing.name });
     const running = this.installing.get(key);
     if (running) return running;
-    const task = this.installFromStore(profileId, id)
+    const updating = this.updating.get(key);
+    const task = (updating ? within(updating.catch(() => false), this.deps.updateDeadlineMs ?? UPDATE_DEADLINE_MS) : Promise.resolve())
+      .then(() => this.installFromStore(profileId, id))
       .then((record): InstallResult => ({ ok: true, name: record.name }))
       .catch((error: unknown): InstallResult => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
       .then((result) => {
@@ -523,18 +545,18 @@ export class Extensions {
     if (!info || info.status !== 'ok' || !info.version || !info.codebase) {
       throw new Error(info?.status === 'noupdate' || info?.status?.includes('unknown') ? 'The Chrome Web Store doesn’t have it.' : `The Chrome Web Store said “${info?.status ?? 'nothing'}”.`);
     }
-    const path = await this.unpackFromStore(profileId, id, info.version, await this.deps.webStore.download(info));
+    const path = await this.unpackFromStore(profileId, id, info.version, await this.deps.webStore.download(info), info.sha256);
     const host = this.host(profileId, true)!;
     let ext: Electron.Extension;
     try {
       ext = await host.load(path);
     } catch (error) {
-      this.removeFolder(path);
+      await this.removeFolder(path);
       throw error;
     }
     if (ext.id !== id) {
       host.unload(ext.id);
-      this.removeFolder(path);
+      await this.removeFolder(path);
       throw new Error('The package’s ID doesn’t match.');
     }
     const now = Date.now();
@@ -544,21 +566,25 @@ export class Extensions {
     return record;
   }
 
-  /** Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_0, keeping the store's ID. */
-  private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer): Promise<string> {
-    const { archive, publicKey } = verifyCrx3(crx, id, this.deps.publisherKeyHash ? { publisherKeyHash: this.deps.publisherKeyHash } : {});
+  /**
+   * Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_0, keeping the store's ID.
+   * All of it (signatures, inflating, writing, the manifest's key) happens in a worker thread, never on main.
+   */
+  private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer, sha256: string | null): Promise<string> {
+    await this.cleanup;
     const path = join(this.deps.root, profileId, id, `${version.replace(/[^\d.]/g, '')}_0`);
-    rmSync(path, { recursive: true, force: true });
-    mkdirSync(path, { recursive: true });
     try {
-      extractZip(archive, path);
-      const manifest = readManifest(path);
-      if (manifest.version !== version) throw new Error(`The package is version ${manifest.version}, not ${version}.`);
-      // With its public key in the manifest, the extension keeps the store's ID wherever it's unpacked.
-      manifest.key = publicKey.toString('base64');
-      writeFileSync(join(path, 'manifest.json'), JSON.stringify(manifest, null, 2));
+      await unpackInWorker(this.deps.unpackWorkerPath, {
+        crx,
+        id,
+        version,
+        dest: path,
+        ...(sha256 ? { sha256 } : {}),
+        ...(this.deps.publisherKeyHash ? { publisherKeyHash: this.deps.publisherKeyHash } : {}),
+      });
     } catch (error) {
-      this.removeFolder(path);
+      // The worker removes what it wrote; if it died partway, this does.
+      await this.removeFolder(path);
       throw error;
     }
     return path;
@@ -591,8 +617,21 @@ export class Extensions {
     if (current && current.version === record.version) this.deps.dispatch({ t: 'extension.record', extension: { ...current, notifiedVersion: record.version } });
   }
 
-  /** Ask the Web Store about every store extension and update the ones that are behind. Resolves with how many were updated. */
-  async checkForUpdates(): Promise<number> {
+  /**
+   * Ask the Web Store about every store extension and update the ones that are behind. Resolves with how many were updated.
+   * One check at a time: a check asked for while one runs (the timer's, or
+   * Settings' Check for updates) joins it and gets its result, rather than
+   * starting another. A Settings click during a check doesn't ask the store
+   * again; that's accepted, as the running check just asked.
+   */
+  checkForUpdates(): Promise<number> {
+    this.updateCheck ??= this.runUpdateCheck().finally(() => {
+      this.updateCheck = null;
+    });
+    return this.updateCheck;
+  }
+
+  private async runUpdateCheck(): Promise<number> {
     const store = Object.values(this.deps.state().extensions).filter((e) => e.source === 'store');
     if (store.length === 0) return 0;
     let infos;
@@ -606,9 +645,21 @@ export class Extensions {
     for (const e of store) {
       const info = infos.find((i) => i.id === e.id);
       if (!info || info.status !== 'ok' || !info.version || !isNewerVersion(info.version, e.version)) continue;
+      const key = extensionKey(e.profileId, e.id);
+      // Removed (or changed) since the check began, being installed again, or an earlier update of it still running: skip it.
+      if (!this.stillCurrent(e) || this.installing.has(key) || this.updating.has(key)) continue;
+      const version = info.version;
+      const task = this.deps.webStore.download(info).then((crx) => this.updateFromStore(e, version, crx, info.sha256));
+      // Tracked until it really settles, even past its deadline, so nothing else unpacks into its folder meanwhile.
+      this.updating.set(key, task);
+      void task.then(
+        () => this.updating.delete(key),
+        () => this.updating.delete(key),
+      );
       try {
-        await this.updateFromStore(e, info.version, await this.deps.webStore.download(info));
-        updated++;
+        const done = await within(task, this.deps.updateDeadlineMs ?? UPDATE_DEADLINE_MS);
+        if (done === undefined) throw new Error('It took too long, and was given up on.');
+        if (done) updated++;
       } catch (error) {
         console.error(`Updating ${e.name} failed:`, error);
       }
@@ -620,22 +671,40 @@ export class Extensions {
     return updated;
   }
 
-  private async updateFromStore(e: InstalledExtension, version: string, crx: Buffer): Promise<void> {
-    const path = await this.unpackFromStore(e.profileId, e.id, version, crx);
+  /** Is `e` still the installed record, as it was when its update began? Removing it, or a newer version, changes that. */
+  private stillCurrent(e: InstalledExtension): boolean {
+    const now = this.deps.state().extensions[extensionKey(e.profileId, e.id)];
+    return now !== undefined && now.version === e.version && now.path === e.path;
+  }
+
+  /** Update one extension. False when it was removed partway, so there was nothing to update. */
+  private async updateFromStore(e: InstalledExtension, version: string, crx: Buffer, sha256: string | null): Promise<boolean> {
+    const path = await this.unpackFromStore(e.profileId, e.id, version, crx, sha256);
+    if (!this.stillCurrent(e)) {
+      await this.removeFolder(path);
+      return false;
+    }
     const host = this.host(e.profileId, true)!;
     host.unload(e.id);
     try {
       await host.load(path);
     } catch (error) {
       // Back to the version that worked.
-      this.removeFolder(path);
-      await host.load(e.path).catch(() => undefined);
+      await this.removeFolder(path);
+      if (this.stillCurrent(e)) await host.load(e.path).catch(() => undefined);
       throw error;
+    }
+    if (!this.stillCurrent(e)) {
+      // Removed while the new version loaded: it doesn't stay loaded.
+      host.unload(e.id);
+      await this.removeFolder(path);
+      return false;
     }
     const record: InstalledExtension = { ...e, version, path, updatedAt: Date.now() };
     this.deps.dispatch({ t: 'extension.record', extension: record });
-    if (e.path !== path) this.removeFolder(e.path);
+    if (e.path !== path) await this.removeFolder(e.path);
     await this.finishInstall(record);
+    return true;
   }
 
   /**
@@ -665,7 +734,7 @@ export class Extensions {
   reconcile(): void {
     for (const e of Object.values(this.deps.state().extensions)) {
       const key = extensionKey(e.profileId, e.id);
-      if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key)) continue;
+      if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key) || this.updating.has(key)) continue;
       const host = this.host(e.profileId, true)!;
       if (host.get(e.id)) continue;
       this.loading.add(key);
@@ -684,22 +753,31 @@ export class Extensions {
   }
 
   /** Web Store folders no installed extension uses (removed last session, or left by an update): deleted at launch. */
-  private removeOrphanFolders(): void {
-    if (!existsSync(this.deps.root)) return;
+  private async removeOrphanFolders(): Promise<void> {
     const used = new Set(Object.values(this.deps.state().extensions).map((e) => resolve(e.path)));
-    const dirs = (dir: string) => readdirSync(dir).map((name) => join(dir, name)).filter((path) => statSync(path).isDirectory());
-    for (const profileDir of dirs(this.deps.root)) {
-      for (const idDir of dirs(profileDir)) {
-        for (const versionDir of dirs(idDir)) if (!used.has(resolve(versionDir))) this.removeFolder(versionDir);
-        if (readdirSync(idDir).length === 0) this.removeFolder(idDir);
+    const dirs = async (dir: string) => {
+      try {
+        return (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => join(dir, d.name));
+      } catch {
+        return []; // No extensions folder yet.
+      }
+    };
+    for (const profileDir of await dirs(this.deps.root)) {
+      for (const idDir of await dirs(profileDir)) {
+        for (const versionDir of await dirs(idDir)) if (!used.has(resolve(versionDir))) await this.removeFolder(versionDir);
+        if ((await readdir(idDir).catch(() => ['?'])).length === 0) await this.removeFolder(idDir);
       }
     }
   }
 
-  /** Delete a folder, but only inside Chord's own extensions folder. */
-  private removeFolder(path: string): void {
+  /**
+   * Delete a folder, but only inside Chord's own extensions folder. Never
+   * throws: what can't go now (a file Windows holds open) goes at the next
+   * launch, and the error that led here is the one worth reporting.
+   */
+  private async removeFolder(path: string): Promise<void> {
     const rel = relative(resolve(this.deps.root), resolve(path));
     if (!rel || rel.startsWith('..') || resolve(path) === resolve(this.deps.root)) return;
-    rmSync(path, { recursive: true, force: true, maxRetries: 3 });
+    await rm(path, { recursive: true, force: true, maxRetries: 3 }).catch((error: unknown) => console.error(`Removing ${path} failed:`, error));
   }
 }
