@@ -5,7 +5,7 @@
  * buckets that are new objects since the last look are read again, about
  * 140 nodes each at 35,000, never every node on every navigation.
  */
-import type { BucketKey, NodeBucket, NodeBuckets, NodeId, TabNode } from '@chord/core';
+import { nodeOf, type BucketKey, type NodeBucket, type NodeBuckets, type NodeId, type TabNode } from '@chord/core';
 
 /**
  * Buckets a navigation's look reads at most (about 0.1 ms each at 35,000
@@ -48,7 +48,10 @@ export class TabIconIndex {
 
   constructor(private readonly current: () => { readonly nodes: NodeBuckets }) {}
 
-  /** The tabs on `site` (an origin) with an icon, as the state has them now: caught up first, however much changed. */
+  /**
+   * The tabs on `site` (an origin) with an icon, as the state has them now: caught up first, however much changed.
+   * For exact reads (the tests); a navigation looks through `iconOn`, which never waits for every bucket.
+   */
   tabsOn(site: string): Iterable<TabNode> {
     this.catchUp();
     return this.known(site);
@@ -94,6 +97,7 @@ export class TabIconIndex {
     const nodes = this.current().nodes;
     if (nodes === this.nodes) return true;
     let left = buckets;
+    // A bucket gone from the nodes doesn't count toward the limit: the 256 are always there (core's nodes.ts), so none ever goes but in a test.
     for (const [key, before] of this.buckets) if (!(key in nodes)) this.reread(key, before, undefined);
     for (const key in nodes) {
       const bucket = nodes[key as BucketKey];
@@ -131,4 +135,19 @@ export class TabIconIndex {
     tabs.delete(node.id);
     if (tabs.size === 0) this.bySite.delete(site!);
   }
+}
+
+/**
+ * A tab on `site` with an icon, for a navigation's look (TabManager.knownIcon): a few changed buckets read now, the
+ * rest in slices after it. What the index has read so far can be stale, so a tab counts only while it is the
+ * state's own node still: one closed since (a private window's, whose chord is gone and so would pass for the default
+ * profile's) or changed since never lends its icon. `mine`: whether the tab is in the session that looks.
+ */
+export function iconOn(index: TabIconIndex, state: { readonly nodes: NodeBuckets }, site: string, mine: (node: TabNode) => boolean): TabNode | null {
+  if (!index.catchUp(LOOK_BUCKETS)) index.catchUpInSlices();
+  for (const node of index.known(site)) {
+    if (!node.favicon || nodeOf(state, node.id) !== node || !mine(node)) continue;
+    return node;
+  }
+  return null;
 }

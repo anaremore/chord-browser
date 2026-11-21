@@ -9,7 +9,7 @@
 import { emptyState, nodeList, nodeOf, nodesOfChord, setNode, type SidebarNode, type State, type TabNode } from '@chord/core';
 import { freeze, produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { LOOK_BUCKETS, SLICE_BUCKETS, TabIconIndex } from '../../src/main/site-icons';
+import { iconOn, SLICE_BUCKETS, TabIconIndex } from '../../src/main/site-icons';
 
 const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.35, appearance: 'auto' as const };
 
@@ -109,10 +109,9 @@ function worstCase() {
     const index = new TabIconIndex(() => state);
     index.catchUp();
     state = changed;
-    // As knownIcon looks: a few buckets now, the rest in slices on later turns.
+    // As knownIcon looks (iconOn): a few buckets now, the rest in slices on later turns.
     const t = performance.now();
-    index.catchUp(LOOK_BUCKETS);
-    for (const node of index.known(site)) void node;
+    void iconOn(index, state, site, () => true);
     if (i >= 2) times.push(performance.now() - t);
   }
   return { before, after: Math.min(...times) };

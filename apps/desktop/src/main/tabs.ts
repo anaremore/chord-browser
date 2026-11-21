@@ -13,7 +13,7 @@ import { trimNavState } from './nav';
 import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
-import { LOOK_BUCKETS, TabIconIndex } from './site-icons';
+import { iconOn, TabIconIndex } from './site-icons';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -134,14 +134,11 @@ export class TabManager {
   private knownIcon(session: Session, site: string): string | null {
     const kept = this.siteIcons.get(session)?.get(site);
     if (kept) return kept;
-    // A few buckets now; after a big change (an import), the rest on later turns, and this look goes by what's read so far.
-    if (!this.tabIcons.catchUp(LOOK_BUCKETS)) this.tabIcons.catchUpInSlices();
-    for (const node of this.tabIcons.known(site)) {
-      if (!node.favicon || this.deps.sessionFor(node) !== session) continue;
-      this.rememberIcon(session, node.url, node.favicon);
-      return node.favicon;
-    }
-    return null;
+    // Only a tab that's still the state's own node, in this session (a closed private window's never: site-icons.ts).
+    const node = iconOn(this.tabIcons, this.deps.state(), site, (n) => this.deps.sessionFor(n) === session);
+    if (!node?.favicon) return null;
+    this.rememberIcon(session, node.url, node.favicon);
+    return node.favicon;
   }
 
   get(nodeId: NodeId): WebContentsView | undefined {
