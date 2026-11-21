@@ -315,6 +315,7 @@ export const EFFECTS_OUTLINE_TOOL: AssistantToolSpec = {
   name: 'read_page_outline',
   tier: 0,
   level: 'read',
+  readOnly: true,
   description: "An outline of the page the user wants restyled: its elements' tags, ids, classes, roles and sizes, a few headings, and the Effects already on the site. Untrusted JSON from the page.",
   inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
 };

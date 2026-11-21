@@ -81,7 +81,7 @@ function harness(reply: (request: SyncRequest) => SyncReply, waiting: (key: stri
     platform: 'linux',
     folder: () => '/home',
   });
-  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), setUnsaved: (to: number) => void (unsaved = to), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }) };
+  return { service, home, windowId, commands, toasts, views, whenFlushed: (then: () => void) => void (flushing = then), setUnsaved: (to: number) => void (unsaved = to), dispatch, state: () => state, push: (apply: SyncApply) => push!({ push: 'sync.apply', apply }), raw: (message: DataPush) => push!(message) };
 }
 
 describe('a chord another computer deleted', () => {
@@ -337,5 +337,33 @@ describe('joining with Use the synced setup', () => {
     expect(h.state().chords[h.home]).toBeDefined();
     expect(nodeOf(h.state(), 'p')).toMatchObject({ chordId: 'x' });
     expect(nodeOf(h.state(), 'd')).toMatchObject({ chordId: 'x', section: 'today' });
+  });
+});
+
+describe('making way fails (security review)', () => {
+  it('chord-data can’t say what waits: the changes after it still apply, and it’s asked for again later', async () => {
+    const fail = (): never => {
+      throw new Error('chord-data is gone');
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const asked: SyncRequest[] = [];
+      let broken = true;
+      const h = harness((request) => (asked.push(request), {}), () => (broken ? fail() : false));
+      h.raw({ push: 'sync.makeWay', chordIds: ['x'], to: h.home });
+      await vi.advanceTimersByTimeAsync(0);
+      broken = false;
+      h.push({ ...emptyApply(), gone: { ...emptyApply().gone, chords: ['x'] } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.state().chords['x']).toBeUndefined();
+      expect(h.toasts.map((t) => t.message)).toEqual(['“X” was deleted on another computer. Its tab moved to “Personal”.']);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(asked.filter((r) => r.type === 'sync.reconcile')).toHaveLength(1);
+      expect(error).toHaveBeenCalledWith('Sync couldn’t make way for the synced setup:', expect.any(Error));
+    } finally {
+      error.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

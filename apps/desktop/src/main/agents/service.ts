@@ -50,6 +50,9 @@ export interface HeldConnection {
   always: boolean;
 }
 
+/** Messages a connection may send while its code loads (an MCP client sends two or three). */
+export const QUEUED_MAX = 32;
+
 export class AgentService {
   private endpoint: Endpoint | null = null;
   private starting: Promise<void> | null = null;
@@ -72,8 +75,9 @@ export class AgentService {
       const endpoint = await startEndpoint({
         userData: this.deps.userData,
         log: this.deps.log,
-        onFirstConnection: () => {
-          if (process.platform === 'win32' && this.deps.helper && this.endpoint) this.restricted = restrictPipe(this.deps.helper, this.endpoint.path);
+        // The path comes with it: a connection can arrive before startEndpoint has returned, and must never skip the DACL.
+        onFirstConnection: (path) => {
+          if (process.platform === 'win32' && this.deps.helper) this.restricted = restrictPipe(this.deps.helper, path);
         },
         onConnection: ({ token: _token, ...hello }, send, socket) => {
           // The connection's code loads with the first one; messages that come meanwhile wait.
@@ -121,7 +125,12 @@ export class AgentService {
             socket.destroy();
           });
           return {
-            message: (m) => (held ? held.connection.message(m) : void queued.push(m)),
+            // Only so many wait: a peer that floods them is hung up on.
+            message: (m) => {
+              if (held) return held.connection.message(m);
+              if (queued.length >= QUEUED_MAX) return void socket.destroy();
+              queued.push(m);
+            },
             closed: () => {
               gone = true;
               if (!held) return;

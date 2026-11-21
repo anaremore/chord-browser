@@ -124,13 +124,19 @@ export class SyncService {
       else if (push.push === 'sync.makeWay')
         // Chords that were to make way for the synced setup and didn't (the change that took them was lost): now, in
         // order. Not one with a change of yours waiting to be written (an Undo that brought it back).
-        this.applying = this.applying.then(() =>
-          this.makeWay(
-            push.chordIds.filter((id) => !this.options.data.waiting(`chord:${id}`)),
-            push.to,
-            false,
-          ),
-        );
+        this.applying = this.applying
+          .then(() =>
+            this.makeWay(
+              push.chordIds.filter((id) => !this.options.data.waiting(`chord:${id}`)),
+              push.to,
+              false,
+            ),
+          )
+          .catch((error: unknown) => {
+            // As for a change below: the chain goes on, and what didn't make way is asked for again.
+            console.error('Sync couldn’t make way for the synced setup:', error);
+            this.reconcileLater();
+          });
       else
         this.applying = this.applying
           .then(() => this.apply(push.apply, false, push.read))

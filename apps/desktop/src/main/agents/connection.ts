@@ -143,6 +143,13 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         }
         if (signal.aborted) return refused('stopped');
         if (contents.isDestroyed()) return { text: 'That tab closed while it loaded.', isError: true };
+        // Redirected to a site the user keeps private: the tab goes, and nothing of where it ended up is said.
+        // (Only a web address counts: a page still loading at the wait's end may show none yet.)
+        const landed = page.url();
+        if (WEB_ADDRESS.test(landed) && isNeverReadable(landed, neverSites())) {
+          deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
+          return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
+        }
         return { text: toolResult({ tab_id: ref, url: page.url(), title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
       },
       refused,

@@ -343,6 +343,44 @@ describe('Review 1 of #77', () => {
   });
 });
 
+describe('open_tab and a Never site (security review)', () => {
+  // [address asked for, where the page ends up, what the agent hears, whether its tab stays]
+  const table: [string, string, string, boolean][] = [
+    ['https://bank.test/', 'https://bank.test/', 'That site is one the user keeps private, so it can’t be opened for you.', false],
+    ['https://agent.test/go', 'https://www.bank.test/statements', 'That site is one the user keeps private, so it can’t be opened for you.', false],
+    ['https://agent.test/go', 'https://agent.test/home', 'https://agent.test/home', true],
+  ];
+  it.each(table)('%s, landing on %s: %s', async (asked, landed, said, stays) => {
+    const t = setup();
+    const events = new EventEmitter();
+    let at = '';
+    let loading = true;
+    const contents = Object.assign(events, { isDestroyed: () => false, isLoading: () => loading, getURL: () => at, getTitle: () => 'Statements for Ada' }) as unknown as WebContents;
+    const sent: { id?: number; result?: { content: { text: string }[]; isError: boolean } }[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() }, (m) => void sent.push(m as never), {
+      present: async () => 'once',
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+      neverSites: () => ['bank.test'],
+    });
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: asked } } });
+    await vi.waitFor(() => expect(events.listenerCount('did-stop-loading') + sent.length).toBeGreaterThan(0));
+    // The page redirects, then finishes loading.
+    at = landed;
+    loading = false;
+    events.emit('did-stop-loading');
+    await vi.waitFor(() => expect(sent.find((m) => m.id === 1)).toBeDefined());
+    const result = sent.find((m) => m.id === 1)!.result!;
+    expect(result.isError).toBe(!stays);
+    expect(result.content[0]!.text).toContain(said);
+    if (!stays) expect(result.content[0]!.text).not.toMatch(/statements|Ada/i);
+    const chordId = t.chords.chordOf(connection.agent);
+    const tabs = Object.values(t.store.state.nodes).flatMap((b) => Object.values(b)).filter((n) => n.kind === 'tab' && n.chordId === chordId);
+    expect(tabs.length).toBe(stays ? 1 : 0);
+  });
+});
+
 describe('S18 M1d', () => {
   it('a site asking again and again for a sign-in is one note per tab and origin until the agent hears it', () => {
     const t = setup();

@@ -56,7 +56,7 @@ const tab = (id: string, url: string, title: string): TabNode => ({
   createdAt: 0,
 });
 
-function setup(picker: 'mac' | 'portal' | null = null) {
+function setup(picker: 'mac' | 'portal' | null = null, agentTab?: (nodeId: string) => boolean) {
   const meet = new FakePage('https://meet.test');
   const slides = new FakePage('https://slides.test');
   const pages: Record<string, FakePage> = { meet, slides };
@@ -79,6 +79,7 @@ function setup(picker: 'mac' | 'portal' | null = null) {
     sharingChanged: () => changes.sharing++,
     repaint: (nodeId) => changes.repaints.push(nodeId),
     cantStop: () => {},
+    ...(agentTab ? { agentTab } : {}),
   });
   let handler: ((request: { frame: WebFrameMain; audioRequested: boolean }, callback: (streams: Streams | null) => void) => void) | undefined;
   const opts: unknown[] = [];
@@ -269,5 +270,26 @@ describe('where screens and windows are picked', () => {
     expect(systemPickerFor('linux', '', { XDG_SESSION_TYPE: 'wayland' }, 'x11')).toBeNull();
     expect(systemPickerFor('linux', '', {}, 'wayland')).toBe('portal');
     expect(systemPickerFor('win32', '10.0.26200', {})).toBeNull();
+  });
+});
+
+describe('an outside agent’s tab (security review)', () => {
+  beforeEach(() => electron.getSources.mockReset());
+
+  // [the asking tab is an agent's, what it's answered, whether a picker shows]
+  const table: [boolean, 'nothing' | 'a picker', boolean][] = [
+    [true, 'nothing', false],
+    [false, 'a picker', true],
+  ];
+  it.each(table)('agent’s: %s → %s', async (agent, _what, picker) => {
+    electron.getSources.mockResolvedValue([]);
+    const t = setup(null, (nodeId) => agent && nodeId === 'meet');
+    let answered: Streams | null | 'unanswered' = 'unanswered';
+    void t.ask().then((streams) => (answered = streams));
+    await flush();
+    expect(t.broker.promptFor('meet') !== null).toBe(picker);
+    expect(t.changes.popover > 0).toBe(picker);
+    expect(electron.getSources).toHaveBeenCalledTimes(picker ? 2 : 0);
+    expect(answered).toBe(picker ? 'unanswered' : null);
   });
 });

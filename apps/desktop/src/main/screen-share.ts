@@ -43,6 +43,8 @@ export interface ScreenShareDeps {
   repaint(nodeId: NodeId): void;
   /** Stop couldn't reach the share (the page never used it where Chord can see): say so. */
   cantStop(nodeId: NodeId, host: string): void;
+  /** An outside agent's tab (S18): it never shares anything, and no picker shows for it. */
+  agentTab?(nodeId: NodeId): boolean;
 }
 
 /** Where screens and windows are picked when Chord's picker doesn't list them (`systemPickerFor`). */
@@ -230,6 +232,7 @@ export class ScreenShareBroker {
     const nodeId = contents ? this.deps?.nodeFor(contents) : undefined;
     const host = frame ? hostOf(frame.origin) : null;
     if (!frame || !contents || !nodeId || !host || !this.deps) return answer(null);
+    if (this.deps.agentTab?.(nodeId)) return answer(null);
     const tabs = this.deps.shareableTabs(nodeId);
     const id = this.nextId++;
     const pending: Pending = {

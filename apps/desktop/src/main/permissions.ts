@@ -6,7 +6,8 @@
  * closes. A private window asks the same way, but its answers last only
  * while it's open, and it never sees the ones you saved. In presenting mode
  * websites' notifications are refused, without asking: their permission
- * check is the only place Chord can stop them.
+ * check is the only place Chord can stop them. An outside agent's tab (S18)
+ * gets only the harmless ones: no prompt, no answer you saved, no screen.
  */
 import type { Command, NodeId, PermissionDecision, SitePermission, SitePermissions, State } from '@chord/core';
 import type { PermissionPrompt } from '@chord/ipc';
@@ -74,6 +75,8 @@ export interface PermissionDeps {
   nodeFor(contents: WebContents): NodeId | undefined;
   /** Something about the prompts changed: refresh every window's popover. */
   onChange(): void;
+  /** An outside agent's tab (S18): it never asks, and never gets what you allowed a site. */
+  agentTab?(nodeId: NodeId): boolean;
 }
 
 const CAPTURE: readonly SitePermission[] = ['camera', 'microphone'];
@@ -99,7 +102,9 @@ export class PermissionBroker {
   /** `scope`: a private window's profile, whose answers stay in memory and apart from your saved ones. */
   attach(ses: Session, scope: string | null = null): void {
     ses.setPermissionRequestHandler((contents, permission, callback, details) => {
-      if (HARMLESS.has(permission) || ASKED_ELSEWHERE.has(permission)) return callback(true);
+      if (HARMLESS.has(permission)) return callback(true);
+      if (this.isAgent(contents)) return callback(false);
+      if (ASKED_ELSEWHERE.has(permission)) return callback(true);
       const mediaTypes = 'mediaTypes' in details ? (details.mediaTypes ?? []) : [];
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf('requestingUrl' in details ? details.requestingUrl : undefined);
@@ -113,13 +118,21 @@ export class PermissionBroker {
       this.pending.push({ id: this.nextId++, nodeId, origin, scope, host: new URL(origin).host, permissions: wanted, answer: callback });
       this.deps.onChange();
     });
-    ses.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
-      if (HARMLESS.has(permission) || ASKED_ELSEWHERE.has(permission)) return true;
+    ses.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+      if (HARMLESS.has(permission)) return true;
+      if (contents && this.isAgent(contents)) return false;
+      if (ASKED_ELSEWHERE.has(permission)) return true;
       const mediaTypes = details.mediaType && details.mediaType !== 'unknown' ? [details.mediaType] : [];
       const wanted = sitePermissionsFor(permission, mediaTypes);
       const origin = originOf(requestingOrigin);
       return Boolean(wanted && origin && this.deps && !this.quiet(wanted) && rememberedDecision(this.answers(scope), origin, wanted) === 'allow');
     });
+  }
+
+  /** Whether the page is an outside agent's tab's. */
+  private isAgent(contents: WebContents): boolean {
+    const nodeId = this.deps?.nodeFor(contents);
+    return Boolean(nodeId && this.deps?.agentTab?.(nodeId));
   }
 
   /** Presenting mode: notifications are refused (pages see "denied" while it's on), and nothing is remembered. */

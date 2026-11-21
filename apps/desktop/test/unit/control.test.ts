@@ -140,10 +140,11 @@ type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) 
 /** A page that answers the extractor with `read`, never (`hang`), or as a test's function does. */
 function fakePage(url: string, read: Answer) {
   const events = new EventEmitter();
+  const at = { url };
   const contents = {
     isDestroyed: () => false,
     isLoading: () => false,
-    getURL: () => url,
+    getURL: () => at.url,
     on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
     once: (e: string, f: (...a: unknown[]) => void) => events.once(e, f),
     off: (e: string, f: (...a: unknown[]) => void) => events.off(e, f),
@@ -154,11 +155,14 @@ function fakePage(url: string, read: Answer) {
           ? new Promise(() => undefined)
           : Promise.resolve({ title: 'Article', url, contentType: 'text/html', text: read.text, selection: '' }),
   };
-  return { contents: contents as unknown as WebContents, events };
+  return { contents: contents as unknown as WebContents, events, at };
 }
 
-function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answer; cardWaitMs?: number } = {}) {
-  const nodes = [tab('n1', 'https://news.test/a'), tab('n2', 'https://private.test/'), tab('n3', 'https://news.test/b')];
+/** The tab goes to `url`: its page, and its saved address too unless `pageOnly` (a redirect the store hasn't heard of yet). */
+type Go = (id: NodeId, url: string, pageOnly?: boolean) => void;
+
+function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answer; cardWaitMs?: number; onCard?: (go: Go) => void; onEnsure?: (go: Go) => void } = {}) {
+  let nodes = [tab('n1', 'https://news.test/a'), tab('n2', 'https://private.test/'), tab('n3', 'https://news.test/b')];
   let state = stateWith(nodes);
   const pages = new Map<NodeId, ReturnType<typeof fakePage>>(nodes.map((n) => [n.id, fakePage(n.url, opts.read ?? { text: `Text of ${n.id}` })]));
   const view = (id: NodeId) => (pages.has(id) ? ({ webContents: pages.get(id)!.contents } as WebContentsView) : undefined);
@@ -168,12 +172,19 @@ function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answ
         return state;
       },
     },
-    tabs: { get: view, ensure: view },
+    tabs: { get: view, ensure: (id) => (opts.onEnsure?.(go), view(id)) },
     readers: { viewFor: () => undefined },
   };
   const cards: ControlCard[] = [];
+  const go: Go = (id, url, pageOnly = false) => {
+    pages.get(id)!.at.url = url;
+    if (pageOnly) return;
+    nodes = nodes.map((n) => (n.id === id ? { ...n, url } : n));
+    state = stateWith(nodes);
+  };
   const agent = new ControlAgent('test', (c, signal) => {
     cards.push(c);
+    opts.onCard?.(go);
     if (opts.answer !== 'hold') return Promise.resolve(opts.answer ?? 'once');
     return new Promise<Grant>((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
   });
@@ -197,7 +208,7 @@ function setup(opts: { needsCard?: boolean; answer?: Grant | 'hold'; read?: Answ
   const close = (id: NodeId) => {
     state = stateWith(nodes.filter((n) => n.id !== id));
   };
-  return { scope, agent, call, close, cards, activity, pages };
+  return { scope, agent, call, close, cards, activity, pages, go };
 }
 
 const refusal = (out: { text?: string }) => (JSON.parse(out.text!) as { data: { refused?: string; error?: string } }).data;
@@ -396,5 +407,35 @@ describe('Cards, review 1 of #76', () => {
     await late({ tab: 'n5', target: ['https://a.test/'] });
     await expect(agent.ask(card({ tab: 'n5', target: ['https://a.test/'] }), new AbortController().signal, 20)).resolves.toBe('once');
     expect(shown).toHaveLength(7);
+  });
+});
+
+describe('Never read, through a redirect (security review)', () => {
+  const NEVER = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+  const formAt = (url: string) => async () => ({ url, forms: [], controls: [], truncated: false });
+  const readAt = (url: string) => async () => ({ title: 'Inbox', url, contentType: 'text/html', text: 'secret', selection: 'secret' });
+  // [tool, how the tab got to the Never site, the setup that makes it so]
+  const table: [string, string, Parameters<typeof setup>[0]][] = [
+    ['read_tab', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
+    ['read_selection', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
+    ['tab_screenshot', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
+    ['read_form', 'navigated while the card was up', { needsCard: true, onCard: (go) => go('n1', 'https://private.test/inbox') }],
+    ['read_tab', 'redirected as it loaded', { onEnsure: (go) => go('n1', 'https://private.test/inbox', true) }],
+    ['tab_screenshot', 'redirected as it loaded', { onEnsure: (go) => go('n1', 'https://mail.private.test/', true) }],
+    ['read_form', 'redirected as it loaded', { onEnsure: (go) => go('n1', 'https://private.test/inbox', true) }],
+    ['read_tab', 'redirected during the read', { read: readAt('https://private.test/inbox') }],
+    ['read_selection', 'redirected during the read', { read: readAt('https://private.test/inbox') }],
+    ['read_form', 'redirected during the read', { read: formAt('https://private.test/inbox') }],
+  ];
+  it.each(table)('%s on a tab that %s: refused, and nothing read is kept', async (tool, _how, opts) => {
+    const { scope, call, activity } = setup(opts);
+    const out = await call(tool, { tab_id: scope.refs.refFor('n1') });
+    expect(out.isError).toBe(true);
+    expect(out.image).toBeUndefined();
+    expect(refusal(out).refused).toBe(NEVER);
+    expect(out.text).not.toContain('secret');
+    expect([...scope.memory.read]).toEqual([]);
+    expect(scope.memory.form).toBeNull();
+    expect(activity).toEqual([]);
   });
 });

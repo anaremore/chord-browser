@@ -254,10 +254,21 @@ export class Persistence {
         return;
       }
       this.spawn();
-      void this.request({ type: 'open', file: this.file }).then(() => {
-        this.schedule();
-        this.respawned();
-      });
+      const child = this.child;
+      this.request({ type: 'open', file: this.file }).then(
+        (response) => {
+          if (response.ok) {
+            this.schedule();
+            this.respawned();
+            return;
+          }
+          // It came back but couldn't open the profile: it goes again (counted), rather than taking writes it can't keep.
+          console.error('chord-data couldn’t open the profile again:', response.error);
+          child.kill();
+        },
+        // It exited again before answering: its exit already started the next one.
+        () => undefined,
+      );
     });
   }
 

@@ -32,6 +32,9 @@ export const HELLO_MAX = 64 * 1024;
 export const MESSAGE_MAX = 4 * 1024 * 1024;
 /** Lines from Chord to the relay: a screenshot is the largest answer. */
 export const ANSWER_MAX = 64 * 1024 * 1024;
+/** Connections held at once, and of those, ones still before their hello: past either, a new one is hung up on at once. */
+export const LIVE_MAX = 32;
+export const UNAUTHENTICATED_MAX = 8;
 
 /**
  * Line-delimited JSON over a stream. A line longer than `max()` characters
@@ -79,8 +82,8 @@ export interface EndpointOptions {
    * message after it, and when it ends. Lazy work (the gate, the parent lookup) starts here.
    */
   onConnection(hello: AgentHello, send: Send, socket: Socket): { message(m: Record<string, unknown>): void; closed?(): void };
-  /** The first connection of any kind, before its hello (the Windows DACL, once). */
-  onFirstConnection?(): void;
+  /** The first connection of any kind, before its hello (the Windows DACL, once): the endpoint's path, known before it's returned. */
+  onFirstConnection?(path: string): void;
   log?(...args: unknown[]): void;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -97,13 +100,21 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
     chmodSync(dirname(path), 0o700);
   }
   const live = new Set<Socket>();
+  /** Connections that haven't sent the token yet. */
+  const waiting = new Set<Socket>();
   let first = true;
   const server: Server = createServer((socket) => {
     if (first) {
       first = false;
-      options.onFirstConnection?.();
+      options.onFirstConnection?.(path);
+    }
+    if (live.size >= LIVE_MAX || waiting.size >= UNAUTHENTICATED_MAX) {
+      log('agent endpoint: too many connections, hung up');
+      socket.destroy();
+      return;
     }
     live.add(socket);
+    waiting.add(socket);
     let handler: ReturnType<EndpointOptions['onConnection']> | null = null;
     const timer = setTimeout(() => {
       log('agent endpoint: no hello in time');
@@ -116,6 +127,7 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
     socket.on('close', () => {
       clearTimeout(timer);
       live.delete(socket);
+      waiting.delete(socket);
       handler?.closed?.();
     });
     socket.on('error', () => undefined);
@@ -131,6 +143,7 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
         }
         if (handler) return handler.message(message);
         clearTimeout(timer);
+        waiting.delete(socket);
         // Constant-time: how much of a wrong token matched says nothing.
         const given = Buffer.from(typeof message['token'] === 'string' ? message['token'] : '', 'hex');
         if (message['type'] !== 'hello' || given.length !== token.length || !timingSafeEqual(given, token)) {
