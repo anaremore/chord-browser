@@ -49,6 +49,9 @@ const FORM_MS = 5000;
 export const FORM_LIB = String.raw`
   const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
   const NO_WORDS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
+  // Whose own text is a value, options or code, never words: what words() gives nothing for when it starts at one. A
+  // button's text is its name, so it isn't here (a label skips a button inside it: NO_WORDS).
+  const VALUE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
   const byId = (el, id) => { const root = el.getRootNode(); return typeof root.getElementById === 'function' ? root.getElementById(id) : null; };
   const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
   // On screen: not hidden by CSS, at least a few pixels, and not put off the page's top or left (scrolled past is fine).
@@ -82,10 +85,11 @@ export const FORM_LIB = String.raw`
   const visibleField = (el, type) => shown(el) || ((type === 'checkbox' || type === 'radio') && labelsOf(el).some(shown));
   const typeOf = (el) => (el.localName === 'textarea' ? 'textarea' : String(el.type || '').toLowerCase());
   // A label's words: its text, never a field's value inside it (a text area's text is its value), nor an editor's.
-  // An editor's own text is what's typed in it: none (aria-labelledby pointing at an editor, or a button labelled by
-  // one). The walk is bounded in steps too: a label of a million empty spans costs no more than a short one.
+  // An editor's own text is what's typed in it, and a field's is its value or its options: none (aria-labelledby
+  // pointing at an editor, a text area or a select, or a button labelled by one; VALUE_TAGS). The walk is bounded in steps too: a
+  // label of a million empty spans costs no more than a short one.
   const words = (node) => {
-    if (node.isContentEditable) return '';
+    if (node.isContentEditable || VALUE_TAGS.has(node.tagName)) return '';
     let out = '';
     let steps = 0;
     const walk = (n) => {

@@ -218,7 +218,17 @@ export function snapshotScript(owner: string, token: string): string {
       walk(el, depth + 1, keyed || acted, inside);
     }
   };
-  walk(document.body || document.documentElement, 0, false, false);
+  // The walk's start, checked as every element is: a page that's all editor (<body contenteditable>, <html
+  // contenteditable>, designMode, the data: notepad) is one typed field, named by its labels alone, never walked.
+  const start = document.body || document.documentElement;
+  if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
+    const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox') };
+    const states = statesOf(start, 'textbox');
+    if (states.length) node.states = states;
+    node.field = { type: 'text', autocomplete: clip(start.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(start.getAttribute('name'), 60), id: clip(start.id, 60), label: labelOf(start), placeholder: clip(start.getAttribute('aria-placeholder'), 100) };
+    if (shown(start)) { node.key = keep.length; keep.push(new WeakRef(start)); }
+    nodes.push(node);
+  } else walk(start, 0, false, false);
   // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
   reads.delete(args.owner);

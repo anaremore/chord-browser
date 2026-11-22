@@ -135,11 +135,21 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     has(/^- textbox "Cell" \[ref=e\d+\] \[filled\]$/);
     has(/^- textbox "Item" \[ref=e\d+\] \[filled\]$/);
     has(/^- textbox "Title" \[ref=e\d+\] \[filled\]$/);
-    // A button labelled by an editor isn't named by what's typed in it.
-    has(/^- button \[ref=e\d+\]$|^- button "Send" \[ref=e\d+\]$/);
+    // A button labelled by an editor, a text area or a select isn't named by what's in it: by its own words instead.
+    has(/^- button "Send" \[ref=e\d+\]$/);
+    has(/^- button "Keep" \[ref=e\d+\]$/);
+    has(/^- button "Pick" \[ref=e\d+\]$/);
     expect(lines.filter((l) => /^- textbox "Card number" \[payment detail: the user fills it\]$/.test(l))).toHaveLength(2);
     // What's hidden, what's in a frame, and what's in a field never show.
-    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07', '5555', 'typed-in-a-cell', 'typed-in-a-list-item', 'typed-in-a-heading', 'typed-label-source', 'Hidden, any case']) expect(snap.content).not.toContain(never);
+    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07', '5555', 'typed-in-a-cell', 'typed-in-a-list-item', 'typed-in-a-heading', 'typed-label-source', 'Hidden, any case', 'initial-textarea-content', 'option-label-x']) expect(snap.content).not.toContain(never);
+
+    // A page that's all editor: one typed field, never walked (review 3 of #104).
+    for (const [i, path] of ['/edit-body', '/edit-html', '/design-mode'].entries()) {
+      await mcp.call('open_tab', { url: `${site.origin}${path}` });
+      const whole = JSON.parse((await mcp.call('snapshot', { tab_id: `a${i + 2}` })).text) as { content: string };
+      expect(whole.content, path).toMatch(/^- textbox \[ref=e\d+\] \[filled\]$/);
+      expect(whole.content, path).not.toContain('typed-');
+    }
     expect(snap.refs).toBe((snap.content.match(/\[ref=e\d+\]/g) ?? []).length);
     // A second snapshot: new refs, counted on.
     const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
@@ -406,6 +416,10 @@ test.beforeAll(async () => {
     // A page that downloads a file as it loads: refused in an agent's tab.
     '/download': '<title>Download</title><p>Fetching…</p><script>setTimeout(() => { location.href = "/file.zip" }, 50)</script>',
     // M2a: a button and a field at known places, and a log of what reached them, and whether the page took it as trusted.
+    // Review 3 of #104: pages that are all editor.
+    '/edit-body': '<title>Notepad</title><body contenteditable>typed-in-the-body <b>and bold</b></body>',
+    '/edit-html': '<html contenteditable><title>Notepad</title><body>typed-in-html</body></html>',
+    '/design-mode': '<title>Notepad</title><body>typed-in-design-mode</body><script>document.designMode = "on";</script>',
     // M2b: a page for the snapshot, every kind of thing an outline says (and doesn't).
     '/snap':
       '<title>Orders</title><header><nav aria-label="Site"><a href="/">Home</a> <a href="/help">Help</a></nav></header>' +
@@ -433,7 +447,10 @@ test.beforeAll(async () => {
       '<ul><li contenteditable aria-label="Item">typed-in-a-list-item</li></ul>' +
       '<h1 contenteditable aria-label="Title">typed-in-a-heading</h1>' +
       '<div contenteditable id=ed aria-label="Draft">typed-label-source</div><button aria-labelledby=ed>Send</button>' +
-      '<div aria-hidden="TRUE"><button>Hidden, any case</button></div></main>' +
+      '<div aria-hidden="TRUE"><button>Hidden, any case</button></div>' +
+      // Review 3 of #104: a label taken from a text area or a select is never its value or its options.
+      '<textarea id=ta aria-label="Draft text">initial-textarea-content</textarea><button aria-labelledby=ta>Keep</button>' +
+      '<select id=sl aria-label="Size"><option selected>Small</option><option>option-label-x</option></select><button aria-labelledby=sl>Pick</button></main>' +
       '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
