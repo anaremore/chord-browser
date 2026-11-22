@@ -6,22 +6,27 @@
  * It walks the main frame (open shadow roots too; a frame is listed by its title, never entered) and gives back the
  * outline as nodes: a role, a name, a depth (only nodes with a role nest), states, and a key on each element an agent
  * can act on. Each keyed element is kept by a WeakRef under the read's token, here in the page's renderer, for M2c's
- * actions to find and check again; only the latest snapshot is kept (SNAPSHOT_KEPT).
+ * actions to find and check again: the latest snapshot of each owner (an agent's gate: an outside agent, a chat), so
+ * one agent's snapshot never takes away another's (SNAPSHOT_OWNERS of them at most).
  *
  * - **Roles:** the element's own `role`, else its tag's (and an input's type's) implicit role.
  * - **Names:** `aria-labelledby`, `aria-label`, a field's labels (forms' rules), `alt`, `title`, then its own words
- *   (never a field's value inside it), cut to SNAPSHOT_NAME_MAX.
+ *   (never a field's value inside it), cut to SNAPSHOT_NAME_MAX. A text field of any kind (an input, a text area, a
+ *   contenteditable, a `role=textbox`) is named by its labels alone, never its words, which are what's typed in it, and
+ *   its inside isn't walked; it's described as a field, so a sensitive one (a card number in a rich editor) gets no key.
+ * - **Left out:** what CSS hides, and `aria-hidden="true"` subtrees, as Playwright leaves them out.
  * - **Acted on (a key):** links, buttons, text fields and areas, contenteditable, checkboxes, radios, selects,
  *   switches, tabs, menu items, options, tree items, `summary`, and anything whose cursor is a pointer with no keyed
  *   ancestor (a site's clickable `div`).
  * - **States, never values:** checked, selected, expanded, pressed, disabled, required; `empty` or `filled` for text;
  *   a select's choice by its label.
- * - **Bounded:** SNAPSHOT_SCAN elements and SNAPSHOT_SCAN_MS of looking, SNAPSHOT_MAX_REFS keys.
+ * - **Bounded:** SNAPSHOT_SCAN nodes looked at (elements and text alike) and SNAPSHOT_SCAN_MS of looking,
+ *   SNAPSHOT_MAX_REFS keys; a page of millions of text nodes is cut like any other.
  *
  * Plain JavaScript source, as forms' and the extractor's are: bundling may rename or wrap functions in ways a page
  * can't run. Arguments go in as JSON.
  */
-import { ASSISTANT_FORM_MAX_OPTIONS, cleanSnapshotRead, SNAPSHOT_KEPT, SNAPSHOT_MAX_REFS, SNAPSHOT_NAME_MAX, SNAPSHOT_SCAN, SNAPSHOT_SCAN_MS, type SnapshotRead } from '@chord/core';
+import { ASSISTANT_FORM_MAX_OPTIONS, cleanSnapshotRead, SNAPSHOT_MAX_REFS, SNAPSHOT_NAME_MAX, SNAPSHOT_OWNERS, SNAPSHOT_SCAN, SNAPSHOT_SCAN_MS, type SnapshotRead } from '@chord/core';
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 import { ASSISTANT_WORLD } from './extract';
@@ -30,8 +35,9 @@ import { FORM_LIB } from './forms';
 /** How long a snapshot may take to come back: a busy page answers within it, a hung one is a refusal. */
 const SNAPSHOT_MS = 5000;
 
-export function snapshotScript(token: string): string {
-  const args = { token, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, kept: SNAPSHOT_KEPT };
+/** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
+export function snapshotScript(owner: string, token: string): string {
+  const args = { owner, token, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS };
   return String.raw`((args) => {
   const MAX_OPTIONS = ${ASSISTANT_FORM_MAX_OPTIONS};
   ${FORM_LIB}
@@ -100,8 +106,12 @@ export function snapshotScript(token: string): string {
     return implicitRole(el);
   };
   const isField = (el) => el.localName === 'input' || el.localName === 'textarea' || el.localName === 'select';
+  // Roles of something typed in: named by labels alone, described as a field, never walked into.
+  const TYPED = new Set(['textbox', 'searchbox', 'spinbutton']);
   // A name: what assistive tech would read first, then the element's own words; never a field's value.
   const nameOf = (el, role) => {
+    // A text field of any kind: its labels and placeholder only. Its words are what's typed in it.
+    if (TYPED.has(role) && !isField(el)) return labelOf(el) || clip(el.getAttribute('aria-placeholder') || el.getAttribute('placeholder'), args.nameMax);
     const ids = String(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).slice(0, 4);
     const by = clip(ids.map((id) => byId(el, id)).filter(Boolean).map(words).join(' '), args.nameMax);
     if (by) return by;
@@ -160,14 +170,17 @@ export function snapshotScript(token: string): string {
     for (const child of parent.childNodes) {
       if (stopped) return;
       if (child.nodeType === 3) {
+        // Text counts as looked at too: a page of millions of text nodes is cut like any other.
+        if (++looked && stop()) { stopped = true; return; }
+        if (named) continue;
         const text = (child.nodeValue || '').replace(/\s+/g, ' ').trim();
-        if (text && !named) nodes.push({ depth, role: 'text', name: clip(text, args.nameMax) });
+        if (text) nodes.push({ depth, role: 'text', name: clip(text, args.nameMax) });
         continue;
       }
       if (child.nodeType !== 1) continue;
       const el = child;
       if (++looked && stop()) { stopped = true; return; }
-      if (SKIP.has(el.localName) || !visible(el)) continue;
+      if (SKIP.has(el.localName) || el.getAttribute('aria-hidden') === 'true' || !visible(el)) continue;
       let role = roleOf(el);
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
       if (!role && !keyed && getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer')) role = 'generic';
@@ -184,29 +197,34 @@ export function snapshotScript(token: string): string {
       const states = statesOf(el, role);
       if (states.length) node.states = states;
       if (el.localName === 'select' && !el.multiple) { const o = el.options[el.selectedIndex]; if (o) node.choice = clip(o.label || o.text, args.nameMax); }
-      if (el.localName === 'input' || el.localName === 'textarea') node.field = { type: typeOf(el), autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder'), 100) };
+      // Described as a field, for core's sensitiveField: inputs, text areas, selects (a card's expiry month), and any
+      // other text field (a contenteditable, a role=textbox), whose type is text.
+      if (isField(el) || TYPED.has(role)) node.field = { type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) };
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
         else { node.key = keep.length; keep.push(new WeakRef(el)); }
       }
       nodes.push(node);
-      // A frame is listed, never entered; a field has no inside worth listing; an acted-on element's words are its name.
-      if (role === 'iframe' || isField(el)) continue;
+      // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
+      // element's words are its name.
+      if (role === 'iframe' || isField(el) || TYPED.has(role)) continue;
       const inside = named || acted || role === 'heading';
       if (el.shadowRoot) walk(el.shadowRoot, depth + 1, keyed || acted, inside);
       walk(el, depth + 1, keyed || acted, inside);
     }
   };
   walk(document.body || document.documentElement, 0, false, false);
+  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
-  reads.set(args.token, { url: location.href, keep });
-  while (reads.size > args.kept) reads.delete(reads.keys().next().value);
+  reads.delete(args.owner);
+  reads.set(args.owner, { token: args.token, url: location.href, keep });
+  while (reads.size > args.owners) reads.delete(reads.keys().next().value);
   return { url: location.href, title: document.title, nodes, cut };
 })(${JSON.stringify(args)})`;
 }
 
-/** A snapshot of the page, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, token: string): Promise<SnapshotRead | null> {
+/** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
+export async function snapshotPage(contents: WebContents, owner: string, token: string): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
-  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(token) }]), null, SNAPSHOT_MS));
+  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token) }]), null, SNAPSHOT_MS));
 }

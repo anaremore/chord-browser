@@ -1321,23 +1321,6 @@ if (!app.requestSingleInstanceLock()) {
          * agent's, yours, or one that came after the send had returned (none should). `unchecked` sends what Chord never
          * would (a shortcut), to show its shortcuts stop it a second time; otherwise such an event is `refused`.
          */
-        /**
-         * S18 M2b's budgets: how long the snapshot script takes in the tab at `url`, round trip from main (the renderer's
-         * work and the answer's way back), `runs` times; and what the last one found.
-         */
-        agentSnapshotTimes: async (url: string, runs: number) => {
-          const { snapshotPage } = await import('./control/snapshot');
-          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
-          if (!contents) return null;
-          const times: number[] = [];
-          let last: Awaited<ReturnType<typeof snapshotPage>> = null;
-          for (let i = 0; i < runs; i++) {
-            const started = performance.now();
-            last = await snapshotPage(contents, `timing${i}`);
-            times.push(performance.now() - started);
-          }
-          return { times, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
-        },
         agentInputSpike: async (url: string, events: AgentInputEvent[], text?: string, unchecked = false) => {
           const { sendAgentInput, isAgentInput, AgentInputRefused } = await import('./control/input');
           const [nodeId, contents] = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url) ?? [];
@@ -1380,6 +1363,23 @@ if (!app.requestSingleInstanceLock()) {
             for (const name of names) contents.off(name as 'input-event', count);
           }
           return { ...seen, paused: held.connection.agent.state(nodeId).paused, shown, refused };
+        },
+        /**
+         * S18 M2b's budgets: how long the snapshot script takes in the tab at `url`, round trip from main (the renderer's
+         * work and the answer's way back), `runs` times; and what the last one found.
+         */
+        agentSnapshotTimes: async (url: string, runs: number) => {
+          const { snapshotPage } = await import('./control/snapshot');
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return null;
+          const times: number[] = [];
+          let last: Awaited<ReturnType<typeof snapshotPage>> = null;
+          for (let i = 0; i < runs; i++) {
+            const started = performance.now();
+            last = await snapshotPage(contents, 'timing', `timing${i}`);
+            times.push(performance.now() - started);
+          }
+          return { times, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
         },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),

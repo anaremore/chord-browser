@@ -128,8 +128,12 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     has(/^- button "More" \[ref=e\d+\] \[collapsed\]$/);
     has(/^- button "In the shadow" \[ref=e\d+\]$/);
     has(/^- iframe "Chat"$/);
+    has(/^- textbox "Message" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Card number" \[payment detail: the user fills it\]$/);
+    has(/^- textbox \[ref=e\d+\] \[filled\]$/);
+    has(/^- combobox "Expires" \[payment detail: the user fills it\]$/);
     // What's hidden, what's in a frame, and what's in a field never show.
-    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened']) expect(snap.content).not.toContain(never);
+    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07']) expect(snap.content).not.toContain(never);
     expect(snap.refs).toBe((snap.content.match(/\[ref=e\d+\]/g) ?? []).length);
     // A second snapshot: new refs, counted on.
     const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
@@ -140,7 +144,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     type Times = { times: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
     const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
     const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
-    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/rows-4000', 4000, 5]] as const) {
+    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
       await mcp.call('open_tab', { url: `${site.origin}${path}` });
       const measured = (await timesOf(`${site.origin}${path}`, runs))!;
       const ms = sorted(measured.times);
@@ -153,7 +157,11 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         expect(measured.keys, seen).toBe(600);
         expect(median, seen).toBeLessThan(SNAPSHOT_TYPICAL_MEDIAN_MS);
         expect(worst, seen).toBeLessThan(SNAPSHOT_TYPICAL_WORST_MS);
-      } else expect(worst, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
+      } else {
+        expect(worst, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
+        // A page of 2,000,000 text nodes is cut at the scan's bound like any other (review 1 of #104).
+        expect(measured.nodes, seen).toBeLessThanOrEqual(20_000);
+      }
     }
     mcp.child.stdin!.end();
     await mcp.exited;
@@ -168,7 +176,9 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
  * and on CI's runners: a typical page (1,500 elements: 300 rows of a link, a note and a button) and a 20,000-element
  * one, which the script stops looking at after SNAPSHOT_SCAN_MS (150 ms). Measured (2026-11-22, the Linux container,
  * three runs each on X11 and Wayland): the typical page's median 12.8 to 15.9 ms, its worst 21 to 28 ms; the huge page
- * 127 to 166 ms median, 194 ms at worst. The budgets are the plan's, at least 1.5 times the worst seen.
+ * 127 to 166 ms median, 194 ms at worst; once text nodes counted toward the scan (review 1 of #104), 75 to 91 ms median
+ * and 138 ms at worst, and a page of 2,000,000 text nodes 31 to 34 ms median, 49 ms at worst. The budgets are the plan's,
+ * at least 1.5 times the worst seen.
  */
 const SNAPSHOT_TYPICAL_MEDIAN_MS = 25;
 const SNAPSHOT_TYPICAL_WORST_MS = 60;
@@ -404,7 +414,13 @@ test.beforeAll(async () => {
       '<div style="cursor:pointer" onclick="0">Track package</div>' +
       '<details><summary>More</summary><p>Hidden until opened.</p></details>' +
       '<div style="display:none"><button>Invisible</button></div>' +
-      '<div id=host></div><iframe title="Chat" srcdoc="<button>Inside</button>"></iframe></main>' +
+      '<div id=host></div><iframe title="Chat" srcdoc="<button>Inside</button>"></iframe>' +
+      // Review 1 of #104: rich-text fields are named by their labels only; a sensitive one has no ref; aria-hidden is left out.
+      '<div contenteditable aria-label="Message">Hi Bob, my SSN is 123-45-6789</div>' +
+      '<div contenteditable aria-label="Card number">4242 4242 4242 4242</div>' +
+      '<div role=textbox>typed-into-a-role-textbox</div>' +
+      '<div aria-hidden="true"><button>Hidden from assistive tech</button></div>' +
+      '<label>Expires <select autocomplete="cc-exp-month"><option>01</option><option selected>07</option></select></label></main>' +
       '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
@@ -418,7 +434,9 @@ test.beforeAll(async () => {
       return;
     }
     const rows = /^\/rows-(\d+)$/.exec(req.url ?? '');
-    const body = rows ? rowsPage(Number(rows[1])) : pages[req.url ?? '/'];
+    // A hostile page: 2,000,000 text nodes in one div (the parser would join them, so a script makes them).
+    const texts = '<title>Texts</title><div id=d></div><script>const d = document.getElementById("d"); for (let i = 0; i < 2000000; i++) d.appendChild(document.createTextNode("x "));</script>';
+    const body = rows ? rowsPage(Number(rows[1])) : req.url === '/texts' ? texts : pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
   });

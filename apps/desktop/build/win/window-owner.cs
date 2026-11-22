@@ -169,6 +169,14 @@ static class WindowOwner
     const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     const uint DUPLICATE_SAME_ACCESS = 2;
     const uint FILE_TYPE_PIPE = 3;
+    const uint FILE_TYPE_UNKNOWN = 0;
+    const int NO_ERROR = 0;
+    /**
+     * A server end of the pipe with no client: waiting for the next connection. libuv keeps four such instances, and
+     * GetNamedPipeClientProcessId answers ERROR_NOT_FOUND on them (seen, Windows 11, 2026-11-22); not connected and
+     * listening mean the same. Any other error is a client Chord can't see: skipped.
+     */
+    static readonly HashSet<int> NO_CLIENT = new HashSet<int> { 233 /* ERROR_PIPE_NOT_CONNECTED */, 536 /* ERROR_PIPE_LISTENING */, 1168 /* ERROR_NOT_FOUND */ };
     const uint PIPE_SERVER_END = 1;
     const int FileNameInfo = 2;
     const uint GENERIC_READ = 0x80000000;
@@ -196,7 +204,7 @@ static class WindowOwner
     [DllImport("kernel32.dll")]
     static extern uint GetCurrentProcessId();
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     static extern uint GetFileType(IntPtr file);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -238,6 +246,12 @@ static class WindowOwner
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    static void Skip(Query q, string call, int error)
+    {
+        q.Skipped = true;
+        q.Why = call + ":" + error;
+    }
 
     /** The pipe's name as a handle to it gives it (\chord-agent-…), or null. */
     static string PipeName(IntPtr pipe)
@@ -284,6 +298,8 @@ static class WindowOwner
         public uint Client;
         /** It couldn't say whether it's one of the pipe's server ends (a call failed): its client may be missing. */
         public bool Skipped;
+        /** Why (the call, and its error), for the output's `skips`. */
+        public string Why;
     }
 
     static string Json(string text)
@@ -431,25 +447,32 @@ static class WindowOwner
                 var t = new Thread(() =>
                 {
                     // Not one of the pipe's: another kind of file, a client end, or another pipe by its name. Can't tell (a
-                    // pipe whose info or name can't be read, or an exception): skipped. A server end of this pipe with no
-                    // client (one waiting for the next connection) is neither.
+                    // file whose type, or a pipe whose info, name or client can't be read, or an exception): skipped. A
+                    // server end of this pipe with no client (one waiting for the next connection) is neither.
                     try
                     {
                         uint flags, pid;
-                        if (GetFileType(q.Copy) == FILE_TYPE_PIPE)
+                        uint type = GetFileType(q.Copy);
+                        int error;
+                        if (type == FILE_TYPE_UNKNOWN && (error = Marshal.GetLastWin32Error()) != NO_ERROR) Skip(q, "type", error);
+                        else if (type == FILE_TYPE_PIPE)
                         {
-                            if (!GetNamedPipeInfo(q.Copy, out flags, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero)) q.Skipped = true;
+                            if (!GetNamedPipeInfo(q.Copy, out flags, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero)) Skip(q, "info", Marshal.GetLastWin32Error());
                             else if ((flags & PIPE_SERVER_END) != 0)
                             {
                                 string pipeName = PipeName(q.Copy);
-                                if (pipeName == null) q.Skipped = true;
-                                else if (string.Equals(pipeName, leaf, StringComparison.OrdinalIgnoreCase) && GetNamedPipeClientProcessId(q.Copy, out pid)) q.Client = pid;
+                                if (pipeName == null) Skip(q, "name", Marshal.GetLastWin32Error());
+                                else if (string.Equals(pipeName, leaf, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (GetNamedPipeClientProcessId(q.Copy, out pid)) q.Client = pid;
+                                    else if (!NO_CLIENT.Contains(error = Marshal.GetLastWin32Error())) Skip(q, "client", error);
+                                }
                             }
                         }
                     }
                     catch
                     {
-                        q.Skipped = true;
+                        Skip(q, "exception", 0);
                     }
                     q.Done = true;
                 }, 64 * 1024) { IsBackground = true };
@@ -460,10 +483,17 @@ static class WindowOwner
                 while (!q.Done && clock.ElapsedMilliseconds < deadline) Thread.Sleep(1);
             tQueries = clock.ElapsedMilliseconds;
             var clients = new List<uint>();
+            var skips = new Dictionary<string, int>();
             foreach (var q in queries)
             {
                 if (!q.Done) stuck++;
-                else if (q.Skipped) skipped++;
+                else if (q.Skipped)
+                {
+                    skipped++;
+                    int n;
+                    skips.TryGetValue(q.Why ?? "?", out n);
+                    skips[q.Why ?? "?"] = n + 1;
+                }
                 else if (q.Client != 0 && !clients.Contains(q.Client)) clients.Add(q.Client);
             }
             var processes = clients.Count > 0 ? Processes() : new Dictionary<uint, ProcessEntry>();
@@ -472,6 +502,7 @@ static class WindowOwner
             tChains = clock.ElapsedMilliseconds;
             // stuck, truncated and skipped say the list may miss a client: then Chord names a peer only by its own claim.
             Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck + ",\"truncated\":" + truncated + ",\"skipped\":" + skipped
+                + ",\"skips\":{" + string.Join(",", new List<KeyValuePair<string, int>>(skips).ConvertAll(k => Json(k.Key) + ":" + k.Value)) + "}"
                 + ",\"handles\":" + count + ",\"ms\":{\"table\":" + tTable + ",\"scan\":" + (tScan - tTable) + ",\"queries\":" + (tQueries - tScan) + ",\"chains\":" + (tChains - tQueries) + ",\"total\":" + tChains + "}}");
             return 0;
         }

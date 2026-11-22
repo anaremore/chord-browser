@@ -16,15 +16,21 @@ import { ASSISTANT_READ_MAX, cleanPageText, pageIdField } from './control-tools'
 // Core compiles without DOM types; URL is a global in Node and every browser.
 declare const URL: new (url: string) => { origin: string };
 
-/** At most this many elements are looked at, and for at most this long (ms): past either, the outline says so. */
+/**
+ * At most this many nodes are looked at (elements and text alike), and for at most this long (ms): past either, the
+ * outline says so. A snapshot never has more nodes than that, and main keeps no more (cleanSnapshotRead).
+ */
 export const SNAPSHOT_SCAN = 20_000;
 export const SNAPSHOT_SCAN_MS = 150;
 /** At most this many refs in one snapshot; elements past it are listed without one, and the outline says so. */
 export const SNAPSHOT_MAX_REFS = 2000;
 /** Names and text runs are cut to this many characters. */
 export const SNAPSHOT_NAME_MAX = 120;
-/** Snapshots kept per tab in the page (for M2c's actions): only the latest one's refs are good. */
-export const SNAPSHOT_KEPT = 1;
+/**
+ * Owners whose latest snapshot a page keeps (for M2c's actions): each agent (an outside agent, a chat) keeps its own,
+ * so one's snapshot never takes away another's; past this many, the oldest goes.
+ */
+export const SNAPSHOT_OWNERS = 16;
 
 /** A field's description, as the page script gives it for a text-like element: what sensitiveField needs. */
 export interface SnapshotField {
@@ -48,9 +54,9 @@ export interface SnapshotNode {
   level?: number;
   /** checked, selected, expanded, pressed, disabled, required, empty, filled… */
   states?: string[];
-  /** A select's choice, by its label. */
+  /** A select's choice, by its label (left out of the outline for a sensitive one). */
   choice?: string;
-  /** For text-like fields: what decides whether it's one Chord never lets an agent touch. */
+  /** For fields (inputs, text areas, selects, any text field): what decides whether it's one Chord never lets an agent touch. */
   field?: SnapshotField;
 }
 
@@ -75,6 +81,18 @@ export type ElementLookup = { ok: true; token: string; key: number } | { ok: fal
 export class ElementRefs {
   private next = 1;
   private current: { pageId: string; token: string; keys: Map<string, number> } | null = null;
+  /** The latest snapshot's outline, for its later ranges: served as it was while the page is the same one. */
+  private kept: SnapshotOutline | null = null;
+
+  /** Keep the latest snapshot's outline (its refs are this table's latest). */
+  remember(outline: SnapshotOutline): void {
+    this.kept = outline;
+  }
+
+  /** The latest outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
+  outline(pageId: string): SnapshotOutline | null {
+    return pageId && this.kept?.pageId === pageId && this.current?.pageId === pageId ? this.kept : null;
+  }
 
   /** The refs of a new snapshot, for the page's keys, in order. Every earlier ref is stale from now on. */
   issue(pageId: string, token: string, keys: readonly number[]): Map<number, string> {
@@ -101,7 +119,18 @@ export class ElementRefs {
   /** The page moved on (or the tab went to sleep): every ref is stale. */
   forget(): void {
     this.current = null;
+    this.kept = null;
   }
+}
+
+/** A snapshot's outline as it was made: what a later range (`start`) is served from, without reading the page again. */
+export interface SnapshotOutline {
+  pageId: string;
+  url: string;
+  title: string;
+  text: string;
+  refs: number;
+  note?: string;
 }
 
 /** What an agent hears for a ref that isn't good (M2c's actions), one sentence each. */
@@ -135,6 +164,14 @@ const STATE = /^(checked|mixed|selected|expanded|collapsed|pressed|disabled|requ
  * the refs issued for the read's keys (ElementRefs.issue). A field Chord never lets an agent touch has no ref and
  * says why. Returns the text and how many refs it holds.
  */
+/**
+ * The keys that get refs: every keyed node but a field Chord never lets an agent touch (forms' `sensitiveField`). A
+ * sensitive field is never given a ref at all, shown or not, so no ref can ever reach it (an agent guessing `e17`).
+ */
+export function snapshotKeys(read: SnapshotRead): number[] {
+  return read.nodes.flatMap((n) => (n.key === undefined || (n.field && sensitiveField(n.field)) ? [] : [n.key]));
+}
+
 export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>): { text: string; refs: number } {
   const lines: string[] = [];
   let count = 0;
@@ -153,7 +190,7 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     }
     if (node.level && node.level >= 1 && node.level <= 6) parts.push(`[level=${node.level}]`);
     for (const state of node.states ?? []) if (STATE.test(state) && !(sensitive && (state === 'empty' || state === 'filled'))) parts.push(`[${state}]`);
-    if (node.choice) parts.push(`[choice=${quoted(clipName(node.choice))}]`);
+    if (node.choice && !sensitive) parts.push(`[choice=${quoted(clipName(node.choice))}]`);
     if (sensitive) parts.push(`[${SENSITIVE_NOTE[sensitive]}]`);
     lines.push(parts.join(' '));
   }
@@ -176,8 +213,9 @@ export function snapshotNote(cut: SnapshotRead['cut']): string | undefined {
 export function snapshotResult(snap: { ref: string; url: string; title: string; outline: string; refs: number; start?: number; retrievedAt: number; pageId?: string; note?: string }): string {
   const total = snap.outline.length;
   let start = Math.max(0, Math.min(Math.floor(snap.start ?? 0), total));
-  // A range starts at a line (a start inside one moves back to its beginning) and ends at one.
-  if (start > 0 && snap.outline[start - 1] !== '\n') start = snap.outline.lastIndexOf('\n', start) + 1;
+  // A range starts at a line (a start inside one moves back to its beginning) and ends at one. At or past the end it's
+  // empty: never the last line again.
+  if (start > 0 && start < total && snap.outline[start - 1] !== '\n') start = snap.outline.lastIndexOf('\n', start) + 1;
   let end = Math.min(total, start + ASSISTANT_READ_MAX);
   if (end < total) {
     const cut = snap.outline.lastIndexOf('\n', end);
@@ -212,7 +250,8 @@ export function cleanSnapshotRead(raw: unknown): SnapshotRead | null {
   if (typeof r['url'] !== 'string' || !Array.isArray(r['nodes'])) return null;
   const nodes: SnapshotNode[] = [];
   const keys = new Set<number>();
-  for (const n of r['nodes'] as Record<string, unknown>[]) {
+  // No more nodes than the script looks at: a page that answered with more is cut, before anything is done with them.
+  for (const n of (r['nodes'] as Record<string, unknown>[]).slice(0, SNAPSHOT_SCAN)) {
     if (!n || typeof n !== 'object' || typeof n['role'] !== 'string' || typeof n['depth'] !== 'number') continue;
     const node: SnapshotNode = { depth: n['depth'], role: n['role'], name: typeof n['name'] === 'string' ? n['name'].slice(0, 2000) : '' };
     // A key is a whole number, at most once in a read, at most SNAPSHOT_MAX_REFS of them.

@@ -12,6 +12,8 @@ import {
   isNeverOffered,
   readNeedsApproval,
   SNAPSHOT_MAX_REFS,
+  SNAPSHOT_SCAN,
+  snapshotKeys,
   snapshotNote,
   snapshotOutline,
   snapshotResult,
@@ -65,6 +67,24 @@ describe('Element refs (S18 M2b): per tab, never reused, good only from the late
     expect(refs.resolve('e2', 'p1')).toEqual({ ok: false, why: 'stale' });
   });
 
+  it('keeps the latest outline for its later ranges, only while it’s that page’s and its refs are the latest', () => {
+    const refs = new ElementRefs();
+    const outline = { pageId: 'p1', url: 'https://x.example/', title: 'X', text: '- link "A" [ref=e1]', refs: 1 };
+    refs.issue('p1', 't', [0]);
+    refs.remember(outline);
+    expect(refs.outline('p1')).toBe(outline);
+    expect(refs.outline('p2')).toBeNull();
+    expect(refs.outline('')).toBeNull();
+    // A page that moved on during the read: its outline is never served again.
+    refs.issue('', 't2', [0]);
+    refs.remember({ ...outline, pageId: '' });
+    expect(refs.outline('')).toBeNull();
+    refs.issue('p1', 't3', [0]);
+    refs.remember(outline);
+    refs.forget();
+    expect(refs.outline('p1')).toBeNull();
+  });
+
   it('each tab counts its own', () => {
     const a = new ElementRefs();
     const b = new ElementRefs();
@@ -97,10 +117,15 @@ describe('The outline', () => {
       // A page's odd role, state or name: kept to what an outline can say.
       { depth: 1, role: 'Button<script>', name: 'Odd', key: 8, states: ['focused', 'disabled', 'x]'] },
       { depth: 1, role: 'text', name: '' },
-      { depth: 1, role: 'link', name: 'Tag\u{E0041}s​hidden', key: 9 },
+      { depth: 1, role: 'link', name: 'Tag\u{E0041}s\u200Bhidden', key: 9 },
+      // Review 1 of #104: a rich-text field described as one (a card number in a contenteditable), and a select whose
+      // choice is a card's expiry month: no ref, no choice.
+      { depth: 1, role: 'textbox', name: 'Card number', key: 10, states: ['filled'], field: field({ label: 'Card number' }) },
+      { depth: 1, role: 'combobox', name: 'Expires', key: 11, choice: '07', field: field({ type: 'select-one', autocomplete: 'cc-exp-month' }) },
     ],
   };
-  const refs = new ElementRefs().issue('p1', 't', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const table = new ElementRefs();
+  const refs = table.issue('p1', 't', snapshotKeys(read));
 
   it('is Playwright MCP’s indented form, refs only on what may be acted on, states never values', () => {
     const { text, refs: count } = snapshotOutline(read, refs);
@@ -117,10 +142,16 @@ describe('The outline', () => {
       '  - textbox "Password" [password: the user signs in]',
       '  - textbox "Code" [one-time code: the user types it]',
       '  - textbox "Card number" [payment detail: the user fills it]',
-      '  - generic "Odd" [ref=e9] [disabled]',
-      '  - link "Tagshidden" [ref=e10]',
+      '  - generic "Odd" [ref=e6] [disabled]',
+      '  - link "Tagshidden" [ref=e7]',
+      '  - textbox "Card number" [payment detail: the user fills it]',
+      '  - combobox "Expires" [payment detail: the user fills it]',
     ]);
     expect(count).toBe(7);
+    // A sensitive field never gets a ref at all: none to show, none to guess (the agents.spec journey found e17 used up).
+    expect(snapshotKeys(read)).toEqual([0, 1, 2, 3, 4, 8, 9]);
+    expect([...refs.values()]).toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7']);
+    expect(table.resolve('e8', 'p1')).toEqual({ ok: false, why: 'unknown' });
   });
 
   it('cuts long names, and says what a cut snapshot left out', () => {
@@ -146,6 +177,11 @@ describe('The result', () => {
     expect(next.range.start).toBe(first.range.end);
     expect(next.content.startsWith('- link')).toBe(true);
     expect(next.origin).toBe('');
+    // At or past the end: empty, never the last line again.
+    for (const start of [outline.length, outline.length + 50]) {
+      const past = JSON.parse(snapshotResult({ ref: 'a1', url: 'x', title: '', outline, refs: 4000, retrievedAt: 0, start })) as { range: { start: number; end: number }; content: string };
+      expect(past).toMatchObject({ range: { start: outline.length, end: outline.length }, content: '' });
+    }
   });
 });
 
@@ -173,6 +209,9 @@ describe('The page script’s answer, cleaned', () => {
       { depth: 1, role: 'textbox', name: '', key: 2, states: ['filled'], field: { type: 'password', autocomplete: '', name: '', id: '', label: '', placeholder: '' } },
     ]);
     expect(read.nodes.filter((n) => n.key !== undefined)).toHaveLength(SNAPSHOT_MAX_REFS);
+    // No more nodes than the script ever looks at, whatever an answer holds (review 1 of #104).
+    const flood = cleanSnapshotRead({ url: 'https://x.example/', nodes: Array.from({ length: SNAPSHOT_SCAN * 3 }, () => ({ depth: 0, role: 'text', name: 'x' })) })!;
+    expect(flood.nodes).toHaveLength(SNAPSHOT_SCAN);
     for (const bad of [null, 'x', {}, { url: 1, nodes: [] }, { url: 'x', nodes: 'no' }]) expect(cleanSnapshotRead(bad)).toBeNull();
   });
 });

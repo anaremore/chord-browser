@@ -23,6 +23,7 @@ import {
   pageResult,
   pdfText,
   proposedFill,
+  snapshotKeys,
   snapshotNote,
   snapshotOutline,
   snapshotResult,
@@ -295,7 +296,9 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
  * The tab's accessibility outline, with refs on what can be acted on (core's control-snapshot.ts). Read as read_tab
  * is: the scope's rules and card, every rule asked again after the card, the load and the read. Its refs are the tab's
  * new ones (ElementRefs): every earlier one is stale from now on, and they're good only on the page (page id) they
- * were taken of. Never in reader view, which hides the page.
+ * were taken of. Never in reader view, which hides the page. A later range (`start`) of the same page's latest
+ * snapshot comes from the outline it made, without reading the page again: its refs stay good, and its offsets are into
+ * that outline. Refs of tabs that closed go with them.
  */
 async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
   const { scope, browser } = call;
@@ -304,6 +307,17 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const node = found;
   if (!scope.readable(node)) return refuse(unreadable(scope, node));
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
+  const elements = (scope.memory.elements ??= new Map());
+  for (const id of [...elements.keys()]) if (nodeOf(browser.store.state, id)?.kind !== 'tab') elements.delete(id);
+  const start = typeof args['start'] === 'number' ? args['start'] : 0;
+  // Reading on: the same page's latest outline, as it was made, while the page is where it may be read.
+  const now = currentPage(browser, node.id);
+  const kept = start > 0 && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
+  if (kept && now) {
+    const blocked = blockedNow(call, node.id, now, 'That page could not be read.', kept.url);
+    if (blocked) return refuse(blocked);
+    return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: kept.url, title: kept.title, outline: kept.text, refs: kept.refs, start, retrievedAt: Date.now(), pageId: kept.pageId, ...(kept.note ? { note: kept.note } : {}) }) };
+  }
   const title = node.title || safeHost(node.url);
   const refused = await call.card('snapshot', node, `Look over “${title}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
   if (refused) return refused;
@@ -316,21 +330,21 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   if (loaded) return refuse(loaded);
   const pageId = page.id;
   const token = randomBytes(12).toString('hex');
-  const read = await page.snapshot(token);
+  const read = await page.snapshot(scope.agent.id, token);
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read ? [read.url] : []));
   if (after) return refuse(after);
   if (!read) return refuse('That page could not be read.');
-  const elements = (scope.memory.elements ??= new Map());
   let refs = elements.get(node.id);
   if (!refs) elements.set(node.id, (refs = new ElementRefs()));
   // Refs for a page that moved on during the read are issued against no page: they resolve as stale.
   const samePage = sameId(page, pageId);
-  const issued = refs.issue(samePage ?? '', token, read.nodes.flatMap((n) => (n.key === undefined ? [] : [n.key])));
+  // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
+  const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
   const outline = snapshotOutline(read, issued);
-  scope.memory.read.add(node.id);
-  const start = typeof args['start'] === 'number' ? args['start'] : 0;
   const note = snapshotNote(read.cut);
+  refs.remember({ pageId: samePage ?? '', url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
+  scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt: Date.now(), ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
 }

@@ -534,9 +534,9 @@ describe('A shared tab is read only on its site (S18 M1e, review 1 of #96)', () 
 
 describe('snapshot through the gate (S18 M2b)', () => {
   /** The page answers the snapshot script with these nodes (and anything else as a plain read). */
-  const page = (nodes: unknown[], onSnapshot?: (events: EventEmitter) => void) => async (code: string, events: EventEmitter) => {
+  const page = (nodes: unknown[], onSnapshot?: (events: EventEmitter, code: string) => void) => async (code: string, events: EventEmitter) => {
     if (!code.includes('__chordSnapshots')) return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
-    onSnapshot?.(events);
+    onSnapshot?.(events, code);
     return { url: 'https://news.test/a', title: 'Orders', nodes, cut: {} };
   };
   const nodes = [
@@ -560,13 +560,15 @@ describe('snapshot through the gate (S18 M2b)', () => {
     const first = snap(await call('snapshot', { tab_id: ref }));
     expect(first).toMatchObject({ source: 'web_snapshot', tab_id: ref, refs: 2 });
     expect(first.page_id).toMatch(/^p\d+$/);
-    expect(first.content).toBe('- link "Home" [ref=e1]\n- textbox "Password" [password: the user signs in]\n- button "Go" [ref=e3]');
+    // The password field gets no ref, not even an unshown one: the numbers go on without it.
+    expect(first.content).toBe('- link "Home" [ref=e1]\n- textbox "Password" [password: the user signs in]\n- button "Go" [ref=e2]');
     expect(activity).toEqual(['Looked over “Article”']);
     const second = snap(await call('snapshot', { tab_id: ref }));
-    expect(second.content).toContain('[ref=e4]');
+    expect(second.content).toContain('[ref=e3]');
     const refs = scope.memory.elements!.get('n1')!;
     expect(refs.resolve('e1', first.page_id!)).toEqual({ ok: false, why: 'stale' });
-    expect(refs.resolve('e4', second.page_id!)).toMatchObject({ ok: true, key: 0 });
+    expect(refs.resolve('e3', second.page_id!)).toMatchObject({ ok: true, key: 0 });
+    expect(refs.resolve('e5', second.page_id!)).toEqual({ ok: false, why: 'unknown' });
     expect(scope.memory.read.has('n1')).toBe(true);
   });
 
@@ -583,11 +585,61 @@ describe('snapshot through the gate (S18 M2b)', () => {
     const denied = await call('snapshot', { tab_id: scope.refs.refFor('n1') });
     expect(refusal(denied).refused).toBe('The user said no to reading that tab. Carry on without it, or ask them.');
     expect(cards.map((c) => [c.tool, c.description])).toEqual([['snapshot', 'Look over “Article”']]);
-    expect(scope.memory.elements).toBeUndefined();
+    expect(scope.memory.elements?.size ?? 0).toBe(0);
   });
 
   it('a page that doesn’t answer is a refusal, not a turn that never ends', async () => {
     const { scope, call } = setup({ read: async () => null, actions: true });
     expect(refusal(await call('snapshot', { tab_id: scope.refs.refFor('n1') })).refused).toBe('That page could not be read.');
+  });
+});
+
+describe('snapshot, review 1 of #104', () => {
+  const many = Array.from({ length: 3000 }, (_, i) => ({ depth: 0, role: 'link', name: `Row ${i}`, key: i }));
+  const page = (calls: string[], go?: () => void) => async (code: string, events: EventEmitter) => {
+    if (!code.includes('__chordSnapshots')) return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
+    calls.push(code);
+    if (go) events.emit('did-navigate');
+    return { url: 'https://news.test/a', title: 'Rows', nodes: many, cut: {} };
+  };
+  type Snap = { refs: number; page_id?: string; range: { start: number; end: number; total: number }; content: string };
+  const snap = (out: { text?: string }) => JSON.parse(out.text!) as Snap;
+
+  it('a later range comes from the same outline: no second read, no card, no activity, and the first range’s refs stay good', async () => {
+    const calls: string[] = [];
+    const { scope, call, cards, activity } = setup({ read: page(calls), actions: true, needsCard: true, answer: 'once' });
+    const ref = scope.refs.refFor('n1');
+    const first = snap(await call('snapshot', { tab_id: ref }));
+    expect(first.range.end).toBeLessThan(first.range.total);
+    const next = snap(await call('snapshot', { tab_id: ref, start: first.range.end }));
+    expect(next.range.start).toBe(first.range.end);
+    expect(next.page_id).toBe(first.page_id);
+    expect(calls).toHaveLength(1);
+    expect(cards).toHaveLength(1);
+    expect(activity).toHaveLength(1);
+    expect(scope.memory.elements!.get('n1')!.resolve('e1', first.page_id!)).toMatchObject({ ok: true });
+    // Each owner keeps its own latest snapshot in the page: the script is told whose it is.
+    expect(calls[0]).toContain('"owner":"test"');
+  });
+
+  it('a later range after the page moved on reads the page again', async () => {
+    const calls: string[] = [];
+    const { scope, call, pages } = setup({ read: page(calls), actions: true });
+    const ref = scope.refs.refFor('n1');
+    const first = snap(await call('snapshot', { tab_id: ref }));
+    pages.get('n1')!.events.emit('did-navigate');
+    const next = snap(await call('snapshot', { tab_id: ref, start: first.range.end }));
+    expect(calls).toHaveLength(2);
+    expect(next.page_id).not.toBe(first.page_id);
+    expect(scope.memory.elements!.get('n1')!.resolve('e1', next.page_id!)).toEqual({ ok: false, why: 'stale' });
+  });
+
+  it('refs of a tab that closed go with it', async () => {
+    const { scope, call, close } = setup({ read: page([]), actions: true });
+    await call('snapshot', { tab_id: scope.refs.refFor('n1') });
+    expect(scope.memory.elements!.has('n1')).toBe(true);
+    close('n1');
+    await call('snapshot', { tab_id: scope.refs.refFor('n3') });
+    expect([...scope.memory.elements!.keys()]).toEqual(['n3']);
   });
 });
