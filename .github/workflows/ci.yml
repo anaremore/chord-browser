@@ -1,13 +1,11 @@
 name: CI
 
 on:
+  # Every push to main runs everything. A pull request that changes only docs or the website skips the slow
+  # jobs instead (the `changes` job): no `paths-ignore` here, which would leave such a pull request no status at all.
   push:
     branches: [main]
-    # The website (site/) is built and deployed by Clank; nothing in CI tests it. Nor does any test read
-    # the docs, and a docs-only push would cancel the run of the code pushed just before it.
-    paths-ignore: ['site/**', 'docs/**', '**/*.md']
   pull_request:
-    paths-ignore: ['site/**']
   # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>).
   workflow_dispatch:
 
@@ -15,11 +13,54 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # Every commit on main gets a full run; only superseded pull-request runs are cancelled.
+  # One group per pull request: a new push cancels the run it replaces. Every other run (main, a run by hand)
+  # has a group of its own, so it's never cancelled, and never waits behind or replaces another run.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether anything but docs changed. Only a pull request can skip anything: the website (site/) is built and
+  # deployed by Clank, and no test reads the docs, the mocks or any Markdown file, so a pull request that changes
+  # only those skips E2E, Chord Player and the password detector's corpora. Typecheck, lint and unit tests still run.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      # A pull request's run checks out its merge commit: its first parent is the base branch as it is now,
+      # so the diff between the two is exactly what merging the pull request changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Anything but docs?
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "A $EVENT run: everything runs."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ "$(git rev-list --parents -n 1 HEAD | wc -w)" = 3 ] || { echo "::error::HEAD isn't the pull request's merge commit"; exit 1; }
+          # --no-renames: a file moved lists both its paths, so a test moved into docs/ still counts as code.
+          git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          code=false
+          while IFS= read -r file; do
+            case "$file" in
+              # Test fixtures are code, Markdown or not.
+              apps/*/test/* | packages/*/test/*) code=true; echo "Test file: $file"; break ;;
+              *.md | docs/* | site/* | mocks/*) ;;
+              *) code=true; echo "Not docs: $file"; break ;;
+            esac
+          done < "$RUNNER_TEMP/changed"
+          echo "$(wc -l < "$RUNNER_TEMP/changed") files changed; anything but docs: $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   checks:
     name: Typecheck · lint · unit tests
     runs-on: ubuntu-24.04
@@ -51,6 +92,8 @@ jobs:
   # Bitwarden's test-the-web is the next job's, not this one's.
   forms:
     name: Password detector · corpus
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -94,6 +137,8 @@ jobs:
   # main or a run by hand (CHORD_TTW_REQUIRED), where a skip would hide a lasting breakage.
   forms-ttw:
     name: Password detector · test-the-web
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -132,25 +177,50 @@ jobs:
   # development signature. Only a player release is VMP-signed (player-release.yml).
   player:
     name: Chord Player
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/player.yml
 
-  e2e:
-    name: E2E · ${{ matrix.name }}
+  # E2E on every OS, each split into shards (Playwright's --shard, which splits by file, keeping each file's tests
+  # together and in order) that run side by side on their own runners. Each shard sets its runner up in full.
+  # macOS has 2 shards, the rest 3: GitHub's free plan runs 5 macOS jobs at a time (and 20 jobs in all), and Chord
+  # Player takes 2 of those 5, so a third macOS shard would wait for a whole shard to finish.
+  # The `E2E` job below is the one status that says whether they all passed.
+  e2e-shard:
+    name: E2E · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
-    # The performance spec adds about 4 minutes on a fast machine. The Intel Macs are the slowest, and vary:
-    # 31 to 40 minutes for the same suite. This limit only has to catch a hung job.
-    timeout-minutes: 60
+    # A whole suite took 30 to 46 minutes. --shard splits by test count, not time, so a macOS shard can hold
+    # well over half of it (28 minutes on Intel, 2026-11-22), and Intel varies most. Elsewhere a shard took up to
+    # 17 minutes. These limits only have to catch a hung job.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: Windows x64, os: windows-latest }
-          - { name: Windows arm64, os: windows-11-arm }
-          - { name: macOS arm64, os: macos-26 }
-          - { name: macOS x64, os: macos-15-intel }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11 }
+          - { name: Windows x64, os: windows-latest, shard: 1, shards: 3 }
+          - { name: Windows x64, os: windows-latest, shard: 2, shards: 3 }
+          - { name: Windows x64, os: windows-latest, shard: 3, shards: 3 }
+          - { name: Windows arm64, os: windows-11-arm, shard: 1, shards: 3 }
+          - { name: Windows arm64, os: windows-11-arm, shard: 2, shards: 3 }
+          - { name: Windows arm64, os: windows-11-arm, shard: 3, shards: 3 }
+          - { name: macOS arm64, os: macos-26, shard: 1, shards: 2 }
+          - { name: macOS arm64, os: macos-26, shard: 2, shards: 2 }
+          - { name: macOS x64, os: macos-15-intel, shard: 1, shards: 2 }
+          - { name: macOS x64, os: macos-15-intel, shard: 2, shards: 2 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 1, shards: 3 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 2, shards: 3 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 3, shards: 3 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 1, shards: 3 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 2, shards: 3 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 3, shards: 3 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 1, shards: 3 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 2, shards: 3 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 3, shards: 3 }
+    env:
+      # Names this shard's artifacts: captures-, perf- and e2e-failures-<runner>[-display]-<shard>of<shards>.
+      ARTIFACT_SUFFIX: ${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}-${{ matrix.shard }}of${{ matrix.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -158,17 +228,30 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # Electron's own download (its postinstall, install-electron), kept per version, OS and architecture.
+      - name: Electron's version
+        id: electron
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/desktop/package.json').devDependencies.electron")" >> "$GITHUB_OUTPUT"
+      - name: Cache Electron's download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/electron-cache
+          key: electron-${{ steps.electron.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
       - run: pnpm install --frozen-lockfile
+        env:
+          electron_config_cache: ${{ runner.temp }}/electron-cache
       - run: pnpm build
       # Outside agents' transport (S18) on every OS: the endpoint, the relay, the gate, and on Windows the pipe's DACL
       # (window-owner.exe, just built), on Linux another user refused; and who's calling (M2a: pipe-clients, ss, lsof),
-      # looked up for real on each OS. pnpm test runs them on Linux too.
+      # looked up for real on each OS. pnpm test runs them on Linux too. Once per OS: in its first shard.
       - name: Agents' transport
+        if: matrix.shard == 1
         run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/agent-peer.test.ts apps/desktop/test/unit/control.test.ts
       # chord-data's perf rows on Windows' disks too, where a sync to disk costs most: a new profile's database (and
       # its migrations committed one by one, as before 2026-11-20, for comparison) and a big import's Undo.
       - name: chord-data's perf rows
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.shard == 1
         run: pnpm test:perf packages/data
 
       # E2E's spelling dictionary: a pinned, hash-checked download served to Chord from this machine
@@ -239,7 +322,7 @@ jobs:
             openbox --startup "touch $ready" &
             for i in $(seq 1 100); do [ -e "$ready" ] && break; sleep 0.1; done
             [ -e "$ready" ] || { echo "openbox did not start"; exit 1; }
-            pnpm --filter @chord/desktop test:e2e
+            pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
           '
 
       - name: E2E (Wayland, headless Weston)
@@ -253,17 +336,17 @@ jobs:
           export WAYLAND_DISPLAY=wayland-chord XDG_SESSION_TYPE=wayland
           # No core dumps (see the display servers step).
           ulimit -c 0
-          pnpm --filter @chord/desktop test:e2e
+          pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
 
       - name: E2E
         if: runner.os != 'Linux'
-        run: pnpm --filter @chord/desktop test:e2e
+        run: pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
 
       - name: Upload design QA captures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: captures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
+          name: captures-${{ env.ARTIFACT_SUFFIX }}
           path: apps/desktop/test-results/captures/
           if-no-files-found: ignore
 
@@ -274,7 +357,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: perf-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
+          name: perf-${{ env.ARTIFACT_SUFFIX }}
           path: apps/desktop/test-results/perf.json
           if-no-files-found: ignore
 
@@ -282,5 +365,28 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: e2e-failures-${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}
+          name: e2e-failures-${{ env.ARTIFACT_SUFFIX }}
           path: apps/desktop/test-results/
+
+  # The one E2E status for a pull request: it passes when every shard passed, or when none had to run (a pull
+  # request of docs alone), and fails when any shard failed or was cancelled, or what changed couldn't be told.
+  e2e:
+    name: E2E
+    needs: [changes, e2e-shard]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed, or none had to run
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          SHARDS: ${{ needs.e2e-shard.result }}
+        run: |
+          echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}). Shards: $SHARDS."
+          if [ "$CHANGES" != success ]; then echo "::error::Couldn't tell what changed ($CHANGES)"; exit 1; fi
+          if [ "$CODE" = true ]; then
+            if [ "$SHARDS" != success ]; then echo "::error::E2E shards: $SHARDS"; exit 1; fi
+          elif [ "$SHARDS" != skipped ]; then
+            echo "::error::Docs alone changed, but the shards were $SHARDS"; exit 1
+          fi
