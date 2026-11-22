@@ -28,7 +28,7 @@ import { runBridge } from '../../src/main/agents/bridge';
 import { connectEndpoint, endpointPath, LIVE_MAX, lines, readEndpoint, startEndpoint, UNAUTHENTICATED_MAX } from '../../src/main/agents/endpoint';
 import { privateFolder, relayFolder, relayUserData, userCache } from '../../src/main/agents/relay-folder';
 import type { ConnectAnswer, ConnectingAgent } from '../../src/main/agents/connect';
-import { AgentService, QUEUED_MAX, restrictWithRetry } from '../../src/main/agents/service';
+import { AgentService, QUEUED_MAX, RESTRICT_TIMED_OUT, restrictWithRetry } from '../../src/main/agents/service';
 import { watchAgents } from '../../src/main/agents/switch';
 import type { ControlBrowser } from '../../src/main/control/tools';
 import type { Change } from '../../src/main/store';
@@ -238,6 +238,8 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
       ['fails, then works', [5, 0], 0, 1],
       ['fails twice', [5, 7], 7, 2],
       ['doesn’t start, twice', [new Error('spawn window-owner.exe ENOENT'), new Error('spawn window-owner.exe ENOENT')], -1, 2],
+      // A timeout already took 10 s: not tried again.
+      ['times out', [RESTRICT_TIMED_OUT, 0], RESTRICT_TIMED_OUT, 1],
     ];
     for (const [what, tries, outcome, warnings] of table) {
       const logged: string[] = [];
@@ -251,6 +253,8 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
       expect(logged, what).toHaveLength(warnings);
       if (what.startsWith('doesn’t start')) expect(logged[0]).toContain('ENOENT');
       if (what === 'fails twice') expect(logged[1]).toContain('the token still gates every connection');
+      if (what === 'times out') expect(logged[0]).toMatch(/it timed out.*the token still gates every connection/);
+      if (what === 'times out') expect(n).toBe(1);
     }
   });
 

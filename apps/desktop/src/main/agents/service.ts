@@ -278,30 +278,39 @@ export function restrictPipe(helper: string, path: string): Promise<number> {
     execFile(helper, ['restrict-pipe', path], { windowsHide: true, timeout: 10_000 }, (error) => {
       if (!error) return resolve(0);
       const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
-      // Not started (missing, blocked) or killed at the timeout: no exit code of its own, so the reason is the error's.
-      if (typeof code !== 'number') lastRestrictError = (error as { killed?: boolean }).killed ? 'it timed out' : error.message;
+      // Killed at the timeout: RESTRICT_TIMED_OUT (never tried again). Not started (missing, blocked): -1, with the error's reason.
+      if ((error as { killed?: boolean }).killed) return resolve(RESTRICT_TIMED_OUT);
+      if (typeof code !== 'number') lastRestrictError = error.message;
       resolve(typeof code === 'number' ? code : -1);
     });
   });
 }
 
-/** Why the last restrict-pipe run had no exit code of its own (it didn't start, or timed out). */
+/** Why the last restrict-pipe run had no exit code of its own (it didn't start). */
 let lastRestrictError = '';
+
+/** restrict-pipe ran out of time (10 s): not tried again, so the first connection never waits twice as long. */
+export const RESTRICT_TIMED_OUT = -2;
 
 const warn = (log: AgentServiceDeps['log'], message: string) => {
   log?.(`agents: ${message}`);
   console.warn(`[chord] ${message}`);
 };
 
-/** The pipe restricted, tried once more if it fails; every failure logged with its reason. Resolves with the last outcome. */
+/**
+ * The pipe restricted, tried once more after a quick failure (never after a timeout); every failure logged with its
+ * reason. Resolves with the last outcome.
+ */
 export async function restrictWithRetry(restrict: (path: string) => Promise<number>, path: string, log?: AgentServiceDeps['log']): Promise<number> {
   let code = -1;
   for (let attempt = 1; attempt <= 2; attempt++) {
     lastRestrictError = '';
     code = await restrict(path).catch((error: unknown) => ((lastRestrictError = error instanceof Error ? error.message : String(error)), -1));
     if (code === 0) return 0;
-    const why = code === -1 ? lastRestrictError || 'it didn’t run' : `window-owner exited ${code}`;
-    warn(log, `couldn’t tighten the agent pipe’s access (try ${attempt} of 2: ${why})${attempt === 2 ? '; the token still gates every connection' : ''}`);
+    const last = attempt === 2 || code === RESTRICT_TIMED_OUT;
+    const why = code === RESTRICT_TIMED_OUT ? 'it timed out' : code === -1 ? lastRestrictError || 'it didn’t run' : `window-owner exited ${code}`;
+    warn(log, `couldn’t tighten the agent pipe’s access (try ${attempt} of 2: ${why})${last ? '; the token still gates every connection' : ''}`);
+    if (last) break;
   }
   return code;
 }

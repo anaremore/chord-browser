@@ -338,14 +338,14 @@ const kindOf = (command: string): string => /--type=(\S+)/.exec(command)?.[1] ??
  *   the relay's command line, and it measured the relay no smaller (123 and 129 MB), so they stay.
  * An AppImage is measured past its runtime, at Chord itself.
  */
-/** Each of Linux's zygotes (#98's review): measured 63–75 MB resident (release.yml run 44965503884), much of it shared with the relay. */
-const ZYGOTE_MB = 100;
-
 const RELAY_BUDGETS = {
   win32: { mb: 90, children: [] as string[] },
   darwin: { mb: 40, children: [] as string[] },
   linux: { mb: 160, children: ['zygote', 'zygote'] },
 };
+
+/** Each of Linux's zygotes (#98's review): measured 63–75 MB resident (release.yml run 44965503884), much of it shared with the relay. */
+const ZYGOTE_MB = 100;
 
 test('Chord mcp: the relay alone answers fast, in one process, with no window and nothing written to the profile', async () => {
   const executable = packagedExecutable();
@@ -374,7 +374,16 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
     const relay = executable.endsWith('.AppImage') && outer.childPids.length === 1 ? processInfo(outer.childPids[0]!) : outer;
     const { mb, rss, children } = relay;
     // Linux: the zygotes' own resident memory, each held loosely (they're forks, so much of it is shared with the relay).
-    const zygoteMb = relay.childPids.map((pid) => Number(/^VmRSS:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]) / 1024);
+    // One that has gone meanwhile (or a zombie, with no VmRSS) isn't counted.
+    const zygoteMb = relay.childPids
+      .map((pid) => {
+        try {
+          return Number(/^VmRSS:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]) / 1024;
+        } catch {
+          return NaN;
+        }
+      })
+      .filter((mb) => Number.isFinite(mb));
     if (zygoteMb.length > 0) console.log(`Chord mcp's zygotes: ${zygoteMb.map(Math.round).join(' MB, ')} MB resident`);
     console.log(`Chord mcp: initialize ${Math.round(initializeMs)} ms (median of ${times.map(Math.round).join(', ')}), ${Math.round(mb)} MB (resident ${Math.round(rss)} MB), child processes: ${children.length ? children.join(', ') : 'none'}`);
     // Budgets per platform (#90), from the 2026-11-21 release dry run (release.yml run 44961409463), each with room

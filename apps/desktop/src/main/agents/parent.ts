@@ -7,7 +7,7 @@
  * line, which can hold tokens.
  */
 import { execFile } from 'node:child_process';
-import { readFileSync, readlinkSync } from 'node:fs';
+import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -40,10 +40,18 @@ async function processInfo(pid: number): Promise<ProcessInfo> {
   }
   const { stdout } = await run('ps', ['-o', 'ppid=,comm=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
   const match = /^\s*(\d+)\s+(.*)$/.exec(stdout.trim());
-  const cwd = await run('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'])
-    .then(({ stdout: o }) => o.split('\n').find((l) => l.startsWith('n'))?.slice(1) ?? null)
-    .catch(() => null);
-  return { pid, name: match ? basename(match[2]!) : null, path: match?.[2] ?? null, cwd, ppid: match ? Number(match[1]) : null };
+  // One lsof for its folder and its executable (the first `txt` file): ps's comm is whatever the process says.
+  const files = await run('lsof', ['-a', '-p', String(pid), '-d', 'cwd,txt', '-Fn'])
+    .then(({ stdout: o }) => o.split('\n'))
+    .catch(() => [] as string[]);
+  const file = (fd: string) => {
+    const at = files.indexOf(`f${fd}`);
+    return at >= 0 ? (files.slice(at + 1).find((l) => l.startsWith('n'))?.slice(1) ?? null) : null;
+  };
+  // The executable as the OS has it, its links resolved: never a path the process made up.
+  const exe = file('txt');
+  const path = exe ? (attempt(() => realpathSync(exe)) ?? exe) : (match?.[2] ?? null);
+  return { pid, name: path ? basename(path) : null, path, cwd: file('cwd'), ppid: match ? Number(match[1]) : null };
 }
 
 /** The process and up to `depth - 1` of its ancestors. */

@@ -219,36 +219,51 @@ describe('Always allow', () => {
     const helper = { pid: 9, name: 'language_server_linux_x64', path: '/opt/Antigravity/resources/bin/language_server_linux_x64', cwd: null, ppid: 8 };
     const app = { pid: 8, name: 'antigravity', path: '/opt/Antigravity/antigravity', cwd: null, ppid: 1 };
     const at = (name: string, path: string) => ({ pid: 1, name, path, cwd: null, ppid: 1 });
-    // [the bridge's parent, its parent, who started it]
-    const table: [string, ProcessInfo, ProcessInfo | null, string][] = [
-      ['Linux: the helper in the app’s folder', helper, app, 'antigravity'],
+    const win = (name: string, path: string) => at(name, path);
+    // [platform, what, the bridge's parent, its parent, who started it]
+    const table: [NodeJS.Platform, string, ProcessInfo, ProcessInfo | null, string][] = [
+      // Antigravity, as each OS installs it: the helper is passed, the app named.
+      ['linux', 'Antigravity: its helper in resources/bin', helper, app, 'antigravity'],
       [
-        'macOS: the helper in the app bundle',
+        'darwin',
+        'Antigravity: its helper in the bundle (any case)',
         at('language_server_macos_arm', '/Applications/Antigravity.app/Contents/Resources/bin/language_server_macos_arm'),
-        at('Antigravity', '/Applications/Antigravity.app/Contents/MacOS/Antigravity'),
+        at('Antigravity', '/Applications/antigravity.app/Contents/MacOS/Antigravity'),
         'Antigravity',
       ],
       [
-        'Windows: the helper in the app’s folder (any case)',
-        at('language_server_windows_x64.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server_windows_x64.exe'),
-        at('Antigravity.exe', 'C:\\Users\\Me\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe'),
+        'win32',
+        'Antigravity: its helper in resources\\bin (any case)',
+        win('language_server_windows_x64.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server_windows_x64.exe'),
+        win('Antigravity.exe', 'C:\\Users\\Me\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe'),
         'Antigravity.exe',
       ],
-      // The attack: a program that calls itself so, anywhere else, is named as itself (and so gets a card).
-      ['a language_server_x outside its parent’s folder', at('language_server_x', '/tmp/evil/language_server_x'), at('claude', '/home/me/.local/bin/claude'), 'language_server_x'],
-      ['a language_server_x in a folder named like its parent’s', at('language_server_x', '/home/me/.local/bin-evil/language_server_x'), at('claude', '/home/me/.local/bin/claude'), 'language_server_x'],
-      ['a helper with no parent', helper, null, 'language_server_linux_x64'],
-      ['no helper', claude, app, 'claude.exe'],
+      // Never passed: a helper-named process whose parent isn't Antigravity, or isn't laid out as it.
+      ['linux', 'under Claude Code’s own folder', at('language_server_x', '/home/me/.local/share/claude/language_server_x'), at('claude', '/home/me/.local/share/claude/claude'), 'language_server_x'],
+      ['linux', 'outside any app', at('language_server_x', '/tmp/evil/language_server_x'), at('claude', '/home/me/.local/bin/claude'), 'language_server_x'],
+      ['linux', 'with .. in its path', at('language_server_x', '/opt/Antigravity/resources/bin/../../../tmp/x/language_server_x'), app, 'language_server_x'],
+      ['darwin', 'with .. in its path', at('language_server_x', '/Applications/Antigravity.app/Contents/Resources/../../../../tmp/x/language_server_x'), at('Antigravity', '/Applications/Antigravity.app/Contents/MacOS/Antigravity'), 'language_server_x'],
+      ['linux', 'a case that differs on Linux', at('language_server_x', '/opt/antigravity/resources/bin/language_server_x'), app, 'language_server_x'],
+      ['linux', 'beside an app not named antigravity', at('language_server_x', '/opt/Codex/resources/bin/language_server_x'), at('codex', '/opt/Codex/codex'), 'language_server_x'],
+      ['linux', 'in the app’s folder but not in resources/bin', at('language_server_x', '/opt/Antigravity/language_server_x'), app, 'language_server_x'],
+      ['darwin', 'outside the bundle', at('language_server_x', '/Applications/Antigravity.app-evil/language_server_x'), at('Antigravity', '/Applications/Antigravity.app/Contents/MacOS/Antigravity'), 'language_server_x'],
+      ['linux', 'with no parent', helper, null, 'language_server_linux_x64'],
+      ['linux', 'no helper at all', claude, app, 'claude.exe'],
     ];
-    for (const [what, first, next, named] of table) expect(startedByOf(next ? [first, next] : [first])?.name, what).toBe(named);
+    for (const [platform, what, first, next, named] of table) expect(startedByOf(next ? [first, next] : [first], platform)?.name, `${platform}: ${what}`).toBe(named);
     expect(startedByOf([])).toBeNull();
-    const t = setup();
-    const asked = t.cards.ask({ name: 'antigravity-cli', folder: '/home/me/code', parent: Promise.resolve([helper, app]) }, new AbortController().signal);
-    await tick();
-    await tick();
-    expect(t.cards.cardFor('w1')).toMatchObject({ name: 'antigravity-cli', startedBy: 'antigravity' });
-    t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
-    expect(await asked).toMatchObject({ grant: 'always', allowedParent: '/opt/Antigravity/antigravity' });
+    // Through the card, with this OS's layout: Antigravity is named, and kept by its app.
+    const here = table.find(([platform, what]) => platform === process.platform && what.startsWith('Antigravity:')) ?? table[0]!;
+    const [, , hereHelper, hereApp] = here;
+    if (here[0] === process.platform) {
+      const t = setup();
+      const asked = t.cards.ask({ name: 'antigravity-cli', folder: '/home/me/code', parent: Promise.resolve([hereHelper, hereApp!]) }, new AbortController().signal);
+      await tick();
+      await tick();
+      expect(t.cards.cardFor('w1')).toMatchObject({ name: 'antigravity-cli', startedBy: hereApp!.name });
+      t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
+      expect(await asked).toMatchObject({ grant: 'always', allowedParent: hereApp!.path });
+    }
 
     // Claude Code is allowed for good; a helper-named program it didn't install, giving Claude Code's name, is asked.
     const u = setup();

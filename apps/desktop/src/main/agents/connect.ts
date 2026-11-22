@@ -61,25 +61,38 @@ const LOOKUP_MS = 5000;
 /** The longest folder the card shows; longer ones lose their middle. */
 const FOLDER_MAX = 120;
 
-/** The folder a program is installed in: its app bundle on macOS (`…/Antigravity.app`), else its own folder. */
-function installFolder(path: string): string {
-  const bundle = /^(.*?\.app)[\\/]/i.exec(path);
-  return (bundle ? bundle[1]! : path.replace(/[\\/][^\\/]*$/, '')).replace(/\\/g, '/').toLowerCase();
+/**
+ * Antigravity's app and the helper it runs its tools from, by the layout each OS installs them in: the app as
+ * `<dir>/Antigravity.exe` (Windows), `<dir>/antigravity` (Linux) or `…/Antigravity.app/Contents/MacOS/<it>` (macOS),
+ * and its helper in `<dir>/resources/bin/` (or the bundle's `Contents/Resources/`). Paths are compared as the OS
+ * does: case aside on Windows and macOS, never on Linux; any `..` in either and it's no match.
+ */
+function antigravityHelper(helper: string, app: string, platform: NodeJS.Platform): boolean {
+  const norm = (path: string) => {
+    const slashes = platform === 'win32' ? path.replace(/\\/g, '/') : path;
+    return platform === 'win32' || platform === 'darwin' ? slashes.toLowerCase() : slashes;
+  };
+  const h = norm(helper);
+  const a = norm(app);
+  if (/(^|\/)\.\.(\/|$)/.test(h) || /(^|\/)\.\.(\/|$)/.test(a)) return false;
+  if (platform === 'darwin') {
+    const bundle = /^(\/.+\/antigravity\.app)\/contents\/macos\/[^/]+$/.exec(a);
+    return Boolean(bundle && h.startsWith(`${bundle[1]}/contents/resources/`));
+  }
+  const app_ = platform === 'win32' ? /^(.+)\/antigravity\.exe$/.exec(a) : /^(\/.+)\/antigravity$/.exec(a);
+  return Boolean(app_ && h.startsWith(`${app_[1]}/resources/bin/`));
 }
 
-/** Whether `path` lies inside `folder` (its separators and, as on Windows and macOS, its case aside). */
-const inside = (path: string, folder: string) => path.replace(/\\/g, '/').toLowerCase().startsWith(`${folder}/`);
-
 /**
- * The program that started it, as the card names it and Always allow keeps it: the bridge's parent, or, past a
- * helper the agent runs its tools from (Antigravity's `language_server_*`, reportedly), the app behind it. Only a
- * helper inside that app's own install folder is passed: a program anywhere else that calls itself so is named as
- * itself, and can't borrow the app's Always allow.
+ * The program that started it, as the card names it and Always allow keeps it: the bridge's parent; or, when that
+ * is Antigravity's `language_server_*` helper and the next ancestor is the Antigravity app itself (by name and
+ * layout), that app. Any other process that calls itself so (a child of Claude Code or Codex, say) is named as
+ * itself, and can't borrow an agent's Always allow. The parent stays a hint, never an identity (S18 §3).
  */
-export function startedByOf(chain: readonly ProcessInfo[]): ProcessInfo | null {
+export function startedByOf(chain: readonly ProcessInfo[], platform: NodeJS.Platform = process.platform): ProcessInfo | null {
   const [first, next] = chain;
   if (!first) return null;
-  const helper = /^language_server/i.test(first.name ?? '') && first.path && next?.path && inside(first.path, installFolder(next.path));
+  const helper = /^language_server/i.test(first.name ?? '') && first.path && next?.path && antigravityHelper(first.path, next.path, platform);
   return helper ? next! : first;
 }
 
