@@ -106,14 +106,14 @@ function NameStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
 
 function ThemeStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
   const apply = (theme: Partial<ChordThemeSpec>) => void api.state.dispatch({ t: 'chord.theme', chordId: chord.id, theme });
-  const usePreset = (id: PresetId) => apply({ stops: presetStops(id), grain: PRESET_GRAIN, themeId: `preset:${id}` });
+  const choosePreset = (id: PresetId) => apply({ stops: presetStops(id), grain: PRESET_GRAIN, themeId: `preset:${id}` });
   // Each group is one Tab stop; arrow keys pick within it (WAI-ARIA radio group).
   const presetsGroup = useRoving<HTMLDivElement>(RADIOS);
   const swatchesGroup = useRoving<HTMLDivElement>(RADIOS);
   const surprise = () => {
     const presets = Object.keys(PRESETS) as PresetId[];
     const others = presets.filter((id) => chord.theme.themeId !== `preset:${id}`);
-    usePreset(others[Math.floor(Math.random() * others.length)]!);
+    choosePreset(others[Math.floor(Math.random() * others.length)]!);
   };
   return (
     <>
@@ -130,7 +130,7 @@ function ThemeStep({ chord, onNext }: { chord: Chord; onNext(): void }) {
             title={titleCase(id)}
             className={styles.preset}
             style={{ backgroundImage: `linear-gradient(150deg, ${PRESETS[id].map((s) => cssOklch(SWATCHES[s])).join(', ')})` }}
-            onClick={() => usePreset(id)}
+            onClick={() => choosePreset(id)}
           />
         ))}
       </div>

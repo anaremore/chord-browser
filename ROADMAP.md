@@ -120,7 +120,7 @@ Released, all previews: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), then 
   - electron-vite 6 on **Electron 45**. Its Electron 45 support is unverified, so the first commit proves it; the fallback is ejecting to plain Vite.
   - Packages: `@chord/core`, `ipc`, `db`, `tokens`, `ui`.
 - **Quality gates:**
-  - ESLint plus the token-enforcing stylelint rules (DESIGN.md §4.1).
+  - ESLint (Oxlint since 2026-11) plus the token-enforcing stylelint rules (DESIGN.md §4.1).
   - Vitest.
   - A Playwright `_electron` harness with test-only IPC.
 - **CI matrix:**

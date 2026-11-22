@@ -48,11 +48,6 @@
     {
       "groupName": "UI libraries",
       "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom", "motion", "lucide-react", "@dnd-kit/**"]
-    },
-    {
-      "description": "typescript-eslint supports TypeScript <6.1 (ARCHITECTURE.md §2).",
-      "matchPackageNames": ["typescript"],
-      "allowedVersions": "<6.1"
     }
   ]
 }
