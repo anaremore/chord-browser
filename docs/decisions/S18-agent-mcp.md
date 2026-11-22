@@ -348,6 +348,17 @@ Behind `AGENT_ACTIONS_RELEASED` (core, false) until M2d lands, as M1 was behind 
 - **Perf:** the snapshot and action timings above, in the perf job, on the fixtures.
 - **Windows CI:** the peer PID helper's units. No Windows E2E on the owner's computer.
 
+### WebMCP (later)
+
+*Owner, 2026-11-21: make M2 WebMCP-ready, and pass sites' own tools (`document.modelContext`) through in a later milestone. What's reported about WebMCP (an Origin Trial in Chrome 149–162; the API moved from `navigator` to `document` and lost `provideContext`; an experimental CDP `WebMCP` domain with `toolsAdded` and `invokeTool`) is from a review, not checked here; that milestone checks it against Electron's Chromium first.*
+
+- **Not in M2.** Passing site tools through waits until Chromium ships `document.modelContext` on by default and the spec settles. M2 enables no WebMCP feature flag.
+- **Fixed tool names.** M2's tools are short and fixed. Site tools will come later behind fixed meta-tools (`list_page_tools`, `call_page_tool`), never by changing `tools/list` as pages come and go: clients cache it (Antigravity reportedly caches schemas on disk).
+- **One page boundary.** `ControlPage` stays the only thing that touches a page, whether through the isolated world or the debugger (`debugger-queue.ts`), so the CDP `WebMCP.*` domain can plug in behind it later with neither front door changing.
+- **Cards and grants that fit.** The site and step cards carry a structured target and arguments (`ControlCard.target`, plus `args` from M2c: the element's role and name, or later a tool's name and its arguments), not prose alone. M2's site grants are per registrable domain, as settled; site tools' grants will be per origin, a finer key the same gate can hold (`grantKey`'s subject).
+- **Pages never lower the bar.** A page's own hints (a tool's `readOnlyHint`, ARIA, form attributes) never turn a risky step into an action that doesn't ask; they can only make one ask. Chord never injects a WebMCP shim into a page's main world.
+- **Untrusted, and only where reading is allowed.** Site tools' names, descriptions, schemas and outputs are untrusted data, wrapped like page text (§11.4). Only the main frame's own, same-origin tools are offered, never in a private window, on a Chord page or on a *Never* site. The assistant gets them through the same gate.
+
 ### Questions for the owner
 
 1. **The agent's reason on the card.** The M1 mock's M2 preview showed the agent's own words (*It's reading your orders to find the return window.*). The plan leaves them off: a page can steer what an agent says, and the card is where you decide. Keep it off, or show it labeled (*Claude Code says: …*)?
