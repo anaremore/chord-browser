@@ -144,6 +144,7 @@ export const ACT_REFUSALS = {
   twoChoices: 'That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.',
   sensitive: 'That field is now a password, code or card field: the user fills it. Ask them to.',
   focusMoved: 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.',
+  noMove: 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.',
   sharedReadOnly: 'That tab is shared with you to read, not to act on. Ask the user if they want you to act in your own tab.',
   siteDenied: (site: string) => `The user didn’t let you act on ${site}. Don’t act there again unless the user asks you to.`,
   noSite: 'Chord can’t act on this page (it isn’t a web page).',

@@ -727,7 +727,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; noMove?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     if (code.includes('new MutationObserver(() =>')) {
       onAct?.(events, 'settle');
@@ -749,6 +749,7 @@ describe('acting through the gate (S18 M2c)', () => {
         return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : {}) };
       }
       if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
+      if (args.op === 'hit' && twist.noMove) return { ok: false, why: 'no-move' };
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       // The page's guard: what it stopped, as if the focus moved between the check and the input.
@@ -918,6 +919,12 @@ describe('acting through the gate (S18 M2c)', () => {
     expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
     const u = await acting({ twist: { moved: true } });
     expect(refusal(await u.call('press_key', { tab_id: u.tab, ref: 'e2', key: 'Enter' })).refused).toBe(ACT_REFUSALS_FOCUS);
+  });
+
+  it('the page never saw the pointer arrive (a tab drawing no frames, a page swallowing moves): no press, fails closed', async () => {
+    const t = await acting({ twist: { noMove: true } });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove']);
   });
 
   it.each(twists)('type, when %s: refused, no text', async (_what, twist, says) => {

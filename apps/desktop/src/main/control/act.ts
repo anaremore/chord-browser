@@ -49,7 +49,7 @@ export type ActOp =
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 export type ActAnswer =
   | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; moved?: boolean }
-  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -102,9 +102,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   }
   if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
   if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
-  // guard: a key or an insertion bound anywhere but the element is stopped before the page sees it (capture, on the
-  // window: the first listener there is). Taken off by unguard once the input's last event was seen, or by itself
-  // after 5 s.
+  // guard: a key or an insertion bound anywhere but the element is stopped before the page's own handlers see it
+  // (capture, on the window), though not before a capture listener the page put on the window earlier, which runs
+  // first. Taken off by unguard once the input's last event was seen, or by itself after 5 s.
   const GUARDED = ['keydown', 'keypress', 'keyup', 'beforeinput'];
   const unwatch = (guard) => {
     for (const type of GUARDED) removeEventListener(type, guard.stop, true);
@@ -117,11 +117,14 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     if (!guard.done) await new Promise((done) => { guard.finished = done; setTimeout(done, args.guardWait); });
     await new Promise((done) => setTimeout(done, 0));
     unwatch(guard);
-    return { ok: true, ...said, moved: guard.moved };
+    // The input's last event never came here: the focus went where this document doesn't see (into a frame). Text,
+    // too, must have ended in the element (a key may move the focus on purpose: Tab).
+    const lost = !guard.done || (guard.until === 'beforeinput' && deepFocus() !== el);
+    return { ok: true, ...said, moved: guard.moved || lost };
   }
   if (args.op === 'guard') {
     if (globalThis.__chordGuard) unwatch(globalThis.__chordGuard);
-    const guard = { moved: false, done: false, finished: null, timer: 0, stop: (e) => {
+    const guard = { until: args.until, moved: false, done: false, finished: null, timer: 0, stop: (e) => {
       if (!e.isTrusted) return;
       if (e.type === args.until) { guard.done = true; if (guard.finished) guard.finished(); }
       if (e.type === 'keyup' || deepFocus() === el) return;
@@ -175,23 +178,29 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // hit: just before the button goes down, the point is still the element's (nothing moved over it since point). The
   // pointer's move first: the page sees it with its next frame, after main sent it, and its mouseover and mouseenter
   // handlers run before the move's own listeners, so once the move is seen here (and its dispatch over: a task later),
-  // whatever they put over the point is there to be hit. A move into a frame goes to the frame's document, never
-  // here: then the wait runs out, and the hit test finds the frame.
+  // whatever they put over the point is there to be hit. It fails closed: a move never seen (a tab that draws no
+  // frames, a page listener that swallows moves, a move into a frame, whose document gets it) gets no press, as the
+  // button going down would send the move then, and its handlers would run after this test. Unless the pointer was at
+  // that point already (a second click there): no move is sent then, nor are its handlers run.
   if (args.op === 'hit') {
     const near = (e) => Math.abs(e.clientX - args.x) <= 2 && Math.abs(e.clientY - args.y) <= 2;
     const moved = globalThis.__chordMoved;
-    if (!(moved && moved.seen && near(moved.seen))) {
-      await new Promise((done) => {
-        const timer = setTimeout(finish, args.hitWait);
-        function seen(e) { if (e.isTrusted && near(e)) finish(); }
-        function finish() { clearTimeout(timer); removeEventListener('mousemove', seen, true); done(); }
+    let arrived = Boolean(moved && moved.seen && near(moved.seen));
+    if (!arrived) {
+      arrived = await new Promise((done) => {
+        const timer = setTimeout(() => finish(false), args.hitWait);
+        function seen(e) { if (e.isTrusted && near(e)) finish(true); }
+        function finish(saw) { clearTimeout(timer); removeEventListener('mousemove', seen, true); done(saw); }
         addEventListener('mousemove', seen, true);
       });
     }
     await new Promise((done) => setTimeout(done, 0));
     if (moved) { removeEventListener('mousemove', moved.listen, true); globalThis.__chordMoved = null; }
     const hit = deepest(args.x, args.y);
-    return ours(hit) ? { ok: true, ...said } : { ok: false, why: 'covered', cover: coverOf(hit) };
+    if (!ours(hit)) return { ok: false, why: 'covered', cover: coverOf(hit) };
+    const before = moved && moved.before;
+    if (!arrived && !(before && near(before))) return { ok: false, why: 'no-move' };
+    return { ok: true, ...said };
   }
   // point: to the middle of the view, then the hit test at its middle and its quarters' middles.
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
@@ -207,7 +216,12 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       // From here, the pointer's move is watched for: main sends it next, and hit waits for the page to see it.
       const was = globalThis.__chordMoved;
       if (was) removeEventListener('mousemove', was.listen, true);
-      const watch = { seen: null, listen: (e) => { if (e.isTrusted) watch.seen = { clientX: e.clientX, clientY: e.clientY }; } };
+      // Where the pointer was last seen, before this action's move (kept by a listener that stays once an agent acts).
+      if (!globalThis.__chordPointer) {
+        const pointer = (globalThis.__chordPointer = { at: null });
+        addEventListener('mousemove', (e) => { if (e.isTrusted) pointer.at = { clientX: e.clientX, clientY: e.clientY }; }, true);
+      }
+      const watch = { seen: null, before: globalThis.__chordPointer.at, listen: (e) => { if (e.isTrusted) watch.seen = { clientX: e.clientX, clientY: e.clientY }; } };
       addEventListener('mousemove', watch.listen, true);
       globalThis.__chordMoved = watch;
       setTimeout(() => { if (globalThis.__chordMoved === watch) { removeEventListener('mousemove', watch.listen, true); globalThis.__chordMoved = null; } }, 5000);

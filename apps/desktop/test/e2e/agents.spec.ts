@@ -104,7 +104,11 @@ const shopResults = (q: string) =>
   // click: the last hit test must wait for the pointer's move to have reached the page).
   '<div role=button tabindex=0 style="inline-size:160px;block-size:40px" onclick="document.getElementById(\'log\').textContent = \'hover deal clicked\'" ' +
   'onmouseenter="const r = this.getBoundingClientRect(), f = document.createElement(\'iframe\'); f.title = \'Popup\'; f.srcdoc = \'x\'; ' +
-  'f.style.cssText = \'position:fixed;border:0;left:\' + r.left + \'px;top:\' + r.top + \'px;width:\' + r.width + \'px;height:\' + r.height + \'px\'; document.body.append(f)">Hover deal</div></main>';
+  'f.style.cssText = \'position:fixed;border:0;left:\' + r.left + \'px;top:\' + r.top + \'px;width:\' + r.width + \'px;height:\' + r.height + \'px\'; document.body.append(f)">Hover deal</div>' +
+  // Review 3 of #110: a button the page swallows pointer moves over (its own capture listener, put first): the move is
+  // never seen, so the click fails closed.
+  '<button id=sticky onclick="document.getElementById(\'log\').textContent = \'sticky deal clicked\'">Sticky deal</button>' +
+  '<script>addEventListener(\'mousemove\', (e) => { if (e.target.id === \'sticky\') e.stopImmediatePropagation(); }, true);</script></main>';
 
 /** A ref from a snapshot's outline, by its line's start (`button "Start a return"`). */
 const refOf = (outline: string, line: string) => {
@@ -172,6 +176,8 @@ test('acting: an agent types, clicks and chooses in its own tab; the first actio
     // clicked. A choice in a disabled group isn't one; two choices by one name, neither.
     expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Hover deal"') })).text).toBe('Something is covering that element: frame “Popup”. Deal with it first, or call snapshot again.');
     expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).not.toContain('hover deal clicked');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Sticky deal"') })).text).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).not.toContain('sticky deal clicked');
     expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(results, 'combobox "Shipping"'), option: 'Overnight' })).text).toBe('That list has no such choice. Call snapshot for its choices.');
     expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(results, 'combobox "Shipping"'), option: 'Pickup' })).text).toBe('That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.');
     // A choice by its label.

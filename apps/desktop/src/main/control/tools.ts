@@ -524,7 +524,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         return false;
       }
       await input();
-      // The input's events are on their way (each its own message): unguard waits for the last one.
+      // The input's events are on their way (each its own message): unguard waits for the last one. No answer counts as
+      // done: the page went (a submit's Enter navigated it), so its document, and where its focus was, are gone too.
       const down = await page.act(owner, lookup.token, lookup.key, { op: 'unguard' });
       if (down.ok && down.moved) refused = ACT_REFUSALS.focusMoved;
       return !refused;
@@ -581,6 +582,7 @@ function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';
   if (answer.why === 'no-choice') return ACT_REFUSALS.noChoice;
   if (answer.why === 'two-choices') return ACT_REFUSALS.twoChoices;
+  if (answer.why === 'no-move') return ACT_REFUSALS.noMove;
   return ACT_REFUSALS.changed;
 }
 
