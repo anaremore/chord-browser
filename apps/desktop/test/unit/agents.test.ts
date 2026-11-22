@@ -537,7 +537,9 @@ describe('Zero cost, and off in packaged builds', () => {
     const [held] = [...service.connections];
     const chain = await held!.parent!;
     if (want === 'none') expect(chain).toEqual([]);
-    else expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
+    // Never the wrong process. Where the parent chain comes from the OS's own lookup (PowerShell's on Windows), CI's
+    // Windows arm64 runner has had it come back empty (issue #107): nobody is a right answer there, a wrong one never.
+    else if (chain.length > 0 || !(process.platform === 'win32' && process.arch === 'arm64')) expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
     if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
     else expect(asked).toBeNull();
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
