@@ -1364,6 +1364,23 @@ if (!app.requestSingleInstanceLock()) {
           }
           return { ...seen, paused: held.connection.agent.state(nodeId).paused, shown, refused };
         },
+        /**
+         * S18 M2b's budgets: how long the snapshot script takes in the tab at `url`, round trip from main (the renderer's
+         * work and the answer's way back), `runs` times; and what the last one found.
+         */
+        agentSnapshotTimes: async (url: string, runs: number) => {
+          const { snapshotPage } = await import('./control/snapshot');
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return null;
+          const times: number[] = [];
+          let last: Awaited<ReturnType<typeof snapshotPage>> = null;
+          for (let i = 0; i < runs; i++) {
+            const started = performance.now();
+            last = await snapshotPage(contents, 'timing', `timing${i}`);
+            times.push(performance.now() - started);
+          }
+          return { times, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
+        },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),
         /** Why each window's last frame change that wanted pictures happened at once (null: it glided). */

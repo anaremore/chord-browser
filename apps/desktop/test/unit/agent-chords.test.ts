@@ -6,7 +6,7 @@
  * agent connects.
  */
 import { EventEmitter } from 'node:events';
-import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
+import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, agentToolList, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
 import { size } from '@chord/tokens';
 import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
@@ -294,7 +294,7 @@ describe('Review 1 of #77', () => {
     vi.useFakeTimers();
     const t = setup();
     const sent: { id?: number; result?: { content: { text: string }[]; isError: boolean } }[] = [];
-    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() }, (m) => void sent.push(m as never), {
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
       present: async () => 'once',
       browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
       chords: t.chords,
@@ -353,7 +353,7 @@ function connected(t: ReturnType<typeof setup>, loadMs?: number) {
   const page = { at: '', loading: true };
   const contents = Object.assign(events, { isDestroyed: () => false, isLoading: () => page.loading, getURL: () => page.at, getTitle: () => 'Statements for Ada' }) as unknown as WebContents;
   const sent: Reply[] = [];
-  const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() }, (m) => void sent.push(m as never), {
+  const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
     present: async () => 'once',
     browser: { store: t.store, tabs: { get: () => undefined, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
     chords: t.chords,

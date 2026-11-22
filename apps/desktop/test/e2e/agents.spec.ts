@@ -89,6 +89,123 @@ async function answer(app: ElectronApplication, name: string, button: 'Deny' | '
   await expect(card).toHaveCount(0);
 }
 
+/** A list of rows of links, buttons and text: `rows` of 5 elements each. */
+const rowsPage = (rows: number) =>
+  `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
+
+test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    expect(((await mcp.request('tools/list', {})).result['tools'] as { name: string }[]).map((t) => t.name)).toContain('snapshot');
+    const opening = mcp.call('open_tab', { url: `${site.origin}/snap` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const result = await mcp.call('snapshot', { tab_id: 'a1' });
+    expect(result.isError).toBe(false);
+    const snap = JSON.parse(result.text) as { source: string; trust: string; refs: number; page_id: string; content: string };
+    expect(snap).toMatchObject({ source: 'web_snapshot', trust: 'untrusted' });
+    const lines = snap.content.split('\n').map((l) => l.trim());
+    const has = (pattern: RegExp) => expect(lines.some((l) => pattern.test(l)), `${pattern} in\n${snap.content}`).toBe(true);
+    has(/^- navigation "Site"$/);
+    has(/^- link "Home" \[ref=e\d+\]$/);
+    has(/^- heading "Your orders" \[ref=e\d+\]|^- heading "Your orders" \[level=1\]$/);
+    has(/^- text: "Returns are free within 30 days\."$/);
+    has(/^- searchbox "Search orders" \[ref=e\d+\] \[filled\]$/);
+    has(/^- checkbox "Gift receipt" \[ref=e\d+\] \[checked\] \[required\]$/);
+    has(/^- combobox "Shipping" \[ref=e\d+\] \[choice="Express"\]$/);
+    has(/^- textbox "Note" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Password" \[password: the user signs in\]$/);
+    has(/^- textbox "Code" \[one-time code: the user types it\]$/);
+    has(/^- button "Start a return" \[ref=e\d+\]$/);
+    has(/^- button "Cancel order" \[ref=e\d+\] \[disabled\]$/);
+    has(/^- generic "Track package" \[ref=e\d+\]$/);
+    has(/^- button "More" \[ref=e\d+\] \[collapsed\]$/);
+    has(/^- button "In the shadow" \[ref=e\d+\]$/);
+    has(/^- iframe "Chat"$/);
+    has(/^- textbox "Message" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Card number" \[payment detail: the user fills it\]$/);
+    has(/^- textbox \[ref=e\d+\] \[filled\]$/);
+    has(/^- combobox "Expires" \[payment detail: the user fills it\]$/);
+    has(/^- textbox "Cell" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Item" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Title" \[ref=e\d+\] \[filled\]$/);
+    // A button labelled by an editor, a text area or a select isn't named by what's in it: by its own words instead.
+    has(/^- button "Send" \[ref=e\d+\]$/);
+    has(/^- button "Keep" \[ref=e\d+\]$/);
+    has(/^- button "Pick" \[ref=e\d+\]$/);
+    expect(lines.filter((l) => /^- textbox "Card number" \[payment detail: the user fills it\]$/.test(l))).toHaveLength(2);
+    // What's hidden, what's in a frame, and what's in a field never show.
+    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07', '5555', 'typed-in-a-cell', 'typed-in-a-list-item', 'typed-in-a-heading', 'typed-label-source', 'Hidden, any case', 'initial-textarea-content', 'option-label-x']) expect(snap.content).not.toContain(never);
+
+    // A page that's all editor: one typed field, never walked (review 3 of #104).
+    for (const [i, path] of ['/edit-body', '/edit-html', '/design-mode'].entries()) {
+      await mcp.call('open_tab', { url: `${site.origin}${path}` });
+      const whole = JSON.parse((await mcp.call('snapshot', { tab_id: `a${i + 2}` })).text) as { content: string };
+      expect(whole.content, path).toMatch(/^- textbox \[ref=e\d+\] \[filled\]$/);
+      expect(whole.content, path).not.toContain('typed-');
+    }
+    expect(snap.refs).toBe((snap.content.match(/\[ref=e\d+\]/g) ?? []).length);
+    // A second snapshot: new refs, counted on.
+    const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
+    const firstMax = Math.max(...[...snap.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])));
+    expect(Math.min(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax + 1);
+
+    // Budgets (docs/decisions/S18-agent-mcp.md, "M2: plan"): a typical page (about 1,500 elements) and a 20,000-element one.
+    type Times = { times: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
+    const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
+    const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
+    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
+      await mcp.call('open_tab', { url: `${site.origin}${path}` });
+      const measured = (await timesOf(`${site.origin}${path}`, runs))!;
+      const ms = sorted(measured.times);
+      const median = ms[Math.floor(ms.length / 2)]!;
+      const worst = ms[ms.length - 1]!;
+      const seen = `${path}: ${rows * 5} elements, ${measured.nodes} nodes, ${measured.keys} keys, cut ${JSON.stringify(measured.cut)}; median ${median.toFixed(1)} ms, worst ${worst.toFixed(1)} ms (${ms.map((t) => t.toFixed(0)).join(' ')})`;
+      test.info().annotations.push({ type: 'snapshot timing', description: seen });
+      console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${seen}`);
+      if (rows === 300) {
+        expect(measured.keys, seen).toBe(600);
+        const typical = SNAPSHOT_TYPICAL_MS[`${process.platform}/${process.arch}`] ?? SNAPSHOT_TYPICAL_MS['default']!;
+        expect(median, seen).toBeLessThan(typical.median);
+        expect(worst, seen).toBeLessThan(typical.worst);
+      } else {
+        expect(worst, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
+        // A page of 2,000,000 text nodes is cut at the scan's bound like any other (review 1 of #104).
+        expect(measured.nodes, seen).toBeLessThanOrEqual(20_000);
+      }
+    }
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The snapshot's budgets, round trip from main (the renderer's work and the answer's way back), in the Linux container
+ * and on CI's runners: a typical page (1,500 elements: 300 rows of a link, a note and a button) and a 20,000-element
+ * one, which the script stops looking at after SNAPSHOT_SCAN_MS (150 ms). Measured (2026-11-22, the Linux container,
+ * three runs each on X11 and Wayland): the typical page's median 12.8 to 15.9 ms, its worst 21 to 28 ms; the huge page
+ * 127 to 166 ms median, 194 ms at worst; once text nodes counted toward the scan (review 1 of #104), 75 to 91 ms median
+ * and 138 ms at worst, and a page of 2,000,000 text nodes 31 to 34 ms median, 49 ms at worst. The budgets are the plan's,
+ * at least 1.5 times the worst seen.
+ *
+ * CI's runners (2026-11-22, #104), the typical page's median and worst: Windows x64 11.0 and 16.1 ms, Linux x64 X11 11.3
+ * and 27.4, Wayland 15.1 and 36.2, macOS arm64 13.5 and 29.9, Windows arm64 19.1 and 23.2, Linux arm64 19.9 and 35.6;
+ * the Intel Mac (macos-15-intel) 26.9 and 57.3, then 30.2 and 49.5 on its retry. That runner gets its own budget, about
+ * 1.5 times the worst it showed; every other keeps the plan's. The 20,000-element and text-flood pages were 156 ms at
+ * worst on any runner.
+ */
+const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = { default: { median: 25, worst: 60 }, 'darwin/x64': { median: 45, worst: 90 } };
+const SNAPSHOT_HUGE_MS = 300;
+
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_E2E_NO_PEER: '1' });
@@ -305,6 +422,42 @@ test.beforeAll(async () => {
     // A page that downloads a file as it loads: refused in an agent's tab.
     '/download': '<title>Download</title><p>Fetching…</p><script>setTimeout(() => { location.href = "/file.zip" }, 50)</script>',
     // M2a: a button and a field at known places, and a log of what reached them, and whether the page took it as trusted.
+    // Review 3 of #104: pages that are all editor.
+    '/edit-body': '<title>Notepad</title><body contenteditable>typed-in-the-body <b>and bold</b></body>',
+    '/edit-html': '<html contenteditable><title>Notepad</title><body>typed-in-html</body></html>',
+    '/design-mode': '<title>Notepad</title><body>typed-in-design-mode</body><script>document.designMode = "on";</script>',
+    // M2b: a page for the snapshot, every kind of thing an outline says (and doesn't).
+    '/snap':
+      '<title>Orders</title><header><nav aria-label="Site"><a href="/">Home</a> <a href="/help">Help</a></nav></header>' +
+      '<main><h1>Your orders</h1><p>Returns are free within 30 days.</p>' +
+      '<label>Search orders <input type="search" value="wool scarf"></label>' +
+      '<label><input type="checkbox" checked required> Gift receipt</label>' +
+      '<label>Shipping <select><option>Standard</option><option selected>Express</option></select></label>' +
+      '<label>Note <textarea>secret-note-value</textarea></label>' +
+      '<label>Password <input type="password" value="hunter2-secret"></label>' +
+      '<label>Code <input autocomplete="one-time-code"></label>' +
+      '<button aria-label="Start a return">↩</button> <button disabled>Cancel order</button>' +
+      '<div style="cursor:pointer" onclick="0">Track package</div>' +
+      '<details><summary>More</summary><p>Hidden until opened.</p></details>' +
+      '<div style="display:none"><button>Invisible</button></div>' +
+      '<div id=host></div><iframe title="Chat" srcdoc="<button>Inside</button>"></iframe>' +
+      // Review 1 of #104: rich-text fields are named by their labels only; a sensitive one has no ref; aria-hidden is left out.
+      '<div contenteditable aria-label="Message">Hi Bob, my SSN is 123-45-6789</div>' +
+      '<div contenteditable aria-label="Card number">4242 4242 4242 4242</div>' +
+      '<div role=textbox>typed-into-a-role-textbox</div>' +
+      '<div aria-hidden="true"><button>Hidden from assistive tech</button></div>' +
+      '<label>Expires <select autocomplete="cc-exp-month"><option>01</option><option selected>07</option></select></label>' +
+      // Review 2 of #104: editability first, whatever the tag or role.
+      '<div contenteditable role="none" aria-label="Card number">5555 4444 3333 1111</div>' +
+      '<table><tr><td contenteditable aria-label="Cell">typed-in-a-cell</td></tr></table>' +
+      '<ul><li contenteditable aria-label="Item">typed-in-a-list-item</li></ul>' +
+      '<h1 contenteditable aria-label="Title">typed-in-a-heading</h1>' +
+      '<div contenteditable id=ed aria-label="Draft">typed-label-source</div><button aria-labelledby=ed>Send</button>' +
+      '<div aria-hidden="TRUE"><button>Hidden, any case</button></div>' +
+      // Review 3 of #104: a label taken from a text area or a select is never its value or its options.
+      '<textarea id=ta aria-label="Draft text">initial-textarea-content</textarea><button aria-labelledby=ta>Keep</button>' +
+      '<select id=sl aria-label="Size"><option selected>Small</option><option>option-label-x</option></select><button aria-labelledby=sl>Pick</button></main>' +
+      '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
@@ -316,7 +469,10 @@ test.beforeAll(async () => {
       res.end('PK');
       return;
     }
-    const body = pages[req.url ?? '/'];
+    const rows = /^\/rows-(\d+)$/.exec(req.url ?? '');
+    // A hostile page: 2,000,000 text nodes in one div (the parser would join them, so a script makes them).
+    const texts = '<title>Texts</title><div id=d></div><script>const d = document.getElementById("d"); for (let i = 0; i < 2000000; i++) d.appendChild(document.createTextNode("x "));</script>';
+    const body = rows ? rowsPage(Number(rows[1])) : req.url === '/texts' ? texts : pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
   });

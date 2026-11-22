@@ -14,10 +14,10 @@
  * arrives.
  */
 import {
-  AGENT_TOOLS,
   CONTROL_REFUSALS,
   CONTROL_WAIT_MS,
   agentToolList,
+  agentTools,
   agentToolsVersion,
   isNeverReadable,
   nodeOf,
@@ -47,6 +47,8 @@ export interface ConnectionDeps {
   browser: ControlBrowser;
   /** How long a call waits on a card; CONTROL_WAIT_MS (tests shorten it). */
   waitMs?: number;
+  /** This build has M2's tools (agentActions); absent, it does. */
+  actions?: boolean;
   log?(...args: unknown[]): void;
   /** The agents' chords (main); absent where nothing opens tabs. */
   chords?: AgentChords;
@@ -94,7 +96,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   const agent = new ControlAgent(`agent:${++lastAgent}`, deps.present);
   const neverSites = () => deps.neverSites?.() ?? [];
   const chordId = () => deps.chords?.chordOf(agent) ?? null;
-  const scope = agentScope(agent, { state: () => deps.browser.store.state, chordId, neverSites, shared: () => deps.shares?.()?.tabsOf(agent.id) ?? [], sharedSite: (id) => deps.shares?.()?.siteOf(id) ?? null });
+  const scope = agentScope(agent, { actions: deps.actions ?? true, state: () => deps.browser.store.state, chordId, neverSites, shared: () => deps.shares?.()?.tabsOf(agent.id) ?? [], sharedSite: (id) => deps.shares?.()?.siteOf(id) ?? null });
   /** When it last called a tool: the share key shares with the agent that called last. */
   let lastCallAt = 0;
   const waitMs = deps.waitMs ?? CONTROL_WAIT_MS;
@@ -110,7 +112,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   const refused = (why: keyof typeof CONTROL_REFUSALS): ToolOutput => ({ text: CONTROL_REFUSALS[why], isError: true });
 
   // The bridge answered tools/list from its own build: if this Chord's list differs, the client asks again.
-  if (hello.toolsVersion !== agentToolsVersion()) send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+  const actions = deps.actions ?? true;
+  if (hello.toolsVersion !== agentToolsVersion(agentToolList(actions))) send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
 
   /** The connection card, once per connection (or for good, with Always or a no). */
   const connectionAnswer = async (signal: AbortSignal): Promise<'go' | Grant | 'waiting'> => {
@@ -214,7 +217,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           const answer = await connectionAnswer(AbortSignal.any([signal, cancel.signal]));
           if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
-          if (!AGENT_TOOLS.some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
+          if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
           if (tool === 'open_tab') return openTab(args);
           if (tool === 'close_tab') return closeTab(args);
           return toPlain(await runControlTool(scope, deps.browser, tool, args));
@@ -242,7 +245,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     },
     message(m) {
       if (m.method === 'tools/call') return void call(m);
-      if (m.method === 'tools/list') return reply(m.id, { tools: agentToolList() });
+      if (m.method === 'tools/list') return reply(m.id, { tools: agentToolList(actions) });
       if (m.method === 'ping') return reply(m.id, {});
       if (m.method === 'notifications/cancelled') {
         calls.get(m.params?.['requestId'] as Message['id'])?.abort();

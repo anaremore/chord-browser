@@ -5,7 +5,7 @@
  * readNeedsApproval); outside agents' comes in M1's later slices (their Agent
  * chord and the tabs shared with them).
  */
-import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, NodeId, TabNode, TabRefs } from '@chord/core';
+import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, ElementRefs, NodeId, TabNode, TabRefs } from '@chord/core';
 import type { ControlAgent } from './gate';
 
 /** A tool's answer to the model. */
@@ -34,6 +34,8 @@ export interface ToolMemory {
   nextField: number;
   /** Tabs it read: the assistant shows a badge on them in the sidebar. */
   read: Set<NodeId>;
+  /** Each tab's element refs (snapshot, M2b): only the latest snapshot's are good. Made with a tab's first snapshot. */
+  elements?: Map<NodeId, ElementRefs>;
 }
 
 /** propose_fill's card, which only a front door with a place to show it offers. */
@@ -46,6 +48,8 @@ export interface FillProposals {
 export interface ControlScope {
   /** The agent's gate: its states, grants, cards and Stop. */
   readonly agent: ControlAgent;
+  /** M2's tools (core's ACTION_TOOLS: snapshot, then acting) are offered here: a build that has them (agentActions). */
+  readonly actions?: boolean;
   readonly refs: TabRefs<NodeId>;
   readonly memory: ToolMemory;
   /** Every tool refused, and why (the assistant reading nothing), or null. */

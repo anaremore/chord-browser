@@ -125,11 +125,25 @@ export const AGENT_TOOLS: readonly AgentToolSpec[] = [
   },
 ];
 
-/** The MCP shape of the list: what tools/list answers. */
-export const agentToolList = () => AGENT_TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
+/**
+ * M2's tools for outside agents (docs/decisions/S18-agent-mcp.md, "M2: plan"), in builds that have M2 (agentActions).
+ * Fixed names, never added or taken away as pages come and go (WebMCP's tools, later, come behind fixed meta-tools).
+ */
+export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
+  read(
+    'snapshot',
+    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
+  ),
+];
+
+/** The tools of this build: M1's, and M2's when it has them (agentActions). */
+export const agentTools = (actions: boolean): readonly AgentToolSpec[] => (actions ? [...AGENT_TOOLS, ...AGENT_ACTION_TOOLS] : AGENT_TOOLS);
+
+/** The MCP shape of the list: what tools/list answers, for this build. */
+export const agentToolList = (actions: boolean) => agentTools(actions).map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
 
 /** A short, stable fingerprint of the list (FNV-1a of its JSON): the bridge and Chord compare it. */
-export function agentToolsVersion(list: readonly unknown[] = agentToolList()): string {
+export function agentToolsVersion(list: readonly unknown[]): string {
   const text = JSON.stringify(list);
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);

@@ -15,7 +15,8 @@ import {
   ASSISTANT_MAX_PROCESSES,
   ASSISTANT_PROCESS_IDLE_MS,
   ASSISTANT_PROVIDERS,
-  ASSISTANT_TOOLS,
+  agentActions,
+  assistantTools,
   assistantInstructions,
   assistantPruneBefore,
   fieldCount,
@@ -1031,7 +1032,7 @@ export class AssistantService {
       instructionsFile,
       resumeId,
       newSessionId: randomUUID(),
-      tools: readsPages ? ASSISTANT_TOOLS : [],
+      tools: readsPages ? assistantTools(agentActions({ packaged: app.isPackaged })) : [],
       images,
     };
     let resumeFailed = false;
@@ -1222,7 +1223,7 @@ export class AssistantService {
           },
         };
       },
-    });
+    }, agentActions({ packaged: app.isPackaged }));
     return state.scope;
   }
 

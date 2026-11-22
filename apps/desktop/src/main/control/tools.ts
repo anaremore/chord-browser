@@ -16,11 +16,17 @@ import {
   fieldCount,
   formRead,
   formResult,
+  ElementRefs,
+  isActionTool,
   isNeverReadable,
   nodeOf,
   pageResult,
   pdfText,
   proposedFill,
+  snapshotKeys,
+  snapshotNote,
+  snapshotOutline,
+  snapshotResult,
   toolResult,
   type AssistantFillCard,
   type AssistantToolName,
@@ -68,7 +74,8 @@ interface Call {
 /** A tool call from a model: through the gate, then its handler. */
 export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
   const spec = controlTool(name);
-  if (!spec) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
+  // M2's tools exist only where the scope offers them (a build that has M2): elsewhere they're unknown, as they were.
+  if (!spec || (isActionTool(spec.name) && !scope.actions)) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
   const off = scope.off();
   if (off) return refuse(off);
   const ref = args['tab_id'];
@@ -95,6 +102,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
       try {
         if (spec.name === 'read_form' || spec.name === 'propose_fill') return await formTool(call, spec.name, args);
         if (spec.name === 'page_diagnostics') return await diagnosticsTool(call, args);
+        if (spec.name === 'snapshot') return await snapshotTool(call, args);
         return await readTool(call, spec.name, args);
       } catch (error) {
         return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
@@ -280,6 +288,67 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
   const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}), pageId: sameId(page, pageId) });
   await call.activity('read_tab', `Read “${title}”`, pdf.totalPages > read ? `PDF, pages 1–${read} of ${pdf.totalPages}` : `PDF, ${pdf.totalPages} page${pdf.totalPages === 1 ? '' : 's'}`);
   return { text };
+}
+
+/* ---------- snapshot (S18 M2b) ---------- */
+
+/**
+ * The tab's accessibility outline, with refs on what can be acted on (core's control-snapshot.ts). Read as read_tab
+ * is: the scope's rules and card, every rule asked again after the card, the load and the read. Its refs are the tab's
+ * new ones (ElementRefs): every earlier one is stale from now on, and they're good only on the page (page id) they
+ * were taken of. Never in reader view, which hides the page. A later range (`start`) of the same page's latest
+ * snapshot comes from the outline it made, without reading the page again: its refs stay good, its offsets are into
+ * that outline, and it's as of when that snapshot was taken (`retrieved_at`). It asks no card: one approval covers a
+ * snapshot, all its ranges (the rules on where it may be read are still asked). Refs of tabs that closed go with them.
+ */
+async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
+  const { scope, browser } = call;
+  const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs or an attached tab id.');
+  if (isOutput(found)) return found;
+  const node = found;
+  if (!scope.readable(node)) return refuse(unreadable(scope, node));
+  if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
+  const elements = (scope.memory.elements ??= new Map());
+  for (const id of [...elements.keys()]) if (nodeOf(browser.store.state, id)?.kind !== 'tab') elements.delete(id);
+  const start = typeof args['start'] === 'number' ? args['start'] : 0;
+  // Reading on: the same page's latest outline, as it was made, while the page is where it may be read.
+  const now = currentPage(browser, node.id);
+  const kept = start > 0 && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
+  if (kept && now) {
+    const blocked = blockedNow(call, node.id, now, 'That page could not be read.', kept.url);
+    if (blocked) return refuse(blocked);
+    return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: kept.url, title: kept.title, outline: kept.text, refs: kept.refs, start, retrievedAt: kept.retrievedAt, pageId: kept.pageId, ...(kept.note ? { note: kept.note } : {}) }) };
+  }
+  const title = node.title || safeHost(node.url);
+  const refused = await call.card('snapshot', node, `Look over “${title}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
+  if (refused) return refused;
+  const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
+  if (moved) return refuse(moved);
+  const page = await loadedPage(browser, node.id);
+  if (!page) return refuse('That tab could not be loaded.');
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+  if (loaded) return refuse(loaded);
+  const pageId = page.id;
+  const token = randomBytes(12).toString('hex');
+  const read = await page.snapshot(scope.agent.id, token);
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read ? [read.url] : []));
+  if (after) return refuse(after);
+  if (!read) return refuse('That page could not be read.');
+  let refs = elements.get(node.id);
+  if (!refs) elements.set(node.id, (refs = new ElementRefs()));
+  // Refs for a page that moved on during the read are issued against no page: they resolve as stale.
+  const samePage = sameId(page, pageId);
+  // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
+  const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
+  const outline = snapshotOutline(read, issued);
+  const note = snapshotNote(read.cut);
+  const retrievedAt = Date.now();
+  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
+  scope.memory.read.add(node.id);
+  await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
+  return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
 }
 
 /* ---------- page_diagnostics (ARCHITECTURE.md §11.3) ---------- */
