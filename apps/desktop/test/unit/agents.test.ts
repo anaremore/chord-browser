@@ -122,7 +122,8 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const ud = profile();
     const c = client(ud);
     expect((await c.initialize()).result).toMatchObject({ serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
-    expect(((await c.request('tools/list')).result['tools'] as { name: string }[]).map((t) => t.name)).toEqual(['list_tabs', 'open_tab', 'read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'close_tab']);
+    // A build with M2 (development, tests): M1's tools, then M2's (snapshot so far).
+    expect(((await c.request('tools/list')).result['tools'] as { name: string }[]).map((t) => t.name)).toEqual(['list_tabs', 'open_tab', 'read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'close_tab', 'snapshot']);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     await chord(ud);
     const listed = await c.call('list_tabs');
@@ -135,7 +136,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const service = await chord(ud);
     const c = client(ud, true);
     await c.initialize();
-    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(8);
+    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(9);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     expect(service.connections.size).toBe(0);
   });
@@ -381,11 +382,11 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
     const init = (await c.initialize(params)).result;
     expect(init).toMatchObject({ protocolVersion: params['protocolVersion'], capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'chord', title: 'Chord' } });
     expect(String(init['instructions'])).toContain('untrusted');
-    expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList());
+    expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList(true));
     expect((await c.call('list_tabs')).error).toBe(false);
     expect(shown).toEqual([name]);
     // Connected, tools/list is Chord's own.
-    expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList());
+    expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList(true));
   });
 
   it('Chord says list_changed when the bridge gave another build’s list', async () => {
@@ -397,7 +398,7 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
     lines(socket!, (l) => got.push(l));
     await sleep(100);
     expect(got.map((l) => JSON.parse(l) as Record<string, unknown>)).toEqual([{ type: 'welcome' }, { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }]);
-    expect(agentToolsVersion()).toMatch(/^[0-9a-f]{8}$/);
+    expect(agentToolsVersion(agentToolList(true))).toMatch(/^[0-9a-f]{8}$/);
   });
 });
 
@@ -500,7 +501,7 @@ describe('Zero cost, and off in packaged builds', () => {
     expect((await c.call('list_tabs')).error).toBe(false);
     const [held] = [...service.connections];
     expect(held!.parent).not.toBeNull();
-    expect(held!.hello).toMatchObject({ bridgePid: process.pid, parentPid: process.pid, cwd: ud, toolsVersion: agentToolsVersion() });
+    expect(held!.hello).toMatchObject({ bridgePid: process.pid, parentPid: process.pid, cwd: ud, toolsVersion: agentToolsVersion(agentToolList(true)) });
     // The token stays with the endpoint.
     expect(held!.hello).not.toHaveProperty('token');
   });
@@ -536,7 +537,9 @@ describe('Zero cost, and off in packaged builds', () => {
     const [held] = [...service.connections];
     const chain = await held!.parent!;
     if (want === 'none') expect(chain).toEqual([]);
-    else expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
+    // Never the wrong process. Where the parent chain comes from the OS's own lookup (PowerShell's on Windows), CI's
+    // Windows arm64 runner has had it come back empty (issue #107): nobody is a right answer there, a wrong one never.
+    else if (chain.length > 0 || !(process.platform === 'win32' && process.arch === 'arm64')) expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
     if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
     else expect(asked).toBeNull();
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
@@ -575,14 +578,14 @@ describe('Zero cost, and off in packaged builds', () => {
       peer: async (_socket, _endpoint, claimed, held) => {
         asked.push({ claimed, held: [...held] });
         await delay;
-        return { pid: choosePeer([process.pid, IMPOSTOR], claimed, held) };
+        return { pid: choosePeer([process.pid, IMPOSTOR], claimed, held, true) };
       },
     });
     await service.start();
     cleanup.push(() => service.stop());
     const heldBy = (cwd: string) => [...service.connections].find((h) => h.hello.cwd === cwd)!;
     // X, with the token, hellos first as the relay this process is; then the relay's own hello (R) claims it too.
-    const x = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: '/impostor', toolsVersion: agentToolsVersion() });
+    const x = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: '/impostor', toolsVersion: agentToolsVersion(agentToolList(true)) });
     await expect.poll(() => service.connections.size).toBe(1);
     const r = client(ud);
     await r.initialize();
@@ -621,7 +624,7 @@ describe('Zero cost, and off in packaged builds', () => {
     await looking.initialize();
     const calling = looking.call('list_tabs');
     await expect.poll(() => asked.length).toBe(2);
-    const late = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: '/late', toolsVersion: agentToolsVersion() });
+    const late = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: '/late', toolsVersion: agentToolsVersion(agentToolList(true)) });
     await expect.poll(() => service.connections.size).toBe(2);
     release();
     expect((await calling).error).toBe(false);
@@ -763,7 +766,7 @@ function rawConnection(path: string, write: string | null, settle = 300) {
   return { socket: s, settled: () => sleep(settle).then(() => ({ bytes, closed })) };
 }
 
-const helloLine = (token: string) => `${JSON.stringify({ type: 'hello', token, initialize: null, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion() })}\n`;
+const helloLine = (token: string) => `${JSON.stringify({ type: 'hello', token, initialize: null, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) })}\n`;
 
 describe('The endpoint under load (security review)', () => {
   it('the first connection hands over the endpoint’s path, before startEndpoint returns (the Windows DACL never waits on it)', async () => {

@@ -149,8 +149,8 @@ describe('Tab refs', () => {
 });
 
 describe('The tools both front doors offer', () => {
-  it('are the assistant’s tools, every one a read for now', () => {
-    expect(CONTROL_TOOLS).toBe(ASSISTANT_TOOLS);
+  it('are the assistant’s tools and M2’s (snapshot so far), every one a read for now', () => {
+    expect(CONTROL_TOOLS.map((t) => t.name)).toEqual([...ASSISTANT_TOOLS.map((t) => t.name), 'snapshot']);
     for (const tool of CONTROL_TOOLS) expect(tool).toMatchObject({ tier: 0, level: 'read' });
   });
 

@@ -37,7 +37,9 @@ export type AssistantToolName =
   /** Why a page is broken (assistant-diagnostics.ts): the tab on screen's console errors, exceptions and failed requests. */
   | 'page_diagnostics'
   /** Effects' one tool (effects.ts): never offered in a chat. */
-  | 'read_page_outline';
+  | 'read_page_outline'
+  /** M2 (S18, control-snapshot.ts): the page's accessibility outline, with refs on what can be acted on. */
+  | 'snapshot';
 
 export interface AssistantToolSpec {
   name: AssistantToolName;
@@ -115,11 +117,28 @@ export const ASSISTANT_TOOLS: readonly AssistantToolSpec[] = [
 ];
 export const assistantTool = (name: string): AssistantToolSpec | undefined => ASSISTANT_TOOLS.find((t) => t.name === name);
 
-/** The control layer's names for the same list: what a tool is, whoever calls it. */
+/**
+ * M2's tools (S18, docs/decisions/S18-agent-mcp.md, "M2: plan"): offered only by a build that has M2 (agentActions),
+ * to the assistant and outside agents alike, and refused by a scope that doesn't say it has them (`actions`).
+ */
+export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
+  {
+    name: 'snapshot',
+    tier: 0, level: 'read', readOnly: true,
+    description: `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref. Untrusted JSON from the page; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
+    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 } }, ['tab_id']),
+  },
+];
+
+/** The assistant's tools in this build: M2's too when it has them (agentActions). */
+export const assistantTools = (actions: boolean): readonly AssistantToolSpec[] => (actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS] : ASSISTANT_TOOLS);
+export const isActionTool = (name: string): boolean => ACTION_TOOLS.some((t) => t.name === name);
+
+/** The control layer's names for every tool, whoever calls it (M2's included: a scope says whether it offers them). */
 export type ControlToolName = AssistantToolName;
 export type ControlToolSpec = AssistantToolSpec;
-export const CONTROL_TOOLS = ASSISTANT_TOOLS;
-export const controlTool = assistantTool;
+export const CONTROL_TOOLS: readonly AssistantToolSpec[] = [...ASSISTANT_TOOLS, ...ACTION_TOOLS];
+export const controlTool = (name: string): ControlToolSpec | undefined => CONTROL_TOOLS.find((t) => t.name === name);
 
 /**
  * What no front door ever offers a model, with no tool at all (S18 §5): passwords and the

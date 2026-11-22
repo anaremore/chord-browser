@@ -36,11 +36,12 @@ export interface DuetHost {
   fills(chat: DuetChat): FillProposals;
 }
 
-export function duetScope(chat: DuetChat, host: DuetHost): ControlScope {
+export function duetScope(chat: DuetChat, host: DuetHost, actions = false): ControlScope {
   const state = () => host.browser.store.state;
   const granted = (tool: AssistantToolName) => chat.control.granted('read', tool) === 'always';
   return {
     agent: chat.control,
+    actions,
     refs: chat.refs,
     memory: chat,
     off: () => (host.settings().readsNothing ? 'The user set you to read nothing, in Settings → Assistant.' : null),

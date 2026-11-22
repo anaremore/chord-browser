@@ -13,6 +13,8 @@ import type { ControlScope } from '../control/scope';
 import { siteOfUrl } from './shares';
 
 export interface AgentScopeDeps {
+  /** M2's tools are offered (agentActions). */
+  actions?: boolean;
   state(): State;
   /** The agent's Agent chord, once it has one. */
   chordId(): string | null;
@@ -49,6 +51,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
   return {
     agent,
     refs,
+    actions: deps.actions ?? false,
     memory: { pdfs: new Map(), form: null, nextField: 1, read: new Set() },
     off: () => null,
     tabs: () => {
