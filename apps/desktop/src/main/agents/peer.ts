@@ -58,6 +58,8 @@ export function socketFd(socket: Socket): number | null {
 /** pipe-clients' answer: the clients, each one's chain (itself first: parent.ts's ProcessInfo), and its own timings. */
 export interface PipeClients {
   clients: number[];
+  /** Every query answered: no client can be missing. Not so when one was left behind, or it stopped at the clients expected. */
+  complete: boolean;
   chains: Map<number, ProcessInfo[]>;
   /** How long each step took in the helper (ms), and what it looked at: for the units' budgets. */
   timings: Record<string, number>;
@@ -68,7 +70,7 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : nu
 
 /** pipe-clients' line of JSON, kept to what it can be; null when it isn't that. */
 export function parsePipeClients(stdout: string): PipeClients | null {
-  let raw: { clients?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; handles?: unknown; ms?: unknown };
+  let raw: { clients?: unknown; complete?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; handles?: unknown; ms?: unknown };
   try {
     raw = JSON.parse(stdout.trim()) as typeof raw;
   } catch {
@@ -91,18 +93,19 @@ export function parsePipeClients(stdout: string): PipeClients | null {
   }
   const timings: Record<string, number> = {};
   for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
-  return { clients, chains, timings };
+  return { clients, complete: raw.complete === true, chains, timings };
 }
 
 /**
  * Which of the pipe's clients is this connection's: the bridge PID its hello claims, when it's a client and no other
- * live connection holds it; else the only client no other connection holds; else none. `held`: the peers other live
- * connections were given.
+ * live connection holds it; else the only client no other connection holds, when the list is `complete` (with a client
+ * possibly missing from it, the only one seen might not be the only one); else none. `held`: PIDs other live
+ * connections hold or claimed.
  */
-export function choosePeer(clients: readonly number[], claimed: number, held: ReadonlySet<number>): number | null {
+export function choosePeer(clients: readonly number[], claimed: number, held: ReadonlySet<number>, complete = true): number | null {
   const free = clients.filter((pid) => !held.has(pid));
   if (free.includes(claimed)) return claimed;
-  return free.length === 1 ? free[0]! : null;
+  return complete && free.length === 1 ? free[0]! : null;
 }
 
 /* ---------- Linux ---------- */
@@ -191,15 +194,15 @@ export interface PeerLookup {
 /**
  * The process at the other end of the connection. `pipe`: the endpoint's path (Windows); `claimed`: the hello's bridge
  * PID, or -1 when the claim isn't this connection's (AgentService.claims); `held`: PIDs other live connections hold
- * or claimed (Windows).
+ * or claimed (Windows); `expected`: the connections Chord holds, so the helper needn't wait out a stuck query (Windows).
  */
-export async function peerOf(socket: Socket, pipe: string, claimed: number, held: ReadonlySet<number>, deps: PeerDeps): Promise<PeerLookup> {
+export async function peerOf(socket: Socket, pipe: string, claimed: number, held: ReadonlySet<number>, deps: PeerDeps, expected = 0): Promise<PeerLookup> {
   try {
     if (deps.platform === 'win32') {
       if (!deps.helper) return { pid: null };
-      const answer = parsePipeClients(await deps.run(deps.helper, ['pipe-clients', pipe, String(deps.self)]));
+      const answer = parsePipeClients(await deps.run(deps.helper, ['pipe-clients', pipe, String(deps.self), ...(expected > 0 ? [String(expected)] : [])]));
       if (!answer) return { pid: null };
-      const pid = choosePeer(answer.clients, claimed, held);
+      const pid = choosePeer(answer.clients, claimed, held, answer.complete);
       const chain = pid === null ? undefined : answer.chains.get(pid);
       return { pid, ...(chain ? { chain } : {}), timings: answer.timings };
     }

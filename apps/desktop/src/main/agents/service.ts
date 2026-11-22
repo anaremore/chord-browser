@@ -42,7 +42,7 @@ export interface AgentServiceDeps {
   /** M2's slices (agentActions): without them, *Started by* comes from the hello's word, as in M1. */
   actions?: boolean;
   /** Who's at the other end of a connection (peer.ts); tests give their own. Null: the OS can't say. */
-  peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>): Promise<PeerLookup>;
+  peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>, expected: number): Promise<PeerLookup>;
 }
 
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
@@ -241,11 +241,11 @@ export class AgentService {
     for (const [pid, claimants] of this.claims) if (!(claimants.size === 1 && held.claim && claimants.has(held.claim))) others.add(pid);
     // Not its claim (-1 is never a process): only a connection that holds its claim alone claims anything.
     const claimed = held.claim && this.claims.get(held.hello.bridgePid)?.has(held.claim) ? held.hello.bridgePid : -1;
-    const peer = this.deps.peer ?? (async (socket: Socket, endpoint: string, claimed: number, taken: ReadonlySet<number>) => {
+    const peer = this.deps.peer ?? (async (socket: Socket, endpoint: string, claimed: number, taken: ReadonlySet<number>, expected: number) => {
       const { peerOf, peerDeps } = await import('./peer');
-      return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper));
+      return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper), expected);
     });
-    const { pid, chain: given } = await peer(held.socket, this.endpoint?.path ?? '', claimed, others);
+    const { pid, chain: given } = await peer(held.socket, this.endpoint?.path ?? '', claimed, others, this.endpoint?.connected() ?? 0);
     // Contested while it looked (the real relay's hello arrived meanwhile): what it found can't be trusted.
     if (contested()) return unknown();
     held.peerPid = pid;

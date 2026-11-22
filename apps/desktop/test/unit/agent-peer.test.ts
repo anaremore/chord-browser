@@ -23,15 +23,18 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     const claude = { pid: 12, name: 'chord.exe', path: 'C:\\Chord\\chord.exe', cwd: null, ppid: 7 };
     const parent = { pid: 7, name: 'claude.exe', path: null, cwd: null, ppid: 3 };
     const answer = parsePipeClients(
-      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
+      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], complete: true, chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
     );
     expect(answer!.clients).toEqual([12, 34]);
+    expect(answer!.complete).toBe(true);
     // A chain stops at an entry that isn't one; one that doesn't start with its client isn't used.
     expect(answer!.chains.get(12)).toEqual([claude, parent]);
     expect(answer!.chains.has(34)).toBe(false);
     expect(answer!.timings).toEqual({ files: 24, stuck: 1, handles: 9, table: 31, total: 57 });
     for (const bad of ['', '12 34', '{}', '{"clients":5}', 'null']) expect(parsePipeClients(bad), bad).toBeNull();
-    expect(parsePipeClients('{"clients":[]}')).toEqual({ clients: [], chains: new Map(), timings: {} });
+    // Not said to be complete: it isn't.
+    expect(parsePipeClients('{"clients":[]}')).toEqual({ clients: [], complete: false, chains: new Map(), timings: {} });
+    expect(parsePipeClients('{"clients":[],"complete":"yes"}')!.complete).toBe(false);
   });
 
   // [clients, the hello's bridge PID, other connections' peers, the peer]
@@ -53,6 +56,16 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     [[10], -1, [10], null],
   ];
   it.each(cases)('clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held))).toBe(peer));
+
+  // A list that may miss a client (a query left behind, or the helper stopped at the clients expected): a verified
+  // claim still holds, but "the only free one" may not be. [clients, claimed, held, the peer]
+  const incomplete: [number[], number, number[], number | null][] = [
+    [[10], 10, [], 10],
+    [[10, 20], 20, [10], 20],
+    [[10], 99, [], null],
+    [[10, 20], -1, [10], null],
+  ];
+  it.each(incomplete)('an incomplete list: clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held), false)).toBe(peer));
 });
 
 describe('Linux: ss’s Unix sockets', () => {
@@ -165,11 +178,14 @@ function client(path: string): ChildProcess {
  *
  * Measured (2026-11-22): Windows x64 here (11 Pro, about 396,000 handles in the system) 104 to 163 ms a lookup, the
  * helper's own work 57 to 85 ms of it (the table 31 to 50, its scan 2 to 3, the queries 3 to 4, the chain 21 to 28).
- * CI's Windows arm64: a lookup 582 ms warm, the helper's own work 456 ms; its first start about 3 s cold (the first
- * .NET program on a fresh runner). Before the scan read the table in place (each entry marshalled, twice), a lookup
- * took 3.6 s there. Linux: one ss (tens of ms in WSL's Ubuntu). macOS: one lsof of this user's sockets.
+ * CI's Windows arm64, two runs before the helper stopped at the clients expected: a lookup 582, 606 and 1,271 ms, the
+ * helper's own work 456 ms in one (its queries 286 of it: one query stuck on a file with I/O pending, waited out to the
+ * 250 ms deadline; the pipe's own server ends never block); its first start 3.0 and 3.7 s cold (the first .NET
+ * program on a fresh runner). That runner is noisy: its budget is 1.5 times the worst lookup seen there, 1,271 ms.
+ * Before the scan read the table in place (each entry marshalled, twice), a lookup took 3.6 s there. Linux: one ss
+ * (tens of ms in WSL's Ubuntu). macOS: one lsof of this user's sockets.
  */
-const PEER_BUDGET_MS: Partial<Record<NodeJS.Platform, number>> = { win32: 1000, linux: 500, darwin: 1500 };
+const PEER_BUDGET_MS: Partial<Record<string, number>> = { win32: 1000, 'win32/arm64': 1900, linux: 500, darwin: 1500 };
 /** Windows: the helper's first start on the machine, cold (what restrict-pipe pays in M1b). A ceiling, not a target. */
 const PEER_COLD_MS = 6000;
 
@@ -194,12 +210,13 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
     }
     // The lookup, as the card waits on it.
     const started = performance.now();
-    const first = await peerOf(ends[0]!, path, a.pid!, new Set(), deps);
+    // As Chord asks: with the connections it holds, so a stuck query on some other file needn't cost the deadline.
+    const first = await peerOf(ends[0]!, path, a.pid!, new Set(), deps, ends.length);
     const lookup = performance.now() - started;
     expect(first.pid).toBe(a.pid);
     // Windows can't tell which instance is whose: the claim decides, and another's claim is refused.
     const warmStart = performance.now();
-    expect((await peerOf(ends[1]!, path, b.pid!, new Set([a.pid!]), deps)).pid).toBe(b.pid);
+    expect((await peerOf(ends[1]!, path, b.pid!, new Set([a.pid!]), deps, ends.length)).pid).toBe(b.pid);
     const warm = performance.now() - warmStart;
     if (process.platform === 'win32') {
       // The chain comes with it, from the same process: the client, then who started it (this test).
@@ -214,8 +231,9 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
     // Off any call's path (it runs while the card shows), but it delays the card's *Started by*. Budgets per OS, from
     // what was measured (PEER_BUDGET_MS); the message carries what was seen.
     const seen = `${process.platform}/${process.arch}: helper's first start ${cold.toFixed(0)} ms, lookup ${lookup.toFixed(0)} ms, again ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}`;
-    expect(lookup, seen).toBeLessThan(PEER_BUDGET_MS[process.platform] ?? 1000);
-    expect(warm, seen).toBeLessThan(PEER_BUDGET_MS[process.platform] ?? 1000);
+    const budget = PEER_BUDGET_MS[`${process.platform}/${process.arch}`] ?? PEER_BUDGET_MS[process.platform] ?? 1000;
+    expect(lookup, seen).toBeLessThan(budget);
+    expect(warm, seen).toBeLessThan(budget);
     expect(cold, seen).toBeLessThan(PEER_COLD_MS);
   }, 30_000);
 });
