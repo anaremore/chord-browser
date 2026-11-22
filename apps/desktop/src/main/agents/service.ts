@@ -134,6 +134,7 @@ export class AgentService {
             const connection = agentConnection(hello, send, {
               browser: this.deps.browser,
               waitMs: this.deps.waitMs,
+              actions: this.deps.actions !== false,
               log: this.deps.log,
               ...(this.chords ? { chords: this.chords } : {}),
               ...(this.deps.dispatch ? { dispatch: this.deps.dispatch } : {}),

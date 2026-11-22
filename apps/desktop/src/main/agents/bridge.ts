@@ -29,6 +29,8 @@ export interface BridgeOptions {
   cwd?: string;
   /** This build has no Agents (a packaged one before AGENTS_RELEASED): never connects, so every call says Chord isn't open. */
   closed?: boolean;
+  /** This build has M2's tools (agentActions); absent, it does (development and tests). */
+  actions?: boolean;
 }
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: Record<string, unknown> } & Record<string, unknown>;
@@ -52,7 +54,7 @@ export function runBridge(options: BridgeOptions): { close(): void } {
         bridgePid: process.pid,
         parentPid: options.parentPid ?? process.ppid,
         cwd: options.cwd ?? process.cwd(),
-        toolsVersion: agentToolsVersion(),
+        toolsVersion: agentToolsVersion(agentToolList(options.actions ?? true)),
       });
       if (!socket) return null;
       return new Promise<Socket | null>((resolve) => {
@@ -114,8 +116,8 @@ export function runBridge(options: BridgeOptions): { close(): void } {
         return reply(m.id, {});
       case 'tools/list':
         // Chord's own list once connected (it may differ, and says so with list_changed); this build's until then.
-        if (chord) return void forward(m, line, () => reply(m.id, { tools: agentToolList() }));
-        return reply(m.id, { tools: agentToolList() });
+        if (chord) return void forward(m, line, () => reply(m.id, { tools: agentToolList(options.actions ?? true) }));
+        return reply(m.id, { tools: agentToolList(options.actions ?? true) });
       case 'tools/call':
         return void forward(m, line, () => reply(m.id, agentRefusal(AGENT_NOT_OPEN)));
       case 'notifications/cancelled':

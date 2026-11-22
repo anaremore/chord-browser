@@ -89,6 +89,91 @@ async function answer(app: ElectronApplication, name: string, button: 'Deny' | '
   await expect(card).toHaveCount(0);
 }
 
+/** A list of rows of links, buttons and text: `rows` of 5 elements each. */
+const rowsPage = (rows: number) =>
+  `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
+
+test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    expect(((await mcp.request('tools/list', {})).result['tools'] as { name: string }[]).map((t) => t.name)).toContain('snapshot');
+    const opening = mcp.call('open_tab', { url: `${site.origin}/snap` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const result = await mcp.call('snapshot', { tab_id: 'a1' });
+    expect(result.isError).toBe(false);
+    const snap = JSON.parse(result.text) as { source: string; trust: string; refs: number; page_id: string; content: string };
+    expect(snap).toMatchObject({ source: 'web_snapshot', trust: 'untrusted' });
+    const lines = snap.content.split('\n').map((l) => l.trim());
+    const has = (pattern: RegExp) => expect(lines.some((l) => pattern.test(l)), `${pattern} in\n${snap.content}`).toBe(true);
+    has(/^- navigation "Site"$/);
+    has(/^- link "Home" \[ref=e\d+\]$/);
+    has(/^- heading "Your orders" \[ref=e\d+\]|^- heading "Your orders" \[level=1\]$/);
+    has(/^- text: "Returns are free within 30 days\."$/);
+    has(/^- searchbox "Search orders" \[ref=e\d+\] \[filled\]$/);
+    has(/^- checkbox "Gift receipt" \[ref=e\d+\] \[checked\] \[required\]$/);
+    has(/^- combobox "Shipping" \[ref=e\d+\] \[choice="Express"\]$/);
+    has(/^- textbox "Note" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Password" \[password: the user signs in\]$/);
+    has(/^- textbox "Code" \[one-time code: the user types it\]$/);
+    has(/^- button "Start a return" \[ref=e\d+\]$/);
+    has(/^- button "Cancel order" \[ref=e\d+\] \[disabled\]$/);
+    has(/^- generic "Track package" \[ref=e\d+\]$/);
+    has(/^- button "More" \[ref=e\d+\] \[collapsed\]$/);
+    has(/^- button "In the shadow" \[ref=e\d+\]$/);
+    has(/^- iframe "Chat"$/);
+    // What's hidden, what's in a frame, and what's in a field never show.
+    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened']) expect(snap.content).not.toContain(never);
+    expect(snap.refs).toBe((snap.content.match(/\[ref=e\d+\]/g) ?? []).length);
+    // A second snapshot: new refs, counted on.
+    const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
+    const firstMax = Math.max(...[...snap.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])));
+    expect(Math.min(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax + 1);
+
+    // Budgets (docs/decisions/S18-agent-mcp.md, "M2: plan"): a typical page (about 1,500 elements) and a 20,000-element one.
+    type Times = { times: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
+    const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
+    const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
+    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/rows-4000', 4000, 5]] as const) {
+      await mcp.call('open_tab', { url: `${site.origin}${path}` });
+      const measured = (await timesOf(`${site.origin}${path}`, runs))!;
+      const ms = sorted(measured.times);
+      const median = ms[Math.floor(ms.length / 2)]!;
+      const worst = ms[ms.length - 1]!;
+      const seen = `${path}: ${rows * 5} elements, ${measured.nodes} nodes, ${measured.keys} keys, cut ${JSON.stringify(measured.cut)}; median ${median.toFixed(1)} ms, worst ${worst.toFixed(1)} ms (${ms.map((t) => t.toFixed(0)).join(' ')})`;
+      test.info().annotations.push({ type: 'snapshot timing', description: seen });
+      console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${seen}`);
+      if (rows === 300) {
+        expect(measured.keys, seen).toBe(600);
+        expect(median, seen).toBeLessThan(SNAPSHOT_TYPICAL_MEDIAN_MS);
+        expect(worst, seen).toBeLessThan(SNAPSHOT_TYPICAL_WORST_MS);
+      } else expect(worst, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
+    }
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The snapshot's budgets, round trip from main (the renderer's work and the answer's way back), in the Linux container
+ * and on CI's runners: a typical page (1,500 elements: 300 rows of a link, a note and a button) and a 20,000-element
+ * one, which the script stops looking at after SNAPSHOT_SCAN_MS (150 ms). Measured (2026-11-22, the Linux container,
+ * three runs each on X11 and Wayland): the typical page's median 12.8 to 15.9 ms, its worst 21 to 28 ms; the huge page
+ * 127 to 166 ms median, 194 ms at worst. The budgets are the plan's, at least 1.5 times the worst seen.
+ */
+const SNAPSHOT_TYPICAL_MEDIAN_MS = 25;
+const SNAPSHOT_TYPICAL_WORST_MS = 60;
+const SNAPSHOT_HUGE_MS = 300;
+
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_E2E_NO_PEER: '1' });
@@ -305,6 +390,22 @@ test.beforeAll(async () => {
     // A page that downloads a file as it loads: refused in an agent's tab.
     '/download': '<title>Download</title><p>Fetching…</p><script>setTimeout(() => { location.href = "/file.zip" }, 50)</script>',
     // M2a: a button and a field at known places, and a log of what reached them, and whether the page took it as trusted.
+    // M2b: a page for the snapshot, every kind of thing an outline says (and doesn't).
+    '/snap':
+      '<title>Orders</title><header><nav aria-label="Site"><a href="/">Home</a> <a href="/help">Help</a></nav></header>' +
+      '<main><h1>Your orders</h1><p>Returns are free within 30 days.</p>' +
+      '<label>Search orders <input type="search" value="wool scarf"></label>' +
+      '<label><input type="checkbox" checked required> Gift receipt</label>' +
+      '<label>Shipping <select><option>Standard</option><option selected>Express</option></select></label>' +
+      '<label>Note <textarea>secret-note-value</textarea></label>' +
+      '<label>Password <input type="password" value="hunter2-secret"></label>' +
+      '<label>Code <input autocomplete="one-time-code"></label>' +
+      '<button aria-label="Start a return">↩</button> <button disabled>Cancel order</button>' +
+      '<div style="cursor:pointer" onclick="0">Track package</div>' +
+      '<details><summary>More</summary><p>Hidden until opened.</p></details>' +
+      '<div style="display:none"><button>Invisible</button></div>' +
+      '<div id=host></div><iframe title="Chat" srcdoc="<button>Inside</button>"></iframe></main>' +
+      '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
@@ -316,7 +417,8 @@ test.beforeAll(async () => {
       res.end('PK');
       return;
     }
-    const body = pages[req.url ?? '/'];
+    const rows = /^\/rows-(\d+)$/.exec(req.url ?? '');
+    const body = rows ? rowsPage(Number(rows[1])) : pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
   });

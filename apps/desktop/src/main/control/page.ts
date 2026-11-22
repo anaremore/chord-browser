@@ -14,7 +14,8 @@ import { readDiagnostics, type DiagnosticsRead } from './diagnostics';
 import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillHighlight, type FillOutcome, type FormPage } from './forms';
 import { fetchPdf } from './pdf';
-import type { FillWrite } from '@chord/core';
+import type { FillWrite, SnapshotRead } from '@chord/core';
+import { snapshotPage } from './snapshot';
 
 export interface ControlPage {
   /** The page id now (see above). */
@@ -27,6 +28,8 @@ export interface ControlPage {
   screenshot(): Promise<{ data: string; mimeType: string } | null>;
   diagnostics(): Promise<DiagnosticsRead>;
   readForm(token: string): Promise<FormPage | null>;
+  /** The page's accessibility outline (S18 M2b), its acted-on elements kept under `token` in the page. */
+  snapshot(token: string): Promise<SnapshotRead | null>;
   fillForm(args: { token: string; writes: FillWrite[]; undo: string; highlight: FillHighlight }): Promise<FillOutcome>;
   undoFill(undo: string): Promise<{ restored: number; kept: number } | null>;
   /** A PDF's bytes through the page's own session; `readable` checks each address it ends up at. */
@@ -65,6 +68,7 @@ export function controlPage(contents: WebContents): ControlPage {
     screenshot: () => screenshot(contents),
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
+    snapshot: (token) => snapshotPage(contents, token),
     fillForm: (args) => fillFormPage(contents, args),
     undoFill: (undo) => undoFillPage(contents, undo),
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),

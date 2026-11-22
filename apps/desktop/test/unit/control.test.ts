@@ -188,6 +188,8 @@ function setup(
     onCapture?: (t: Meanwhile) => void;
     /** A scope that reads only on this site, as an outside agent's does a shared tab (S18 M1e). */
     sharedOn?: string;
+    /** A scope that offers M2's tools (S18 M2b). */
+    actions?: boolean;
     /** Where a PDF's download ends up. */
     pdfLandsAt?: string;
   } = {},
@@ -229,6 +231,7 @@ function setup(
   const memory: ToolMemory = { pdfs: new Map(), form: null, nextField: 1, read: new Set() };
   const scope: ControlScope = {
     agent,
+    ...(opts.actions ? { actions: true } : {}),
     refs: new TabRefs<NodeId>('t'),
     memory,
     off: () => null,
@@ -524,5 +527,67 @@ describe('A shared tab is read only on its site (S18 M1e, review 1 of #96)', () 
     const out = await call('read_tab', { tab_id: scope.refs.refFor('n1') });
     expect(out.isError).toBeFalsy();
     expect(out.text).toContain('secret');
+  });
+});
+
+/* ---------- snapshot (S18 M2b) ---------- */
+
+describe('snapshot through the gate (S18 M2b)', () => {
+  /** The page answers the snapshot script with these nodes (and anything else as a plain read). */
+  const page = (nodes: unknown[], onSnapshot?: (events: EventEmitter) => void) => async (code: string, events: EventEmitter) => {
+    if (!code.includes('__chordSnapshots')) return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
+    onSnapshot?.(events);
+    return { url: 'https://news.test/a', title: 'Orders', nodes, cut: {} };
+  };
+  const nodes = [
+    { depth: 0, role: 'link', name: 'Home', key: 0 },
+    { depth: 0, role: 'textbox', name: 'Password', key: 1, states: ['empty'], field: { type: 'password' } },
+    { depth: 0, role: 'button', name: 'Go', key: 2 },
+  ];
+  type Snap = { source: string; tab_id: string; page_id?: string; refs: number; content: string };
+  const snap = (out: { text?: string }) => JSON.parse(out.text!) as Snap;
+
+  it('is unknown where the scope doesn’t offer M2’s tools (a packaged build before it ships)', async () => {
+    const { scope, call } = setup({ read: page(nodes) });
+    const out = await call('snapshot', { tab_id: scope.refs.refFor('n1') });
+    expect(out.isError).toBe(true);
+    expect(refusal(out).error).toBe('Unknown tool snapshot');
+  });
+
+  it('gives the outline with the tab’s refs; each snapshot gives new ones, and the earlier ones go stale', async () => {
+    const { scope, call, activity } = setup({ read: page(nodes), actions: true });
+    const ref = scope.refs.refFor('n1');
+    const first = snap(await call('snapshot', { tab_id: ref }));
+    expect(first).toMatchObject({ source: 'web_snapshot', tab_id: ref, refs: 2 });
+    expect(first.page_id).toMatch(/^p\d+$/);
+    expect(first.content).toBe('- link "Home" [ref=e1]\n- textbox "Password" [password: the user signs in]\n- button "Go" [ref=e3]');
+    expect(activity).toEqual(['Looked over “Article”']);
+    const second = snap(await call('snapshot', { tab_id: ref }));
+    expect(second.content).toContain('[ref=e4]');
+    const refs = scope.memory.elements!.get('n1')!;
+    expect(refs.resolve('e1', first.page_id!)).toEqual({ ok: false, why: 'stale' });
+    expect(refs.resolve('e4', second.page_id!)).toMatchObject({ ok: true, key: 0 });
+    expect(scope.memory.read.has('n1')).toBe(true);
+  });
+
+  it('a page that moved on while it was read: no page_id, and its refs are never good', async () => {
+    const { scope, call } = setup({ read: page(nodes, (events) => events.emit('did-navigate')), actions: true });
+    const out = snap(await call('snapshot', { tab_id: scope.refs.refFor('n1') }));
+    expect(out.page_id).toBeUndefined();
+    expect(scope.memory.elements!.get('n1')!.resolve('e1', 'p1')).toEqual({ ok: false, why: 'stale' });
+  });
+
+  it('is read as read_tab is: never a page that can never be read, and the scope’s card first', async () => {
+    const { scope, call, cards } = setup({ read: page(nodes), actions: true, needsCard: true, answer: 'deny' });
+    expect(refusal(await call('snapshot', { tab_id: scope.refs.refFor('n2') })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    const denied = await call('snapshot', { tab_id: scope.refs.refFor('n1') });
+    expect(refusal(denied).refused).toBe('The user said no to reading that tab. Carry on without it, or ask them.');
+    expect(cards.map((c) => [c.tool, c.description])).toEqual([['snapshot', 'Look over “Article”']]);
+    expect(scope.memory.elements).toBeUndefined();
+  });
+
+  it('a page that doesn’t answer is a refusal, not a turn that never ends', async () => {
+    const { scope, call } = setup({ read: async () => null, actions: true });
+    expect(refusal(await call('snapshot', { tab_id: scope.refs.refFor('n1') })).refused).toBe('That page could not be read.');
   });
 });

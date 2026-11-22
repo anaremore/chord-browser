@@ -46,7 +46,7 @@ import { ASSISTANT_WORLD } from './extract';
 const FORM_MS = 5000;
 
 /** What describes a field, shared by the read and the fill (which checks a field is still as it was read). */
-const FORM_LIB = String.raw`
+export const FORM_LIB = String.raw`
   const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
   const NO_WORDS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
   const byId = (el, id) => { const root = el.getRootNode(); return typeof root.getElementById === 'function' ? root.getElementById(id) : null; };
