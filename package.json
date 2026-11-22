@@ -11,6 +11,7 @@
     "build": "pnpm --filter @chord/desktop build",
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "oxlint --report-unused-disable-directives-severity=warn && stylelint \"**/*.css\" --ignore-pattern \".claude/**\"",
+    "deadcode": "knip",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:perf": "vitest run --config vitest.perf.config.ts",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "knip": "6.45.1",
     "oxlint": "1.93.0",
     "stylelint": "17.16.0",
     "stylelint-config-standard": "40.0.0",

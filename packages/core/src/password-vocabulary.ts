@@ -97,18 +97,7 @@ export const kUsernameLatin: readonly string[] = [
   "ainmcleachdaidh", "igamalomsebenzisi", "nomdusuari", "lomsebenzisi", "jenengpanganggo", "ingoakaiwhakamahi",
   "nomeutente", "namapengguna",
 ];
-export const kUsernameNonLatin: readonly string[] = [
-  "用户名", "کاتيجونالو", "用戶名", "የተጠቃሚስም", "логин", "اسمالمستخدم", "נאמען", "کاصارفکانام", "ユーザ名",
-  "όνομα χρήστη", "brûkersnamme", "корисничкоиме", "nonitilizatè", "корисничкоиме", "ngaranpamaké",
-  "ຊື່ຜູ້ໃຊ້", "användarnamn", "యూజర్పేరు", "korisničkoime", "пайдаланушыаты", "שםמשתמש", "ім'якористувача",
-  "کارننوم", "хэрэглэгчийннэр", "nomedeusuário", "имяпользователя", "têntruynhập", "பயனர்பெயர்",
-  "ainmúsáideora", "ชื่อผู้ใช้", "사용자이름", "імякарыстальніка", "lietotājvārds", "потребителскоиме",
-  "uporabniškoime", "колдонуучунунаты", "kullanıcıadı", "පරිශීලකනාමය", "istifadəçiadı", "օգտագործողիանունը",
-  "navêbikarhêner", "ಬಳಕೆದಾರಹೆಸರು", "emriipërdoruesit", "वापरकर्तानाव", "käyttäjätunnus", "વપરાશકર્તાનામ",
-  "felhasználónév", "उपयोगकर्तानाम", "nazwaużytkownika", "ഉപയോക്തൃനാമം", "სახელი", "အသုံးပြုသူအမည်",
-  "نامکاربری", "प्रयोगकर्तानाम", "uživatelskéjméno", "ব্যবহারকারীরনাম", "užívateľskémeno",
-  "ឈ្មោះអ្នកប្រើប្រាស់",
-];
+// Chromium's kUsernameNonLatin isn't carried: its classifier reads kUsernameLatin in its place (password-parser.ts).
 export const kUserLatin: readonly string[] = [
   "user", "wosuta", "gebruiker", "utilizator", "usor", "notandi", "gumagamit", "vartotojas", "fammi",
   "olumulo", "maiamfani", "cleachdaidh", "utent", "pemakai", "mpampiasa", "umsebenzisi", "bruger", "usuario",
@@ -163,8 +152,6 @@ export const DDG_UNKNOWN: WordMatcher = {
   ),
   skip: ddg('phone|mobile|email|password'),
 };
-/** `totp`. */
-export const DDG_TOTP: WordMatcher = { match: ddg('mfa|2fa|(two|2).?factor|one-time|otp|totp'), skip: ddg('phone|mobile|email|password') };
 /** `emailAddress`. */
 export const DDG_EMAIL: WordMatcher = {
   match: ddg('.mail\\b|apple.?id|posta elettronica|e.?mailadres|correo electr|correo-e|^correo$|\\be.?post|e.?postadress'),
@@ -196,8 +183,6 @@ export const DDG_USERNAME: WordMatcher = {
   skip: ddg('phone|first.?name|last.?name'),
   forceUnknown: ddg('search|policy|choose a user\\b'),
 };
-/** `cardSecurityCode`. */
-export const DDG_CARD_CODE: WordMatcher = { match: ddg('security.?code|card.?verif|cvv|csc|cvc|cv2|card id') };
 
 /** How a DuckDuckGo matcher reads `text`: `'yes'`, `'no'`, or `'unknown'` when its `forceUnknown` matches. */
 export function matchWords(matcher: WordMatcher, text: string): 'yes' | 'no' | 'unknown' {

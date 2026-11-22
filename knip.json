@@ -1,0 +1,52 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    "spikes/**",
+    "scripts/dev/**",
+    "**/test/fixtures/**",
+    "**/test/*/fixtures/**",
+    "packages/chrome-extensions/types/**",
+    "packages/chrome-extensions/src/browser-action.ts",
+    "apps/player/scripts/test-page.d.mts"
+  ],
+  "ignoreBinaries": ["wsl.exe", "openssl", "tasklist", "xdotool", "plutil", "vmmap", "ss", "mkfifo", "reg"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs", "scripts/ci/*.mjs", "scripts/e2e-linux/*.mjs", "site/tools/*.mjs", "site/public/**/*.js", "vitest.sim.config.ts"]
+    },
+    "apps/desktop": {
+      "entry": [
+        "src/main/entry.ts",
+        "src/data/worker.ts",
+        "src/data/sync-worker.ts",
+        "src/pdf/worker.ts",
+        "src/main/safe-browsing/worker.ts",
+        "src/main/ad-blocking/worker.ts",
+        "src/main/player/unpack-worker.ts",
+        "src/main/extensions/unpack-worker.ts",
+        "src/import/worker.ts",
+        "src/main/reader/worker.ts",
+        "src/main/effects/worker.ts",
+        "src/export/worker.ts",
+        "src/import-file/worker.ts",
+        "src/preload/{shell,overlay,popover,preview,internal,archive,mini,reader,devtools,page,passwords,service-worker}.ts",
+        "src/renderer/*/main.tsx",
+        "src/passwords/agent/index.ts",
+        "scripts/*.mjs",
+        "playwright.*.config.ts",
+        "test/forms/*-entry.ts",
+        "test/forms/sandbox-recorder.ts",
+        "test/e2e/fake-claude.mjs",
+        "test/shots/demo-claude.mjs",
+        "test/signin-sweep/main.mjs"
+      ]
+    },
+    "apps/player": {
+      "entry": ["src/preload/bar.ts", "src/renderer/bar/bar.ts", "scripts/*.mjs", "electron-builder.config.ts"],
+      "ignoreDependencies": ["electron"]
+    },
+    "packages/chrome-extensions": {
+      "ignoreDependencies": ["electron"]
+    }
+  }
+}
