@@ -23,17 +23,17 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     const claude = { pid: 12, name: 'chord.exe', path: 'C:\\Chord\\chord.exe', cwd: null, ppid: 7 };
     const parent = { pid: 7, name: 'claude.exe', path: null, cwd: null, ppid: 3 };
     const answer = parsePipeClients(
-      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, truncated: 0, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
+      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, truncated: 0, skipped: 0, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
     );
     expect(answer!.clients).toEqual([12, 34]);
     // A query was left behind: a client may be missing.
     expect(answer!.complete).toBe(false);
-    expect(parsePipeClients('{"clients":[],"stuck":0,"truncated":0}')!.complete).toBe(true);
-    expect(parsePipeClients('{"clients":[],"stuck":0,"truncated":2}')!.complete).toBe(false);
+    expect(parsePipeClients('{"clients":[],"stuck":0,"truncated":0,"skipped":0}')!.complete).toBe(true);
+    for (const counts of ['"stuck":0,"truncated":2,"skipped":0', '"stuck":0,"truncated":0,"skipped":1', '"stuck":0,"truncated":0']) expect(parsePipeClients(`{"clients":[],${counts}}`)!.complete, counts).toBe(false);
     // A chain stops at an entry that isn't one; one that doesn't start with its client isn't used.
     expect(answer!.chains.get(12)).toEqual([claude, parent]);
     expect(answer!.chains.has(34)).toBe(false);
-    expect(answer!.timings).toEqual({ files: 24, stuck: 1, truncated: 0, handles: 9, table: 31, total: 57 });
+    expect(answer!.timings).toEqual({ files: 24, stuck: 1, truncated: 0, skipped: 0, handles: 9, table: 31, total: 57 });
     for (const bad of ['', '12 34', '{}', '{"clients":5}', 'null']) expect(parsePipeClients(bad), bad).toBeNull();
     // Not said to be complete: it isn't.
     expect(parsePipeClients('{"clients":[]}')).toEqual({ clients: [], complete: false, chains: new Map(), timings: {} });
@@ -57,9 +57,9 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     [[10, 20, 30], -1, [10], null],
     [[10], -1, [10], null],
   ];
-  it.each(cases)('clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held))).toBe(peer));
+  it.each(cases)('clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held), true)).toBe(peer));
 
-  // A list that may miss a client (stuck or truncated): a verified claim still names the peer, the fallback never does.
+  // A list that may miss a client (stuck, truncated or skipped): a verified claim still names the peer, the fallback never does.
   // R connected but hasn't said hello; X claims an unused PID and is missing from the list: the list is [R], and X must
   // not get R. [clients, claimed, held, the peer]
   const incomplete: [number[], number, number[], number | null][] = [
@@ -132,6 +132,23 @@ describe('macOS: lsof’s Unix sockets', () => {
     [99, null],
   ];
   it.each(cases)('fd %i: %s', (fd, peer) => expect(macPeer(parseLsof(lsof), 300, fd)).toBe(peer));
+});
+
+describe('Windows: the helper’s answer, wired through peerOf (stood in for, so no live timing decides it)', () => {
+  const socket = { _handle: { fd: -1 } } as unknown as Socket;
+  const windows = (answer: string): PeerDeps => ({ platform: 'win32', self: 1, helper: 'window-owner.exe', run: async () => answer, readlink: () => '' });
+  // [the helper's answer, the claim, held, the peer]: a claim that isn't a client, so only the fallback could name one.
+  const rows: [string, number, number[], number | null][] = [
+    ['{"clients":[10],"stuck":1,"truncated":0,"skipped":0}', 99, [], null],
+    ['{"clients":[10],"stuck":0,"truncated":1,"skipped":0}', 99, [], null],
+    ['{"clients":[10],"stuck":0,"truncated":0,"skipped":1}', 99, [], null],
+    ['{"clients":[10],"stuck":1,"truncated":0}', 99, [], null],
+    ['{"clients":[10],"stuck":0,"truncated":0,"skipped":0}', 99, [], 10],
+    ['{"clients":[10,20],"stuck":0,"truncated":0,"skipped":0}', 99, [10], 20],
+    // A verified claim names its peer, complete or not.
+    ['{"clients":[10,20],"stuck":3,"truncated":0,"skipped":0}', 20, [10], 20],
+  ];
+  it.each(rows)('%s, claiming %i, held %j: %s', async (answer, claimed, held, peer) => expect((await peerOf(socket, '', claimed, new Set(held), windows(answer))).pid).toBe(peer));
 });
 
 describe('The lookup, when the OS can’t say', () => {
@@ -228,7 +245,7 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
       expect(first.chain?.[0]?.path?.toLowerCase()).toBe(process.execPath.toLowerCase());
       // The only free client, by a claim that's taken: given only when the helper looked at every file and each answered.
       const fallback = await peerOf(ends[1]!, path, a.pid!, new Set([a.pid!]), deps);
-      const complete = fallback.timings?.['stuck'] === 0 && fallback.timings['truncated'] === 0;
+      const complete = fallback.timings?.['stuck'] === 0 && fallback.timings['truncated'] === 0 && fallback.timings['skipped'] === 0;
       expect(fallback.pid, JSON.stringify(fallback.timings)).toBe(complete ? b.pid : null);
       expect((await peerOf(ends[1]!, path, 4, new Set(), deps)).pid).toBeNull();
     } else {

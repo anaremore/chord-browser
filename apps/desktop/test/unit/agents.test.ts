@@ -575,7 +575,7 @@ describe('Zero cost, and off in packaged builds', () => {
       peer: async (_socket, _endpoint, claimed, held) => {
         asked.push({ claimed, held: [...held] });
         await delay;
-        return { pid: choosePeer([process.pid, IMPOSTOR], claimed, held) };
+        return { pid: choosePeer([process.pid, IMPOSTOR], claimed, held, true) };
       },
     });
     await service.start();

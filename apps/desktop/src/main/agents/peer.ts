@@ -59,7 +59,7 @@ export function socketFd(socket: Socket): number | null {
 export interface PipeClients {
   clients: number[];
   /**
-   * Every one of the server's files was looked at and answered (`stuck` and `truncated` both 0): no client can be
+   * Every one of the server's files was looked at and answered (`stuck`, `truncated` and `skipped` all 0): no client can be
    * missing. Otherwise only a connection's own claim names its peer (choosePeer).
    */
   complete: boolean;
@@ -73,7 +73,7 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : nu
 
 /** pipe-clients' line of JSON, kept to what it can be; null when it isn't that. */
 export function parsePipeClients(stdout: string): PipeClients | null {
-  let raw: { clients?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; truncated?: unknown; handles?: unknown; ms?: unknown };
+  let raw: { clients?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; truncated?: unknown; skipped?: unknown; handles?: unknown; ms?: unknown };
   try {
     raw = JSON.parse(stdout.trim()) as typeof raw;
   } catch {
@@ -95,9 +95,9 @@ export function parsePipeClients(stdout: string): PipeClients | null {
     if (infos[0]?.pid === pid) chains.set(pid, infos);
   }
   const timings: Record<string, number> = {};
-  for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, truncated: raw.truncated, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
-  // Complete only when the helper says both are 0: a missing or other value is a list that may miss a client.
-  return { clients, complete: raw.stuck === 0 && raw.truncated === 0, chains, timings };
+  for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, truncated: raw.truncated, skipped: raw.skipped, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
+  // Complete only when the helper says all three are 0: a missing or other value is a list that may miss a client.
+  return { clients, complete: raw.stuck === 0 && raw.truncated === 0 && raw.skipped === 0, chains, timings };
 }
 
 /**
@@ -107,7 +107,7 @@ export function parsePipeClients(stdout: string): PipeClients | null {
  * only free client seen might be another connection's whose hello hasn't come yet (review 3 of #103). `held`: PIDs
  * other live connections hold or claimed.
  */
-export function choosePeer(clients: readonly number[], claimed: number, held: ReadonlySet<number>, complete = true): number | null {
+export function choosePeer(clients: readonly number[], claimed: number, held: ReadonlySet<number>, complete: boolean): number | null {
   const free = clients.filter((pid) => !held.has(pid));
   if (free.includes(claimed)) return claimed;
   return complete && free.length === 1 ? free[0]! : null;

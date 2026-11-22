@@ -32,8 +32,9 @@
 //     the same user's process) and kept if it's the server end of this pipe. A query on a
 //     file can block when the file has I/O pending, so they all run at once, each on a
 //     thread of its own, and those not done within QUERIES_MS are left behind ("stuck"); the
-//     server's files past FILES_MAX aren't looked at ("truncated"). Either means a client may
-//     be missing from the list.
+//     server's files past FILES_MAX aren't looked at ("truncated"); one that can't be copied, or
+//     whose query fails before it can say whether it's one of the pipe's, is "skipped". Any of
+//     them means a client may be missing from the list.
 //
 // Exit codes: 0 done, 2 bad arguments, 3 a window isn't the process's, 4 the call failed,
 // 5 the pipe (for pipe-clients, the server's process) couldn't be opened.
@@ -281,6 +282,8 @@ static class WindowOwner
         public IntPtr Copy;
         public volatile bool Done;
         public uint Client;
+        /** It couldn't say whether it's one of the pipe's server ends (a call failed): its client may be missing. */
+        public bool Skipped;
     }
 
     static string Json(string text)
@@ -377,7 +380,7 @@ static class WindowOwner
         IntPtr table = HandleTable(out count);
         tTable = clock.ElapsedMilliseconds;
         var queries = new List<Query>();
-        int stuck = 0, truncated = 0;
+        int stuck = 0, truncated = 0, skipped = 0;
         try
         {
             if (table == IntPtr.Zero) return 4;
@@ -417,19 +420,37 @@ static class WindowOwner
             {
                 if (c.Value != fileType) continue;
                 IntPtr copy;
-                if (!DuplicateHandle(process, new IntPtr(c.Key), GetCurrentProcess(), out copy, 0, false, DUPLICATE_SAME_ACCESS)) continue;
+                // A file that can't be copied can't be looked at: its client, if it's one of the pipe's, would be missing.
+                if (!DuplicateHandle(process, new IntPtr(c.Key), GetCurrentProcess(), out copy, 0, false, DUPLICATE_SAME_ACCESS))
+                {
+                    skipped++;
+                    continue;
+                }
                 var q = new Query { Copy = copy };
                 queries.Add(q);
                 var t = new Thread(() =>
                 {
+                    // Not one of the pipe's: another kind of file, a client end, or another pipe by its name. Can't tell (a
+                    // pipe whose info or name can't be read, or an exception): skipped. A server end of this pipe with no
+                    // client (one waiting for the next connection) is neither.
                     try
                     {
                         uint flags, pid;
-                        if (GetFileType(q.Copy) == FILE_TYPE_PIPE && GetNamedPipeInfo(q.Copy, out flags, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) && (flags & PIPE_SERVER_END) != 0
-                            && string.Equals(PipeName(q.Copy), leaf, StringComparison.OrdinalIgnoreCase) && GetNamedPipeClientProcessId(q.Copy, out pid))
-                            q.Client = pid;
+                        if (GetFileType(q.Copy) == FILE_TYPE_PIPE)
+                        {
+                            if (!GetNamedPipeInfo(q.Copy, out flags, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero)) q.Skipped = true;
+                            else if ((flags & PIPE_SERVER_END) != 0)
+                            {
+                                string pipeName = PipeName(q.Copy);
+                                if (pipeName == null) q.Skipped = true;
+                                else if (string.Equals(pipeName, leaf, StringComparison.OrdinalIgnoreCase) && GetNamedPipeClientProcessId(q.Copy, out pid)) q.Client = pid;
+                            }
+                        }
                     }
-                    catch { }
+                    catch
+                    {
+                        q.Skipped = true;
+                    }
                     q.Done = true;
                 }, 64 * 1024) { IsBackground = true };
                 t.Start();
@@ -442,14 +463,15 @@ static class WindowOwner
             foreach (var q in queries)
             {
                 if (!q.Done) stuck++;
+                else if (q.Skipped) skipped++;
                 else if (q.Client != 0 && !clients.Contains(q.Client)) clients.Add(q.Client);
             }
             var processes = clients.Count > 0 ? Processes() : new Dictionary<uint, ProcessEntry>();
             var chains = new List<string>();
             foreach (uint c in clients) chains.Add(Json(c.ToString()) + ":" + Chain(c, processes));
             tChains = clock.ElapsedMilliseconds;
-            // stuck and truncated say the list may miss a client: then Chord names a peer only by its own claim.
-            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck + ",\"truncated\":" + truncated
+            // stuck, truncated and skipped say the list may miss a client: then Chord names a peer only by its own claim.
+            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck + ",\"truncated\":" + truncated + ",\"skipped\":" + skipped
                 + ",\"handles\":" + count + ",\"ms\":{\"table\":" + tTable + ",\"scan\":" + (tScan - tTable) + ",\"queries\":" + (tQueries - tScan) + ",\"chains\":" + (tChains - tQueries) + ",\"total\":" + tChains + "}}");
             return 0;
         }
