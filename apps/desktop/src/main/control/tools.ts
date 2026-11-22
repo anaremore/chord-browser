@@ -53,6 +53,7 @@ import type { WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import type { ActAnswer } from './act';
+import type { DeepAnswer, DeepSession } from './deep';
 import type { PageRead } from './extract';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
@@ -396,7 +397,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
   const ref = scope.refs.refFor(node.id);
-  const done = async (navigated: boolean, loading: boolean, what: string): Promise<ToolOutput> => {
+  const done = async (navigated: boolean, loading: boolean, what: string, picker = false): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
     if (after) return refuse(after);
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
@@ -411,6 +412,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         url: page.url(),
         title: page.title(),
         ...(navigated ? { note: 'The page changed: call snapshot again before using refs from before.' } : {}),
+        // Agents never choose files: a picker the page opened was held, never shown.
+        ...(picker ? { held: 'The page opened a file picker: Chord held it (agents never choose files). Ask the user if a file is needed.' } : {}),
       }),
     };
   };
@@ -519,29 +522,54 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   }
 
   host.doing(node.id, description);
+  /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
+  let deep: DeepSession | null = null;
   try {
     let refused: string | null = null;
     /**
-     * Text or keys in, with the page's guard up: a key or an insertion the page would get anywhere but the element (the
-     * focus moved after focusOk: a timer, between two key events) is stopped there, and the action ends. False then.
+     * Text or keys in, with the page preload's guard up (the window's first listener): the guard takes what has the
+     * focus as the element; the focus is then checked to be this element's (in this document, so not in a frame), its
+     * insides all to be seen (no closed shadow root), and Stop and a pause too. A key or an insertion the page would get
+     * anywhere else is stopped there, and the action ends. False then.
      */
     const guarded = async (until: 'keyup' | 'beforeinput', input: () => void | Promise<void>): Promise<boolean> => {
-      const up = await page.act(owner, lookup.token, lookup.key, { op: 'guard', until });
-      if (!up.ok) {
-        refused = actRefusal(up);
+      if (!(await page.guard(until))) {
+        refused = ACT_REFUSALS.changed;
+        return false;
+      }
+      if ((refused = await focusOk())) {
+        await page.unguard();
+        return false;
+      }
+      const open = await deep!.open();
+      if (!open.ok) {
+        await page.unguard();
+        refused = deepRefusal(open);
+        return false;
+      }
+      if ((refused = halt())) {
+        await page.unguard();
         return false;
       }
       await input();
-      // The input's events are on their way (each its own message): unguard waits for the last one. No answer counts as
-      // done: the page went (a submit's Enter navigated it), so its document, and where its focus was, are gone too.
-      const down = await page.act(owner, lookup.token, lookup.key, { op: 'unguard' });
-      if (down.ok && down.moved) refused = ACT_REFUSALS.focusMoved;
-      else if (down.ok && down.lost) refused = ACT_REFUSALS.focusLost;
+      // The input's events are on their way (each its own message): unguard waits for the last one.
+      const down = await page.unguard();
+      if (!down) {
+        // No guard to take down: the page went (a submit's Enter navigated it), so its document, and where its focus
+        // was, went with it. Otherwise it fails closed: nothing more goes in.
+        if (page.id !== pageAtCheck) return true;
+        refused = ACT_REFUSALS.focusLost;
+        return false;
+      }
+      if (down.moved) refused = ACT_REFUSALS.focusMoved;
+      else if (down.lost) refused = ACT_REFUSALS.focusLost;
       return !refused;
     };
     const { navigated, loading } = await page.afterActing(async () => {
       const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
+      // The field as it is now, after any card's wait: never one the page made a password, code or card field.
+      if (pointed.field && sensitiveField(pointed.field)) return void (refused = ACT_REFUSALS.sensitive);
       if ((refused = halt())) return;
       if (tool === 'select_option') {
         // By the page's whole label, as describe matched it (the card showed it clipped).
@@ -549,18 +577,29 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if (!chosen.ok) refused = actRefusal(chosen);
         return;
       }
+      if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
+      // From here input goes in: the debugger's checks, and any file picker the page opens held.
+      deep = await page.deep(owner, lookup.token, lookup.key);
+      if (!deep) return void (refused = ACT_REFUSALS.noCheck);
+      if ((refused = halt())) return;
       if (tool === 'press_key') {
-        // focus answers whether it has it now, as focused would.
-        if ((refused = await focusOk(await page.act(owner, lookup.token, lookup.key, { op: 'focus' })))) return;
+        const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
+        if (!focused.ok) return void (refused = actRefusal(focused));
         return void (await guarded('keyup', () => page.keys(pressKeyEvents(key as PressKey) as AgentInputEvent[])));
       }
       // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
-      // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. It narrows the
-      // race; it can't close it (the page runs between the test and the press too).
+      // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. The page's
+      // own test first, then the debugger's, which sees into closed shadow roots. It narrows the race; it can't close
+      // it (the page runs between the test and the press too).
       page.pointer(pointed.x, pointed.y);
-      if (tool === 'hover') return;
       const hit = await page.act(owner, lookup.token, lookup.key, { op: 'hit', x: pointed.x, y: pointed.y });
       if (!hit.ok) return void (refused = actRefusal(hit));
+      const under = await deep.hit(pointed.x + (hit.scrollX ?? 0), pointed.y + (hit.scrollY ?? 0), hit.repeat === true);
+      if (!under.ok) return void (refused = deepRefusal(under));
+      if (tool === 'type') {
+        const open = await deep.open();
+        if (!open.ok) return void (refused = deepRefusal(open));
+      }
       if ((refused = halt())) return;
       page.press(pointed.x, pointed.y);
       if (tool !== 'type') return;
@@ -568,19 +607,25 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         const selected = await page.act(owner, lookup.token, lookup.key, { op: 'select' });
         if (!selected.ok) return void (refused = actRefusal(selected));
       }
-      // Text goes where the focus is: this element's, and no field Chord never types in, checked right before.
-      if ((refused = await focusOk())) return;
       if (!(await guarded('beforeinput', () => page.insertText(text as string)))) return;
       if (args['submit'] !== true) return;
-      if ((refused = await focusOk())) return;
       await guarded('keyup', () => page.keys(pressKeyEvents('Enter') as AgentInputEvent[]));
     });
+    const picker = deep ? (await (deep as DeepSession).close()).picker : false;
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    return await done(navigated, loading, actDone(description));
+    return await done(navigated, loading, actDone(description), picker);
   } finally {
+    if (deep) await (deep as DeepSession).close();
     host.doing(node.id, null);
   }
+}
+
+/** The debugger's no, in words for the agent. */
+function deepRefusal(answer: Extract<DeepAnswer, { ok: false }>): string {
+  if (answer.why === 'closed') return ACT_REFUSALS.closed;
+  if (answer.why === 'no-check') return ACT_REFUSALS.noCheck;
+  return actRefusal(answer as Extract<ActAnswer, { ok: false }>);
 }
 
 /** The page's no, in words for the agent. */
@@ -592,6 +637,7 @@ function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'no-choice') return ACT_REFUSALS.noChoice;
   if (answer.why === 'two-choices') return ACT_REFUSALS.twoChoices;
   if (answer.why === 'no-move') return ACT_REFUSALS.noMove;
+  if (answer.why === 'file') return ACT_REFUSALS.file;
   return ACT_REFUSALS.changed;
 }
 

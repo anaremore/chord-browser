@@ -16,6 +16,8 @@ import { fillFormPage, readFormPage, undoFillPage, type FillHighlight, type Fill
 import { fetchPdf } from './pdf';
 import { ACT_LOAD_MS, type FillWrite, type SnapshotRead } from '@chord/core';
 import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
+import { openDeep, type DeepSession } from './deep';
+import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
 import { snapshotPage } from './snapshot';
 
@@ -47,6 +49,15 @@ export interface ControlPage {
   press(x: number, y: number): void;
   /** Keys, as the agent's (control/input.ts refuses anything off its list). */
   keys(events: readonly AgentInputEvent[]): void;
+  /**
+   * The page preload's guard (preload/agent-guard.ts) up, before text or keys: whatever has the focus now is all
+   * input may reach. False if there's no guard to arm (then nothing is sent).
+   */
+  guard(until: 'keyup' | 'beforeinput'): Promise<boolean>;
+  /** The guard down, once the input's last event came (at most 250 ms): what it stopped; null if it wasn't up. */
+  unguard(): Promise<{ moved: boolean; lost: boolean } | null>;
+  /** The debugger's checks for one action (control/deep.ts); null if it can't be had. */
+  deep(owner: string, token: string, key: number): Promise<DeepSession | null>;
   /** Text put in where the focus is, as one insertion (never as keys). */
   insertText(text: string): Promise<void>;
   /**
@@ -112,6 +123,12 @@ export function controlPage(contents: WebContents): ControlPage {
       ]);
     },
     keys: (events) => sendAgentInput(contents, events),
+    guard: async (until) => (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}) : false`)) === true,
+    unguard: async () => {
+      const answer = (await inPreload(contents, 'globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(250) : null')) as { moved?: unknown; lost?: unknown } | null;
+      return answer && typeof answer === 'object' ? { moved: answer.moved === true, lost: answer.lost === true } : null;
+    },
+    deep: (owner, token, key) => openDeep(contents, owner, token, key),
     insertText: (text) => (contents.isDestroyed() ? Promise.resolve() : contents.insertText(text)),
     afterActing: (act) => afterActing(contents, act),
     navigate: (url) => loaded(contents, () => contents.loadURL(url).catch(() => undefined)),
@@ -127,6 +144,15 @@ export function controlPage(contents: WebContents): ControlPage {
     },
     title: () => (contents.isDestroyed() ? '' : contents.getTitle()),
   };
+}
+
+/** Electron's world for the page preload (contextIsolation's): where its agent guard is. */
+const PRELOAD_WORLD = 999;
+
+/** A script in the page preload's world, answered within a moment (null if not). */
+function inPreload(contents: WebContents, code: string): Promise<unknown> {
+  if (contents.isDestroyed()) return Promise.resolve(null);
+  return pageCall(contents.executeJavaScriptInIsolatedWorld(PRELOAD_WORLD, [{ code }]), null, 3000);
 }
 
 /** The page's CSS pixels to the view's: sendInputEvent's points are the view's, the page zoomed in them. */

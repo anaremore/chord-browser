@@ -257,6 +257,79 @@ test('Always on this site: offered to an agent you always allow, kept, listed in
 const rowsPage = (rows: number) =>
   `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
 
+test('acting: what a page hides from scripts, its own capture listeners, file inputs, and your click (Neon’s review of #110)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/neon` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const inPage = (code: string) =>
+      app.evaluate(({ webContents }, [url, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(url))!.executeJavaScript(js), [`${site.origin}/neon`, code] as const);
+    // Your focus, before the agent acts (it must stay where it is: the agent's tab is parked, off screen).
+    const focused = () => app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? null);
+    const yours = await focused();
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const outline = await snap();
+
+    // File inputs, and a label that opens one, get no ref.
+    expect.soft(outline).not.toMatch(/button "Upload" \[ref=/);
+    expect.soft(outline).not.toMatch(/"Choose a photo" \[ref=/);
+
+    // The first action asks the site card.
+    const first = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Closed deal"') });
+    const popover = await pageWhere(app, isPopover);
+    const card = siteCardOf(popover, 'Codex');
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await card.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    // A closed root's frame, under the point once the pointer moved there: refused, nothing clicked.
+    expect.soft((await first).text).toBe('Something is covering that element: frame “Inner ad”. Deal with it first, or call snapshot again.');
+
+    // A text box whose closed root sends the focus to a password field: nothing typed.
+    const notes = await mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Notes box"'), text: 'typed-into-a-closed-password' });
+    expect.soft(notes.text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.');
+    expect.soft(await inPage('window.__secret.value')).toBe('');
+
+    // A key whose own capture listener (put first) sends it to a password field, unseen after: nothing goes in.
+    const coupon = await mcp.call('press_key', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Coupon"'), key: 'Space' });
+    expect.soft(coupon.text).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect.soft(await inPage('document.getElementById("pw2").value')).toBe('');
+
+    // A button that opens a file input, the input's click kept from Chord's own listener: the picker is held.
+    const attach = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Open attachments"') });
+    // Held by the preload's listener, now the window's first (reported with a result, as a dialog is), or by the
+    // debugger's interception (in the action's own result): either way no picker, and the agent hears of it.
+    const heard = [attach.text, ...attach.held, ...(await mcp.call('list_tabs')).held].join(' ');
+    expect.soft(heard).toMatch(/a file input|a file picker/);
+    // One in a closed root: the debugger's interception holds it, and the action's result says so.
+    const closedUpload = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Closed upload"') });
+    expect.soft(closedUpload.text).toContain('The page opened a file picker: Chord held it');
+
+    // Your focus never moved to the agent's tab.
+    expect.soft(await focused()).toBe(yours);
+
+    // Your click in its tab pauses it there, as a key does (shown over your chord, so its bar shows).
+    await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Neon/ }).click();
+    await app.evaluate(({ webContents }, url) => {
+      const c = webContents.getAllWebContents().find((x) => x.getURL().startsWith(url))!;
+      c.sendInputEvent({ type: 'mouseDown', x: 5, y: 5, button: 'left', clickCount: 1 });
+      c.sendInputEvent({ type: 'mouseUp', x: 5, y: 5, button: 'left', clickCount: 1 });
+    }, `${site.origin}/neon`);
+    await expect.soft(shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' })).toBeVisible();
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -339,7 +412,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         expect(median, seen).toBeLessThan(typical.median);
         expect(worst, seen).toBeLessThan(typical.worst);
         // M2c: an action's own work before its input goes (the element checked, scrolled to, hit-tested), on this page.
-        type ActTimes = { times: number[]; failed?: string } | null;
+        type ActTimes = { times: number[]; deep: number[]; failed?: string } | null;
         const act = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentActTimes(u: string, r: number): Promise<ActTimes> } }).chordTestHooks.agentActTimes(u, r), [`${site.origin}${path}`, 30] as const))!;
         expect(act.failed).toBeUndefined();
         const at = sorted(act.times);
@@ -349,6 +422,14 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${actSeen}`);
         expect(actMedian, actSeen).toBeLessThan(ACT_POINT_MS.median);
         expect(actP95, actSeen).toBeLessThan(ACT_POINT_MS.p95);
+        // Neon's review of #110: the debugger's session a press or typing opens, on this page.
+        const dt = sorted(act.deep);
+        const deepMedian = dt[Math.floor(dt.length / 2)]!;
+        const deepP95 = dt[Math.floor(dt.length * 0.95)]!;
+        const deepSeen = `${path}: the debugger's session, median ${deepMedian.toFixed(1)} ms, p95 ${deepP95.toFixed(1)} ms (${dt.map((t) => t.toFixed(0)).join(' ')})`;
+        console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${deepSeen}`);
+        expect(deepMedian, deepSeen).toBeLessThan(ACT_DEEP_MS.median);
+        expect(deepP95, deepSeen).toBeLessThan(ACT_DEEP_MS.p95);
       } else {
         // The median of five: one pause in five (a garbage collection on a page of 2,000,000 text nodes) took 777 ms once
         // on main itself, its other runs 35 to 43 ms. The worst is in the message.
@@ -389,6 +470,8 @@ const SNAPSHOT_HUGE_MS = 300;
  * "M2c: as built".
  */
 const ACT_POINT_MS = { median: 15, p95: 40 };
+/** The debugger's session for a press or typing (Neon's review of #110), on the typical page. */
+const ACT_DEEP_MS = { median: 25, p95: 60 };
 
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -646,6 +729,35 @@ test.beforeAll(async () => {
       '<textarea id=ta aria-label="Draft text">initial-textarea-content</textarea><button aria-labelledby=ta>Keep</button>' +
       '<select id=sl aria-label="Size"><option selected>Small</option><option>option-label-x</option></select><button aria-labelledby=sl>Pick</button></main>' +
       '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
+    // Neon's review of #110: closed shadow roots, a page's own capture listeners, file inputs.
+    '/neon':
+      '<title>Neon</title><style>body{margin:0;padding:20px}.row{display:block;margin:12px 0}</style><main>' +
+      '<x-deal class=row role=button tabindex=0 aria-label="Closed deal" id=deal></x-deal>' +
+      '<div class=row contenteditable aria-label="Notes box" id=notes style="width:200px;height:40px"></div>' +
+      '<label class=row>Coupon <input id=coupon></label><input type=password id=pw2 aria-label="Account password">' +
+      '<label class=row>Upload <input type=file id=up></label>' +
+      '<label class=row for=up2 style="cursor:pointer">Choose a photo</label><input type=file id=up2 style="display:none">' +
+      '<button class=row id=attach onclick="document.getElementById(\'up3\').click()">Open attachments</button><input type=file id=up3 style="display:none">' +
+      '<x-up class=row role=button tabindex=0 aria-label="Closed upload" id=cup></x-up>' +
+      '<p id=log></p></main><script>' +
+      // A button whose closed root holds a frame, which takes the pointer once it moves over the button.
+      'const dealRoot = deal.attachShadow({ mode: "closed" });' +
+      'dealRoot.innerHTML = "<style>:host{display:inline-block;position:relative;width:160px;height:40px}</style><span>Closed deal</span><iframe title=\\"Inner ad\\" srcdoc=\\"ad\\" style=\\"position:absolute;left:0;top:0;width:100%;height:100%;border:0;pointer-events:none\\"></iframe>";' +
+      'const innerFrame = dealRoot.querySelector("iframe");' +
+      'deal.addEventListener("mousemove", () => { innerFrame.style.pointerEvents = "auto"; });' +
+      'deal.addEventListener("click", () => { log.textContent += "deal clicked "; });' +
+      // A text box whose closed root sends its focus to a password field.
+      'const notesRoot = notes.attachShadow({ mode: "closed", delegatesFocus: true });' +
+      'notesRoot.innerHTML = "<input type=password style=\\"width:180px\\">";' +
+      'window.__secret = notesRoot.querySelector("input");' +
+      // The page's own capture listeners, put first: a key in the coupon field goes to the password field, unseen.
+      'for (const type of ["keydown", "keypress", "beforeinput", "input", "keyup"]) addEventListener(type, (e) => { if (e.target.id === "coupon") pw2.focus(); if (e.target.id === "coupon" || e.target.id === "pw2") e.stopImmediatePropagation(); }, true);' +
+      // A button whose closed root holds the file input it clicks (the preload's listener sees only the button).
+      'const cupRoot = cup.attachShadow({ mode: "closed" }); cupRoot.innerHTML = "<span>Closed upload</span><input type=file style=\\"display:none\\">";' +
+      'cup.addEventListener("click", () => cupRoot.querySelector("input").click());' +
+      // And the file input its button clicks, its click kept from anything after.
+      'addEventListener("click", (e) => { if (e.target.id === "up3") e.stopImmediatePropagation(); }, true);' +
+      '</script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +

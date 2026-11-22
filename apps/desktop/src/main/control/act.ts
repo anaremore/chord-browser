@@ -13,10 +13,9 @@
  *   for the page to see the pointer's move first (Blink sends a move with the next frame, and its mouseover and
  *   mouseenter handlers, which can put something over the point, run then), at most HIT_WAIT_MS. A hit on a frame (an
  *   iframe, an embed, a fenced frame) is never the element's, even one inside it.
- * - `guard` and `unguard`: while text and keys go in, a key or an insertion that would land anywhere but the element
- *   (the page moved the focus between main's check and the input) is stopped in the page, and `unguard` says so. Input
- *   and scripts reach the page by different ways, so `unguard` waits for the input's last event (the key's keyup, the
- *   text's beforeinput) to have been seen, at most GUARD_WAIT_MS, before it takes the guard down.
+ *
+ * The guard while text and keys go in is the page preload's (preload/agent-guard.ts), so it's the window's first
+ * listener; what a page hides in closed shadow roots is checked through the debugger (control/deep.ts).
  * - `point`: scrolled to the middle of the view (at once), and hit-tested at its middle, then at the middles of its
  *   quarters: the point to send the click to, in the page's CSS pixels, or what covers it (its role and name).
  * - `select`: a text field's contents selected (all of it), so the text `insertText` puts in replaces it.
@@ -41,23 +40,19 @@ export type ActOp =
   | { op: 'select' }
   | { op: 'focus' }
   | { op: 'focused' }
-  | { op: 'guard'; until: 'keyup' | 'beforeinput' }
-  | { op: 'unguard' }
   | { op: 'choose'; option: string }
   | { op: 'describe'; option?: string };
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; moved?: boolean; lost?: boolean }
-  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; repeat?: boolean; scrollX?: number; scrollY?: number }
+  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
-/** How long `unguard` waits for the input's last event. */
-const GUARD_WAIT_MS = 250;
 
 function actScript(owner: string, token: string, key: number, op: ActOp): string {
-  const args = { owner, token, key, hitWait: HIT_WAIT_MS, guardWait: GUARD_WAIT_MS, ...op };
+  const args = { owner, token, key, hitWait: HIT_WAIT_MS, ...op };
   return String.raw`(async (args) => {
   ${SNAPSHOT_LIB}
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(args.owner);
@@ -69,6 +64,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const role = roleNow(el);
   if (role !== entry.role || nameOf(el, role) !== entry.name) return { ok: false, why: 'changed' };
   if (!(isField(el) ? visibleField(el, typeOf(el)) : shown(el))) return { ok: false, why: 'changed' };
+  // One that opens a file picker now (the page made it one since): never acted on.
+  if (opensFiles(el)) return { ok: false, why: 'file' };
   const disabled = el.matches(':disabled') || String(el.getAttribute('aria-disabled')).toLowerCase() === 'true';
   const editable = el.isContentEditable || (el.localName === 'textarea' && !el.readOnly) || (el.localName === 'input' && !el.readOnly && TEXT_TYPES.has(String(el.type || '').toLowerCase()));
   const select = el.localName === 'select';
@@ -102,40 +99,6 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   }
   if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
   if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
-  // guard: a key or an insertion bound anywhere but the element is stopped before the page's own handlers see it
-  // (capture, on the window), though not before a capture listener the page put on the window earlier, which runs
-  // first. Taken off by unguard once the input's last event was seen, or by itself after 5 s.
-  const GUARDED = ['keydown', 'keypress', 'keyup', 'beforeinput'];
-  const unwatch = (guard) => {
-    for (const type of GUARDED) removeEventListener(type, guard.stop, true);
-    clearTimeout(guard.timer);
-    if (globalThis.__chordGuard === guard) globalThis.__chordGuard = null;
-  };
-  if (args.op === 'unguard') {
-    const guard = globalThis.__chordGuard;
-    if (!guard) return { ok: true, ...said, moved: false };
-    if (!guard.done) await new Promise((done) => { guard.finished = done; setTimeout(done, args.guardWait); });
-    await new Promise((done) => setTimeout(done, 0));
-    unwatch(guard);
-    // The input's last event never came here: the focus went where this document doesn't see (into a frame), and some
-    // of the input may have gone there. (Not where the focus is now: a field may move it on, as split date fields do.)
-    return { ok: true, ...said, moved: guard.moved, lost: !guard.done };
-  }
-  if (args.op === 'guard') {
-    if (globalThis.__chordGuard) unwatch(globalThis.__chordGuard);
-    const guard = { until: args.until, moved: false, done: false, finished: null, timer: 0, stop: (e) => {
-      if (!e.isTrusted) return;
-      if (e.type === args.until) { guard.done = true; if (guard.finished) guard.finished(); }
-      if (e.type === 'keyup' || deepFocus() === el) return;
-      guard.moved = true;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    } };
-    for (const type of GUARDED) addEventListener(type, guard.stop, true);
-    guard.timer = setTimeout(() => unwatch(guard), 5000);
-    globalThis.__chordGuard = guard;
-    return { ok: true, ...said };
-  }
   if (args.op === 'select') {
     el.focus({ preventScroll: true });
     if (isField(el)) el.select();
@@ -201,7 +164,10 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     if (!ours(hit)) return { ok: false, why: 'covered', cover: coverOf(hit) };
     const before = moved && moved.before;
     if (!arrived && !(before && near(before) && before.target && before.target.deref() === hit)) return { ok: false, why: 'no-move' };
-    return { ok: true, ...said };
+    // A second click without a fresh move: the debugger's own hit test (deep.ts) must find the very node too.
+    globalThis.__chordRepeat = arrived ? null : before.target;
+    // Where the page is scrolled to: the debugger's hit test takes the document's coordinates.
+    return { ok: true, ...said, repeat: !arrived, scrollX, scrollY };
   }
   // point: to the middle of the view, then the hit test at its middle and its quarters' middles.
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });

@@ -174,7 +174,12 @@ function fakePage(url: string, read: Answer) {
     loads: string[];
     history: { url: string; skippable?: boolean }[];
     active: number;
-  } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0 };
+    /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean };
+    debugging: string[];
+  } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
+  const debugEvents = new EventEmitter();
+  let attached = false;
   const go = (index: number) => {
     at.active = index;
     at.url = at.history[index]!.url;
@@ -211,6 +216,31 @@ function fakePage(url: string, read: Answer) {
         const response = new Response('%PDF-1.4');
         Object.defineProperty(response, 'url', { value: at.pdfLandsAt ?? asked });
         return response;
+      },
+    },
+    // The debugger, as Chromium's DevTools protocol answers deep.ts.
+    debugger: {
+      isAttached: () => attached,
+      attach: () => {
+        if (at.deep.unavailable) throw new Error('Another debugger is already attached');
+        attached = true;
+      },
+      detach: () => void (attached = false),
+      on: (e: string, f: (...a: unknown[]) => void) => debugEvents.on(e, f),
+      off: (e: string, f: (...a: unknown[]) => void) => debugEvents.off(e, f),
+      sendCommand: async (method: string, params?: { expression?: string }) => {
+        at.debugging.push(method);
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } };
+        if (method === 'Runtime.enable') debugEvents.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, auxData: { frameId: 'F', type: 'isolated' } } });
+        if (method === 'Runtime.evaluate') return params?.expression?.includes('instanceof Map') ? { result: { value: true } } : { result: { objectId: 'el' } };
+        if (method === 'DOM.getNodeForLocation') return { backendNodeId: 1, frameId: 'F' };
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'hit' } };
+        if (method === 'Runtime.callFunctionOn') {
+          if (at.deep.picker) debugEvents.emit('message', {}, 'Page.fileChooserOpened', {});
+          return { result: { value: at.deep.hit ?? { ok: true } } };
+        }
+        if (method === 'DOM.describeNode') return { node: at.deep.closed ? { children: [{ shadowRoots: [{ shadowRootType: 'closed' }] }] } : { shadowRoots: [{ shadowRootType: 'open' }] } };
+        return {};
       },
     },
     isDestroyed: () => false,
@@ -729,6 +759,13 @@ describe('acting through the gate (S18 M2c)', () => {
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
   type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
+    // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
+    if (code.includes('__chordAgentGuard')) {
+      const op = code.includes('.arm(') ? 'guard' : 'unguard';
+      steps.push(op);
+      onAct?.(events, op);
+      return op === 'guard' ? true : { moved: Boolean(twist.moved), lost: Boolean(twist.lost) };
+    }
     if (code.includes('new MutationObserver(() =>')) {
       onAct?.(events, 'settle');
       return true;
@@ -752,8 +789,6 @@ describe('acting through the gate (S18 M2c)', () => {
       if (args.op === 'hit' && twist.noMove) return { ok: false, why: 'no-move' };
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
-      // The page's guard: what it stopped, as if the focus moved between the check and the input.
-      if (args.op === 'unguard') return { ok: true, ...said, moved: Boolean(twist.moved), lost: Boolean(twist.lost) };
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
@@ -762,7 +797,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void } = {}) {
+  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -775,7 +810,9 @@ describe('acting through the gate (S18 M2c)', () => {
     });
     const tab = t.scope.refs.refFor('n1');
     await t.call('snapshot', { tab_id: tab });
-    return { ...t, tab, steps, doings, kept, at: t.pages.get('n1')!.at };
+    const at = t.pages.get('n1')!.at;
+    at.deep = opts.deep ?? {};
+    return { ...t, tab, steps, doings, kept, at };
   }
 
   it('is unknown where the scope doesn’t let its agent act (the assistant, until M2e)', async () => {
@@ -848,21 +885,21 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     const out = await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool scarf', submit: true });
     expect(result(out).data['done']).toBe('Typed in “Search”');
-    // Each input with the page's guard up (guard, the input, unguard), the focus checked before each.
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'focused', 'guard', 'unguard', 'focused', 'guard', 'unguard']);
+    // Each input with the page preload's guard up (guard, the focus checked, the input, unguard).
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'unguard']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
     t.steps.length = 0;
     await t.call('type', { tab_id: t.tab, ref: 'e2', text: ' red', replace: false });
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'focused', 'guard', 'unguard']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'guard', 'focused', 'unguard']);
   });
 
   it('press_key focuses the element and sends the key; select_option chooses by label', async () => {
     const t = await acting();
     await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Escape' });
-    // focus says whether it has the focus: no second round trip.
-    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'unguard']);
+    // Focused, then the guard up and the focus checked under it (the guard takes what has the focus as the element).
+    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'focused', 'unguard']);
     expect(t.at.input).toEqual([
       { type: 'keyDown', keyCode: 'Escape' },
       { type: 'keyUp', keyCode: 'Escape' },
@@ -888,8 +925,7 @@ describe('acting through the gate (S18 M2c)', () => {
   // ---------- Neon's review of #110 ----------
 
   it('the page went to another site while the element was described: no card for that site, nothing kept, nothing sent', async () => {
-    let t: Awaited<ReturnType<typeof acting>> | undefined;
-    t = await acting({
+    const t: Awaited<ReturnType<typeof acting>> = await acting({
       onAct: (events, op) => {
         if (op !== 'describe' || !t || t.at.url.includes('bank.test')) return;
         t.at.url = 'https://bank.test/login';
@@ -903,12 +939,12 @@ describe('acting through the gate (S18 M2c)', () => {
   });
 
   it('a yes on the card is kept only once the action runs on that page: the page moving on meanwhile keeps nothing (a no is kept)', async () => {
-    let t: Awaited<ReturnType<typeof acting>> | undefined;
+    const held: { t?: Awaited<ReturnType<typeof acting>> } = {};
     const move = () => {
-      t!.at.url = 'https://news.test/other';
-      t!.pages.get('n1')!.events.emit('did-navigate');
+      held.t!.at.url = 'https://news.test/other';
+      held.t!.pages.get('n1')!.events.emit('did-navigate');
     };
-    t = await acting({ onCard: () => move() });
+    const t = (held.t = await acting({ onCard: () => move() }));
     expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
     expect(t.agent.granted('site', 'news.test')).toBeUndefined();
     expect(t.at.input).toEqual([]);
@@ -922,9 +958,41 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(v.agent.granted('site', 'news.test')).toBe('deny');
   });
 
+  // [what the debugger sees, what the agent hears]: nothing is pressed or typed.
+  const deepRows: [string, string, { hit?: unknown; closed?: boolean; unavailable?: boolean }, string][] = [
+    ['click', 'a frame in a closed shadow root under the point', { hit: { ok: false, why: 'covered', cover: { role: 'frame', name: 'Inner ad' } } }, 'Something is covering that element: frame “Inner ad”. Deal with it first, or call snapshot again.'],
+    ['click', 'a file input in a closed shadow root under the point', { hit: { ok: false, why: 'file' } }, 'That opens a file picker: agents never choose files. Ask the user to.'],
+    ['click', 'another node than the last move was over, with no fresh move', { hit: { ok: false, why: 'no-move' } }, 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.'],
+    ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
+    ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
+    ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
+  ];
+  it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
+    const t = await acting({ deep });
+    const args = tool === 'type' ? { ref: 'e2', text: 'secret' } : tool === 'press_key' ? { ref: 'e2', key: 'Space' } : { ref: 'e1' };
+    expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused).toBe(says);
+    expect(t.at.text).toEqual([]);
+    expect((t.at.input as { type: string }[]).filter((e) => e.type !== 'mouseMove')).toEqual([]);
+    // And let go of after.
+    expect(t.at.debugging.includes('Page.setInterceptFileChooserDialog') || Boolean(deep.unavailable)).toBe(true);
+  });
+
+  it('a file picker the page opened while the agent clicked: held, never shown, and the agent hears so', async () => {
+    const t = await acting({ deep: { picker: true } });
+    const out = result(await t.call('click', { tab_id: t.tab, ref: 'e1' }));
+    expect(out.data['held']).toBe('The page opened a file picker: Chord held it (agents never choose files). Ask the user if a file is needed.');
+    expect(t.at.debugging).toContain('Page.setInterceptFileChooserDialog');
+  });
+
+  it('a field the page made a password field while the card was up: select_option and click refuse it at the point', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist, onCard: () => void (twist.field = field({ type: 'password' })) });
+    expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Express' })).refused).toBe('That field is now a password, code or card field: the user fills it. Ask them to.');
+    expect(t.steps).not.toContain('choose');
+  });
+
   it('navigate and back: a pause that comes after the tab was loaded sends nothing', async () => {
-    let t: Awaited<ReturnType<typeof acting>> | undefined;
-    t = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
+    const t: Awaited<ReturnType<typeof acting>> = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
     expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' })).refused).toBe(CONTROL_REFUSALS.paused);
     expect(t.at.loads).toEqual([]);
   });

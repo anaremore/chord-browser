@@ -160,6 +160,8 @@ export const SNAPSHOT_LIB = String.raw`
   const SKIP = new Set(['script', 'style', 'template', 'noscript', 'head', 'link', 'meta', 'option', 'optgroup', 'datalist', 'svg', 'canvas', 'video', 'audio', 'object', 'embed', 'br']);
   // A field's description, for core's sensitiveField: an input's type, a text area's, a select's, or text for any other
   // field (an editor). The snapshot gives it with each field, and an action checks it again before text or a key goes in.
+  // What opens a file picker: a file input, or a label for one (Neon's review of #110). Agents never choose files: no ref.
+  const opensFiles = (el) => (el.localName === 'input' && String(el.type).toLowerCase() === 'file') || (el.localName === 'label' && Boolean(el.control) && String(el.control.type).toLowerCase() === 'file');
   const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
   // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
   const roleNow = (el) => {
@@ -213,7 +215,7 @@ export function snapshotScript(owner: string, token: string): string {
       }
       const acted = ACTED.has(role) || role === 'generic';
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
-      const actable = acted && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
+      const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const node = { depth, role, name: nameOf(el, role) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);

@@ -1406,7 +1406,7 @@ if (!app.requestSingleInstanceLock()) {
          * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
          */
         agentActTimes: async (url: string, runs: number) => {
-          const [{ snapshotPage }, { actOnPage }] = await Promise.all([import('./control/snapshot'), import('./control/act')]);
+          const [{ snapshotPage }, { actOnPage }, { openDeep }] = await Promise.all([import('./control/snapshot'), import('./control/act'), import('./control/deep')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
           if (!contents) return null;
           const read = await snapshotPage(contents, 'timing', 'timing-act');
@@ -1414,13 +1414,25 @@ if (!app.requestSingleInstanceLock()) {
           const key = keys[Math.floor(keys.length / 2)];
           if (key === undefined) return null;
           const times: number[] = [];
+          // Neon's review of #110: the debugger's session for a press or typing (attach, find Chord's world, the hit
+          // test, the closed-root check, let go), on the same element.
+          const deep: number[] = [];
           for (let i = 0; i < runs; i++) {
             const started = performance.now();
             const answer = await actOnPage(contents, 'timing', 'timing-act', key, { op: 'point', highlight: false });
             times.push(performance.now() - started);
-            if (!answer.ok) return { times, failed: answer.why };
+            if (!answer.ok) return { times, deep, failed: answer.why };
+            const opened = performance.now();
+            const session = await openDeep(contents, 'timing', 'timing-act', key);
+            if (!session) return { times, deep, failed: 'no session' };
+            const scroll = (await contents.executeJavaScript('[scrollX, scrollY]')) as [number, number];
+            const hit = await session.hit(answer.x! + scroll[0], answer.y! + scroll[1], false);
+            const open = await session.open();
+            await session.close();
+            deep.push(performance.now() - opened);
+            if (!hit.ok || !open.ok) return { times, deep, failed: `deep: ${JSON.stringify(hit.ok ? open : hit)}` };
           }
-          return { times };
+          return { times, deep };
         },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),

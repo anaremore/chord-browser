@@ -24,6 +24,7 @@
  * so a site that checks for tampered APIs sees Chromium's.
  */
 import { contextBridge, ipcRenderer } from 'electron';
+import { installAgentGuard } from './agent-guard';
 import { holdForAgent } from './agent-hold';
 
 /** The page's globals this touches (the preload's project has no DOM types; this runs in the page's own world). */
@@ -136,9 +137,12 @@ if (protocol === 'https:' || protocol === 'http:') {
   if (agentTab) {
     const held = (kind: 'dialog' | 'file', detail: string) => ipcRenderer.send('page:agentHeld', { kind, detail: String(detail).slice(0, 500) });
     contextBridge.executeInMainWorld({ func: holdForAgent, args: [held] });
-    // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent.
-    const doc = (globalThis as unknown as { document: { addEventListener(type: string, listener: (event: { composedPath(): unknown[]; preventDefault(): void }) => void, capture: boolean): void } }).document;
-    doc.addEventListener(
+    // The guard while an agent's text and keys go in: the window's first listeners (agent-guard.ts).
+    installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
+    // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent. On the window,
+    // the first listener there, so a page's own capture listener can't stop it first (Neon's review of #110).
+    const win = globalThis as unknown as { addEventListener(type: string, listener: (event: { composedPath(): unknown[]; preventDefault(): void }) => void, capture: boolean): void };
+    win.addEventListener(
       'click',
       (event) => {
         const target = event.composedPath()[0] as { tagName?: string; type?: string } | undefined;

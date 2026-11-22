@@ -235,19 +235,22 @@ export class AgentChords {
     for (const id of [...this.unthrottled]) if (!nodeOf(state, id)) this.unthrottled.delete(id);
   }
 
-  /** An agent tab's page was made: a key you press there pauses the agent on it; leaving it never asks (beforeunload). */
+  /** An agent tab's page was made: a key you press or a click of yours there pauses the agent on it; leaving it never asks (beforeunload). */
   wire(contents: WebContents, nodeId: NodeId): void {
     // Made while the agent already works on the tab (its first load, or after it slept): full speed now too.
     if (this.unthrottled.has(nodeId)) contents.setBackgroundThrottling(false);
     // Only your hands: input Chord sends for an agent (control/input.ts) never pauses it or makes a navigation yours.
-    contents.on('before-mouse-event', (_event, mouse) => {
-      if (mouse.type === 'mouseDown' && !isAgentInput(contents)) this.userActed(nodeId);
-    });
-    contents.on('before-input-event', (_event, input) => {
-      if (input.type !== 'keyDown' || isAgentInput(contents)) return;
+    // Your hands: a key, or a button pressed (Neon's review of #110: a click is using the tab as much as a key is).
+    const yours = () => {
       this.userActed(nodeId);
       const chord = this.chordOfTab(nodeId);
       if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
+    };
+    contents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type === 'mouseDown' && !isAgentInput(contents)) yours();
+    });
+    contents.on('before-input-event', (_event, input) => {
+      if (input.type === 'keyDown' && !isAgentInput(contents)) yours();
     });
     contents.on('will-prevent-unload', (event) => event.preventDefault());
   }
