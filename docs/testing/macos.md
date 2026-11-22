@@ -97,3 +97,4 @@ Write `docs/testing/reports/macos-<YYYY-MM-DD>.md`:
 - the by-hand checklist with pass or fail and notes.
 
 Push it on `mac/qa-<YYYY-MM-DD>`. Screenshots are big, so keep them out of git: list them in the report by file name and share them in the chat.
+
