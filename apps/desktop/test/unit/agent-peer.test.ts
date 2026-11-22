@@ -158,13 +158,20 @@ function client(path: string): ChildProcess {
 }
 
 /**
- * The whole lookup's budget, cold, per OS (ms). Measured (2026-11-22): Windows x64 (11 Pro, about 396,000 handles in
- * the system) 104 to 163 ms wall, the helper's own work 57 to 85 ms of it (the table 31 to 50, its scan 2 to 3, the
- * queries 3 to 4, the chain 21 to 28). Before the scan read the table in place (each entry marshalled, twice), it was
- * about 180 ms here and 3.6 s on CI's Windows arm64. Linux: one ss (tens of ms in WSL's Ubuntu). macOS: one lsof of
- * this user's sockets. The budgets leave CI's slower runners room, not the lookup room to grow.
+ * The lookup's budget per OS (ms, wall clock), as the card waits on it. On Windows that's the helper started warm: the
+ * first connection runs window-owner.exe's restrict-pipe (M1b), and every connection's code waits for it before the
+ * card, so the helper's first start (.NET loading) is paid there, not by the lookup. The test does the same: a
+ * `pipe-dacl` run first (its cold start, budgeted apart as `PEER_COLD_MS`), then the lookups.
+ *
+ * Measured (2026-11-22): Windows x64 here (11 Pro, about 396,000 handles in the system) 104 to 163 ms a lookup, the
+ * helper's own work 57 to 85 ms of it (the table 31 to 50, its scan 2 to 3, the queries 3 to 4, the chain 21 to 28).
+ * CI's Windows arm64: a lookup 582 ms warm, the helper's own work 456 ms; its first start about 3 s cold (the first
+ * .NET program on a fresh runner). Before the scan read the table in place (each entry marshalled, twice), a lookup
+ * took 3.6 s there. Linux: one ss (tens of ms in WSL's Ubuntu). macOS: one lsof of this user's sockets.
  */
-const PEER_BUDGET_MS: Partial<Record<NodeJS.Platform, number>> = { win32: 750, linux: 500, darwin: 1500 };
+const PEER_BUDGET_MS: Partial<Record<NodeJS.Platform, number>> = { win32: 1000, linux: 500, darwin: 1500 };
+/** Windows: the helper's first start on the machine, cold (what restrict-pipe pays in M1b). A ceiling, not a target. */
+const PEER_COLD_MS = 6000;
 
 describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
   it('names each connection’s own client process', async () => {
@@ -178,10 +185,17 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
     const b = client(path);
     await expect.poll(() => ends.length, { timeout: 10_000 }).toBe(2);
     const deps = peerDeps(process.platform === 'win32' ? helper : null);
-    // The first lookup is cold (the helper's first start, on Windows), as an agent's first card is.
+    // Windows: the helper's first start, as Chord's first connection pays it (restrict-pipe), measured apart.
+    let cold = 0;
+    if (process.platform === 'win32') {
+      const coldStart = performance.now();
+      await deps.run(helper, ['pipe-dacl', path]);
+      cold = performance.now() - coldStart;
+    }
+    // The lookup, as the card waits on it.
     const started = performance.now();
     const first = await peerOf(ends[0]!, path, a.pid!, new Set(), deps);
-    const cold = performance.now() - started;
+    const lookup = performance.now() - started;
     expect(first.pid).toBe(a.pid);
     // Windows can't tell which instance is whose: the claim decides, and another's claim is refused.
     const warmStart = performance.now();
@@ -198,9 +212,10 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
       expect((await peerOf(ends[1]!, path, a.pid!, new Set(), deps)).pid).toBe(b.pid);
     }
     // Off any call's path (it runs while the card shows), but it delays the card's *Started by*. Budgets per OS, from
-    // what was measured (PEER_BUDGET_MS): the whole lookup, cold, wall clock. The message carries what was seen.
-    const budget = PEER_BUDGET_MS[process.platform] ?? 1000;
-    const seen = `${process.platform}/${process.arch}: cold ${cold.toFixed(0)} ms, warm ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}`;
-    expect(cold, seen).toBeLessThan(budget);
+    // what was measured (PEER_BUDGET_MS); the message carries what was seen.
+    const seen = `${process.platform}/${process.arch}: helper's first start ${cold.toFixed(0)} ms, lookup ${lookup.toFixed(0)} ms, again ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}`;
+    expect(lookup, seen).toBeLessThan(PEER_BUDGET_MS[process.platform] ?? 1000);
+    expect(warm, seen).toBeLessThan(PEER_BUDGET_MS[process.platform] ?? 1000);
+    expect(cold, seen).toBeLessThan(PEER_COLD_MS);
   }, 30_000);
 });
