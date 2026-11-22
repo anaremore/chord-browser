@@ -1,6 +1,6 @@
 {
   // Upstream's own compiler settings (electron-browser-shell tsconfig.base.json),
-  // updated only where TypeScript 6 requires it. Chord's stricter base config
+  // updated only where TypeScript 6 and 7 require it. Chord's stricter base config
   // isn't applied to vendored code.
   "compilerOptions": {
     "lib": ["DOM", "ES2022"],

@@ -10,7 +10,10 @@ import { dirname, join } from 'node:path';
 const here = import.meta.dirname;
 // TypeScript 7's exports map hides bin/tsc, so find it through the package's own `bin` field.
 const tsPackage = createRequire(import.meta.url).resolve('typescript/package.json');
-const tsc = join(dirname(tsPackage), JSON.parse(readFileSync(tsPackage, 'utf8')).bin.tsc);
+const { bin } = JSON.parse(readFileSync(tsPackage, 'utf8'));
+const tscPath = typeof bin === 'string' ? bin : bin?.tsc;
+if (!tscPath) throw new Error(`no tsc in the bin field of ${tsPackage}`);
+const tsc = join(dirname(tsPackage), tscPath);
 rmSync(join(here, 'types'), { recursive: true, force: true });
 execFileSync(
   process.execPath,
