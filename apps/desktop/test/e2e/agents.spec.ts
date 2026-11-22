@@ -132,8 +132,14 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     has(/^- textbox "Card number" \[payment detail: the user fills it\]$/);
     has(/^- textbox \[ref=e\d+\] \[filled\]$/);
     has(/^- combobox "Expires" \[payment detail: the user fills it\]$/);
+    has(/^- textbox "Cell" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Item" \[ref=e\d+\] \[filled\]$/);
+    has(/^- textbox "Title" \[ref=e\d+\] \[filled\]$/);
+    // A button labelled by an editor isn't named by what's typed in it.
+    has(/^- button \[ref=e\d+\]$|^- button "Send" \[ref=e\d+\]$/);
+    expect(lines.filter((l) => /^- textbox "Card number" \[payment detail: the user fills it\]$/.test(l))).toHaveLength(2);
     // What's hidden, what's in a frame, and what's in a field never show.
-    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07']) expect(snap.content).not.toContain(never);
+    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07', '5555', 'typed-in-a-cell', 'typed-in-a-list-item', 'typed-in-a-heading', 'typed-label-source', 'Hidden, any case']) expect(snap.content).not.toContain(never);
     expect(snap.refs).toBe((snap.content.match(/\[ref=e\d+\]/g) ?? []).length);
     // A second snapshot: new refs, counted on.
     const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
@@ -420,7 +426,14 @@ test.beforeAll(async () => {
       '<div contenteditable aria-label="Card number">4242 4242 4242 4242</div>' +
       '<div role=textbox>typed-into-a-role-textbox</div>' +
       '<div aria-hidden="true"><button>Hidden from assistive tech</button></div>' +
-      '<label>Expires <select autocomplete="cc-exp-month"><option>01</option><option selected>07</option></select></label></main>' +
+      '<label>Expires <select autocomplete="cc-exp-month"><option>01</option><option selected>07</option></select></label>' +
+      // Review 2 of #104: editability first, whatever the tag or role.
+      '<div contenteditable role="none" aria-label="Card number">5555 4444 3333 1111</div>' +
+      '<table><tr><td contenteditable aria-label="Cell">typed-in-a-cell</td></tr></table>' +
+      '<ul><li contenteditable aria-label="Item">typed-in-a-list-item</li></ul>' +
+      '<h1 contenteditable aria-label="Title">typed-in-a-heading</h1>' +
+      '<div contenteditable id=ed aria-label="Draft">typed-label-source</div><button aria-labelledby=ed>Send</button>' +
+      '<div aria-hidden="TRUE"><button>Hidden, any case</button></div></main>' +
       '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +

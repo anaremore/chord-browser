@@ -69,7 +69,7 @@ describe('Element refs (S18 M2b): per tab, never reused, good only from the late
 
   it('keeps the latest outline for its later ranges, only while it’s that page’s and its refs are the latest', () => {
     const refs = new ElementRefs();
-    const outline = { pageId: 'p1', url: 'https://x.example/', title: 'X', text: '- link "A" [ref=e1]', refs: 1 };
+    const outline = { pageId: 'p1', retrievedAt: 1, url: 'https://x.example/', title: 'X', text: '- link "A" [ref=e1]', refs: 1 };
     refs.issue('p1', 't', [0]);
     refs.remember(outline);
     expect(refs.outline('p1')).toBe(outline);

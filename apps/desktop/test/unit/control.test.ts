@@ -602,7 +602,7 @@ describe('snapshot, review 1 of #104', () => {
     if (go) events.emit('did-navigate');
     return { url: 'https://news.test/a', title: 'Rows', nodes: many, cut: {} };
   };
-  type Snap = { refs: number; page_id?: string; range: { start: number; end: number; total: number }; content: string };
+  type Snap = { refs: number; page_id?: string; retrieved_at: string; range: { start: number; end: number; total: number }; content: string };
   const snap = (out: { text?: string }) => JSON.parse(out.text!) as Snap;
 
   it('a later range comes from the same outline: no second read, no card, no activity, and the first range’s refs stay good', async () => {
@@ -611,9 +611,12 @@ describe('snapshot, review 1 of #104', () => {
     const ref = scope.refs.refFor('n1');
     const first = snap(await call('snapshot', { tab_id: ref }));
     expect(first.range.end).toBeLessThan(first.range.total);
+    await new Promise((r) => setTimeout(r, 5));
     const next = snap(await call('snapshot', { tab_id: ref, start: first.range.end }));
     expect(next.range.start).toBe(first.range.end);
     expect(next.page_id).toBe(first.page_id);
+    // As of when the snapshot was taken, not when the range was asked for.
+    expect(next.retrieved_at).toBe(first.retrieved_at);
     expect(calls).toHaveLength(1);
     expect(cards).toHaveLength(1);
     expect(activity).toHaveLength(1);

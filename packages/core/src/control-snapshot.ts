@@ -126,6 +126,8 @@ export class ElementRefs {
 /** A snapshot's outline as it was made: what a later range (`start`) is served from, without reading the page again. */
 export interface SnapshotOutline {
   pageId: string;
+  /** When the snapshot was taken: a later range is as of then. */
+  retrievedAt: number;
   url: string;
   title: string;
   text: string;
@@ -160,11 +162,6 @@ const quoted = (text: string) => JSON.stringify(text);
 const STATE = /^(checked|mixed|selected|expanded|collapsed|pressed|disabled|required|empty|filled|readonly)$/;
 
 /**
- * The outline as text (Playwright MCP's indented form): `- role "name" [ref=e3] [checked]`, two spaces a level. `refs`:
- * the refs issued for the read's keys (ElementRefs.issue). A field Chord never lets an agent touch has no ref and
- * says why. Returns the text and how many refs it holds.
- */
-/**
  * The keys that get refs: every keyed node but a field Chord never lets an agent touch (forms' `sensitiveField`). A
  * sensitive field is never given a ref at all, shown or not, so no ref can ever reach it (an agent guessing `e17`).
  */
@@ -172,6 +169,11 @@ export function snapshotKeys(read: SnapshotRead): number[] {
   return read.nodes.flatMap((n) => (n.key === undefined || (n.field && sensitiveField(n.field)) ? [] : [n.key]));
 }
 
+/**
+ * The outline as text (Playwright MCP's indented form): `- role "name" [ref=e3] [checked]`, two spaces a level. `refs`:
+ * the refs issued for the read's keys (ElementRefs.issue). A field Chord never lets an agent touch has no ref and
+ * says why. Returns the text and how many refs it holds.
+ */
 export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>): { text: string; refs: number } {
   const lines: string[] = [];
   let count = 0;

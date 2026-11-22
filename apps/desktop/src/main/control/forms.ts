@@ -82,11 +82,15 @@ export const FORM_LIB = String.raw`
   const visibleField = (el, type) => shown(el) || ((type === 'checkbox' || type === 'radio') && labelsOf(el).some(shown));
   const typeOf = (el) => (el.localName === 'textarea' ? 'textarea' : String(el.type || '').toLowerCase());
   // A label's words: its text, never a field's value inside it (a text area's text is its value), nor an editor's.
+  // An editor's own text is what's typed in it: none (aria-labelledby pointing at an editor, or a button labelled by
+  // one). The walk is bounded in steps too: a label of a million empty spans costs no more than a short one.
   const words = (node) => {
+    if (node.isContentEditable) return '';
     let out = '';
+    let steps = 0;
     const walk = (n) => {
       for (const c of n.childNodes) {
-        if (out.length > 240) return;
+        if (out.length > 240 || ++steps > 2000) return;
         if (c.nodeType === 3) out += c.nodeValue;
         else if (c.nodeType === 1 && !NO_WORDS.has(c.tagName) && !c.isContentEditable && !c.hidden && getComputedStyle(c).display !== 'none') walk(c);
       }

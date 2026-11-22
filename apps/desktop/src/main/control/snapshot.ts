@@ -7,13 +7,16 @@
  * outline as nodes: a role, a name, a depth (only nodes with a role nest), states, and a key on each element an agent
  * can act on. Each keyed element is kept by a WeakRef under the read's token, here in the page's renderer, for M2c's
  * actions to find and check again: the latest snapshot of each owner (an agent's gate: an outside agent, a chat), so
- * one agent's snapshot never takes away another's (SNAPSHOT_OWNERS of them at most).
+ * one agent's snapshot never takes away another's (SNAPSHOT_OWNERS of them at most). An owner that went (an agent
+ * disconnecting, a chat closed) leaves its entry until it's the oldest past that bound or the page goes: harmless, as
+ * its refs live only in its own scope, which went with it, and the entry holds elements only by WeakRef.
  *
  * - **Roles:** the element's own `role`, else its tag's (and an input's type's) implicit role.
  * - **Names:** `aria-labelledby`, `aria-label`, a field's labels (forms' rules), `alt`, `title`, then its own words
- *   (never a field's value inside it), cut to SNAPSHOT_NAME_MAX. A text field of any kind (an input, a text area, a
- *   contenteditable, a `role=textbox`) is named by its labels alone, never its words, which are what's typed in it, and
- *   its inside isn't walked; it's described as a field, so a sensitive one (a card number in a rich editor) gets no key.
+ *   (never a field's value inside it, nor an editor's text), cut to SNAPSHOT_NAME_MAX. A text field of any kind (an
+ *   input, a text area, a `role=textbox`, and any editable element whatever its tag or role: editability is decided
+ *   first) is named by its labels alone, never its words, which are what's typed in it, and its inside isn't walked;
+ *   it's described as a field, so a sensitive one (a card number in a rich editor) gets no ref.
  * - **Left out:** what CSS hides, and `aria-hidden="true"` subtrees, as Playwright leaves them out.
  * - **Acted on (a key):** links, buttons, text fields and areas, contenteditable, checkboxes, radios, selects,
  *   switches, tabs, menu items, options, tree items, `summary`, and anything whose cursor is a pointer with no keyed
@@ -96,7 +99,6 @@ export function snapshotScript(owner: string, token: string): string {
       case 'hr': return 'separator';
       case 'progress': return 'progressbar';
     }
-    if (el.isContentEditable && (!el.parentElement || !el.parentElement.isContentEditable)) return 'textbox';
     return null;
   };
   const roleOf = (el) => {
@@ -180,8 +182,11 @@ export function snapshotScript(owner: string, token: string): string {
       if (child.nodeType !== 1) continue;
       const el = child;
       if (++looked && stop()) { stopped = true; return; }
-      if (SKIP.has(el.localName) || el.getAttribute('aria-hidden') === 'true' || !visible(el)) continue;
-      let role = roleOf(el);
+      if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
+      // Editability first, whatever the tag or role (a td, an li, an h1, role=none): an editor is a typed field, named by
+      // its labels alone, described as a field for sensitiveField, and never walked into (its inside is what's typed).
+      const own = String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
+      let role = el.isContentEditable ? (TYPED.has(own) ? own : 'textbox') : roleOf(el);
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
       if (!role && !keyed && getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer')) role = 'generic';
       if (!role) {

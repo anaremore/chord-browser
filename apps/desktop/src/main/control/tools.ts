@@ -297,8 +297,9 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
  * is: the scope's rules and card, every rule asked again after the card, the load and the read. Its refs are the tab's
  * new ones (ElementRefs): every earlier one is stale from now on, and they're good only on the page (page id) they
  * were taken of. Never in reader view, which hides the page. A later range (`start`) of the same page's latest
- * snapshot comes from the outline it made, without reading the page again: its refs stay good, and its offsets are into
- * that outline. Refs of tabs that closed go with them.
+ * snapshot comes from the outline it made, without reading the page again: its refs stay good, its offsets are into
+ * that outline, and it's as of when that snapshot was taken (`retrieved_at`). It asks no card: one approval covers a
+ * snapshot, all its ranges (the rules on where it may be read are still asked). Refs of tabs that closed go with them.
  */
 async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
   const { scope, browser } = call;
@@ -316,7 +317,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   if (kept && now) {
     const blocked = blockedNow(call, node.id, now, 'That page could not be read.', kept.url);
     if (blocked) return refuse(blocked);
-    return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: kept.url, title: kept.title, outline: kept.text, refs: kept.refs, start, retrievedAt: Date.now(), pageId: kept.pageId, ...(kept.note ? { note: kept.note } : {}) }) };
+    return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: kept.url, title: kept.title, outline: kept.text, refs: kept.refs, start, retrievedAt: kept.retrievedAt, pageId: kept.pageId, ...(kept.note ? { note: kept.note } : {}) }) };
   }
   const title = node.title || safeHost(node.url);
   const refused = await call.card('snapshot', node, `Look over “${title}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
@@ -343,10 +344,11 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
   const outline = snapshotOutline(read, issued);
   const note = snapshotNote(read.cut);
-  refs.remember({ pageId: samePage ?? '', url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
+  const retrievedAt = Date.now();
+  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
-  return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt: Date.now(), ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
+  return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
 }
 
 /* ---------- page_diagnostics (ARCHITECTURE.md §11.3) ---------- */
