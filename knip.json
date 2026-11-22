@@ -4,7 +4,7 @@
     "spikes/**",
     "scripts/dev/**",
     "**/test/fixtures/**",
-    "**/test/unit/fixtures/**",
+    "**/test/*/fixtures/**",
     "packages/chrome-extensions/types/**",
     "packages/chrome-extensions/src/browser-action.ts",
     "apps/player/scripts/test-page.d.mts"
