@@ -484,6 +484,7 @@ The maintainer moved Effects and Your data up, right after the P0 performance pl
 - **Search the text of pages you've read**, kept on your computer.
 - **Counts on tabs** (asked 2026-10-25). **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.2): the Badging API's count on the tab, its tile, a closed folder and the chord switcher, the total on Chord's icon; a site's hidden from the tab's menu. A service worker's count shows on its site's tabs too (built 2026-10-25). Next: a hand check of the Dock and taskbar.
 - **The assistant makes images** (asked 2026-10-25). **Built 2026-10-25** with Codex's own image tool (ARCHITECTURE.md §11.5); Claude can't make images and offers Codex. A real image needs a hand check on the maintainer's plan.
+- **Antigravity as the assistant's app:** no-go for now ([S19](docs/decisions/S19-antigravity-assistant.md)); look again when `agy acp` can drop its built-in tools.
 - **The assistant tidying your tabs.** It conflicts with D8 ("the assistant reads, it doesn't rearrange"), so it waits for you to ask again.
 
 ## Not planned (decided 2026-10-22, updated 2026-10-24)
