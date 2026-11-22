@@ -32,6 +32,28 @@ export interface AgentInputLike {
 const NOT_HELD = new Set(['isKeypad', 'isAutoRepeat', 'leftButtonDown', 'capsLock', 'numLock']);
 const held = (event: AgentInputLike): string[] => (event.modifiers ?? []).filter((m) => !NOT_HELD.has(m)).map((m) => m.toLowerCase());
 
+/** press_key's keys as a page (and `before-input-event`'s `input.key`) names them. */
+const AGENT_DOM_KEYS = new Set(['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', ' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+
+/** A key as `before-input-event` gives it, loosely. */
+export interface AgentKeyLike {
+  key: string;
+  control?: boolean;
+  alt?: boolean;
+  meta?: boolean;
+  shift?: boolean;
+}
+
+/**
+ * Whether a key Chord is sending for an agent, as `before-input-event` sees it, is one of press_key's: such a key goes
+ * to the page as it is, even when it's one of Chord's shortcuts too (plain Escape is *Stop loading*), and Chord's own
+ * handler skips it. Anything else (control/input.ts never sends one) is stopped there, page and menu alike.
+ */
+export function agentKeyAllowed(input: AgentKeyLike): boolean {
+  if (!AGENT_DOM_KEYS.has(input.key) || input.control || input.alt || input.meta) return false;
+  return !input.shift || input.key === 'Tab';
+}
+
 /** Whether Chord may send this event for an agent; anything else is refused before it's sent. */
 export function agentInputAllowed(event: AgentInputLike): boolean {
   const mods = held(event);

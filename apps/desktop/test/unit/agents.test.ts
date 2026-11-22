@@ -27,6 +27,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runBridge } from '../../src/main/agents/bridge';
 import { connectEndpoint, endpointPath, LIVE_MAX, lines, readEndpoint, startEndpoint, UNAUTHENTICATED_MAX } from '../../src/main/agents/endpoint';
 import { privateFolder, relayFolder, relayUserData, userCache } from '../../src/main/agents/relay-folder';
+import { choosePeer } from '../../src/main/agents/peer';
 import type { ConnectAnswer, ConnectingAgent } from '../../src/main/agents/connect';
 import { AgentService, QUEUED_MAX, RESTRICT_TIMED_OUT, restrictWithRetry } from '../../src/main/agents/service';
 import { watchAgents } from '../../src/main/agents/switch';
@@ -77,7 +78,7 @@ async function chord(userData: string, ask: Ask = answering('once'), waitMs = 20
 }
 
 /** An MCP client on a bridge in this process: as an agent would talk to `chord mcp`. */
-function client(userData: string, closed?: boolean) {
+function client(userData: string, closed?: boolean, cwd = userData) {
   const input = new PassThrough();
   const output = new PassThrough();
   const waiting = new Map<number, (m: Record<string, unknown>) => void>();
@@ -88,7 +89,7 @@ function client(userData: string, closed?: boolean) {
     if (m.method) notifications.push(m.method);
     if (typeof m.id === 'number') waiting.get(m.id)?.(m);
   });
-  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd: userData, closed });
+  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd, closed });
   let id = 0;
   const request = (method: string, params: unknown = {}) =>
     new Promise<{ result: Record<string, unknown> }>((done) => {
@@ -556,9 +557,14 @@ describe('Zero cost, and off in packaged builds', () => {
     expect(await held!.parent!).toEqual([claude]);
   });
 
-  it('a bridge PID is claimed first come, first served: a later connection claiming it is no claim (M2a)', async () => {
+  // M2a, review 2 of #103: a bridge PID claimed by two live connections is contested. Neither gets it by claim, both
+  // can't tell (no fallback), everyone else counts it taken; it clears as they close.
+  it('a contested bridge PID: whoever claimed it first and second both can’t tell; it clears as they close', async () => {
     const ud = profile();
+    // The pipe's clients as Windows' helper would list them: the real relay (this process) and the impostor.
+    const IMPOSTOR = 999_999;
     const asked: { claimed: number; held: number[] }[] = [];
+    let delay: Promise<void> | null = null;
     const service = new AgentService({
       userData: ud,
       browser,
@@ -568,27 +574,61 @@ describe('Zero cost, and off in packaged builds', () => {
       actions: true,
       peer: async (_socket, _endpoint, claimed, held) => {
         asked.push({ claimed, held: [...held] });
-        return { pid: null };
+        await delay;
+        return { pid: choosePeer([process.pid, IMPOSTOR], claimed, held) };
       },
     });
     await service.start();
     cleanup.push(() => service.stop());
-    // An idle connection (a hello, then nothing) claims this process's PID first; the bridge here claims it too.
-    const idle = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: ud, toolsVersion: agentToolsVersion() });
+    const heldBy = (cwd: string) => [...service.connections].find((h) => h.hello.cwd === cwd)!;
+    // X, with the token, hellos first as the relay this process is; then the relay's own hello (R) claims it too.
+    const x = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: '/impostor', toolsVersion: agentToolsVersion() });
     await expect.poll(() => service.connections.size).toBe(1);
-    const second = client(ud);
-    await second.initialize();
-    expect((await second.call('list_tabs')).error).toBe(false);
-    expect(asked).toEqual([{ claimed: -1, held: [process.pid] }]);
-    second.close();
-    // Once the idle one goes, its claim goes with it: the next to claim the PID holds it.
-    idle!.destroy();
+    const r = client(ud);
+    await r.initialize();
+    expect((await r.call('list_tabs')).error).toBe(false);
+    // X calls too: neither is looked up, and neither gets anyone.
+    x!.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_tabs', arguments: {} } })}\n`);
+    await expect.poll(() => heldBy('/impostor').parent).not.toBeNull();
+    expect(await heldBy('/impostor').parent).toEqual([]);
+    expect(await heldBy(ud).parent).toEqual([]);
+    expect(heldBy('/impostor').peerPid).toBeNull();
+    expect(heldBy(ud).peerPid).toBeNull();
+    expect(asked).toEqual([]);
+    // X goes: the contest clears, but a later claimant of the same PID contests it with R again.
+    x!.destroy();
+    await expect.poll(() => service.connections.size).toBe(1);
+    const again = client(ud, false, '/again');
+    await again.initialize();
+    expect((await again.call('list_tabs')).error).toBe(false);
+    expect(await heldBy('/again').parent).toEqual([]);
+    expect(asked).toEqual([]);
+    r.close();
+    again.close();
     await expect.poll(() => service.connections.size).toBe(0);
-    const third = client(ud);
-    await third.initialize();
-    expect((await third.call('list_tabs')).error).toBe(false);
-    expect(asked[1]).toEqual({ claimed: process.pid, held: [] });
-  }, 20_000);
+    // Alone again, a claim holds: looked up with its claim, nothing taken.
+    const alone = client(ud, false, '/alone');
+    await alone.initialize();
+    expect((await alone.call('list_tabs')).error).toBe(false);
+    expect(asked).toEqual([{ claimed: process.pid, held: [] }]);
+    expect(heldBy('/alone').peerPid).toBe(process.pid);
+    alone.close();
+    await expect.poll(() => service.connections.size).toBe(0);
+    // Contested while it looked (another hello arrived meanwhile): what it found isn't used.
+    let release!: () => void;
+    delay = new Promise((done) => (release = done));
+    const looking = client(ud, false, '/looking');
+    await looking.initialize();
+    const calling = looking.call('list_tabs');
+    await expect.poll(() => asked.length).toBe(2);
+    const late = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: '/late', toolsVersion: agentToolsVersion() });
+    await expect.poll(() => service.connections.size).toBe(2);
+    release();
+    expect((await calling).error).toBe(false);
+    expect(await heldBy('/looking').parent).toEqual([]);
+    expect(heldBy('/looking').peerPid).toBeNull();
+    late!.destroy();
+  }, 30_000);
 
   // [argv after the executable (and, in development, the app's folder), is it chord mcp?]
   const argv: [string[], boolean][] = [

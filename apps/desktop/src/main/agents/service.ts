@@ -55,7 +55,7 @@ export interface HeldConnection {
   parent: Promise<ProcessInfo[]> | null;
   /** The process at its other end, as the OS says (peer.ts), once looked up; null if it couldn't say. */
   peerPid?: number | null;
-  /** Its claim on its hello's bridge PID: it holds that PID only if this is the claim on it (AgentService.claims). */
+  /** Its claim on its hello's bridge PID (AgentService.claims): it holds that PID only while no other live connection claims it too. */
   claim?: object;
   /** The sign-ins it was let in with (the window you answered in, or those of its Always allow). */
   profileId: ProfileId | null;
@@ -75,10 +75,13 @@ export class AgentService {
   private starting: Promise<void> | null = null;
   readonly connections = new Set<HeldConnection>();
   /**
-   * Bridge PIDs claimed by live connections, each by the first to claim it, from its hello on (M2a): another connection
-   * claiming it can't be taken for that process, even while the first is idle and hasn't been looked up yet.
+   * Bridge PIDs claimed by live connections, from each one's hello on (M2a), so even an idle relay that hasn't been
+   * looked up yet holds its own. A PID claimed by more than one live connection is **contested**: no connection gets it
+   * by claim, those that claimed it can't tell who's calling (no fallback for them either), and every other connection
+   * counts it as taken. It clears as they close. (Review 2 of #103: a process with the token could otherwise hello as a
+   * new relay before the relay's own hello arrived.)
    */
-  private readonly claims = new Map<number, object>();
+  private readonly claims = new Map<number, Set<object>>();
   /** The agents' chords: made with the first connection, so with no agent there are none and nothing runs for them. */
   chords: AgentChords | null = null;
   /** The DACL helper's run, once per endpoint (Windows). */
@@ -111,9 +114,11 @@ export class AgentService {
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
           let gone = false;
-          // Its claim to be that bridge process, first come, first served (whoStarted).
+          // Its claim to be that bridge process (whoStarted): contested if another live connection claims it too.
           const claim = {};
-          if (!this.claims.has(hello.bridgePid)) this.claims.set(hello.bridgePid, claim);
+          const claimants = this.claims.get(hello.bridgePid) ?? new Set<object>();
+          claimants.add(claim);
+          this.claims.set(hello.bridgePid, claimants);
           // Nothing of it is handled until the pipe's restriction (Windows' DACL, started by the first connection) has
           // finished, however it ended: its messages wait meanwhile, as they do for the connection's code. A failed one
           // (logged, and tried twice) doesn't hold connections back: the token still gates every one.
@@ -176,7 +181,9 @@ export class AgentService {
             },
             closed: () => {
               gone = true;
-              if (this.claims.get(hello.bridgePid) === claim) this.claims.delete(hello.bridgePid);
+              const claimants = this.claims.get(hello.bridgePid);
+              claimants?.delete(claim);
+              if (claimants?.size === 0) this.claims.delete(hello.bridgePid);
               if (!held) return;
               held.connection.closed();
               this.connections.delete(held);
@@ -221,17 +228,26 @@ export class AgentService {
   private async whoStarted(held: HeldConnection): Promise<ProcessInfo[]> {
     // A packaged build before AGENT_ACTIONS_RELEASED: M1's lookup, from the bridge's word.
     if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid));
-    // Taken by other live connections: the peers they were given, and the bridge PIDs they claimed first.
+    // Its claim, contested (another live connection claims that PID too): it can't tell, before the lookup or after.
+    const contested = () => (this.claims.get(held.hello.bridgePid)?.size ?? 0) > 1;
+    const unknown = () => {
+      held.peerPid = null;
+      return [];
+    };
+    if (contested()) return unknown();
+    // Taken by other live connections: the peers they were given, and every PID claimed by anyone but this one alone.
     const others = new Set<number>();
     for (const other of this.connections) if (other !== held && typeof other.peerPid === 'number') others.add(other.peerPid);
-    for (const [pid, claim] of this.claims) if (claim !== held.claim) others.add(pid);
-    // A PID another connection claimed first is no claim at all (-1 is never a process).
-    const claimed = held.claim && this.claims.get(held.hello.bridgePid) === held.claim ? held.hello.bridgePid : -1;
+    for (const [pid, claimants] of this.claims) if (!(claimants.size === 1 && held.claim && claimants.has(held.claim))) others.add(pid);
+    // Not its claim (-1 is never a process): only a connection that holds its claim alone claims anything.
+    const claimed = held.claim && this.claims.get(held.hello.bridgePid)?.has(held.claim) ? held.hello.bridgePid : -1;
     const peer = this.deps.peer ?? (async (socket: Socket, endpoint: string, claimed: number, taken: ReadonlySet<number>) => {
       const { peerOf, peerDeps } = await import('./peer');
       return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper));
     });
     const { pid, chain: given } = await peer(held.socket, this.endpoint?.path ?? '', claimed, others);
+    // Contested while it looked (the real relay's hello arrived meanwhile): what it found can't be trusted.
+    if (contested()) return unknown();
     held.peerPid = pid;
     if (pid === null) return [];
     const { ancestry, sameProgram } = await import('./parent');

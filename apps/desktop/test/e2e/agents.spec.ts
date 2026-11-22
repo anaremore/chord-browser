@@ -456,6 +456,9 @@ test('input Chord sends an agent’s tab is trusted by the page, reaches a parke
     expect(text).toContain('keydown-Enter:true');
     expect(text).toContain('beforeinput-insertText:true');
     expect(text).not.toContain(':false');
+    // Escape, though plain Escape is one of Chord's shortcuts too (Stop loading): an agent's goes to the page as it is.
+    expect(await send([{ type: 'keyDown', keyCode: 'Escape' }, { type: 'keyUp', keyCode: 'Escape' }])).toMatchObject({ yours: 0, after: 0, refused: false });
+    await expect.poll(log).toContain('keydown-Escape:true');
     // Nothing of Chord's ran for it: no pause, and no bar but the working one, now gone.
     await expect(shell.getByRole('status').filter({ hasText: /Paused/ })).toHaveCount(0);
 

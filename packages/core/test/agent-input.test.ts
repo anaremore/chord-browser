@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_KEYS, agentInputAllowed, type AgentInputLike } from '../src/agent-input';
+import { AGENT_KEYS, agentInputAllowed, agentKeyAllowed, type AgentInputLike, type AgentKeyLike } from '../src/agent-input';
 
 describe('What input Chord ever sends a page for an agent (S18 M2a)', () => {
   // [event, allowed]
@@ -42,4 +42,29 @@ describe('What input Chord ever sends a page for an agent (S18 M2a)', () => {
     [{ type: 'gestureScrollBegin' }, false],
   ];
   it.each(cases)('%j: %s', (event, allowed) => expect(agentInputAllowed(event)).toBe(allowed));
+});
+
+describe('An agent’s key as before-input-event sees it: to the page as it is, or stopped (S18 M2a, review 2)', () => {
+  // [input, goes to the page]
+  const keys: [AgentKeyLike, boolean][] = [
+    // press_key's keys, even when they're Chord's shortcuts too (plain Escape is Stop loading) or rebound by you.
+    [{ key: 'Escape' }, true],
+    [{ key: 'Enter' }, true],
+    [{ key: ' ' }, true],
+    [{ key: 'Home' }, true],
+    [{ key: 'PageDown' }, true],
+    [{ key: 'ArrowLeft' }, true],
+    [{ key: 'Tab', shift: true }, true],
+    // Anything else: stopped, page and menu alike.
+    [{ key: 'w', control: true }, false],
+    [{ key: 'w', meta: true }, false],
+    [{ key: 'Escape', control: true }, false],
+    [{ key: 'ArrowLeft', alt: true }, false],
+    [{ key: 'Home', shift: true }, false],
+    [{ key: 'F12' }, false],
+    [{ key: 'I', control: true, shift: true }, false],
+    [{ key: 'a' }, false],
+    [{ key: '#' }, false],
+  ];
+  it.each(keys)('%j: %s', (input, allowed) => expect(agentKeyAllowed(input)).toBe(allowed));
 });
