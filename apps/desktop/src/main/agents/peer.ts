@@ -58,6 +58,11 @@ export function socketFd(socket: Socket): number | null {
 /** pipe-clients' answer: the clients, each one's chain (itself first: parent.ts's ProcessInfo), and its own timings. */
 export interface PipeClients {
   clients: number[];
+  /**
+   * Every one of the server's files was looked at and answered (`stuck` and `truncated` both 0): no client can be
+   * missing. Otherwise only a connection's own claim names its peer (choosePeer).
+   */
+  complete: boolean;
   chains: Map<number, ProcessInfo[]>;
   /** How long each step took in the helper (ms), and what it looked at: for the units' budgets. */
   timings: Record<string, number>;
@@ -68,7 +73,7 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : nu
 
 /** pipe-clients' line of JSON, kept to what it can be; null when it isn't that. */
 export function parsePipeClients(stdout: string): PipeClients | null {
-  let raw: { clients?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; handles?: unknown; ms?: unknown };
+  let raw: { clients?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; truncated?: unknown; handles?: unknown; ms?: unknown };
   try {
     raw = JSON.parse(stdout.trim()) as typeof raw;
   } catch {
@@ -90,19 +95,22 @@ export function parsePipeClients(stdout: string): PipeClients | null {
     if (infos[0]?.pid === pid) chains.set(pid, infos);
   }
   const timings: Record<string, number> = {};
-  for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
-  return { clients, chains, timings };
+  for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, truncated: raw.truncated, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
+  // Complete only when the helper says both are 0: a missing or other value is a list that may miss a client.
+  return { clients, complete: raw.stuck === 0 && raw.truncated === 0, chains, timings };
 }
 
 /**
  * Which of the pipe's clients is this connection's: the bridge PID its hello claims, when it's a client and no other
- * live connection holds it; else the only client no other connection holds; else none. `held`: the peers other live
- * connections were given.
+ * live connection holds it; else, when the list is `complete`, the only client no other connection holds; else none.
+ * A list that may miss a client (a query left behind, or files past the helper's cap) never gives the fallback: the
+ * only free client seen might be another connection's whose hello hasn't come yet (review 3 of #103). `held`: PIDs
+ * other live connections hold or claimed.
  */
-export function choosePeer(clients: readonly number[], claimed: number, held: ReadonlySet<number>): number | null {
+export function choosePeer(clients: readonly number[], claimed: number, held: ReadonlySet<number>, complete = true): number | null {
   const free = clients.filter((pid) => !held.has(pid));
   if (free.includes(claimed)) return claimed;
-  return free.length === 1 ? free[0]! : null;
+  return complete && free.length === 1 ? free[0]! : null;
 }
 
 /* ---------- Linux ---------- */
@@ -199,7 +207,7 @@ export async function peerOf(socket: Socket, pipe: string, claimed: number, held
       if (!deps.helper) return { pid: null };
       const answer = parsePipeClients(await deps.run(deps.helper, ['pipe-clients', pipe, String(deps.self)]));
       if (!answer) return { pid: null };
-      const pid = choosePeer(answer.clients, claimed, held);
+      const pid = choosePeer(answer.clients, claimed, held, answer.complete);
       const chain = pid === null ? undefined : answer.chains.get(pid);
       return { pid, ...(chain ? { chain } : {}), timings: answer.timings };
     }

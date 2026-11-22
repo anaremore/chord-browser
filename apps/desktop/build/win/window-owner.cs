@@ -31,7 +31,9 @@
 //     hundreds of thousands of entries), only its files, each copied here (DuplicateHandle:
 //     the same user's process) and kept if it's the server end of this pipe. A query on a
 //     file can block when the file has I/O pending, so they all run at once, each on a
-//     thread of its own, and those not done within QUERIES_MS are left behind.
+//     thread of its own, and those not done within QUERIES_MS are left behind ("stuck"); the
+//     server's files past FILES_MAX aren't looked at ("truncated"). Either means a client may
+//     be missing from the list.
 //
 // Exit codes: 0 done, 2 bad arguments, 3 a window isn't the process's, 4 the call failed,
 // 5 the pipe (for pipe-clients, the server's process) couldn't be opened.
@@ -375,7 +377,7 @@ static class WindowOwner
         IntPtr table = HandleTable(out count);
         tTable = clock.ElapsedMilliseconds;
         var queries = new List<Query>();
-        int stuck = 0;
+        int stuck = 0, truncated = 0;
         try
         {
             if (table == IntPtr.Zero) return 4;
@@ -396,10 +398,17 @@ static class WindowOwner
                 long handle = Marshal.ReadIntPtr(at, 2 * p).ToInt64();
                 int type = (ushort)Marshal.ReadInt16(at, 3 * p + 6);
                 if (pid == self && (ulong)handle == ownValue) fileType = type;
-                else if (pid == server && candidates.Count < FILES_MAX) candidates.Add(new KeyValuePair<long, int>(handle, type));
+                else if (pid == server) candidates.Add(new KeyValuePair<long, int>(handle, type));
             }
             tScan = clock.ElapsedMilliseconds;
             if (fileType < 0) return 4;
+            // Only the server's files, then the cap: one past it is counted as truncated, never dropped silently.
+            candidates = candidates.FindAll(c => c.Value == fileType);
+            if (candidates.Count > FILES_MAX)
+            {
+                truncated = candidates.Count - FILES_MAX;
+                candidates.RemoveRange(FILES_MAX, truncated);
+            }
             string leaf = name.Substring(@"\\.\pipe".Length); // \chord-agent-…, as a handle to it names it
             // Each of the server's files is queried on a thread of its own, all at once: one with I/O pending can block
             // (GetFileType on a synchronous handle), and is left behind when time's up, with its copy still open
@@ -439,7 +448,8 @@ static class WindowOwner
             var chains = new List<string>();
             foreach (uint c in clients) chains.Add(Json(c.ToString()) + ":" + Chain(c, processes));
             tChains = clock.ElapsedMilliseconds;
-            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck
+            // stuck and truncated say the list may miss a client: then Chord names a peer only by its own claim.
+            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck + ",\"truncated\":" + truncated
                 + ",\"handles\":" + count + ",\"ms\":{\"table\":" + tTable + ",\"scan\":" + (tScan - tTable) + ",\"queries\":" + (tQueries - tScan) + ",\"chains\":" + (tChains - tQueries) + ",\"total\":" + tChains + "}}");
             return 0;
         }

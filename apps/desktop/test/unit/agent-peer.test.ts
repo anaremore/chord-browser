@@ -23,15 +23,20 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     const claude = { pid: 12, name: 'chord.exe', path: 'C:\\Chord\\chord.exe', cwd: null, ppid: 7 };
     const parent = { pid: 7, name: 'claude.exe', path: null, cwd: null, ppid: 3 };
     const answer = parsePipeClients(
-      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
+      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, truncated: 0, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
     );
     expect(answer!.clients).toEqual([12, 34]);
+    // A query was left behind: a client may be missing.
+    expect(answer!.complete).toBe(false);
+    expect(parsePipeClients('{"clients":[],"stuck":0,"truncated":0}')!.complete).toBe(true);
+    expect(parsePipeClients('{"clients":[],"stuck":0,"truncated":2}')!.complete).toBe(false);
     // A chain stops at an entry that isn't one; one that doesn't start with its client isn't used.
     expect(answer!.chains.get(12)).toEqual([claude, parent]);
     expect(answer!.chains.has(34)).toBe(false);
-    expect(answer!.timings).toEqual({ files: 24, stuck: 1, handles: 9, table: 31, total: 57 });
+    expect(answer!.timings).toEqual({ files: 24, stuck: 1, truncated: 0, handles: 9, table: 31, total: 57 });
     for (const bad of ['', '12 34', '{}', '{"clients":5}', 'null']) expect(parsePipeClients(bad), bad).toBeNull();
-    expect(parsePipeClients('{"clients":[]}')).toEqual({ clients: [], chains: new Map(), timings: {} });
+    // Not said to be complete: it isn't.
+    expect(parsePipeClients('{"clients":[]}')).toEqual({ clients: [], complete: false, chains: new Map(), timings: {} });
   });
 
   // [clients, the hello's bridge PID, other connections' peers, the peer]
@@ -53,6 +58,18 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     [[10], -1, [10], null],
   ];
   it.each(cases)('clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held))).toBe(peer));
+
+  // A list that may miss a client (stuck or truncated): a verified claim still names the peer, the fallback never does.
+  // R connected but hasn't said hello; X claims an unused PID and is missing from the list: the list is [R], and X must
+  // not get R. [clients, claimed, held, the peer]
+  const incomplete: [number[], number, number[], number | null][] = [
+    [[10], 10, [], 10],
+    [[10, 20], 20, [10], 20],
+    [[10], 99, [], null],
+    [[10, 20], -1, [10], null],
+    [[10, 20], 99, [10], null],
+  ];
+  it.each(incomplete)('an incomplete list: clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held), false)).toBe(peer));
 });
 
 describe('Linux: ss’s Unix sockets', () => {
@@ -168,11 +185,12 @@ function client(path: string): ChildProcess {
  * CI's Windows arm64, over two runs: a lookup 582, 606 and 1,271 ms (the helper's own work 456 ms in one, 286 ms of it
  * its queries waiting out the 250 ms deadline for one stuck on a file with I/O pending, never one of the pipe's: its
  * server ends never block); its first start 3.0 and 3.7 s cold (the first .NET program on a fresh runner). That runner
- * is noisy, and 600 to 1,300 ms while the card shows is acceptable: its budget is about 1.5 times the worst seen. Before
+ * is noisy, and 600 to 1,300 ms while the card shows is acceptable: its budget is about 1.5 times the worst seen. Windows
+ * x64's is 400 ms, about 2.5 times the worst seen here (163 ms). Before
  * the scan read the table in place (each entry marshalled, twice), a lookup took 3.6 s there. Linux: one ss (tens of
  * ms in WSL's Ubuntu). macOS: one lsof of this user's sockets.
  */
-const PEER_BUDGET_MS: Partial<Record<string, number>> = { win32: 1000, 'win32/arm64': 1900, linux: 500, darwin: 1500 };
+const PEER_BUDGET_MS: Partial<Record<string, number>> = { win32: 400, 'win32/arm64': 1900, linux: 500, darwin: 1500 };
 /** Windows: the helper's first start on the machine, cold (what restrict-pipe pays in M1b). A ceiling, not a target. */
 const PEER_COLD_MS = 6000;
 
@@ -208,7 +226,10 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
       // The chain comes with it, from the same process: the client, then who started it (this test).
       expect(first.chain?.map((p) => p.pid).slice(0, 2)).toEqual([a.pid, process.pid]);
       expect(first.chain?.[0]?.path?.toLowerCase()).toBe(process.execPath.toLowerCase());
-      expect((await peerOf(ends[1]!, path, a.pid!, new Set([a.pid!]), deps)).pid).toBe(b.pid);
+      // The only free client, by a claim that's taken: given only when the helper looked at every file and each answered.
+      const fallback = await peerOf(ends[1]!, path, a.pid!, new Set([a.pid!]), deps);
+      const complete = fallback.timings?.['stuck'] === 0 && fallback.timings['truncated'] === 0;
+      expect(fallback.pid, JSON.stringify(fallback.timings)).toBe(complete ? b.pid : null);
       expect((await peerOf(ends[1]!, path, 4, new Set(), deps)).pid).toBeNull();
     } else {
       // Linux and macOS know: the claim doesn't matter.
