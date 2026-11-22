@@ -252,6 +252,33 @@ describe('Always allow', () => {
     ];
     for (const [platform, what, first, next, named] of table) expect(startedByOf(next ? [first, next] : [first], platform)?.name, `${platform}: ${what}`).toBe(named);
     expect(startedByOf([])).toBeNull();
+
+    // The extension's own bin (VS Code forks ship a language server there), and on macOS the extension host's helper
+    // app between it and Antigravity. [platform, what, the chain from the bridge's parent up, who started it]
+    const MAC = '/Applications/Antigravity.app/Contents';
+    const macApp = at('Antigravity', `${MAC}/MacOS/Antigravity`);
+    const macHost = at('Antigravity Helper (Plugin)', `${MAC}/Frameworks/Antigravity Helper (Plugin).app/Contents/MacOS/Antigravity Helper (Plugin)`);
+    const macServer = at('language_server_macos_arm', `${MAC}/Resources/app/extensions/antigravity/bin/language_server_macos_arm`);
+    const chains: [NodeJS.Platform, string, ProcessInfo[], string][] = [
+      ['linux', 'its language server in the extension’s bin', [at('language_server_linux_x64', '/opt/Antigravity/resources/app/extensions/antigravity/bin/language_server_linux_x64'), app], 'antigravity'],
+      [
+        'win32',
+        'its language server in the extension’s bin',
+        [
+          win('language_server_windows_x64.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\resources\\app\\extensions\\antigravity\\bin\\language_server_windows_x64.exe'),
+          win('Antigravity.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe'),
+        ],
+        'Antigravity.exe',
+      ],
+      ['darwin', 'past the extension host’s helper app, to Antigravity', [macServer, macHost, macApp], 'Antigravity'],
+      // Never passed:
+      ['linux', 'another extension’s bin', [at('language_server_x', '/opt/Antigravity/resources/app/extensions/other/bin/language_server_x'), app], 'language_server_x'],
+      ['darwin', 'a helper app of another bundle', [at('language_server_x', '/Applications/Evil.app/Contents/Resources/language_server_x'), at('Antigravity Helper', '/Applications/Evil.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper'), macApp], 'language_server_x'],
+      ['darwin', 'Antigravity’s helper app, then not its app', [macServer, macHost, at('claude', '/Users/me/.local/bin/claude')], 'language_server_macos_arm'],
+      ['darwin', 'Antigravity’s helper app with nothing above it', [macServer, macHost], 'language_server_macos_arm'],
+      ['darwin', 'a helper app named otherwise', [macServer, at('Code Helper', `${MAC}/Frameworks/Code Helper.app/Contents/MacOS/Code Helper`), macApp], 'language_server_macos_arm'],
+    ];
+    for (const [platform, what, chain, named] of chains) expect(startedByOf(chain, platform)?.name, `${platform}: ${what}`).toBe(named);
     // Through the card, with this OS's layout: Antigravity is named, and kept by its app.
     const here = table.find(([platform, what]) => platform === process.platform && what.startsWith('Antigravity:')) ?? table[0]!;
     const [, , hereHelper, hereApp] = here;

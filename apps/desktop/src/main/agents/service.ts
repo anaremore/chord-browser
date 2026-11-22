@@ -279,7 +279,8 @@ export function restrictPipe(helper: string, path: string): Promise<number> {
       if (!error) return resolve(0);
       const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
       // Killed at the timeout: RESTRICT_TIMED_OUT (never tried again). Not started (missing, blocked): -1, with the error's reason.
-      if ((error as { killed?: boolean }).killed) return resolve(RESTRICT_TIMED_OUT);
+      // Killed by our timer, that is: maxBuffer kills it too, with a code of its own (then it's an ordinary failure).
+      if ((error as { killed?: boolean }).killed && code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return resolve(RESTRICT_TIMED_OUT);
       if (typeof code !== 'number') lastRestrictError = error.message;
       resolve(typeof code === 'number' ? code : -1);
     });

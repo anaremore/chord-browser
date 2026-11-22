@@ -61,39 +61,58 @@ const LOOKUP_MS = 5000;
 /** The longest folder the card shows; longer ones lose their middle. */
 const FOLDER_MAX = 120;
 
-/**
- * Antigravity's app and the helper it runs its tools from, by the layout each OS installs them in: the app as
- * `<dir>/Antigravity.exe` (Windows), `<dir>/antigravity` (Linux) or `…/Antigravity.app/Contents/MacOS/<it>` (macOS),
- * and its helper in `<dir>/resources/bin/` (or the bundle's `Contents/Resources/`). Paths are compared as the OS
- * does: case aside on Windows and macOS, never on Linux; any `..` in either and it's no match.
- */
-function antigravityHelper(helper: string, app: string, platform: NodeJS.Platform): boolean {
-  const norm = (path: string) => {
-    const slashes = platform === 'win32' ? path.replace(/\\/g, '/') : path;
-    return platform === 'win32' || platform === 'darwin' ? slashes.toLowerCase() : slashes;
-  };
-  const h = norm(helper);
-  const a = norm(app);
-  if (/(^|\/)\.\.(\/|$)/.test(h) || /(^|\/)\.\.(\/|$)/.test(a)) return false;
-  if (platform === 'darwin') {
-    const bundle = /^(\/.+\/antigravity\.app)\/contents\/macos\/[^/]+$/.exec(a);
-    return Boolean(bundle && h.startsWith(`${bundle[1]}/contents/resources/`));
-  }
-  const app_ = platform === 'win32' ? /^(.+)\/antigravity\.exe$/.exec(a) : /^(\/.+)\/antigravity$/.exec(a);
-  return Boolean(app_ && h.startsWith(`${app_[1]}/resources/bin/`));
+/** A path as the OS compares it: case aside on Windows and macOS, never on Linux; null with any `..` in it. */
+function comparable(path: string, platform: NodeJS.Platform): string | null {
+  const slashes = platform === 'win32' ? path.replace(/\\/g, '/') : path;
+  const norm = platform === 'win32' || platform === 'darwin' ? slashes.toLowerCase() : slashes;
+  return /(^|\/)\.\.(\/|$)/.test(norm) ? null : norm;
+}
+
+/** The Antigravity app's install root, if `path` is its main executable: `<dir>` on Windows and Linux, the `.app` bundle on macOS. */
+function antigravityApp(path: string, platform: NodeJS.Platform): string | null {
+  const p = comparable(path, platform);
+  if (!p) return null;
+  const root = platform === 'darwin' ? /^(\/.+\/antigravity\.app)\/contents\/macos\/[^/]+$/.exec(p) : platform === 'win32' ? /^(.+)\/antigravity\.exe$/.exec(p) : /^(\/.+)\/antigravity$/.exec(p);
+  return root?.[1] ?? null;
+}
+
+/** macOS: the bundle a helper app of Antigravity's runs from (`Contents/Frameworks/Antigravity Helper*.app`), its extension host. */
+function antigravityHelperApp(path: string): string | null {
+  const p = comparable(path, 'darwin');
+  return (p && /^(\/.+\/antigravity\.app)\/contents\/frameworks\/antigravity helper[^/]*\.app\/contents\/macos\/[^/]+$/.exec(p)?.[1]) ?? null;
 }
 
 /**
- * The program that started it, as the card names it and Always allow keeps it: the bridge's parent; or, when that
- * is Antigravity's `language_server_*` helper and the next ancestor is the Antigravity app itself (by name and
- * layout), that app. Any other process that calls itself so (a child of Claude Code or Codex, say) is named as
- * itself, and can't borrow an agent's Always allow. The parent stays a hint, never an identity (S18 §3).
+ * Whether a helper lies where Antigravity ships its language server, under `root`: `resources/bin/` or, as VS Code
+ * forks ship an extension's, `resources/app/extensions/antigravity/bin/` (Windows, Linux); the bundle's
+ * `Contents/Resources/` (macOS).
+ */
+function inAntigravity(helper: string, root: string, platform: NodeJS.Platform): boolean {
+  const h = comparable(helper, platform);
+  if (!h) return false;
+  if (platform === 'darwin') return h.startsWith(`${root}/contents/resources/`);
+  return h.startsWith(`${root}/resources/bin/`) || h.startsWith(`${root}/resources/app/extensions/antigravity/bin/`);
+}
+
+/**
+ * The program that started it, as the card names it and Always allow keeps it: the bridge's parent; or, when that is
+ * Antigravity's `language_server_*` helper, the Antigravity app itself: the next ancestor, if it's the app (by name
+ * and each OS's layout), or on macOS the one after a helper app inside the same bundle (its extension host). Any
+ * other process that calls itself so (a child of Claude Code or Codex, say) is named as itself, and can't borrow an
+ * agent's Always allow. The layouts are what VS Code forks ship, not yet checked against a real Antigravity; the
+ * parent stays a hint, never an identity (S18 §3).
  */
 export function startedByOf(chain: readonly ProcessInfo[], platform: NodeJS.Platform = process.platform): ProcessInfo | null {
-  const [first, next] = chain;
+  const [first, next, third] = chain;
   if (!first) return null;
-  const helper = /^language_server/i.test(first.name ?? '') && first.path && next?.path && antigravityHelper(first.path, next.path, platform);
-  return helper ? next! : first;
+  if (!/^language_server/i.test(first.name ?? '') || !first.path || !next?.path) return first;
+  const app = antigravityApp(next.path, platform);
+  if (app && inAntigravity(first.path, app, platform)) return next;
+  if (platform === 'darwin' && third?.path) {
+    const host = antigravityHelperApp(next.path);
+    if (host && antigravityApp(third.path, 'darwin') === host && inAntigravity(first.path, host, 'darwin')) return third;
+  }
+  return first;
 }
 
 const firstOf = (parent: Promise<ProcessInfo[]>): Promise<ProcessInfo | null> =>

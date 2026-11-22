@@ -50,7 +50,8 @@ async function processInfo(pid: number): Promise<ProcessInfo> {
   };
   // The executable as the OS has it, its links resolved: never a path the process made up.
   const exe = file('txt');
-  const path = exe ? (attempt(() => realpathSync(exe)) ?? exe) : (match?.[2] ?? null);
+  // No executable from lsof: no path at all (ps's name is the process's own word), and the lookup stops there.
+  const path = exe ? (attempt(() => realpathSync(exe)) ?? exe) : null;
   return { pid, name: path ? basename(path) : null, path, cwd: file('cwd'), ppid: match ? Number(match[1]) : null };
 }
 
