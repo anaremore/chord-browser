@@ -19,10 +19,19 @@ afterEach(async () => {
 });
 
 describe('Windows: which of the pipe’s clients is this connection’s', () => {
-  it('reads pipe-clients’ output', () => {
-    expect(parsePipeClients('12 34 12\r\n')).toEqual([12, 34]);
-    expect(parsePipeClients('\r\n')).toEqual([]);
-    expect(parsePipeClients('12 x -3 0 7.5')).toEqual([12]);
+  it('reads pipe-clients’ answer: the clients, each one’s chain, and the helper’s timings', () => {
+    const claude = { pid: 12, name: 'chord.exe', path: 'C:\\Chord\\chord.exe', cwd: null, ppid: 7 };
+    const parent = { pid: 7, name: 'claude.exe', path: null, cwd: null, ppid: 3 };
+    const answer = parsePipeClients(
+      JSON.stringify({ clients: [12, 34, 12, 0, -3, 'x', 7.5], chains: { 12: [claude, parent, { pid: 'no' }, parent], 34: [parent] }, files: 24, stuck: 1, handles: 9, ms: { table: 31, total: 57, bad: 'x' } }) + '\r\n',
+    );
+    expect(answer!.clients).toEqual([12, 34]);
+    // A chain stops at an entry that isn't one; one that doesn't start with its client isn't used.
+    expect(answer!.chains.get(12)).toEqual([claude, parent]);
+    expect(answer!.chains.has(34)).toBe(false);
+    expect(answer!.timings).toEqual({ files: 24, stuck: 1, handles: 9, table: 31, total: 57 });
+    for (const bad of ['', '12 34', '{}', '{"clients":5}', 'null']) expect(parsePipeClients(bad), bad).toBeNull();
+    expect(parsePipeClients('{"clients":[]}')).toEqual({ clients: [], chains: new Map(), timings: {} });
   });
 
   // [clients, the hello's bridge PID, other connections' peers, the peer]
@@ -113,11 +122,12 @@ describe('The lookup, when the OS can’t say', () => {
   const deps = (over: Partial<PeerDeps>): PeerDeps => ({ platform: 'linux', self: 1, helper: null, run: async () => '', readlink: () => 'socket:[1]', ...over });
 
   it('is null, never a guess', async () => {
-    expect(await peerOf(socket, '', 5, new Set(), deps({ platform: 'win32', helper: null }))).toBeNull();
-    expect(await peerOf(socket, '', 5, new Set(), deps({ run: () => Promise.reject(new Error('spawn ss ENOENT')) }))).toBeNull();
-    expect(await peerOf(socket, '', 5, new Set(), deps({ readlink: () => '/dev/null' }))).toBeNull();
-    expect(await peerOf({ _handle: { fd: -1 } } as unknown as Socket, '', 5, new Set(), deps({}))).toBeNull();
-    expect(await peerOf(socket, '', 5, new Set(), deps({ platform: 'freebsd' }))).toBeNull();
+    expect(await peerOf(socket, '', 5, new Set(), deps({ platform: 'win32', helper: null }))).toEqual({ pid: null });
+    expect(await peerOf(socket, '', 5, new Set(), deps({ platform: 'win32', helper: 'x.exe', run: async () => '12 34' }))).toEqual({ pid: null });
+    expect(await peerOf(socket, '', 5, new Set(), deps({ run: () => Promise.reject(new Error('spawn ss ENOENT')) }))).toEqual({ pid: null });
+    expect(await peerOf(socket, '', 5, new Set(), deps({ readlink: () => '/dev/null' }))).toEqual({ pid: null });
+    expect(await peerOf({ _handle: { fd: -1 } } as unknown as Socket, '', 5, new Set(), deps({}))).toEqual({ pid: null });
+    expect(await peerOf(socket, '', 5, new Set(), deps({ platform: 'freebsd' }))).toEqual({ pid: null });
   });
 });
 
@@ -147,6 +157,15 @@ function client(path: string): ChildProcess {
   return child;
 }
 
+/**
+ * The whole lookup's budget, cold, per OS (ms). Measured (2026-11-22): Windows x64 (11 Pro, about 396,000 handles in
+ * the system) 104 to 163 ms wall, the helper's own work 57 to 85 ms of it (the table 31 to 50, its scan 2 to 3, the
+ * queries 3 to 4, the chain 21 to 28). Before the scan read the table in place (each entry marshalled, twice), it was
+ * about 180 ms here and 3.6 s on CI's Windows arm64. Linux: one ss (tens of ms in WSL's Ubuntu). macOS: one lsof of
+ * this user's sockets. The budgets leave CI's slower runners room, not the lookup room to grow.
+ */
+const PEER_BUDGET_MS: Partial<Record<NodeJS.Platform, number>> = { win32: 750, linux: 500, darwin: 1500 };
+
 describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
   it('names each connection’s own client process', async () => {
     if (process.platform === 'win32') {
@@ -159,21 +178,29 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
     const b = client(path);
     await expect.poll(() => ends.length, { timeout: 10_000 }).toBe(2);
     const deps = peerDeps(process.platform === 'win32' ? helper : null);
+    // The first lookup is cold (the helper's first start, on Windows), as an agent's first card is.
     const started = performance.now();
     const first = await peerOf(ends[0]!, path, a.pid!, new Set(), deps);
-    const ms = performance.now() - started;
-    expect(first).toBe(a.pid);
+    const cold = performance.now() - started;
+    expect(first.pid).toBe(a.pid);
     // Windows can't tell which instance is whose: the claim decides, and another's claim is refused.
-    expect(await peerOf(ends[1]!, path, b.pid!, new Set([a.pid!]), deps)).toBe(b.pid);
+    const warmStart = performance.now();
+    expect((await peerOf(ends[1]!, path, b.pid!, new Set([a.pid!]), deps)).pid).toBe(b.pid);
+    const warm = performance.now() - warmStart;
     if (process.platform === 'win32') {
-      expect(await peerOf(ends[1]!, path, a.pid!, new Set([a.pid!]), deps)).toBe(b.pid);
-      expect(await peerOf(ends[1]!, path, 4, new Set(), deps)).toBeNull();
+      // The chain comes with it, from the same process: the client, then who started it (this test).
+      expect(first.chain?.map((p) => p.pid).slice(0, 2)).toEqual([a.pid, process.pid]);
+      expect(first.chain?.[0]?.path?.toLowerCase()).toBe(process.execPath.toLowerCase());
+      expect((await peerOf(ends[1]!, path, a.pid!, new Set([a.pid!]), deps)).pid).toBe(b.pid);
+      expect((await peerOf(ends[1]!, path, 4, new Set(), deps)).pid).toBeNull();
     } else {
       // Linux and macOS know: the claim doesn't matter.
-      expect(await peerOf(ends[1]!, path, a.pid!, new Set(), deps)).toBe(b.pid);
+      expect((await peerOf(ends[1]!, path, a.pid!, new Set(), deps)).pid).toBe(b.pid);
     }
-    // Off any call's path (it runs while the card shows), but kept small: the plan's budget.
-    console.log(`[perf] peer lookup (${process.platform}): ${ms.toFixed(0)} ms`);
-    expect(ms).toBeLessThan(process.platform === 'win32' ? 1500 : 1000);
+    // Off any call's path (it runs while the card shows), but it delays the card's *Started by*. Budgets per OS, from
+    // what was measured (PEER_BUDGET_MS): the whole lookup, cold, wall clock. The message carries what was seen.
+    const budget = PEER_BUDGET_MS[process.platform] ?? 1000;
+    const seen = `${process.platform}/${process.arch}: cold ${cold.toFixed(0)} ms, warm ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}`;
+    expect(cold, seen).toBeLessThan(budget);
   }, 30_000);
 });

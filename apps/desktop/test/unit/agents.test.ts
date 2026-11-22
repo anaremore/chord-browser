@@ -524,7 +524,7 @@ describe('Zero cost, and off in packaged builds', () => {
       actions,
       peer: async (_socket, endpoint, claimed) => {
         asked = { claimed, endpoint };
-        return peerPid;
+        return { pid: peerPid };
       },
     });
     await service.start();
@@ -541,6 +541,21 @@ describe('Zero cost, and off in packaged builds', () => {
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
   }, 20_000);
 
+  it('who started it, from a chain the lookup gave (Windows’ helper): used as given, no second lookup', async () => {
+    const ud = profile();
+    const bridge = { pid: 123_456, name: 'chord.exe', path: process.execPath, cwd: null, ppid: 77 };
+    const claude = { pid: 77, name: 'claude.exe', path: '/opt/claude/claude', cwd: null, ppid: 1 };
+    const service = new AgentService({ userData: ud, browser, ask: answering('once'), helper: null, waitMs: 2000, actions: true, peer: async () => ({ pid: bridge.pid, chain: [bridge, claude] }) });
+    await service.start();
+    cleanup.push(() => service.stop());
+    const c = client(ud);
+    await c.initialize();
+    expect((await c.call('list_tabs')).error).toBe(false);
+    const [held] = [...service.connections];
+    // The peer is Chord's own executable (the bridge): who started it is the next one.
+    expect(await held!.parent!).toEqual([claude]);
+  });
+
   it('a bridge PID is claimed first come, first served: a later connection claiming it is no claim (M2a)', async () => {
     const ud = profile();
     const asked: { claimed: number; held: number[] }[] = [];
@@ -553,7 +568,7 @@ describe('Zero cost, and off in packaged builds', () => {
       actions: true,
       peer: async (_socket, _endpoint, claimed, held) => {
         asked.push({ claimed, held: [...held] });
-        return null;
+        return { pid: null };
       },
     });
     await service.start();

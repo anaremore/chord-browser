@@ -1144,7 +1144,7 @@ if (!app.requestSingleInstanceLock()) {
           helper: helper && existsSync(helper) ? helper : null,
           actions: agentActions({ packaged: app.isPackaged }),
           // E2E only (development builds): the OS can't say who's calling, as in the Flatpak or without ss.
-          ...(!app.isPackaged && process.env['CHORD_E2E_NO_PEER'] === '1' ? { peer: async () => null } : {}),
+          ...(!app.isPackaged && process.env['CHORD_E2E_NO_PEER'] === '1' ? { peer: async () => ({ pid: null }) } : {}),
           waitMs,
           dispatch: (command) => agentBrowser.store.dispatch(command),
           neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,

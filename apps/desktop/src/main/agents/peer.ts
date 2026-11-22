@@ -6,7 +6,8 @@
  * Node has no getsockopt and never gives a pipe's handle on Windows, so each OS is asked from outside, while the
  * connect card shows (never inside a call):
  *
- * - **Windows:** window-owner.exe's `pipe-clients` lists the PIDs of the clients connected to Chord's agent pipe.
+ * - **Windows:** window-owner.exe's `pipe-clients` lists the PIDs of the clients connected to Chord's agent pipe,
+ *   and each one's chain (its parent, and theirs), in one process: about 60 ms of its own work (S18 M2a).
  *   It can't say which connection is whose, so a connection's peer is the bridge PID its hello claims when that
  *   PID is among them and the claim is its own (AgentService.claims: first come, first served, from the hello on);
  *   else the one client no other connection holds or claimed; else unknown.
@@ -20,6 +21,7 @@
 import { execFile } from 'node:child_process';
 import { readlinkSync } from 'node:fs';
 import type { Socket } from 'node:net';
+import type { ProcessInfo } from './parent';
 
 /** What a lookup needs from the OS, so the units can stand in for it. */
 export interface PeerDeps {
@@ -53,9 +55,43 @@ export function socketFd(socket: Socket): number | null {
 
 /* ---------- Windows ---------- */
 
-/** pipe-clients' output: PIDs, space-separated. */
-export function parsePipeClients(stdout: string): number[] {
-  return [...new Set(stdout.trim().split(/\s+/).filter(Boolean).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+/** pipe-clients' answer: the clients, each one's chain (itself first: parent.ts's ProcessInfo), and its own timings. */
+export interface PipeClients {
+  clients: number[];
+  chains: Map<number, ProcessInfo[]>;
+  /** How long each step took in the helper (ms), and what it looked at: for the units' budgets. */
+  timings: Record<string, number>;
+}
+
+const isPid = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0;
+const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+/** pipe-clients' line of JSON, kept to what it can be; null when it isn't that. */
+export function parsePipeClients(stdout: string): PipeClients | null {
+  let raw: { clients?: unknown; chains?: unknown; files?: unknown; stuck?: unknown; handles?: unknown; ms?: unknown };
+  try {
+    raw = JSON.parse(stdout.trim()) as typeof raw;
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.clients)) return null;
+  const clients = [...new Set(raw.clients.filter(isPid))];
+  const chains = new Map<number, ProcessInfo[]>();
+  const given = raw.chains && typeof raw.chains === 'object' ? (raw.chains as Record<string, unknown>) : {};
+  for (const pid of clients) {
+    const chain = given[String(pid)];
+    if (!Array.isArray(chain)) continue;
+    const infos: ProcessInfo[] = [];
+    for (const p of chain as Record<string, unknown>[]) {
+      if (!p || !isPid(p['pid'])) break;
+      infos.push({ pid: p['pid'], name: text(p['name']), path: text(p['path']), cwd: null, ppid: isPid(p['ppid']) ? p['ppid'] : null });
+    }
+    // A chain is the client's: one that doesn't start with it isn't used.
+    if (infos[0]?.pid === pid) chains.set(pid, infos);
+  }
+  const timings: Record<string, number> = {};
+  for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
+  return { clients, chains, timings };
 }
 
 /**
@@ -143,28 +179,43 @@ export function macPeer(sockets: readonly LsofSocket[], self: number, fd: number
 /* ---------- The lookup ---------- */
 
 /**
- * The PID at the other end of the connection, or null when the OS can't say. `pipe`: the endpoint's path (Windows);
- * `claimed`: the hello's bridge PID; `held`: other live connections' peers (Windows).
+ * Who's at the other end: its PID (null when the OS can't say) and, where the lookup gave it in the same step
+ * (Windows' helper), its chain, so no second process is started for it; `timings`, the helper's own (units' budgets).
  */
-export async function peerOf(socket: Socket, pipe: string, claimed: number, held: ReadonlySet<number>, deps: PeerDeps): Promise<number | null> {
+export interface PeerLookup {
+  pid: number | null;
+  chain?: ProcessInfo[];
+  timings?: Record<string, number>;
+}
+
+/**
+ * The process at the other end of the connection. `pipe`: the endpoint's path (Windows); `claimed`: the hello's bridge
+ * PID, or -1 when the claim isn't this connection's (AgentService.claims); `held`: PIDs other live connections hold
+ * or claimed (Windows).
+ */
+export async function peerOf(socket: Socket, pipe: string, claimed: number, held: ReadonlySet<number>, deps: PeerDeps): Promise<PeerLookup> {
   try {
     if (deps.platform === 'win32') {
-      if (!deps.helper) return null;
-      return choosePeer(parsePipeClients(await deps.run(deps.helper, ['pipe-clients', pipe, String(deps.self)])), claimed, held);
+      if (!deps.helper) return { pid: null };
+      const answer = parsePipeClients(await deps.run(deps.helper, ['pipe-clients', pipe, String(deps.self)]));
+      if (!answer) return { pid: null };
+      const pid = choosePeer(answer.clients, claimed, held);
+      const chain = pid === null ? undefined : answer.chains.get(pid);
+      return { pid, ...(chain ? { chain } : {}), timings: answer.timings };
     }
     const fd = socketFd(socket);
-    if (fd === null) return null;
+    if (fd === null) return { pid: null };
     if (deps.platform === 'linux') {
       const inode = /^socket:\[(\d+)\]$/.exec(deps.readlink(`/proc/self/fd/${fd}`))?.[1];
-      return inode ? linuxPeer(parseSs(await deps.run('ss', ['-xpnH'])), Number(inode)) : null;
+      return { pid: inode ? linuxPeer(parseSs(await deps.run('ss', ['-xpnH'])), Number(inode)) : null };
     }
     if (deps.platform === 'darwin') {
       // This user's Unix sockets only: the peer is the same user's (the socket's folder is 0700).
       const uid = process.getuid?.();
-      return macPeer(parseLsof(await deps.run('lsof', ['-nP', '-U', ...(uid !== undefined ? ['-a', '-u', String(uid)] : []), '-F', 'pfdn'])), deps.self, fd);
+      return { pid: macPeer(parseLsof(await deps.run('lsof', ['-nP', '-U', ...(uid !== undefined ? ['-a', '-u', String(uid)] : []), '-F', 'pfdn'])), deps.self, fd) };
     }
-    return null;
+    return { pid: null };
   } catch {
-    return null;
+    return { pid: null };
   }
 }

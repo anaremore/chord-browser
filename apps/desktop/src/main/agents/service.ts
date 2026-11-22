@@ -16,6 +16,7 @@ import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
+import type { PeerLookup } from './peer';
 // The service loads with the first time Agents is on, never at launch: so does what decides a tab can be shared.
 import { shareable, type AgentShares } from './shares';
 import type { Socket } from 'node:net';
@@ -41,7 +42,7 @@ export interface AgentServiceDeps {
   /** M2's slices (agentActions): without them, *Started by* comes from the hello's word, as in M1. */
   actions?: boolean;
   /** Who's at the other end of a connection (peer.ts); tests give their own. Null: the OS can't say. */
-  peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>): Promise<number | null>;
+  peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>): Promise<PeerLookup>;
 }
 
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
@@ -230,11 +231,12 @@ export class AgentService {
       const { peerOf, peerDeps } = await import('./peer');
       return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper));
     });
-    const pid = await peer(held.socket, this.endpoint?.path ?? '', claimed, others);
+    const { pid, chain: given } = await peer(held.socket, this.endpoint?.path ?? '', claimed, others);
     held.peerPid = pid;
     if (pid === null) return [];
     const { ancestry, sameProgram } = await import('./parent');
-    const chain = await ancestry(pid, 4);
+    // Windows' helper gives the chain with the peer (one process, no PowerShell); elsewhere it's looked up now.
+    const chain = given ?? (await ancestry(pid, 4));
     return chain[0] && sameProgram(chain[0].path, process.execPath) ? chain.slice(1) : chain.slice(0, 3);
   }
 
