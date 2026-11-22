@@ -21,7 +21,7 @@
 //     the user, and denies network logons. Chord runs it once, on the first connection.
 //   window-owner pipe-dacl <pipe>
 //     Prints that pipe's DACL as SDDL (tests).
-//   window-owner pipe-clients <pipe> <server's process id> [clients expected]
+//   window-owner pipe-clients <pipe> <server's process id>
 //     Prints, as one line of JSON, the process ids of the clients connected to that pipe's
 //     instances, which the server (Chord) holds, and each one's chain: itself, its parent and
 //     theirs, from one process snapshot (S18 M2a, "who's calling"), with how long each step took.
@@ -31,9 +31,7 @@
 //     hundreds of thousands of entries), only its files, each copied here (DuplicateHandle:
 //     the same user's process) and kept if it's the server end of this pipe. A query on a
 //     file can block when the file has I/O pending, so they all run at once, each on a
-//     thread of its own, and those not done within QUERIES_MS are left behind; it stops
-//     waiting sooner once as many clients answered as expected (Chord's live connections:
-//     its pipe's server ends never block). "complete" says whether every query answered.
+//     thread of its own, and those not done within QUERIES_MS are left behind.
 //
 // Exit codes: 0 done, 2 bad arguments, 3 a window isn't the process's, 4 the call failed,
 // 5 the pipe (for pipe-clients, the server's process) couldn't be opened.
@@ -360,7 +358,7 @@ static class WindowOwner
      * Prints, as one line of JSON: the clients' PIDs, each one's chain (itself first), how many of the server's files
      * were looked at and how many queries didn't answer in time, and how long each step took (ms).
      */
-    static int PipeClients(string name, uint server, int expected)
+    static int PipeClients(string name, uint server)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         long tTable, tScan, tQueries, tChains;
@@ -427,21 +425,9 @@ static class WindowOwner
                 }, 64 * 1024) { IsBackground = true };
                 t.Start();
             }
-            // Done when every query has answered, or once as many clients have answered as Chord holds connections
-            // (`expected`: the pipe's own server ends never block, so one stuck file needn't cost the deadline), or at it.
             var deadline = clock.ElapsedMilliseconds + QUERIES_MS;
-            while (clock.ElapsedMilliseconds < deadline)
-            {
-                int done = 0, found = 0;
-                foreach (var q in queries)
-                {
-                    if (!q.Done) continue;
-                    done++;
-                    if (q.Client != 0) found++;
-                }
-                if (done == queries.Count || (expected > 0 && found >= expected)) break;
-                Thread.Sleep(1);
-            }
+            foreach (var q in queries)
+                while (!q.Done && clock.ElapsedMilliseconds < deadline) Thread.Sleep(1);
             tQueries = clock.ElapsedMilliseconds;
             var clients = new List<uint>();
             foreach (var q in queries)
@@ -453,8 +439,7 @@ static class WindowOwner
             var chains = new List<string>();
             foreach (uint c in clients) chains.Add(Json(c.ToString()) + ":" + Chain(c, processes));
             tChains = clock.ElapsedMilliseconds;
-            // complete: every query answered, so no client can be missing from the list.
-            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"complete\":" + (stuck == 0 ? "true" : "false") + ",\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck
+            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck
                 + ",\"handles\":" + count + ",\"ms\":{\"table\":" + tTable + ",\"scan\":" + (tScan - tTable) + ",\"queries\":" + (tQueries - tScan) + ",\"chains\":" + (tChains - tQueries) + ",\"total\":" + tChains + "}}");
             return 0;
         }
@@ -492,13 +477,11 @@ static class WindowOwner
             if (!AgentPipe.IsMatch(args[1])) return 2;
             return args[0] == "restrict-pipe" ? RestrictPipe(args[1]) : PipeDacl(args[1]);
         }
-        if ((args.Length == 3 || args.Length == 4) && args[0] == "pipe-clients")
+        if (args.Length == 3 && args[0] == "pipe-clients")
         {
             uint server;
-            int expected = 0;
             if (!AgentPipe.IsMatch(args[1]) || !uint.TryParse(args[2], out server) || server == 0) return 2;
-            if (args.Length == 4 && (!int.TryParse(args[3], out expected) || expected < 0)) return 2;
-            return PipeClients(args[1], server, expected);
+            return PipeClients(args[1], server);
         }
         if (args.Length == 2 && args[0] == "get" && Handle(args[1], out window))
         {

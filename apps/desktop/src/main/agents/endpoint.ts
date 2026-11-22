@@ -70,8 +70,6 @@ export type Send = (message: unknown) => void;
 export interface Endpoint {
   readonly path: string;
   readonly file: string;
-  /** Connections held now, said hello or not: how many clients Windows' peer lookup expects to find (agents/peer.ts). */
-  connected(): number;
   /** Stops serving: every connection ends (as quitting Chord does to connected bridges), and the file and folder go. */
   close(): void;
 }
@@ -176,7 +174,6 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
   return {
     path,
     file,
-    connected: () => live.size,
     close() {
       server.close();
       for (const socket of live) socket.destroy();
