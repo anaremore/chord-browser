@@ -338,8 +338,8 @@ const kindOf = (command: string): string => /--type=(\S+)/.exec(command)?.[1] ??
  *   the relay's command line, and it measured the relay no smaller (123 and 129 MB), so they stay.
  * An AppImage is measured past its runtime, at Chord itself.
  */
-/** Each of Linux's zygotes, loosely: not measured before this budget (#98's review); the dry run logs them. */
-const ZYGOTE_MB = 200;
+/** Each of Linux's zygotes (#98's review): measured 63–75 MB resident (release.yml run 44965503884), much of it shared with the relay. */
+const ZYGOTE_MB = 100;
 
 const RELAY_BUDGETS = {
   win32: { mb: 90, children: [] as string[] },
