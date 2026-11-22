@@ -2,6 +2,16 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.14.0 · preview · 2026-11-22
+
+- **Agents: the AI agents you run can use Chord.** Claude Code, Codex and Antigravity can open and read pages in Chord for you. Turn it on in Settings → Agents, then copy the line for Claude Code or Codex into your terminal, or press **Add to Antigravity** (Undo puts its settings back).
+  - **You say yes first.** An agent's first try shows a card: *Claude Code wants to use Chord*, with the program that started it and its folder. **Deny**, **Allow once** or **Always allow**. Chord goes by the name the agent gives, so Settings → Agents lists every agent you've let in, with **Remove**.
+  - **Tabs of its own.** An agent works in an Agent section below your tabs, kept in memory only. While it works on a tab, a bar over the page says so, with **Stop**. A key you press in its tab pauses it, and Ctrl+. (⌘.) stops every agent. When it's done, a toast asks *Keep these tabs?*
+  - **Your tabs only when you share them.** *Share with Claude Code* in a tab's menu lets it read that tab, never change it, until you stop sharing, close the tab, or the tab leaves that site.
+  - **Never your passwords.** Agents never see your vault or a site you keep private. They connect only from your own computer, never over the network.
+- **Faster start with lots of tabs.** Finding each tab's icon at launch is now spread out in small steps, so a big profile no longer holds Chord's window for a moment.
+- **Release builds are checked harder:** pinned build tools, a signature check on a Windows helper, and Electron's security switches confirmed on every build.
+
 ## 0.13.1 · security · 2026-11-21
 
 - **Security: the assistant keeps away from sites you never let it read.** If a tab it was about to read was redirected, or moved to another page while you were answering its card, to a site on your *Never read* list, the assistant could read that site after all. It now checks again after the page loads and after reading, and refuses. Update as soon as you can.

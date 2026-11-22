@@ -2,7 +2,7 @@
 
 **Result: pass on Windows 11 with Claude Code 2.1.328 end to end.** Codex 0.160.1 connects, sends `initialize` and `tools/list`, but no live turn ran: the test account is at its usage limit until Dec 16, 2026. Linux sockets were checked in WSL (Ubuntu, Node 24, Electron 45.3.2). macOS and the Flatpak are planned for CI or checked by hand (below).
 
-**Release builds (2026-11-21):** Agents is hidden in packaged builds until 0.14.0, while slice (e)'s consent fixes land. `AGENTS_RELEASED` (packages/core/src/agent-tools.ts) is false: a packaged Chord has no Settings → Agents, never serves the endpoint or writes its token file (even with `agentsEnabled` saved), and `chord mcp` answers every call as when Agents is off. Development and E2E builds keep all of it. Flip `AGENTS_RELEASED` in the 0.14.0 release commit; the packaged smoke test's expectations follow it.
+**Release builds:** on since 0.14.0 (2026-11-22): `AGENTS_RELEASED` (packages/core/src/agent-tools.ts) is true. For 0.13.1 (2026-11-21) Agents was hidden in packaged builds, while slice (e)'s consent fixes landed. With it false: a packaged Chord has no Settings → Agents, never serves the endpoint or writes its token file (even with `agentsEnabled` saved), and `chord mcp` answers every call as when Agents is off. Development and E2E builds keep all of it. The packaged smoke test's expectations follow it.
 
 **Decision (for M1):**
 

@@ -1,9 +1,9 @@
 [Adblock Plus 1.1]
-! Version: 202611211752
+! Version: 202611220259
 ! Title: EasyPrivacy
-! Last modified: 21 Nov 2026 17:52 UTC
+! Last modified: 22 Nov 2026 02:59 UTC
 ! Expires: 4 days (update frequency)
-! Commit: 686663bc18c647cc02670b7e79793c9138b3dc0e
+! Commit: db24ceaa452f1c85af03191f7a35aae887c8a076
 ! *** easylist:template_header.txt ***
 ! 
 ! Please report any unblocked adverts or problems
@@ -2523,6 +2523,7 @@
 /track.v2.js
 /track/?*&event=
 /track/?data=
+/track/?evt=
 /track/?verbose=
 /track/aggregate?
 /track/batch?
@@ -8506,6 +8507,7 @@ omni.soundestlink.com$image
 ||piquantpigs.com^
 ||piquantprice.com^
 ||piquantvortex.com^
+||pitmanmusic.com^
 ||pixeledhub.com^
 ||pixelmoonstudio.com^
 ||pixeltrouble.com^
@@ -8696,6 +8698,7 @@ omni.soundestlink.com$image
 ||redbasketball.com^
 ||redbricksoap.com^
 ||redexecs.com^
+||redmaceta.com^
 ||redmillgroup.com^
 ||reelboat.com^
 ||reelcombat.com^
@@ -8802,6 +8805,7 @@ omni.soundestlink.com$image
 ||samplesamba.com^
 ||samuraibots.com^
 ||sandboxbid.com^
+||sandshredder.com^
 ||sandstrophies.com^
 ||sandypocket.com^
 ||sandytaco.com^
@@ -9121,6 +9125,7 @@ omni.soundestlink.com$image
 ||steepsister.com^
 ||steepsquirrel.com^
 ||stellarbalms.com^
+||stellarcoded.com^
 ||stellarduel.com^
 ||stepcattle.com^
 ||stepwisevideo.com^
@@ -16256,9 +16261,6 @@ $third-party,xmlhttprequest,domain=opensubtitles.org
 ||errorreports.couponcabin.com^
 ||errors.darkreader.app^
 ||espy.boehs.org^
-||essentiallysports.com/api/track/
-||essentiallysports.com/api/v1/counts
-||essentiallysports.com/growth/engagement/
 ||et.nytimes.com^
 ||et.tidal.com^
 ||eta.animenewsnetwork.com^
@@ -16769,7 +16771,6 @@ $third-party,xmlhttprequest,domain=opensubtitles.org
 ||masterclass.com/qz6s/
 ||mat6tube.com/api/stats?
 ||matalan.co.uk/track
-||maximise.nyc3.cdn.digitaloceanspaces.com/mxmse.min.js$domain=essentiallysports.com
 ||mcc-tags.cisco.com^
 ||mcdonalds.com/tags/js/*/mparticle.js
 ||mcdonalds.com/webevents/
@@ -17267,6 +17268,7 @@ $third-party,xmlhttprequest,domain=opensubtitles.org
 ||sexu.com/api/ttrack
 ||sexybabepics.net/re/?ping
 ||sf-syn.com/conversion_outbound_tracker$subdocument,domain=sourceforge.net
+||sfchronicle.com/api/client-logs
 ||sfgate.com/api/client-logs
 ||share.9cdn.net/share/short_cache/js/tracking/$domain=nine.com.au
 ||sharechat.com/event-tracking-service/
@@ -57293,6 +57295,10 @@ search.rakuten.co.jp##+js(aeld, mouseup, sendClickEvent)
 ! 
 ! ---------- Icelandic ----------
 ! 
+! 
+! ---------- Indian ----------
+! 
+@@||scorecardresearch.com/plugins/streaming-jwplayer/$script,domain=newstak.in
 ! 
 ! ---------- Italian ----------
 ! 
