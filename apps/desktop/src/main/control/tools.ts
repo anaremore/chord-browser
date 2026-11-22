@@ -417,20 +417,24 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
 
   if (tool === 'navigate' || tool === 'back') {
     let target = '';
+    let back: { index: number; url: string } | null = null;
     if (tool === 'navigate') {
       target = typeof args['url'] === 'string' ? args['url'].trim() : '';
       if (!/^https?:\/\//i.test(target) || target.length > NAVIGATE_URL_MAX) return refuse(`navigate takes an http or https address of at most ${NAVIGATE_URL_MAX} characters.`);
       if (isNeverReadable(target, scope.neverSites())) return refuse(NEVER);
     } else {
       // Where back goes is checked before going, as navigate's address is: never a site kept private, never a Chord page.
-      const back = page.backUrl();
+      // And it goes to exactly that entry (goBack could skip it, to one further back).
+      back = page.backEntry();
       if (!back) return refuse(ACT_REFUSALS.noBack);
-      if (!/^https?:\/\//i.test(back) || isNeverReadable(back, scope.neverSites())) return refuse(NEVER);
+      if (!/^https?:\/\//i.test(back.url) || isNeverReadable(back.url, scope.neverSites())) return refuse(NEVER);
     }
     const before = page.id;
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
-      const { loading } = tool === 'navigate' ? await page.navigate(target) : await page.back();
+      const went = tool === 'navigate' ? await page.navigate(target) : await page.back(back!);
+      if (!went) return refuse(ACT_REFUSALS.noBack);
+      const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
       return await done(page.id !== before, loading, tool === 'navigate' ? `Went to ${barAddress(target)}` : 'Went back');
     } finally {
@@ -451,7 +455,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   // The element as it is now; for select_option, the choice matched against the page's own options before anything is
   // asked, so the card and the bar show the page's label, never the agent's words.
   const element = await page.act(owner, lookup.token, lookup.key, { op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
-  if (!element.ok) return refuse(element.why === 'stale' ? ELEMENT_REFUSALS.stale : element.why === 'no-choice' ? ACT_REFUSALS.noChoice : element.why === 'not-select' ? ACT_REFUSALS.notSelect : ACT_REFUSALS.changed);
+  if (!element.ok) return refuse(actRefusal(element));
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
   if (tool === 'type' && !element.editable) return refuse(ACT_REFUSALS.notEditable);
@@ -472,9 +476,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (page.id !== pageAtCheck) return ELEMENT_REFUSALS.stale;
     return null;
   };
-  /** Text or a key goes where the focus is: only while it's this element's, and it's no field Chord never types in. */
-  const focusOk = async (): Promise<string | null> => {
-    const now = await page.act(owner, lookup.token, lookup.key, { op: 'focused' });
+  /**
+   * Text or a key goes where the focus is: only while it's this element's, and it's no field Chord never types in. The
+   * page can still move the focus after this answers (a timer); the guard (see below) stops what would land elsewhere.
+   */
+  const focusOk = async (now?: ActAnswer): Promise<string | null> => {
+    now ??= await page.act(owner, lookup.token, lookup.key, { op: 'focused' });
     if (!now.ok) return actRefusal(now);
     if (now.field && sensitiveField(now.field)) return ACT_REFUSALS.sensitive;
     if (!now.focused) return ACT_REFUSALS.focusMoved;
@@ -506,24 +513,40 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   host.doing(node.id, description);
   try {
     let refused: string | null = null;
+    /**
+     * Text or keys in, with the page's guard up: a key or an insertion the page would get anywhere but the element (the
+     * focus moved after focusOk: a timer, between two key events) is stopped there, and the action ends. False then.
+     */
+    const guarded = async (until: 'keyup' | 'beforeinput', input: () => void | Promise<void>): Promise<boolean> => {
+      const up = await page.act(owner, lookup.token, lookup.key, { op: 'guard', until });
+      if (!up.ok) {
+        refused = actRefusal(up);
+        return false;
+      }
+      await input();
+      // The input's events are on their way (each its own message): unguard waits for the last one.
+      const down = await page.act(owner, lookup.token, lookup.key, { op: 'unguard' });
+      if (down.ok && down.moved) refused = ACT_REFUSALS.focusMoved;
+      return !refused;
+    };
     const { navigated, loading } = await page.afterActing(async () => {
       const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
       if ((refused = halt())) return;
       if (tool === 'select_option') {
-        const chosen = await page.act(owner, lookup.token, lookup.key, { op: 'choose', option: choice });
-        if (!chosen.ok) refused = chosen.why === 'no-choice' ? ACT_REFUSALS.noChoice : actRefusal(chosen);
+        // By the page's whole label, as describe matched it (the card showed it clipped).
+        const chosen = await page.act(owner, lookup.token, lookup.key, { op: 'choose', option: asked });
+        if (!chosen.ok) refused = actRefusal(chosen);
         return;
       }
       if (tool === 'press_key') {
-        const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
-        if (!focused.ok) return void (refused = actRefusal(focused));
-        if ((refused = await focusOk())) return;
-        return page.keys(pressKeyEvents(key as PressKey) as AgentInputEvent[]);
+        // focus answers whether it has it now, as focused would.
+        if ((refused = await focusOk(await page.act(owner, lookup.token, lookup.key, { op: 'focus' })))) return;
+        return void (await guarded('keyup', () => page.keys(pressKeyEvents(key as PressKey) as AgentInputEvent[])));
       }
-      // The pointer there, then a last hit test right before the button goes down: an overlay or a frame moved over
-      // the point meanwhile (the page saw the scroll, or the outline) gets no press. It narrows the race; it can't
-      // close it (the page runs between the test and the press too).
+      // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
+      // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. It narrows the
+      // race; it can't close it (the page runs between the test and the press too).
       page.pointer(pointed.x, pointed.y);
       if (tool === 'hover') return;
       const hit = await page.act(owner, lookup.token, lookup.key, { op: 'hit', x: pointed.x, y: pointed.y });
@@ -537,10 +560,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       }
       // Text goes where the focus is: this element's, and no field Chord never types in, checked right before.
       if ((refused = await focusOk())) return;
-      await page.insertText(text as string);
+      if (!(await guarded('beforeinput', () => page.insertText(text as string)))) return;
       if (args['submit'] !== true) return;
       if ((refused = await focusOk())) return;
-      page.keys(pressKeyEvents('Enter') as AgentInputEvent[]);
+      await guarded('keyup', () => page.keys(pressKeyEvents('Enter') as AgentInputEvent[]));
     });
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -557,6 +580,7 @@ function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';
   if (answer.why === 'no-choice') return ACT_REFUSALS.noChoice;
+  if (answer.why === 'two-choices') return ACT_REFUSALS.twoChoices;
   return ACT_REFUSALS.changed;
 }
 

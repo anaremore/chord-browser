@@ -141,6 +141,7 @@ export const ACT_REFUSALS = {
   notSelect: 'That element isn’t a list of choices. Use click for it.',
   // Never the agent's words back (a choice that isn't on the page isn't quoted): the page's own options are in a snapshot.
   noChoice: 'That list has no such choice. Call snapshot for its choices.',
+  twoChoices: 'That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.',
   sensitive: 'That field is now a password, code or card field: the user fills it. Ask them to.',
   focusMoved: 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.',
   sharedReadOnly: 'That tab is shared with you to read, not to act on. Ask the user if they want you to act in your own tab.',

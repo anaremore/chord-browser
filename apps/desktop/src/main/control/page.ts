@@ -54,12 +54,15 @@ export interface ControlPage {
    * quiet for a moment. Says whether the page went somewhere else (its page id changed).
    */
   afterActing(act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }>;
-  /** Goes to an address, or back, and waits for the load (at most ACT_LOAD_MS). */
+  /** Goes to an address and waits for the load (at most ACT_LOAD_MS). */
   navigate(url: string): Promise<{ loading: boolean }>;
-  back(): Promise<{ loading: boolean }>;
-  canGoBack(): boolean;
-  /** The address back would go to, or null. */
-  backUrl(): string | null;
+  /**
+   * The entry just before this one in the tab's history, or null. Not goBack's: Chromium's goBack skips entries a page
+   * added without a gesture (a pushState), so it can land further back than the entry checked.
+   */
+  backEntry(): { index: number; url: string } | null;
+  /** Goes to exactly that entry, if it's still there (null if not), and waits for the load. */
+  back(entry: { index: number; url: string }): Promise<{ loading: boolean } | null>;
   title(): string;
 }
 
@@ -112,11 +115,15 @@ export function controlPage(contents: WebContents): ControlPage {
     insertText: (text) => (contents.isDestroyed() ? Promise.resolve() : contents.insertText(text)),
     afterActing: (act) => afterActing(contents, act),
     navigate: (url) => loaded(contents, () => contents.loadURL(url).catch(() => undefined)),
-    back: () => loaded(contents, () => contents.navigationHistory.goBack()),
-    canGoBack: () => !contents.isDestroyed() && contents.navigationHistory.canGoBack(),
-    backUrl: () => {
-      if (contents.isDestroyed() || !contents.navigationHistory.canGoBack()) return null;
-      return contents.navigationHistory.getEntryAtIndex(contents.navigationHistory.getActiveIndex() - 1)?.url ?? null;
+    backEntry: () => {
+      if (contents.isDestroyed()) return null;
+      const index = contents.navigationHistory.getActiveIndex() - 1;
+      const url = index >= 0 ? contents.navigationHistory.getEntryAtIndex(index)?.url : undefined;
+      return url ? { index, url } : null;
+    },
+    back: async (entry) => {
+      if (contents.isDestroyed() || contents.navigationHistory.getEntryAtIndex(entry.index)?.url !== entry.url) return null;
+      return loaded(contents, () => contents.navigationHistory.goToIndex(entry.index));
     },
     title: () => (contents.isDestroyed() ? '' : contents.getTitle()),
   };

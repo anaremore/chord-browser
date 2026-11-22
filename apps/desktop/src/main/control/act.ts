@@ -9,8 +9,14 @@
  *   Text and keys go wherever the focus is, so main asks this right before each, and a page that moved the focus (a
  *   mousedown handler sending it to a password field) gets nothing. Every answer carries the field as it is now, which
  *   main checks with core's sensitiveField, as the snapshot did.
- * - `hit`: just before the button goes down, the point is still the element's: the press is sent only then. A hit on a
- *   frame (an iframe, an embed) is never the element's, even one inside it.
+ * - `hit`: just before the button goes down, the point is still the element's: the press is sent only then. It waits
+ *   for the page to see the pointer's move first (Blink sends a move with the next frame, and its mouseover and
+ *   mouseenter handlers, which can put something over the point, run then), at most HIT_WAIT_MS. A hit on a frame (an
+ *   iframe, an embed, a fenced frame) is never the element's, even one inside it.
+ * - `guard` and `unguard`: while text and keys go in, a key or an insertion that would land anywhere but the element
+ *   (the page moved the focus between main's check and the input) is stopped in the page, and `unguard` says so. Input
+ *   and scripts reach the page by different ways, so `unguard` waits for the input's last event (the key's keyup, the
+ *   text's beforeinput) to have been seen, at most GUARD_WAIT_MS, before it takes the guard down.
  * - `point`: scrolled to the middle of the view (at once), and hit-tested at its middle, then at the middles of its
  *   quarters: the point to send the click to, in the page's CSS pixels, or what covers it (its role and name).
  * - `select`: a text field's contents selected (all of it), so the text `insertText` puts in replaces it.
@@ -35,17 +41,24 @@ export type ActOp =
   | { op: 'select' }
   | { op: 'focus' }
   | { op: 'focused' }
+  | { op: 'guard'; until: 'keyup' | 'beforeinput' }
+  | { op: 'unguard' }
   | { op: 'choose'; option: string }
   | { op: 'describe'; option?: string };
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean }
-  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-choice' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; moved?: boolean }
+  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+
+/** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
+const HIT_WAIT_MS = 250;
+/** How long `unguard` waits for the input's last event. */
+const GUARD_WAIT_MS = 250;
 
 function actScript(owner: string, token: string, key: number, op: ActOp): string {
-  const args = { owner, token, key, ...op };
-  return String.raw`((args) => {
+  const args = { owner, token, key, hitWait: HIT_WAIT_MS, guardWait: GUARD_WAIT_MS, ...op };
+  return String.raw`(async (args) => {
   ${SNAPSHOT_LIB}
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(args.owner);
   if (!read || read.token !== args.token) return { ok: false, why: 'stale' };
@@ -67,17 +80,60 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     while (f && f.shadowRoot && f.shadowRoot.activeElement) f = f.shadowRoot.activeElement;
     return f;
   };
-  // A choice by the page's own label: matched before anything is asked, so only the page's words are ever shown.
-  const optionIndex = (want) => [...el.options].findIndex((o) => !o.disabled && clip(o.label || o.text, NAME_MAX) === String(want).replace(/\s+/g, ' ').trim());
+  // A choice by the page's own label, whole (clipped only to show it): matched before anything is asked, so only the
+  // page's words are ever shown. Never a disabled one (itself or its group) nor a hidden one; two with the label, none.
+  const norm = (text) => String(text).replace(/\s+/g, ' ').trim();
+  const optionIndex = (want) => {
+    const label = norm(want);
+    const found = [];
+    [...el.options].forEach((o, i) => {
+      if (o.matches(':disabled') || o.hidden || (o.parentElement && o.parentElement.localName === 'optgroup' && o.parentElement.hidden)) return;
+      if (norm(o.label || o.text) === label) found.push(i);
+    });
+    return found.length === 1 ? found[0] : found.length ? -2 : -1;
+  };
+  const noChoice = (index) => ({ ok: false, why: index === -2 ? 'two-choices' : 'no-choice' });
   if (args.op === 'describe') {
     if (args.option === undefined) return { ok: true, ...said, disabled, editable, select };
     if (!select) return { ok: false, why: 'not-select' };
     const index = optionIndex(args.option);
-    if (index < 0) return { ok: false, why: 'no-choice' };
+    if (index < 0) return noChoice(index);
     return { ok: true, ...said, disabled, editable, select, choice: clip(el.options[index].label || el.options[index].text, NAME_MAX) };
   }
   if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
   if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
+  // guard: a key or an insertion bound anywhere but the element is stopped before the page sees it (capture, on the
+  // window: the first listener there is). Taken off by unguard once the input's last event was seen, or by itself
+  // after 5 s.
+  const GUARDED = ['keydown', 'keypress', 'keyup', 'beforeinput'];
+  const unwatch = (guard) => {
+    for (const type of GUARDED) removeEventListener(type, guard.stop, true);
+    clearTimeout(guard.timer);
+    if (globalThis.__chordGuard === guard) globalThis.__chordGuard = null;
+  };
+  if (args.op === 'unguard') {
+    const guard = globalThis.__chordGuard;
+    if (!guard) return { ok: true, ...said, moved: false };
+    if (!guard.done) await new Promise((done) => { guard.finished = done; setTimeout(done, args.guardWait); });
+    await new Promise((done) => setTimeout(done, 0));
+    unwatch(guard);
+    return { ok: true, ...said, moved: guard.moved };
+  }
+  if (args.op === 'guard') {
+    if (globalThis.__chordGuard) unwatch(globalThis.__chordGuard);
+    const guard = { moved: false, done: false, finished: null, timer: 0, stop: (e) => {
+      if (!e.isTrusted) return;
+      if (e.type === args.until) { guard.done = true; if (guard.finished) guard.finished(); }
+      if (e.type === 'keyup' || deepFocus() === el) return;
+      guard.moved = true;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    } };
+    for (const type of GUARDED) addEventListener(type, guard.stop, true);
+    guard.timer = setTimeout(() => unwatch(guard), 5000);
+    globalThis.__chordGuard = guard;
+    return { ok: true, ...said };
+  }
   if (args.op === 'select') {
     el.focus({ preventScroll: true });
     if (isField(el)) el.select();
@@ -86,15 +142,14 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   }
   if (args.op === 'choose') {
     if (!select) return { ok: false, why: 'not-select' };
-    const want = String(args.option).replace(/\s+/g, ' ').trim();
-    const index = optionIndex(want);
-    if (index < 0) return { ok: false, why: 'no-choice' };
+    const index = optionIndex(args.option);
+    if (index < 0) return noChoice(index);
     if (el.selectedIndex !== index) {
       Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex').set.call(el, index);
       el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    return { ok: true, ...said, choice: want };
+    return { ok: true, ...said, choice: clip(el.options[index].label || el.options[index].text, NAME_MAX) };
   }
   const within = (hit) => {
     for (let n = hit; n; n = n.parentNode || n.host) if (n === el) return true;
@@ -106,7 +161,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     return hit;
   };
   // A hit on a frame (another document, maybe another site's) is never the element's, even inside it.
-  const FRAMES = new Set(['iframe', 'frame', 'embed', 'object']);
+  const FRAMES = new Set(['iframe', 'frame', 'embed', 'object', 'fencedframe']);
   const ours = (hit) => hit && within(hit) && !FRAMES.has(hit.localName);
   // What covers it, by its nearest named ancestor with a role.
   const coverOf = (cover) => {
@@ -117,8 +172,24 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     }
     return { role: cover ? cover.localName : 'element', name: '' };
   };
-  // hit: just before the button goes down, the point is still the element's (nothing moved over it since point).
+  // hit: just before the button goes down, the point is still the element's (nothing moved over it since point). The
+  // pointer's move first: the page sees it with its next frame, after main sent it, and its mouseover and mouseenter
+  // handlers run before the move's own listeners, so once the move is seen here (and its dispatch over: a task later),
+  // whatever they put over the point is there to be hit. A move into a frame goes to the frame's document, never
+  // here: then the wait runs out, and the hit test finds the frame.
   if (args.op === 'hit') {
+    const near = (e) => Math.abs(e.clientX - args.x) <= 2 && Math.abs(e.clientY - args.y) <= 2;
+    const moved = globalThis.__chordMoved;
+    if (!(moved && moved.seen && near(moved.seen))) {
+      await new Promise((done) => {
+        const timer = setTimeout(finish, args.hitWait);
+        function seen(e) { if (e.isTrusted && near(e)) finish(); }
+        function finish() { clearTimeout(timer); removeEventListener('mousemove', seen, true); done(); }
+        addEventListener('mousemove', seen, true);
+      });
+    }
+    await new Promise((done) => setTimeout(done, 0));
+    if (moved) { removeEventListener('mousemove', moved.listen, true); globalThis.__chordMoved = null; }
     const hit = deepest(args.x, args.y);
     return ours(hit) ? { ok: true, ...said } : { ok: false, why: 'covered', cover: coverOf(hit) };
   }
@@ -133,6 +204,13 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   for (const [x, y] of points) {
     const hit = deepest(x, y);
     if (ours(hit)) {
+      // From here, the pointer's move is watched for: main sends it next, and hit waits for the page to see it.
+      const was = globalThis.__chordMoved;
+      if (was) removeEventListener('mousemove', was.listen, true);
+      const watch = { seen: null, listen: (e) => { if (e.isTrusted) watch.seen = { clientX: e.clientX, clientY: e.clientY }; } };
+      addEventListener('mousemove', watch.listen, true);
+      globalThis.__chordMoved = watch;
+      setTimeout(() => { if (globalThis.__chordMoved === watch) { removeEventListener('mousemove', watch.listen, true); globalThis.__chordMoved = null; } }, 5000);
       if (args.highlight) {
         const quiet = matchMedia('(prefers-reduced-motion: reduce)').matches;
         const ring = '0 0 0 3px oklch(0.55 0.12 250 / 0.9), 0 0 0 7px oklch(0.55 0.12 250 / 0.18)';

@@ -118,8 +118,12 @@ describe('ControlAgent', () => {
     const second = agent.ask(card({ kind: 'site', tool: 'type', subject: 'shop.example', tab: 'n2' }), signal);
     await tick();
     expect(shown).toHaveLength(1);
+    // The card names the first tab's action; both tabs' bars say they're waiting.
+    expect(shown[0]!.card.tool).toBe('click');
+    expect([agent.state('n1').cards.length, agent.state('n2').cards.length]).toEqual([1, 1]);
     shown[0]!.answer('once');
     await expect(first).resolves.toBe('once');
+    expect([agent.state('n1').cards.length, agent.state('n2').cards.length]).toEqual([0, 0]);
     await expect(second).resolves.toBe('once');
     // Another site is its own card.
     void agent.ask(card({ kind: 'site', tool: 'click', subject: 'other.example', tab: 'n1' }), signal);
@@ -159,7 +163,24 @@ type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) 
 /** A page that answers the extractor with `read`, never (`hang`), or as a test's function does. */
 function fakePage(url: string, read: Answer) {
   const events = new EventEmitter();
-  const at: { url: string; onCapture?: () => void; pdfLandsAt?: string; zoom: number; input: unknown[]; text: string[]; loads: string[]; back: number } = { url, zoom: 1, input: [], text: [], loads: [], back: 0 };
+  // history: the tab's entries as Chromium keeps them (skippable: added by the page without a gesture, which goBack skips).
+  const at: {
+    url: string;
+    onCapture?: () => void;
+    pdfLandsAt?: string;
+    zoom: number;
+    input: unknown[];
+    text: string[];
+    loads: string[];
+    history: { url: string; skippable?: boolean }[];
+    active: number;
+  } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0 };
+  const go = (index: number) => {
+    at.active = index;
+    at.url = at.history[index]!.url;
+    events.emit('did-navigate');
+    events.emit('did-stop-loading');
+  };
   const contents = {
     // Acting (S18 M2c): what an action sends, recorded.
     getZoomFactor: () => at.zoom,
@@ -169,18 +190,19 @@ function fakePage(url: string, read: Answer) {
     getTitle: () => 'Article',
     loadURL: async (to: string) => {
       at.loads.push(to);
-      at.url = to;
-      events.emit('did-navigate');
-      events.emit('did-stop-loading');
+      at.history = [...at.history.slice(0, at.active + 1), { url: to }];
+      go(at.history.length - 1);
     },
     navigationHistory: {
-      canGoBack: () => at.loads.length > 0,
-      getActiveIndex: () => at.loads.length,
-      getEntryAtIndex: (i: number) => ({ url: i === 0 ? url : at.loads[i - 1]! }),
+      canGoBack: () => at.active > 0,
+      getActiveIndex: () => at.active,
+      getEntryAtIndex: (i: number) => at.history[i],
+      goToIndex: (i: number) => go(i),
+      // Chromium's: past the entries the page added without a gesture.
       goBack: () => {
-        at.back++;
-        events.emit('did-navigate');
-        events.emit('did-stop-loading');
+        let i = at.active - 1;
+        while (i > 0 && at.history[i]!.skippable) i--;
+        go(i);
       },
     },
     // A PDF's bytes, fetched through the tab's session: it ends up at `pdfLandsAt` (a redirect), else where it was asked.
@@ -699,13 +721,13 @@ describe('acting through the gate (S18 M2c)', () => {
   const ELEMENTS: El[] = [
     { role: 'link', name: 'Home' },
     { role: 'searchbox', name: 'Search', editable: true, field: field({ type: 'search' }) },
-    { role: 'combobox', name: 'Shipping', select: true, options: ['Standard', 'Express'] },
+    { role: 'combobox', name: 'Shipping', select: true, options: ['Standard', 'Express', 'Pickup', 'Pickup'] },
     { role: 'button', name: 'Cancel', disabled: true },
     { role: 'button', name: 'Buy', cover: { role: 'dialog', name: 'Cookie settings' } },
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string } };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     if (code.includes('new MutationObserver(() =>')) {
       onAct?.(events, 'settle');
@@ -721,13 +743,16 @@ describe('acting through the gate (S18 M2c)', () => {
       if (args.op === 'describe') {
         if (args.option !== undefined) {
           if (!el.select) return { ok: false, why: 'not-select' };
-          if (!el.options?.includes(args.option)) return { ok: false, why: 'no-choice' };
+          const found = el.options?.filter((o) => o === args.option).length ?? 0;
+          if (found !== 1) return { ok: false, why: found ? 'two-choices' : 'no-choice' };
         }
         return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : {}) };
       }
       if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
+      // The page's guard: what it stopped, as if the focus moved between the check and the input.
+      if (args.op === 'unguard') return { ok: true, ...said, moved: Boolean(twist.moved) };
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
@@ -822,19 +847,21 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     const out = await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool scarf', submit: true });
     expect(result(out).data['done']).toBe('Typed in “Search”');
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'focused', 'focused']);
+    // Each input with the page's guard up (guard, the input, unguard), the focus checked before each.
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'focused', 'guard', 'unguard', 'focused', 'guard', 'unguard']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
     t.steps.length = 0;
     await t.call('type', { tab_id: t.tab, ref: 'e2', text: ' red', replace: false });
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'focused']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'focused', 'guard', 'unguard']);
   });
 
   it('press_key focuses the element and sends the key; select_option chooses by label', async () => {
     const t = await acting();
     await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Escape' });
-    expect(t.steps).toEqual(['describe', 'point', 'focus', 'focused']);
+    // focus says whether it has the focus: no second round trip.
+    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'unguard']);
     expect(t.at.input).toEqual([
       { type: 'keyDown', keyCode: 'Escape' },
       { type: 'keyUp', keyCode: 'Escape' },
@@ -877,6 +904,7 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.input).toEqual([]);
   });
 
+  const ACT_REFUSALS_FOCUS = 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.';
   // [what changed in the page, what the agent hears]: nothing goes in, before any card when it's known then.
   const twists: [string, Twist, string][] = [
     ['the field turned into a password field', { field: field({ type: 'password' }) }, 'That field is now a password, code or card field: the user fills it. Ask them to.'],
@@ -884,6 +912,14 @@ describe('acting through the gate (S18 M2c)', () => {
     ['the focus taken to another field (a mousedown handler)', { focused: false }, 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.'],
     ['a frame moved over the point before the press', { hit: { role: 'frame', name: 'Ad' } }, 'Something is covering that element: frame “Ad”. Deal with it first, or call snapshot again.'],
   ];
+  it('the focus moved between the check and the input: the page stops the text, and nothing more goes in (no Enter)', async () => {
+    const t = await acting({ twist: { moved: true } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe(ACT_REFUSALS_FOCUS);
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+    const u = await acting({ twist: { moved: true } });
+    expect(refusal(await u.call('press_key', { tab_id: u.tab, ref: 'e2', key: 'Enter' })).refused).toBe(ACT_REFUSALS_FOCUS);
+  });
+
   it.each(twists)('type, when %s: refused, no text', async (_what, twist, says) => {
     const t = await acting({ twist });
     expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'secret' })).refused).toBe(says);
@@ -897,18 +933,29 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Free shipping, trust me' })).refused).toBe('That list has no such choice. Call snapshot for its choices.');
     expect(t.cards).toEqual([]);
+    // Two with the label: neither, and no card.
+    expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Pickup' })).refused).toBe('That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.');
+    expect(t.cards).toEqual([]);
     await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Express' });
     expect(t.cards.map((c) => c.description)).toEqual(['choose “Express” in “Shipping”']);
   });
 
-  it('back is checked before going: never to a site kept private', async () => {
+  it('back is checked before going, and goes to exactly the entry checked: never to a site kept private', async () => {
+    const NEVER_READ = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+    // The entry before is on a site the user keeps private: refused, and nowhere gone.
     const t = await acting();
-    await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
-    // The page before is on a site the user keeps private now (the fake's history: loads after the first page).
-    t.at.loads.unshift('https://private.test/x');
-    await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/c' });
-    t.at.loads.splice(1, 1, 'https://private.test/y');
-    expect(refusal(await t.call('back', { tab_id: t.tab })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    t.at.history = [{ url: 'https://private.test/x' }, { url: 'https://news.test/a' }];
+    t.at.active = 1;
+    expect(refusal(await t.call('back', { tab_id: t.tab })).refused).toBe(NEVER_READ);
+    expect(t.at.active).toBe(1);
+
+    // A private page, then one the page added without a gesture (Chromium's goBack would skip it, to the private one):
+    // back is checked on the entry just before, and goes to exactly that one.
+    const u = await acting();
+    u.at.history = [{ url: 'https://private.test/x' }, { url: 'https://news.test/pushed', skippable: true }, { url: 'https://news.test/a' }];
+    u.at.active = 2;
+    expect(result(await u.call('back', { tab_id: u.tab })).data).toMatchObject({ done: 'Went back', navigated: true, url: 'https://news.test/pushed' });
+    expect(u.at.active).toBe(1);
   });
 
   it('navigate and back: its own tabs, http and https, never a site kept private; no site card', async () => {

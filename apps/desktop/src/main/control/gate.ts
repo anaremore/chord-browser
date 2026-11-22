@@ -55,11 +55,15 @@ const grantKey = (card: { kind: ApprovalKind; subject: string }) => `${card.kind
 /**
  * Which card an ask waits on: the kind, subject and tab, so a card only ever answers for the tab it names. A site card
  * (M2c) is the agent's for the site, whatever its tab: two tabs of it on one site wait on one card, and one answer
- * settles both (it's for the site, and lasts the agent's life anyway).
+ * settles both (it's for the site, and lasts the agent's life anyway). The card says what the first tab's action was;
+ * every tab waiting on it has its bar say so.
  */
-const openKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }) => (card.kind === 'site' ? `site:${card.subject}` : `${card.kind}:${card.subject}:${card.tab ?? ''}`);
+const openKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }): string => (card.kind === 'site' ? `site:${card.subject}` : `${card.kind}:${card.subject}:${card.tab ?? ''}`);
 
 interface OpenCard {
+  id: string;
+  /** The tabs waiting on it: the one it names, and (a site card) any other tab of the agent's asking the same. */
+  tabs: Set<string>;
   cancel: AbortController;
   /** Asks still waiting on it. */
   askers: number;
@@ -206,6 +210,12 @@ export class ControlAgent {
       if (Date.now() - late.at <= CONTROL_WAIT_MS && late.url === (card.target[0] ?? '')) return 'once';
     }
     const open = this.open.get(key) ?? this.openCard(card);
+    // Another tab waiting on a card up already (a site card is the site's): its bar says it's waiting too.
+    const tab = card.tab ?? NO_TAB;
+    if (!open.tabs.has(tab)) {
+      open.tabs.add(tab);
+      this.step(tab, { t: 'ask', card: open.id });
+    }
     open.askers++;
     return new Promise<Grant | 'waiting'>((resolve) => {
       let done = false;
@@ -232,7 +242,7 @@ export class ControlAgent {
     const key = openKey(card);
     const cancel = new AbortController();
     this.step(tab, { t: 'ask', card: id });
-    const open: OpenCard = { cancel, askers: 0, answer: Promise.resolve<Grant>('deny') };
+    const open: OpenCard = { id, tabs: new Set([tab]), cancel, askers: 0, answer: Promise.resolve<Grant>('deny') };
     open.answer = (async (): Promise<Grant> => {
       try {
         const grant = await this.present({ ...card, id }, cancel.signal);
@@ -246,7 +256,7 @@ export class ControlAgent {
         return 'deny';
       } finally {
         this.open.delete(key);
-        this.step(tab, { t: 'answer', card: id });
+        for (const waited of open.tabs) this.step(waited, { t: 'answer', card: id });
       }
     })();
     this.open.set(key, open);
