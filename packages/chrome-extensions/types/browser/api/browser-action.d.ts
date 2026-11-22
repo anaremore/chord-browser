@@ -33,13 +33,11 @@ export declare class BrowserActionAPI {
     getState(): {
         activeTabId: number | undefined;
         actions: {
-            color?: string | undefined;
-            text?: string | undefined;
-            title?: string | undefined;
-            popup?: string
-            /** Last modified date for icon. */
-             | undefined;
-            iconModified?: number | undefined;
+            color?: string;
+            text?: string;
+            title?: string;
+            popup?: string;
+            iconModified?: number;
             id: string;
             tabs: {
                 [key: string]: any;

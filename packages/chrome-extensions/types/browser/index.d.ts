@@ -83,11 +83,11 @@ export declare class ElectronChromeExtensions extends EventEmitter {
     getActionState(): {
         activeTabId: number | undefined;
         actions: {
-            color?: string | undefined;
-            text?: string | undefined;
-            title?: string | undefined;
-            popup?: string | undefined;
-            iconModified?: number | undefined;
+            color?: string;
+            text?: string;
+            title?: string;
+            popup?: string;
+            iconModified?: number;
             id: string;
             tabs: {
                 [key: string]: any;

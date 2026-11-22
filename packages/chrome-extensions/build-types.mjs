@@ -5,10 +5,15 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const here = import.meta.dirname;
-const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+// TypeScript 7's exports map hides bin/tsc, so find it through the package's own `bin` field.
+const tsPackage = createRequire(import.meta.url).resolve('typescript/package.json');
+const { bin } = JSON.parse(readFileSync(tsPackage, 'utf8'));
+const tscPath = typeof bin === 'string' ? bin : bin?.tsc;
+if (!tscPath) throw new Error(`no tsc in the bin field of ${tsPackage}`);
+const tsc = join(dirname(tsPackage), tscPath);
 rmSync(join(here, 'types'), { recursive: true, force: true });
 execFileSync(
   process.execPath,
