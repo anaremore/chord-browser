@@ -22,6 +22,7 @@ import { hostOf, type DevtoolsPlace, type DevtoolsSettings, type NodeId } from '
 import type { DevtoolsBar } from '@chord/ipc';
 import { frameRadius, size } from '@chord/tokens';
 import { BaseWindow, nativeTheme, screen, WebContentsView, type Rectangle, type Session, type WebContents } from 'electron';
+import { isAgentInput } from './control/input';
 import { send } from './ipc';
 import { backgroundHex, miniWindowChromeOptions, onUiScale, platform, systemInfo, titleBarOverlay, trafficLightPosition, uiScale } from './platform';
 import { createUiView } from './window';
@@ -354,6 +355,8 @@ export class DevTools {
     const toggle = (event: Electron.Event, input: Electron.Input) => {
       if (!isToggleKey(input)) return;
       event.preventDefault();
+      // An agent's key (control/input.ts) never opens DevTools: stopped, not toggled.
+      if (isAgentInput(contents)) return;
       this.toggleWindow(nodeId, true);
     };
     page.once('destroyed', gone);

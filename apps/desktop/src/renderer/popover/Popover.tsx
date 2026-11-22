@@ -521,14 +521,15 @@ function AgentConnectCardView({ card }: { card: AgentConnectCard }) {
     <div className={styles.card} role="alertdialog" aria-label={`${card.name} wants to use Chord`}>
       <AgentCardBody
         title={`${card.name} wants to use Chord`}
-        note={`Started${card.startedBy ? ` by ${card.startedBy}` : ''} in ${card.folder ?? 'an unknown folder'}.`}
+        note={`Started${card.startedBy ? ` by ${card.startedBy}` : ''} in ${card.folder ?? 'an unknown folder'}.${card.noProgram ? ' Chord can’t tell which program started it.' : ''}`}
         list={AGENT_MAY}
         closeLabel="Close"
         onClose={() => respond('deny')}
+        // Always allow is kept by the program that started it: with none Chord can name, it isn't offered.
         actions={[
           { label: 'Deny', look: 'link', onClick: () => respond('deny') },
-          { label: 'Allow once', look: 'quiet', onClick: () => respond('once') },
-          { label: 'Always allow', look: 'primary', onClick: () => respond('always') },
+          { label: 'Allow once', look: card.noProgram ? 'primary' : 'quiet', onClick: () => respond('once') },
+          ...(card.noProgram ? [] : [{ label: 'Always allow', look: 'primary' as const, onClick: () => respond('always') }]),
         ]}
       />
     </div>

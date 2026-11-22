@@ -953,6 +953,11 @@ export interface AgentConnectCard {
   folder: string | null;
   /** The program that started it (claude.exe), once Chord has looked; null until then, or if it can't tell. */
   startedBy: string | null;
+  /**
+   * Chord looked and can't tell which program started it (S18 M2a): the card says so, and Always allow isn't offered,
+   * since an allowance is kept by its program and there's none to keep it by.
+   */
+  noProgram?: boolean;
 }
 
 /** Settings → Agents (S18 M1d; mocks/agents-s18-m1.html §4). */

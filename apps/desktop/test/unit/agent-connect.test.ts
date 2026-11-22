@@ -60,6 +60,33 @@ describe('The connect card', () => {
     expect(t.cards.cardFor('w1')).toBeNull();
   });
 
+  // M2a: no program Chord can keep an allowance by (the lookup found none, or no path): the card says so and offers
+  // no Always allow; an Always pressed before Chord knew lets it in once and keeps nothing.
+  // [what the lookup found, answered before it ended?]
+  const unknown: [string, ProcessInfo[], boolean][] = [
+    ['nobody', [], false],
+    ['nobody, Always pressed first', [], true],
+    ['a process with no path', [{ ...claude, path: null }], false],
+    ['a process with no path, Always pressed first', [{ ...claude, path: null }], true],
+  ];
+  it.each(unknown)('can’t tell who started it (%s): no Always allow, nothing kept', async (_what, chain, early) => {
+    const t = setup();
+    let looked!: (chain: ProcessInfo[]) => void;
+    const asked = t.cards.ask(t.who(new Promise((r) => (looked = r))), new AbortController().signal);
+    await tick();
+    const { id } = t.cards.cardFor('w1')!;
+    expect(t.cards.cardFor('w1')!.noProgram).toBeFalsy();
+    if (early) t.cards.answer(id, 'always', 'w1');
+    looked(chain);
+    await tick();
+    if (!early) {
+      expect(t.cards.cardFor('w1')).toMatchObject({ startedBy: null, noProgram: true });
+      t.cards.answer(id, 'always', 'w1');
+    }
+    expect(await asked).toEqual<ConnectAnswer>({ grant: 'once', profileId: 'default' });
+    expect(t.store.state.settings.agentsAllowed).toEqual([]);
+  });
+
   it('Deny (and ×, which answers the same) lets nothing in; another window’s popover can’t answer', async () => {
     const t = setup();
     const asked = t.cards.ask(t.who(), new AbortController().signal);
@@ -170,12 +197,12 @@ describe('Always allow', () => {
     expect((await other).grant).toBe('deny');
   });
 
-  it('without the program that started it (the lookup failed), this connection is let in but nothing is kept: the next asks', async () => {
+  it('without the program that started it (the lookup failed), this connection is let in once and nothing is kept: the next asks', async () => {
     const t = setup();
     const first = t.cards.ask(t.who(Promise.reject(new Error('no lookup'))), new AbortController().signal);
     await tick();
     t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
-    expect(await first).toEqual({ grant: 'always', profileId: 'default', allowedParent: null });
+    expect(await first).toEqual({ grant: 'once', profileId: 'default' });
     expect(t.store.state.settings.agentsAllowed).toEqual([]);
     // Nor does a saved row without one count (restore drops it): a name never matches alone.
     expect(cleanAgentsAllowed([{ name: 'Claude Code', parent: null, profileId: 'default' }, { name: 'Codex', parent: '', profileId: 'default' }])).toEqual([]);

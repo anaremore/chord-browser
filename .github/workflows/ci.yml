@@ -161,9 +161,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       # Outside agents' transport (S18) on every OS: the endpoint, the relay, the gate, and on Windows the pipe's DACL
-      # (window-owner.exe, just built), on Linux another user refused. pnpm test runs them on Linux too.
+      # (window-owner.exe, just built), on Linux another user refused; and who's calling (M2a: pipe-clients, ss, lsof),
+      # looked up for real on each OS. pnpm test runs them on Linux too.
       - name: Agents' transport
-        run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/control.test.ts
+        run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/agent-peer.test.ts apps/desktop/test/unit/control.test.ts
       # chord-data's perf rows on Windows' disks too, where a sync to disk costs most: a new profile's database (and
       # its migrations committed one by one, as before 2026-11-20, for comparison) and a big import's Undo.
       - name: chord-data's perf rows

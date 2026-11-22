@@ -21,12 +21,26 @@
 //     the user, and denies network logons. Chord runs it once, on the first connection.
 //   window-owner pipe-dacl <pipe>
 //     Prints that pipe's DACL as SDDL (tests).
+//   window-owner pipe-clients <pipe> <server's process id>
+//     Prints, as one line of JSON, the process ids of the clients connected to that pipe's
+//     instances, which the server (Chord) holds, and each one's chain: itself, its parent and
+//     theirs, from one process snapshot (S18 M2a, "who's calling"), with how long each step took.
+//     GetNamedPipeClientProcessId needs the server's own handle to an instance, and Node
+//     never gives Chord its handle (a pipe socket's fd is -1 on Windows), so this finds it:
+//     the server's handles from the system's handle table (read in place: it can hold
+//     hundreds of thousands of entries), only its files, each copied here (DuplicateHandle:
+//     the same user's process) and kept if it's the server end of this pipe. A query on a
+//     file can block when the file has I/O pending, so they all run at once, each on a
+//     thread of its own, and those not done within QUERIES_MS are left behind ("stuck"); the
+//     server's files past FILES_MAX aren't looked at ("truncated"). Either means a client may
+//     be missing from the list.
 //
 // Exit codes: 0 done, 2 bad arguments, 3 a window isn't the process's, 4 the call failed,
-// 5 the pipe couldn't be opened.
+// 5 the pipe (for pipe-clients, the server's process) couldn't be opened.
 // Built with the C# compiler that ships with Windows (.NET Framework 4.8,
 // scripts/build-window-owner.mjs), so building it needs no SDK.
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
@@ -147,6 +161,307 @@ static class WindowOwner
         }
     }
 
+    // pipe-clients: the system's handle table, the queries on each of the server's files, and the clients' chains.
+    const int SystemExtendedHandleInformation = 64;
+    const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
+    const uint PROCESS_DUP_HANDLE = 0x40;
+    const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    const uint DUPLICATE_SAME_ACCESS = 2;
+    const uint FILE_TYPE_PIPE = 3;
+    const uint PIPE_SERVER_END = 1;
+    const int FileNameInfo = 2;
+    const uint GENERIC_READ = 0x80000000;
+    const uint FILE_SHARE_READ = 1;
+    const uint TH32CS_SNAPPROCESS = 2;
+    /** How long all the queries on the server's files may take, together: they run at once. */
+    const int QUERIES_MS = 250;
+    /** At most this many of the server's files are looked at. */
+    const int FILES_MAX = 8192;
+    /** A chain: the client and this many ancestors at most (the bridge, who started it, and two above). */
+    const int CHAIN_MAX = 4;
+
+    [DllImport("ntdll.dll")]
+    static extern int NtQuerySystemInformation(int infoClass, IntPtr info, int length, out int needed);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, bool inherit, uint options);
+
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentProcessId();
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetFileType(IntPtr file);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetNamedPipeInfo(IntPtr pipe, out uint flags, IntPtr outSize, IntPtr inSize, IntPtr maxInstances);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetFileInformationByHandleEx(IntPtr file, int infoClass, IntPtr info, uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct ProcessEntry
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public UIntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, System.Text.StringBuilder name, ref uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    /** The pipe's name as a handle to it gives it (\chord-agent-…), or null. */
+    static string PipeName(IntPtr pipe)
+    {
+        IntPtr buffer = Marshal.AllocHGlobal(1024);
+        try
+        {
+            if (!GetFileInformationByHandleEx(pipe, FileNameInfo, buffer, 1024)) return null;
+            int bytes = Marshal.ReadInt32(buffer);
+            return bytes > 0 && bytes <= 1020 ? Marshal.PtrToStringUni(new IntPtr(buffer.ToInt64() + 4), bytes / 2) : null;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /** The handle table: every process's handles, as the system has them now; IntPtr.Zero if it can't be had. */
+    static IntPtr HandleTable(out long count)
+    {
+        int size = 4 << 20, needed;
+        count = 0;
+        for (int tries = 0; tries < 8; tries++)
+        {
+            IntPtr table = Marshal.AllocHGlobal(size);
+            int status = NtQuerySystemInformation(SystemExtendedHandleInformation, table, size, out needed);
+            if (status == 0)
+            {
+                count = Marshal.ReadIntPtr(table).ToInt64();
+                return table;
+            }
+            Marshal.FreeHGlobal(table);
+            if (status != STATUS_INFO_LENGTH_MISMATCH) return IntPtr.Zero;
+            size = Math.Max(size * 2, needed + (1 << 20));
+        }
+        return IntPtr.Zero;
+    }
+
+    /** One of the server's file handles, its query, and what it found (0: nothing, or not done). */
+    sealed class Query
+    {
+        public IntPtr Copy;
+        public volatile bool Done;
+        public uint Client;
+    }
+
+    static string Json(string text)
+    {
+        if (text == null) return "null";
+        var b = new System.Text.StringBuilder("\"");
+        foreach (char c in text)
+        {
+            if (c == '"' || c == '\\') b.Append('\\').Append(c);
+            else if (c < ' ') b.Append("\\u").Append(((int)c).ToString("x4"));
+            else b.Append(c);
+        }
+        return b.Append('"').ToString();
+    }
+
+    /** A process's executable (null without access) and when it started (0 without access). */
+    static string ImagePath(uint pid, out long created)
+    {
+        created = 0;
+        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (process == IntPtr.Zero) return null;
+        try
+        {
+            long exit, kernel, user;
+            if (GetProcessTimes(process, out created, out exit, out kernel, out user) == false) created = 0;
+            var name = new System.Text.StringBuilder(32768);
+            uint size = (uint)name.Capacity;
+            return QueryFullProcessImageNameW(process, 0, name, ref size) ? name.ToString(0, (int)size) : null;
+        }
+        finally
+        {
+            CloseHandle(process);
+        }
+    }
+
+    /**
+     * The client and its ancestors as JSON ({pid, name, path, ppid}, as parent.ts's ProcessInfo), from one process
+     * snapshot. Windows never reparents, so an exited parent's PID can be another process's: an ancestor that started
+     * after its child (a reused PID) ends the chain, as does one Chord can't see when it started.
+     */
+    static string Chain(uint pid, Dictionary<uint, ProcessEntry> processes)
+    {
+        var items = new List<string>();
+        long childCreated = long.MaxValue;
+        for (int i = 0; i < CHAIN_MAX && pid > 4; i++)
+        {
+            ProcessEntry entry;
+            if (!processes.TryGetValue(pid, out entry)) break;
+            long created;
+            string path = ImagePath(pid, out created);
+            if (i > 0 && (created == 0 || created > childCreated)) break;
+            childCreated = created == 0 ? long.MaxValue : created;
+            items.Add("{\"pid\":" + pid + ",\"name\":" + Json(entry.szExeFile) + ",\"path\":" + Json(path) + ",\"cwd\":null,\"ppid\":" + entry.th32ParentProcessID + "}");
+            pid = entry.th32ParentProcessID;
+        }
+        return "[" + string.Join(",", items) + "]";
+    }
+
+    static Dictionary<uint, ProcessEntry> Processes()
+    {
+        var processes = new Dictionary<uint, ProcessEntry>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == new IntPtr(-1)) return processes;
+        try
+        {
+            var entry = new ProcessEntry { dwSize = (uint)Marshal.SizeOf(typeof(ProcessEntry)) };
+            for (bool more = Process32FirstW(snapshot, ref entry); more; more = Process32NextW(snapshot, ref entry)) processes[entry.th32ProcessID] = entry;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+        return processes;
+    }
+
+    /**
+     * Prints, as one line of JSON: the clients' PIDs, each one's chain (itself first), how many of the server's files
+     * were looked at and how many queries didn't answer in time, and how long each step took (ms).
+     */
+    static int PipeClients(string name, uint server)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long tTable, tScan, tQueries, tChains;
+        // Files are one object type: this program's own file handle says which, so only the server's files are queried.
+        IntPtr own = CreateFileW(System.Reflection.Assembly.GetExecutingAssembly().Location, GENERIC_READ, FILE_SHARE_READ, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        if (own == new IntPtr(-1)) return 4;
+        IntPtr process = OpenProcess(PROCESS_DUP_HANDLE, false, server);
+        if (process == IntPtr.Zero)
+        {
+            CloseHandle(own);
+            return 5;
+        }
+        long count;
+        IntPtr table = HandleTable(out count);
+        tTable = clock.ElapsedMilliseconds;
+        var queries = new List<Query>();
+        int stuck = 0, truncated = 0;
+        try
+        {
+            if (table == IntPtr.Zero) return 4;
+            // The entries, read in place (no marshalling of each): Object, UniqueProcessId, HandleValue (pointers), then
+            // GrantedAccess (4 bytes), CreatorBackTraceIndex and ObjectTypeIndex (2 each), HandleAttributes, Reserved.
+            int p = IntPtr.Size;
+            int entrySize = 3 * p + 16;
+            long first = table.ToInt64() + 2 * p;
+            ulong self = GetCurrentProcessId();
+            ulong ownValue = (ulong)own.ToInt64();
+            int fileType = -1;
+            var candidates = new List<KeyValuePair<long, int>>();
+            for (long i = 0; i < count; i++)
+            {
+                IntPtr at = new IntPtr(first + i * entrySize);
+                ulong pid = (ulong)Marshal.ReadIntPtr(at, p).ToInt64();
+                if (pid != server && pid != self) continue;
+                long handle = Marshal.ReadIntPtr(at, 2 * p).ToInt64();
+                int type = (ushort)Marshal.ReadInt16(at, 3 * p + 6);
+                if (pid == self && (ulong)handle == ownValue) fileType = type;
+                else if (pid == server) candidates.Add(new KeyValuePair<long, int>(handle, type));
+            }
+            tScan = clock.ElapsedMilliseconds;
+            if (fileType < 0) return 4;
+            // Only the server's files, then the cap: one past it is counted as truncated, never dropped silently.
+            candidates = candidates.FindAll(c => c.Value == fileType);
+            if (candidates.Count > FILES_MAX)
+            {
+                truncated = candidates.Count - FILES_MAX;
+                candidates.RemoveRange(FILES_MAX, truncated);
+            }
+            string leaf = name.Substring(@"\\.\pipe".Length); // \chord-agent-…, as a handle to it names it
+            // Each of the server's files is queried on a thread of its own, all at once: one with I/O pending can block
+            // (GetFileType on a synchronous handle), and is left behind when time's up, with its copy still open
+            // (closing it under the query could hand its number to another handle).
+            foreach (var c in candidates)
+            {
+                if (c.Value != fileType) continue;
+                IntPtr copy;
+                if (!DuplicateHandle(process, new IntPtr(c.Key), GetCurrentProcess(), out copy, 0, false, DUPLICATE_SAME_ACCESS)) continue;
+                var q = new Query { Copy = copy };
+                queries.Add(q);
+                var t = new Thread(() =>
+                {
+                    try
+                    {
+                        uint flags, pid;
+                        if (GetFileType(q.Copy) == FILE_TYPE_PIPE && GetNamedPipeInfo(q.Copy, out flags, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) && (flags & PIPE_SERVER_END) != 0
+                            && string.Equals(PipeName(q.Copy), leaf, StringComparison.OrdinalIgnoreCase) && GetNamedPipeClientProcessId(q.Copy, out pid))
+                            q.Client = pid;
+                    }
+                    catch { }
+                    q.Done = true;
+                }, 64 * 1024) { IsBackground = true };
+                t.Start();
+            }
+            var deadline = clock.ElapsedMilliseconds + QUERIES_MS;
+            foreach (var q in queries)
+                while (!q.Done && clock.ElapsedMilliseconds < deadline) Thread.Sleep(1);
+            tQueries = clock.ElapsedMilliseconds;
+            var clients = new List<uint>();
+            foreach (var q in queries)
+            {
+                if (!q.Done) stuck++;
+                else if (q.Client != 0 && !clients.Contains(q.Client)) clients.Add(q.Client);
+            }
+            var processes = clients.Count > 0 ? Processes() : new Dictionary<uint, ProcessEntry>();
+            var chains = new List<string>();
+            foreach (uint c in clients) chains.Add(Json(c.ToString()) + ":" + Chain(c, processes));
+            tChains = clock.ElapsedMilliseconds;
+            // stuck and truncated say the list may miss a client: then Chord names a peer only by its own claim.
+            Console.WriteLine("{\"clients\":[" + string.Join(",", clients) + "],\"chains\":{" + string.Join(",", chains) + "},\"files\":" + queries.Count + ",\"stuck\":" + stuck + ",\"truncated\":" + truncated
+                + ",\"handles\":" + count + ",\"ms\":{\"table\":" + tTable + ",\"scan\":" + (tScan - tTable) + ",\"queries\":" + (tQueries - tScan) + ",\"chains\":" + (tChains - tQueries) + ",\"total\":" + tChains + "}}");
+            return 0;
+        }
+        finally
+        {
+            if (table != IntPtr.Zero) Marshal.FreeHGlobal(table);
+            foreach (var q in queries) if (q.Done) CloseHandle(q.Copy);
+            CloseHandle(process);
+            CloseHandle(own);
+        }
+    }
+
     static bool Handle(string text, out IntPtr value)
     {
         ulong number;
@@ -171,6 +486,12 @@ static class WindowOwner
         {
             if (!AgentPipe.IsMatch(args[1])) return 2;
             return args[0] == "restrict-pipe" ? RestrictPipe(args[1]) : PipeDacl(args[1]);
+        }
+        if (args.Length == 3 && args[0] == "pipe-clients")
+        {
+            uint server;
+            if (!AgentPipe.IsMatch(args[1]) || !uint.TryParse(args[2], out server) || server == 0) return 2;
+            return PipeClients(args[1], server);
         }
         if (args.Length == 2 && args[0] == "get" && Handle(args[1], out window))
         {

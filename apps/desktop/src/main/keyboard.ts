@@ -6,8 +6,9 @@
  * renderers handle them, since only they know whether a text field has focus
  * (⌘← must move the caret in the command bar, not go back).
  */
-import { findShortcut, type ActionId } from '@chord/core';
+import { agentKeyAllowed, findShortcut, type ActionId } from '@chord/core';
 import type { WebContents } from 'electron';
+import { isAgentInput, yourKey } from './control/input';
 import { platform } from './platform';
 import { shortcutOverrides } from './shortcut-overrides';
 
@@ -22,6 +23,16 @@ export interface KeyboardHandlers {
 
 export function attachShortcuts(contents: WebContents, handlers: KeyboardHandlers): void {
   contents.on('before-input-event', (event, input) => {
+    // Keys Chord sends a page for an agent (control/input.ts) are never Chord's shortcuts. One of press_key's goes to the
+    // page as it is (an agent's Escape closes the page's dialog, though plain Escape is *Stop loading* too), and the
+    // menu's accelerators are off while it's on its way (control/input.ts). Any other key (control/input.ts never sends
+    // one: this is the second lock) is stopped here, so neither the page nor, unhandled, the ⋯ menu sees it.
+    if (isAgentInput(contents)) {
+      if (!agentKeyAllowed(input)) event.preventDefault();
+      return;
+    }
+    // Your key: the menu's accelerators are yours again, before the page or the menu sees it.
+    if (input.type === 'keyDown') yourKey(contents);
     if (handlers.paused?.(contents)) return;
     if (input.type === 'keyUp' && input.key === 'Control') {
       handlers.onControlUp(contents);

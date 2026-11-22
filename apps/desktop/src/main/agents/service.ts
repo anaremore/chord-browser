@@ -16,6 +16,7 @@ import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
+import type { PeerLookup } from './peer';
 // The service loads with the first time Agents is on, never at launch: so does what decides a tab can be shared.
 import { shareable, type AgentShares } from './shares';
 import type { Socket } from 'node:net';
@@ -38,6 +39,10 @@ export interface AgentServiceDeps {
   chords?: AgentChordsDeps;
   dispatch?(command: Command): void;
   neverSites?(): readonly string[];
+  /** M2's slices (agentActions): without them, *Started by* comes from the hello's word, as in M1. */
+  actions?: boolean;
+  /** Who's at the other end of a connection (peer.ts); tests give their own. Null: the OS can't say. */
+  peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>): Promise<PeerLookup>;
 }
 
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
@@ -48,6 +53,10 @@ export interface HeldConnection {
   /** Its end of the endpoint: Remove in Settings hangs up on it. */
   socket: Socket;
   parent: Promise<ProcessInfo[]> | null;
+  /** The process at its other end, as the OS says (peer.ts), once looked up; null if it couldn't say. */
+  peerPid?: number | null;
+  /** Its claim on its hello's bridge PID (AgentService.claims): it holds that PID only while no other live connection claims it too. */
+  claim?: object;
   /** The sign-ins it was let in with (the window you answered in, or those of its Always allow). */
   profileId: ProfileId | null;
   /** Let in for good (Always allow, now or before). */
@@ -65,6 +74,14 @@ export class AgentService {
   private endpoint: Endpoint | null = null;
   private starting: Promise<void> | null = null;
   readonly connections = new Set<HeldConnection>();
+  /**
+   * Bridge PIDs claimed by live connections, from each one's hello on (M2a), so even an idle relay that hasn't been
+   * looked up yet holds its own. A PID claimed by more than one live connection is **contested**: no connection gets it
+   * by claim, those that claimed it can't tell who's calling (no fallback for them either), and every other connection
+   * counts it as taken. It clears as they close. (Review 2 of #103: a process with the token could otherwise hello as a
+   * new relay before the relay's own hello arrived.)
+   */
+  private readonly claims = new Map<number, Set<object>>();
   /** The agents' chords: made with the first connection, so with no agent there are none and nothing runs for them. */
   chords: AgentChords | null = null;
   /** The DACL helper's run, once per endpoint (Windows). */
@@ -97,6 +114,11 @@ export class AgentService {
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
           let gone = false;
+          // Its claim to be that bridge process (whoStarted): contested if another live connection claims it too.
+          const claim = {};
+          const claimants = this.claims.get(hello.bridgePid) ?? new Set<object>();
+          claimants.add(claim);
+          this.claims.set(hello.bridgePid, claimants);
           // Nothing of it is handled until the pipe's restriction (Windows' DACL, started by the first connection) has
           // finished, however it ended: its messages wait meanwhile, as they do for the connection's code. A failed one
           // (logged, and tried twice) doesn't hold connections back: the token still gates every one.
@@ -121,7 +143,7 @@ export class AgentService {
               present: async (card, signal) => {
                 if (card.kind !== 'connection' || !held) return 'deny';
                 // Who started it, looked up while the card shows (about 1 s on Windows), never inside a call.
-                held.parent ??= import('./parent').then(({ ancestry }) => ancestry(hello.parentPid)).catch(() => []);
+                held.parent ??= this.whoStarted(held).catch(() => []);
                 const answer = await this.deps.ask({ name: held.connection.name, folder: hello.cwd, parent: held.parent }, signal);
                 held.profileId = answer.profileId;
                 held.always = answer.grant === 'always';
@@ -132,7 +154,7 @@ export class AgentService {
                 return answer.grant;
               },
             });
-            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null, letIn: false };
+            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null, letIn: false, claim };
             held = record;
             this.connections.add(record);
             // Settings → Agents lists the stopped ones: it hears when one stops or goes on.
@@ -159,6 +181,9 @@ export class AgentService {
             },
             closed: () => {
               gone = true;
+              const claimants = this.claims.get(hello.bridgePid);
+              claimants?.delete(claim);
+              if (claimants?.size === 0) this.claims.delete(hello.bridgePid);
               if (!held) return;
               held.connection.closed();
               this.connections.delete(held);
@@ -188,9 +213,47 @@ export class AgentService {
     this.endpoint?.close();
     this.endpoint = null;
     this.restricted = null;
+    this.claims.clear();
     for (const held of this.connections) held.connection.closed();
     this.connections.clear();
     this.publishLetIn();
+  }
+
+  /**
+   * Who started a connection's agent (M2a): the process at its other end as the OS says (peer.ts), never the
+   * hello's word for it. That's `chord mcp` (Chord's own executable), and who started it is its parent; anything else
+   * that holds the token and connected is the client itself. Unknown, nobody: the card names no program, and Always
+   * allow isn't offered.
+   */
+  private async whoStarted(held: HeldConnection): Promise<ProcessInfo[]> {
+    // A packaged build before AGENT_ACTIONS_RELEASED: M1's lookup, from the bridge's word.
+    if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid));
+    // Its claim, contested (another live connection claims that PID too): it can't tell, before the lookup or after.
+    const contested = () => (this.claims.get(held.hello.bridgePid)?.size ?? 0) > 1;
+    const unknown = () => {
+      held.peerPid = null;
+      return [];
+    };
+    if (contested()) return unknown();
+    // Taken by other live connections: the peers they were given, and every PID claimed by anyone but this one alone.
+    const others = new Set<number>();
+    for (const other of this.connections) if (other !== held && typeof other.peerPid === 'number') others.add(other.peerPid);
+    for (const [pid, claimants] of this.claims) if (!(claimants.size === 1 && held.claim && claimants.has(held.claim))) others.add(pid);
+    // Not its claim (-1 is never a process): only a connection that holds its claim alone claims anything.
+    const claimed = held.claim && this.claims.get(held.hello.bridgePid)?.has(held.claim) ? held.hello.bridgePid : -1;
+    const peer = this.deps.peer ?? (async (socket: Socket, endpoint: string, claimed: number, taken: ReadonlySet<number>) => {
+      const { peerOf, peerDeps } = await import('./peer');
+      return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper));
+    });
+    const { pid, chain: given } = await peer(held.socket, this.endpoint?.path ?? '', claimed, others);
+    // Contested while it looked (the real relay's hello arrived meanwhile): what it found can't be trusted.
+    if (contested()) return unknown();
+    held.peerPid = pid;
+    if (pid === null) return [];
+    const { ancestry, sameProgram } = await import('./parent');
+    // Windows' helper gives the chain with the peer (one process, no PowerShell); elsewhere it's looked up now.
+    const chain = given ?? (await ancestry(pid, 4));
+    return chain[0] && sameProgram(chain[0].path, process.execPath) ? chain.slice(1) : chain.slice(0, 3);
   }
 
   /** Stop for every agent (Ctrl+. / ⌘. in M1c): calls in flight answer now, later ones are refused. */

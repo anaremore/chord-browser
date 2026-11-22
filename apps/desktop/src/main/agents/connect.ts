@@ -201,11 +201,12 @@ export class ConnectCards {
           const state = this.deps.store.state;
           const profileId = state.chords[state.windows[answeredIn]?.activeChordId ?? '']?.profileId ?? null;
           if (answer === 'always' && profileId) {
-            // Kept only with the program that started it (looked up by now, or as soon as it is).
+            // Kept only with the program that started it (looked up by now, or as soon as it is). With none to keep it
+            // by, nothing is kept and it's let in this once (the card stops offering Always allow once it knows).
             void (async () => {
               const parent = entry.parent ?? (await entry.looked);
               const kept = parent?.path ? this.keep(who.name, parent.path, profileId) : null;
-              resolve({ grant: answer, profileId, allowedParent: kept });
+              resolve(kept ? { grant: 'always', profileId, allowedParent: kept } : { grant: 'once', profileId });
             })();
             return;
           }
@@ -218,11 +219,11 @@ export class ConnectCards {
       this.deps.changed();
       // Who started it, as soon as it's known.
       void looked.then((parent) => {
-        if (!this.waiting.has(id) || !parent) return;
+        if (!this.waiting.has(id)) return;
         entry.parent = parent;
-        const name = parent.name ? plain(parent.name).slice(0, 100) : '';
-        if (!name) return;
-        entry.card = { ...entry.card, startedBy: name };
+        const name = parent?.name ? plain(parent.name).slice(0, 100) : '';
+        // No program it can be kept by: the card says Chord can't tell, and offers no Always allow.
+        entry.card = parent?.path && name ? { ...entry.card, startedBy: name } : { ...entry.card, startedBy: null, noProgram: true };
         this.deps.changed();
       });
     });
