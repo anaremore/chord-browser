@@ -8,7 +8,7 @@
 import { emptyState, nodeOf, type State } from '@chord/core';
 import { describe, expect, it } from 'vitest';
 import { agentScope, NOT_SHARED, NOT_YOURS } from '../../src/main/agents/scope';
-import { AgentShares, shareable } from '../../src/main/agents/shares';
+import { AgentShares, shareable, siteOfUrl } from '../../src/main/agents/shares';
 import { ControlAgent } from '../../src/main/control/gate';
 import { Store } from '../../src/main/store';
 
@@ -153,5 +153,33 @@ describe('Share polish (#89’s review)', () => {
     const own = { ...node, chordId: 'agent-chord' };
     expect(scope.siteOk!(own, 'https://elsewhere.test/')).toBe(true);
     expect(t.shares.count).toBe(1);
+  });
+});
+
+describe('The site a tab is shared on, by the Public Suffix List (#97)', () => {
+  it('private suffixes count: alice.github.io and bob.github.io are two sites; co.uk is no site of its own', () => {
+    // [shared on, now at, the same site]
+    const table: [string, string, boolean][] = [
+      ['https://alice.github.io/notes', 'https://alice.github.io/other', true],
+      ['https://alice.github.io/notes', 'https://bob.github.io/', false],
+      ['https://www.example.co.uk/', 'https://shop.example.co.uk/', true],
+      ['https://www.example.co.uk/', 'https://other.co.uk/', false],
+      ['https://app.vercel.app/', 'https://evil.vercel.app/', false],
+      ['https://docs.example.com/', 'https://example.com/', true],
+      ['http://127.0.0.1:8080/', 'http://127.0.0.1:9090/', false],
+      ['http://localhost:3000/a', 'http://localhost:3000/b', true],
+    ];
+    for (const [from, to, same] of table) expect(siteOfUrl(from) === siteOfUrl(to), `${from} → ${to}`).toBe(same);
+    expect(siteOfUrl('chord://settings/')).toBeNull();
+  });
+
+  it('a tab shared on alice.github.io stops being shared when it goes to bob.github.io', () => {
+    const t = setup();
+    t.store.dispatch({ t: 'tab.updated', nodeId: t.mine, url: 'https://alice.github.io/notes' });
+    t.shares.share(t.mine, CODEX);
+    t.store.dispatch({ t: 'tab.updated', nodeId: t.mine, url: 'https://alice.github.io/more' });
+    expect(t.shares.sharedWith(t.mine)).not.toBeNull();
+    t.store.dispatch({ t: 'tab.updated', nodeId: t.mine, url: 'https://bob.github.io/' });
+    expect(t.shares.sharedWith(t.mine)).toBeNull();
   });
 });

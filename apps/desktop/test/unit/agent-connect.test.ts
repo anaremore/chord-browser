@@ -9,7 +9,7 @@
  */
 import { AGENTS_ALLOWED_MAX, cleanAgentsAllowed, emptyState, type State } from '@chord/core';
 import { describe, expect, it } from 'vitest';
-import { cardFolder, ConnectCards, plain, signInsExist, unversioned, type ConnectAnswer } from '../../src/main/agents/connect';
+import { cardFolder, ConnectCards, plain, signInsExist, startedByOf, unversioned, type ConnectAnswer } from '../../src/main/agents/connect';
 import { clientName } from '../../src/main/agents/connection';
 import type { ProcessInfo } from '../../src/main/agents/parent';
 import { agentsView, mcpCommand, quote, setupLines, signInsName, type SetupWhere } from '../../src/main/agents/settings';
@@ -186,7 +186,7 @@ describe('Always allow', () => {
     await next;
   });
 
-  it('an update in a versioned install folder takes the place of its row, not a second one', async () => {
+  it('an update in a versioned install folder is the same program: let in without a card, and never a second row', async () => {
     // [kept, new, same program]
     const table: [string, string, boolean][] = [
       ['/home/me/.local/share/claude/versions/2.1.3', '/home/me/.local/share/claude/versions/2.1.4', true],
@@ -200,16 +200,107 @@ describe('Always allow', () => {
     const t = setup();
     const at = (path: string) => [{ ...claude, path }];
     t.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [{ name: 'Claude Code', parent: '/opt/c/versions/2.1.3/claude', profileId: 'default', allowedAt: 5, lastUsedAt: 5 }, { name: 'Codex', parent: '/opt/x/codex', profileId: 'default', allowedAt: 6, lastUsedAt: 6 }] } });
-    // The updated program asks (it's another path), and Always allow replaces the row.
-    const asked = t.cards.ask(t.who(Promise.resolve(at('/opt/c/versions/2.1.4/claude'))), new AbortController().signal);
+    // Updated (another version folder): the same program, let in at once with its sign-ins; its row is the one it had.
+    expect(await t.cards.ask(t.who(Promise.resolve(at('/opt/c/versions/2.1.4/claude'))), new AbortController().signal)).toEqual({ grant: 'always', profileId: 'default', allowedParent: '/opt/c/versions/2.1.3/claude' });
+    expect(t.store.state.settings.agentsAllowed.map((a) => [a.name, a.parent, a.lastUsedAt])).toEqual([
+      ['Claude Code', '/opt/c/versions/2.1.3/claude', 1000],
+      ['Codex', '/opt/x/codex', 6],
+    ]);
+    // Another program by that name (another folder): asked, and Always allow keeps a row of its own.
+    const asked = t.cards.ask(t.who(Promise.resolve(at('/elsewhere/versions/2.1.4/claude'))), new AbortController().signal);
     await tick();
     await tick();
     t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
     await asked;
-    expect(t.store.state.settings.agentsAllowed).toEqual([
-      { name: 'Codex', parent: '/opt/x/codex', profileId: 'default', allowedAt: 6, lastUsedAt: 6 },
-      { name: 'Claude Code', parent: '/opt/c/versions/2.1.4/claude', profileId: 'default', allowedAt: 5, lastUsedAt: 1000 },
-    ]);
+    expect(t.store.state.settings.agentsAllowed.map((a) => a.parent)).toEqual(['/opt/c/versions/2.1.3/claude', '/opt/x/codex', '/elsewhere/versions/2.1.4/claude']);
+  });
+
+  it('who started it, past a helper the agent runs tools from (language_server_*) to the app behind it', async () => {
+    const helper = { pid: 9, name: 'language_server_linux_x64', path: '/opt/Antigravity/resources/bin/language_server_linux_x64', cwd: null, ppid: 8 };
+    const app = { pid: 8, name: 'antigravity', path: '/opt/Antigravity/antigravity', cwd: null, ppid: 1 };
+    const at = (name: string, path: string) => ({ pid: 1, name, path, cwd: null, ppid: 1 });
+    const win = (name: string, path: string) => at(name, path);
+    // [platform, what, the bridge's parent, its parent, who started it]
+    const table: [NodeJS.Platform, string, ProcessInfo, ProcessInfo | null, string][] = [
+      // Antigravity, as each OS installs it: the helper is passed, the app named.
+      ['linux', 'Antigravity: its helper in resources/bin', helper, app, 'antigravity'],
+      [
+        'darwin',
+        'Antigravity: its helper in the bundle (any case)',
+        at('language_server_macos_arm', '/Applications/Antigravity.app/Contents/Resources/bin/language_server_macos_arm'),
+        at('Antigravity', '/Applications/antigravity.app/Contents/MacOS/Antigravity'),
+        'Antigravity',
+      ],
+      [
+        'win32',
+        'Antigravity: its helper in resources\\bin (any case)',
+        win('language_server_windows_x64.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server_windows_x64.exe'),
+        win('Antigravity.exe', 'C:\\Users\\Me\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe'),
+        'Antigravity.exe',
+      ],
+      // Never passed: a helper-named process whose parent isn't Antigravity, or isn't laid out as it.
+      ['linux', 'under Claude Code’s own folder', at('language_server_x', '/home/me/.local/share/claude/language_server_x'), at('claude', '/home/me/.local/share/claude/claude'), 'language_server_x'],
+      ['linux', 'outside any app', at('language_server_x', '/tmp/evil/language_server_x'), at('claude', '/home/me/.local/bin/claude'), 'language_server_x'],
+      ['linux', 'with .. in its path', at('language_server_x', '/opt/Antigravity/resources/bin/../../../tmp/x/language_server_x'), app, 'language_server_x'],
+      ['darwin', 'with .. in its path', at('language_server_x', '/Applications/Antigravity.app/Contents/Resources/../../../../tmp/x/language_server_x'), at('Antigravity', '/Applications/Antigravity.app/Contents/MacOS/Antigravity'), 'language_server_x'],
+      ['linux', 'a case that differs on Linux', at('language_server_x', '/opt/antigravity/resources/bin/language_server_x'), app, 'language_server_x'],
+      ['linux', 'beside an app not named antigravity', at('language_server_x', '/opt/Codex/resources/bin/language_server_x'), at('codex', '/opt/Codex/codex'), 'language_server_x'],
+      ['linux', 'in the app’s folder but not in resources/bin', at('language_server_x', '/opt/Antigravity/language_server_x'), app, 'language_server_x'],
+      ['darwin', 'outside the bundle', at('language_server_x', '/Applications/Antigravity.app-evil/language_server_x'), at('Antigravity', '/Applications/Antigravity.app/Contents/MacOS/Antigravity'), 'language_server_x'],
+      ['linux', 'with no parent', helper, null, 'language_server_linux_x64'],
+      ['linux', 'no helper at all', claude, app, 'claude.exe'],
+    ];
+    for (const [platform, what, first, next, named] of table) expect(startedByOf(next ? [first, next] : [first], platform)?.name, `${platform}: ${what}`).toBe(named);
+    expect(startedByOf([])).toBeNull();
+
+    // The extension's own bin (VS Code forks ship a language server there), and on macOS the extension host's helper
+    // app between it and Antigravity. [platform, what, the chain from the bridge's parent up, who started it]
+    const MAC = '/Applications/Antigravity.app/Contents';
+    const macApp = at('Antigravity', `${MAC}/MacOS/Antigravity`);
+    const macHost = at('Antigravity Helper (Plugin)', `${MAC}/Frameworks/Antigravity Helper (Plugin).app/Contents/MacOS/Antigravity Helper (Plugin)`);
+    const macServer = at('language_server_macos_arm', `${MAC}/Resources/app/extensions/antigravity/bin/language_server_macos_arm`);
+    const chains: [NodeJS.Platform, string, ProcessInfo[], string][] = [
+      ['linux', 'its language server in the extension’s bin', [at('language_server_linux_x64', '/opt/Antigravity/resources/app/extensions/antigravity/bin/language_server_linux_x64'), app], 'antigravity'],
+      [
+        'win32',
+        'its language server in the extension’s bin',
+        [
+          win('language_server_windows_x64.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\resources\\app\\extensions\\antigravity\\bin\\language_server_windows_x64.exe'),
+          win('Antigravity.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe'),
+        ],
+        'Antigravity.exe',
+      ],
+      ['darwin', 'past the extension host’s helper app, to Antigravity', [macServer, macHost, macApp], 'Antigravity'],
+      // Never passed:
+      ['linux', 'another extension’s bin', [at('language_server_x', '/opt/Antigravity/resources/app/extensions/other/bin/language_server_x'), app], 'language_server_x'],
+      ['darwin', 'a helper app of another bundle', [at('language_server_x', '/Applications/Evil.app/Contents/Resources/language_server_x'), at('Antigravity Helper', '/Applications/Evil.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper'), macApp], 'language_server_x'],
+      ['darwin', 'Antigravity’s helper app, then not its app', [macServer, macHost, at('claude', '/Users/me/.local/bin/claude')], 'language_server_macos_arm'],
+      ['darwin', 'Antigravity’s helper app with nothing above it', [macServer, macHost], 'language_server_macos_arm'],
+      ['darwin', 'a helper app named otherwise', [macServer, at('Code Helper', `${MAC}/Frameworks/Code Helper.app/Contents/MacOS/Code Helper`), macApp], 'language_server_macos_arm'],
+    ];
+    for (const [platform, what, chain, named] of chains) expect(startedByOf(chain, platform)?.name, `${platform}: ${what}`).toBe(named);
+    // Through the card, with this OS's layout: Antigravity is named, and kept by its app.
+    const here = table.find(([platform, what]) => platform === process.platform && what.startsWith('Antigravity:')) ?? table[0]!;
+    const [, , hereHelper, hereApp] = here;
+    if (here[0] === process.platform) {
+      const t = setup();
+      const asked = t.cards.ask({ name: 'antigravity-cli', folder: '/home/me/code', parent: Promise.resolve([hereHelper, hereApp!]) }, new AbortController().signal);
+      await tick();
+      await tick();
+      expect(t.cards.cardFor('w1')).toMatchObject({ name: 'antigravity-cli', startedBy: hereApp!.name });
+      t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
+      expect(await asked).toMatchObject({ grant: 'always', allowedParent: hereApp!.path });
+    }
+
+    // Claude Code is allowed for good; a helper-named program it didn't install, giving Claude Code's name, is asked.
+    const u = setup();
+    u.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [{ name: 'Claude Code', parent: '/home/me/.local/bin/claude', profileId: 'default', allowedAt: 1, lastUsedAt: 1 }] } });
+    const borrowed = u.cards.ask({ name: 'Claude Code', folder: '/home/me', parent: Promise.resolve([at('language_server_x', '/tmp/evil/language_server_x'), at('claude', '/home/me/.local/bin/claude')]) }, new AbortController().signal);
+    await tick();
+    await tick();
+    expect(u.cards.cardFor('w1')).toMatchObject({ name: 'Claude Code', startedBy: 'language_server_x' });
+    u.cards.answer(u.cards.cardFor('w1')!.id, 'deny', 'w1');
+    expect((await borrowed).grant).toBe('deny');
   });
 
   it('over the cap, the ones used longest ago go', () => {

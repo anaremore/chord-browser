@@ -22,7 +22,7 @@ import {
   type Command,
   type WindowId,
 } from '@chord/core';
-import type { RendererCommand } from '@chord/ipc';
+import type { AntigravityAnswer, RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -35,7 +35,9 @@ import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
+import type { AntigravityUndos } from './agents/antigravity';
 import type { ConnectCards } from './agents/connect';
+import type { SetupWhere } from './agents/settings';
 import { pageOf } from './view-page';
 import { defaultBrowserStatus, makeDefaultBrowser } from './default-browser';
 import { Exporter } from './export';
@@ -303,6 +305,11 @@ function scopeToWindow(command: RendererCommand, windowId: WindowId): Command {
   return 'windowId' in command ? { ...command, windowId } : command;
 }
 
+/** Where this Chord runs from, for the lines and configs that start its `mcp` (S18). */
+function setupWhere(): SetupWhere {
+  return { platform: process.platform, packaged: app.isPackaged, exe: app.getPath('exe'), appPath: app.getAppPath(), appImage: process.env['APPIMAGE'], flatpak: inFlatpak ? (process.env['FLATPAK_ID'] ?? null) : null };
+}
+
 function registerIpc(): void {
   handle('system:info', () => systemInfo());
   handle('state:snapshot', (_request, sender) => ({ windowId: senderWindow(sender).id, state: browser!.store.state }));
@@ -540,8 +547,14 @@ function registerIpc(): void {
       stopped: held.connection.agent.isStopped,
       chordId: service?.chords?.chordOf(held.connection.agent) ?? null,
     }));
-    const setup = setupLines({ platform: process.platform, packaged: app.isPackaged, exe: app.getPath('exe'), appPath: app.getAppPath(), appImage: process.env['APPIMAGE'], flatpak: inFlatpak ? (process.env['FLATPAK_ID'] ?? null) : null });
-    return agentsView(browser!.store.state, connected, setup);
+    return agentsView(browser!.store.state, connected, setupLines(setupWhere()));
+  });
+  // Settings → Agents' *Add to Antigravity* (S18): Chord's own entry in its MCP config, and its Undo (the last few kept).
+  let antigravity: AntigravityUndos | null = null;
+  handle('settings:antigravity', async (request): Promise<AntigravityAnswer> => {
+    const [{ AntigravityUndos }, { mcpArgv }] = await Promise.all([import('./agents/antigravity'), import('./agents/settings')]);
+    antigravity ??= new AntigravityUndos();
+    return request.do === 'undo' ? antigravity.undo(request.token) : antigravity.add(mcpArgv(setupWhere()));
   });
   handle('auth:unlock', async ({ id }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');

@@ -61,8 +61,62 @@ const LOOKUP_MS = 5000;
 /** The longest folder the card shows; longer ones lose their middle. */
 const FOLDER_MAX = 120;
 
+/** A path as the OS compares it: case aside on Windows and macOS, never on Linux; null with any `..` in it. */
+function comparable(path: string, platform: NodeJS.Platform): string | null {
+  const slashes = platform === 'win32' ? path.replace(/\\/g, '/') : path;
+  const norm = platform === 'win32' || platform === 'darwin' ? slashes.toLowerCase() : slashes;
+  return /(^|\/)\.\.(\/|$)/.test(norm) ? null : norm;
+}
+
+/** The Antigravity app's install root, if `path` is its main executable: `<dir>` on Windows and Linux, the `.app` bundle on macOS. */
+function antigravityApp(path: string, platform: NodeJS.Platform): string | null {
+  const p = comparable(path, platform);
+  if (!p) return null;
+  const root = platform === 'darwin' ? /^(\/.+\/antigravity\.app)\/contents\/macos\/[^/]+$/.exec(p) : platform === 'win32' ? /^(.+)\/antigravity\.exe$/.exec(p) : /^(\/.+)\/antigravity$/.exec(p);
+  return root?.[1] ?? null;
+}
+
+/** macOS: the bundle a helper app of Antigravity's runs from (`Contents/Frameworks/Antigravity Helper*.app`), its extension host. */
+function antigravityHelperApp(path: string): string | null {
+  const p = comparable(path, 'darwin');
+  return (p && /^(\/.+\/antigravity\.app)\/contents\/frameworks\/antigravity helper[^/]*\.app\/contents\/macos\/[^/]+$/.exec(p)?.[1]) ?? null;
+}
+
+/**
+ * Whether a helper lies where Antigravity ships its language server, under `root`: `resources/bin/` or, as VS Code
+ * forks ship an extension's, `resources/app/extensions/antigravity/bin/` (Windows, Linux); the bundle's
+ * `Contents/Resources/` (macOS).
+ */
+function inAntigravity(helper: string, root: string, platform: NodeJS.Platform): boolean {
+  const h = comparable(helper, platform);
+  if (!h) return false;
+  if (platform === 'darwin') return h.startsWith(`${root}/contents/resources/`);
+  return h.startsWith(`${root}/resources/bin/`) || h.startsWith(`${root}/resources/app/extensions/antigravity/bin/`);
+}
+
+/**
+ * The program that started it, as the card names it and Always allow keeps it: the bridge's parent; or, when that is
+ * Antigravity's `language_server_*` helper, the Antigravity app itself: the next ancestor, if it's the app (by name
+ * and each OS's layout), or on macOS the one after a helper app inside the same bundle (its extension host). Any
+ * other process that calls itself so (a child of Claude Code or Codex, say) is named as itself, and can't borrow an
+ * agent's Always allow. The layouts are what VS Code forks ship, not yet checked against a real Antigravity; the
+ * parent stays a hint, never an identity (S18 §3).
+ */
+export function startedByOf(chain: readonly ProcessInfo[], platform: NodeJS.Platform = process.platform): ProcessInfo | null {
+  const [first, next, third] = chain;
+  if (!first) return null;
+  if (!/^language_server/i.test(first.name ?? '') || !first.path || !next?.path) return first;
+  const app = antigravityApp(next.path, platform);
+  if (app && inAntigravity(first.path, app, platform)) return next;
+  if (platform === 'darwin' && third?.path) {
+    const host = antigravityHelperApp(next.path);
+    if (host && antigravityApp(third.path, 'darwin') === host && inAntigravity(first.path, host, 'darwin')) return third;
+  }
+  return first;
+}
+
 const firstOf = (parent: Promise<ProcessInfo[]>): Promise<ProcessInfo | null> =>
-  Promise.race([parent.then((chain) => chain[0] ?? null).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_MS).unref?.())]);
+  Promise.race([parent.then(startedByOf).catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), LOOKUP_MS).unref?.())]);
 
 /** Control and format characters (bidi overrides, zero-width joiners…): never shown from an agent or the OS. */
 const UNSAFE = /[\p{Cc}\p{Cf}]/u;
@@ -106,10 +160,14 @@ export class ConnectCards {
     return this.deps.now?.() ?? Date.now();
   }
 
-  /** The agent let in for good, if it is: the same name, the same program, sign-ins that still exist. */
+  /**
+   * The agent let in for good, if it is: the same name, the same program (an update in a versioned install folder is
+   * the same program, as `keep` counts it), sign-ins that still exist.
+   */
   private allowance(name: string, parent: string): AgentAllowance | null {
     const state = this.deps.store.state;
-    return state.settings.agentsAllowed.find((a) => a.name === name && a.parent === parent && signInsExist(state, a.profileId)) ?? null;
+    const program = unversioned(parent);
+    return state.settings.agentsAllowed.find((a) => a.name === name && (a.parent === parent || unversioned(a.parent) === program) && signInsExist(state, a.profileId)) ?? null;
   }
 
   /** Ask (or not, for an agent let in for good). Taken down when `signal` aborts (Stop, the agent going): a no. */

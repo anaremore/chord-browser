@@ -3,7 +3,7 @@
  * the whole feature (off by default), the lines that connect Claude Code and
  * Codex, agents you've stopped, and agents you've let in for good.
  */
-import type { AgentsView, SettingsSnapshot } from '@chord/ipc';
+import type { AgentsView, AntigravityAnswer, SettingsSnapshot } from '@chord/ipc';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import local from './Agents.module.css';
@@ -59,6 +59,53 @@ function SetupLine({ text, label }: { text: string; label: string }) {
   );
 }
 
+/** What *Add to Antigravity* says when it can't (the owner's mock B, 2026-11-21). */
+const ANTIGRAVITY_PROBLEMS: Record<Exclude<AntigravityAnswer, { ok: true }>['why'], string> = {
+  invalid: 'Antigravity’s MCP config isn’t valid JSON, so Chord left it as it is.',
+  link: 'Antigravity’s MCP config is a link to another file, so Chord left it as it is.',
+  unwritable: 'Chord couldn’t change Antigravity’s MCP config.',
+  changed: 'Chord’s entry in Antigravity’s MCP config has changed since, so Chord left it as it is.',
+  gone: 'There’s nothing to undo.',
+};
+
+/**
+ * Antigravity: no command of its own to paste, so Chord adds itself to its MCP config, with Undo. The result shows
+ * under the row, as the mock draws it.
+ */
+function AntigravityRow() {
+  const [said, setSaid] = useState<{ text: string; undo: string | null } | null>(null);
+  // An Undo that couldn't read or write the file keeps its button, to try again.
+  const run = (request: Parameters<typeof api.settings.antigravity>[0], done: string) =>
+    void api.settings.antigravity(request).then((answer) =>
+      setSaid(answer.ok ? { text: done, undo: answer.token } : { text: ANTIGRAVITY_PROBLEMS[answer.why], undo: request.do === 'undo' && answer.why !== 'changed' && answer.why !== 'gone' ? request.token : null }),
+    );
+  return (
+    <>
+      <div className={local.addRow}>
+        <div className={styles.rowText}>
+          <span className={styles.rowLabel}>Antigravity</span>
+          <span className={styles.rowDescription}>Adds Chord to Antigravity’s MCP servers</span>
+        </div>
+        <button type="button" className={local.add} onClick={() => run({ do: 'add' }, 'Added Chord to Antigravity. Refresh or restart its MCP servers to see it.')}>
+          Add to Antigravity
+        </button>
+      </div>
+      <div className={local.said} role="status">
+        {said && (
+          <>
+            <span>{said.text}</span>
+            {said.undo && (
+              <button type="button" className={local.copy} onClick={() => run({ do: 'undo', token: said.undo! }, 'Antigravity’s MCP servers are as they were.')}>
+                Undo
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
   const [view, setView] = useState<AgentsView | null>(null);
   const enabled = snapshot.settings.agentsEnabled;
@@ -70,7 +117,7 @@ export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
 
   return (
     <>
-      <SectionHeader title="Agents" description="Let AI agents you run, like Claude Code and Codex, use Chord. They work in their own tabs and never see your passwords." />
+      <SectionHeader title="Agents" description="Let AI agents you run, like Claude Code, Codex and Antigravity, use Chord. They work in their own tabs and never see your passwords." />
       <div className={styles.group}>
         <Row
           label="Let agents connect"
@@ -84,6 +131,7 @@ export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
           <h2 className={styles.groupTitle}>Set up</h2>
           <SetupLine text={view.setup.claude} label="the line for Claude Code" />
           <SetupLine text={view.setup.codex} label="the line for Codex" />
+          <AntigravityRow />
 
           {view.stopped.length > 0 && (
             <>

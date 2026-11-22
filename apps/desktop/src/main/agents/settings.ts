@@ -29,14 +29,23 @@ export function quote(path: string, platform: NodeJS.Platform): string {
   return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
 }
 
+/** The program that runs `chord mcp` here and its arguments, as a config that starts it (Antigravity's) lists them. */
+export function mcpArgv(where: SetupWhere): { command: string; args: string[] } {
+  if (where.flatpak) return { command: 'flatpak', args: ['run', where.flatpak, 'mcp'] };
+  const exe = where.platform === 'linux' && where.appImage ? where.appImage : where.exe;
+  const args = where.packaged ? [] : [where.appPath];
+  // Linux: with no display (SSH, a headless box) Electron stops before any of Chord runs, unless told so on argv (S18 §2).
+  if (where.platform === 'linux') args.push('--ozone-platform=headless');
+  args.push('mcp');
+  return { command: exe, args };
+}
+
 /** The command that runs `chord mcp` here, as a terminal takes it. */
 export function mcpCommand(where: SetupWhere): string {
   if (where.flatpak) return `flatpak run ${where.flatpak} mcp`;
-  const exe = where.platform === 'linux' && where.appImage ? where.appImage : where.exe;
-  const q = (path: string) => quote(path, where.platform);
-  const program = where.packaged ? q(exe) : `${q(exe)} ${q(where.appPath)}`;
-  // Linux: with no display (SSH, a headless box) Electron stops before any of Chord runs, unless told so on argv (S18 §2).
-  return where.platform === 'linux' ? `${program} --ozone-platform=headless mcp` : `${program} mcp`;
+  const { command, args } = mcpArgv(where);
+  // The app's folder (development builds) is a path too; the switches and `mcp` need no quotes.
+  return [command, ...args].map((part) => quote(part, where.platform)).join(' ');
 }
 
 /** The lines to paste: Claude Code's and Codex's own ways to add an MCP server. */

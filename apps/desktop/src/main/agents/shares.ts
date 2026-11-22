@@ -13,7 +13,8 @@
  * Each shared tab's bar says so (LiveTab.agent, state `shared`); a tab whose
  * page was made again (it slept) gets it back.
  */
-import { hostOf, isAgentChord, isNeverReadable, nodeOf, siteOf, type Command, type NodeId, type State, type TabNode } from '@chord/core';
+import { isAgentChord, isNeverReadable, nodeOf, type Command, type NodeId, type State, type TabNode } from '@chord/core';
+import { loginSite } from '@chord/core/password-sites';
 import type { Change } from '../store';
 
 export interface AgentSharesDeps {
@@ -36,11 +37,13 @@ interface Share extends SharedWith {
   site: string;
 }
 
-/** A web address's site (example.co.uk for www.example.co.uk); null for anything else. */
+/**
+ * A web address's site: its registrable domain by the Public Suffix List with private suffixes on (#97), as a saved
+ * sign-in's is (`example.co.uk` for www.example.co.uk; `alice.github.io` and `bob.github.io` are two sites), or an
+ * address or a single-label host with its port. Null for anything but http and https.
+ */
 export function siteOfUrl(url: string): string | null {
-  if (!/^https?:/i.test(url)) return null;
-  const host = hostOf(url);
-  return host ? siteOf(host) : null;
+  return /^https?:/i.test(url) ? loginSite(url) : null;
 }
 
 /** Whether a tab of yours can be shared now: a web page of your own chord (not a private window's), on a site you don't keep private. */
