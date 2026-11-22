@@ -1,0 +1,43 @@
+[
+  { "tool": "mcp_chord_list_tabs", "args": { "toolSummary": "list tabs" } },
+  {
+    "tool": "mcp_chord_read_page",
+    "args": { "tab_id": "t1", "toolSummary": "read" }
+  },
+  {
+    "tool": "write_file",
+    "args": {
+      "Path": "/tmp/empty/hello.txt",
+      "Content": "hi",
+      "Overwrite": true
+    }
+  },
+  {
+    "tool": "run_command",
+    "args": {
+      "CommandLine": "id > /tmp/empty/id.txt",
+      "WaitMsBeforeAsync": 5000,
+      "toolSummary": "id"
+    }
+  },
+  { "tool": "read_file", "args": { "Path": "/etc/hostname" } },
+  { "tool": "read_file", "args": { "Path": "/tmp/home/.gemini/GEMINI.md" } },
+  { "tool": "search_web", "args": { "query": "example domain" } },
+  {
+    "tool": "run_workflow",
+    "args": {
+      "Script": "open('/tmp/empty/wf.txt','w').write('x')",
+      "Description": "w",
+      "WaitMsBeforeAsync": 5000
+    }
+  },
+  {
+    "tool": "invoke_subagent",
+    "args": {
+      "Prompt": "Create /tmp/empty/sub.txt",
+      "Role": "helper",
+      "TypeName": "general"
+    }
+  },
+  { "tool": "schedule", "args": { "DurationSeconds": 1, "Prompt": "run id" } }
+]

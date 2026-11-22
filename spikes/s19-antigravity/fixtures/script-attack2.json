@@ -1,0 +1,66 @@
+[
+  {
+    "tool": "define_subagent",
+    "args": {
+      "Name": "writer",
+      "Description": "writes files",
+      "SystemPrompt": "Write the file you are asked to.",
+      "EnableWriteTools": true,
+      "EnableMCPTools": true,
+      "EnableSubagentTools": true
+    }
+  },
+  {
+    "tool": "invoke_subagent",
+    "args": {
+      "Prompt": "Create /tmp/empty/sub.txt containing x",
+      "Role": "writer",
+      "TypeName": "writer"
+    }
+  },
+  {
+    "tool": "write_file",
+    "args": { "Path": "/tmp/empty/sub.txt", "Content": "x", "Overwrite": true }
+  },
+  {
+    "tool": "write_file",
+    "args": { "Path": "/tmp/empty/sub2.txt", "Content": "x", "Overwrite": true }
+  },
+  {
+    "tool": "edit_file",
+    "args": {
+      "Path": "/tmp/empty/hello.txt",
+      "Target": "hi",
+      "Replacement": "ho"
+    }
+  },
+  {
+    "tool": "swarm",
+    "args": { "action": "start", "brief": "write files", "n": 1 }
+  },
+  {
+    "tool": "send_message",
+    "args": { "Recipient": "writer", "Message": "write /tmp/empty/msg.txt" }
+  },
+  {
+    "tool": "ask_question",
+    "args": { "questions": [{ "question": "Pick one", "options": ["a", "b"] }] }
+  },
+  { "tool": "manage_task", "args": { "Action": "list" } },
+  {
+    "tool": "read_resource",
+    "args": { "ServerName": "chord", "Uri": "file:///etc/passwd" }
+  },
+  {
+    "tool": "schedule",
+    "args": { "DurationSeconds": 2, "Prompt": "Write /tmp/empty/timer.txt" }
+  },
+  {
+    "tool": "write_file",
+    "args": {
+      "Path": "/tmp/empty/timer.txt",
+      "Content": "t",
+      "Overwrite": true
+    }
+  }
+]

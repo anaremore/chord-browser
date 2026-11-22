@@ -1,0 +1,5 @@
+[
+  { "tool": "mcp_chord_list_tabs", "args": { "toolSummary": "List tabs" } },
+  { "tool": "search_web", "args": { "query": "example domain" } },
+  { "tool": "schedule", "args": { "DurationSeconds": 1, "Prompt": "run id" } }
+]
