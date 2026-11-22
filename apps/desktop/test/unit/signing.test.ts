@@ -109,7 +109,7 @@ describe('Windows signing', () => {
   it('signs window-owner.exe too: it is copied from a folder, since electron-builder copies a lone file unsigned', () => {
     // electron-builder's copyFiles skips its signing transformer for a `from` that is a file (0.13.0 shipped the helper
     // unsigned); a folder with a filter goes through it. release.yml checks the installed copy's signature.
-    const helper = (config.win?.extraResources as { from: string; to: string; filter: string[] }[]).find((r) => r.filter?.includes('window-owner.exe'));
+    const helper = ((config.win?.extraResources ?? []) as { from: string; to: string; filter: string[] }[]).find((r) => r.filter?.includes('window-owner.exe'));
     expect(helper).toEqual({ from: 'out/window-owner', to: '.', filter: ['window-owner.exe'] });
   });
 

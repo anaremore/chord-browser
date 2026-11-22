@@ -182,7 +182,7 @@ build → tokens.css  :root, [data-platform], [data-appearance] custom propertie
   - `function-disallowed-list` (rgb, hsl, oklch)
   - `unit-disallowed-list: ["px", "ms", "s"]`
   - `declaration-property-value-allowed-list` for shadows and z-index
-- A custom ESLint rule `chord/no-raw-motion` rejects numeric literals in Motion `transition` props; they must come from `motion.*` tokens.
+- A custom lint rule `chord/no-raw-motion` (not written yet; it would be an Oxlint JS plugin) rejects numeric literals in Motion `transition` props; they must come from `motion.*` tokens.
 - Debug builds have a **4 px grid overlay** toggle (⌘⌥G).
 
 ### 4.2 Typography

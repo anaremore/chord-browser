@@ -43,7 +43,7 @@
     },
     {
       "groupName": "build and lint tooling",
-      "matchPackageNames": ["vite", "@vitejs/**", "vitest", "eslint", "@eslint/**", "typescript-eslint", "stylelint", "stylelint-config-standard", "@playwright/test", "babel-plugin-react-compiler", "@rolldown/plugin-babel", "@babel/core"]
+      "matchPackageNames": ["vite", "@vitejs/**", "vitest", "oxlint", "stylelint", "stylelint-config-standard", "@playwright/test", "babel-plugin-react-compiler", "@rolldown/plugin-babel", "@babel/core"]
     },
     {
       "groupName": "UI libraries",
