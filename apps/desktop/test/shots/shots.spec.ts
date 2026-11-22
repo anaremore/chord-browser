@@ -13,8 +13,9 @@
  * Writes test-results/shots/<name>.png. The screen must hold the window at 2×: shots.mjs sets
  * CHORD_E2E_SCREEN for that.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import type { ServerResponse } from 'node:http';
 import { createServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -324,6 +325,100 @@ test('light: passwords, the menu under a sign-in field', async () => {
     await iconsLoaded(shell);
     await capture(app, 'Chord', 'passwords');
   } finally {
+    await app.close();
+    server.close();
+  }
+});
+
+/**
+ * The agents picture's page that's being worked on: example.com as a stand-in, served from this machine as the
+ * passwords picture's sign-in page is. Its text draws at once and an image on it never finishes, so the agent's
+ * open_tab is still at work, and its bar up, when the picture is taken.
+ */
+const AGENT_HOST = 'example.com';
+const AGENT_PAGE =
+  '<!doctype html><title>Example Domain</title><link rel="icon" href="data:,">' +
+  '<style>body{margin:0;background:#f0f0f2;font:16px/1.5 -apple-system,system-ui,sans-serif}div{width:600px;margin:5em auto;padding:2em;background:#fdfdff;border-radius:.5em;box-shadow:2px 3px 7px 2px #00000005}h1{margin-top:0}a{color:#38488f}</style>' +
+  '<div><h1>Example Domain</h1><p>This domain is for use in illustrative examples in documents. You may use this domain in literature without prior coordination or asking for permission.</p><p><a href="https://www.iana.org/domains/example">More information...</a></p><img src="/slow.png" alt="" width="1" height="1"></div>';
+
+/** `chord mcp` from this build, as an agent starts it: Claude Code, here, talking to the Chord on `profile`. */
+function agentRelay(profile: string) {
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile };
+  delete env['ELECTRON_RUN_AS_NODE'];
+  const electron = process.getBuiltinModule('module').createRequire(join(appDir, 'package.json'))('electron') as string;
+  const child = spawn(electron, [appDir, '--ozone-platform=headless', 'mcp'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
+  const waiting = new Map<number, (m: unknown) => void>();
+  let buffer = '';
+  child.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
+    buffer += chunk;
+    for (let i = buffer.indexOf('\n'); i >= 0; i = buffer.indexOf('\n')) {
+      const line = buffer.slice(0, i).trim();
+      buffer = buffer.slice(i + 1);
+      if (line) {
+        const m = JSON.parse(line) as { id?: number };
+        if (typeof m.id === 'number') waiting.get(m.id)?.(m);
+      }
+    }
+  });
+  let id = 0;
+  const request = (method: string, params: unknown) =>
+    new Promise<unknown>((done) => {
+      const n = ++id;
+      waiting.set(n, done);
+      child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id: n, method, params })}\n`);
+    });
+  return { child, request, call: (name: string, args: Record<string, unknown>) => request('tools/call', { name, arguments: args }) };
+}
+
+test('light: agents, Claude Code at work in its own chord', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'chord-shots-cert-'));
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', `/CN=${AGENT_HOST}`, '-addext', `subjectAltName=DNS:${AGENT_HOST}`, '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], { stdio: 'ignore' });
+  const held: ServerResponse[] = [];
+  const server = createServer({ key: readFileSync(join(dir, 'key.pem')), cert: readFileSync(join(dir, 'cert.pem')) }, (req, res) => {
+    // The image never comes: the page never stops loading.
+    if (req.url === '/slow.png') return void held.push(res);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(AGENT_PAGE);
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address() as AddressInfo;
+  // Agents on, as Settings → Agents turns it on (CHORD_AGENTS, development builds).
+  const { app, shell, windowId } = await session('light', { CHORD_AGENTS: '1' }, [`--host-resolver-rules=MAP ${AGENT_HOST} 127.0.0.1:${port}`, '--ignore-certificate-errors']);
+  const profile = await app.evaluate(({ app: a }) => a.getPath('userData'));
+  const agent = agentRelay(profile);
+  try {
+    await agent.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', title: 'Claude Code', version: '2.1.328' } });
+    // Its first call asks: Allow once, on the card.
+    const first = agent.call('open_tab', { url: 'https://en.wikipedia.org/wiki/Web_browser' });
+    const popover = await pageWhere(app, (u) => isPopover(u) && !u.includes('#'));
+    const card = popover.getByRole('alertdialog', { name: 'Claude Code wants to use Chord' });
+    await card.waitFor({ timeout: 20_000 });
+    await sleep(700);
+    await card.getByRole('button', { name: 'Allow once', exact: true }).click();
+    await first;
+    await agent.call('open_tab', { url: PAGES.html });
+    // The tab it's working on: open_tab still waiting on the page, the agent's bar over it, with Stop.
+    void agent.call('open_tab', { url: `https://${AGENT_HOST}/` });
+    let working: { id: string } | undefined;
+    for (const end = Date.now() + 20_000; !working && Date.now() < end; await sleep(200)) {
+      working = await shell.evaluate(async (host) => {
+        const { state } = await (window as unknown as ChordGlobal).chord.state.snapshot();
+        return Object.values(state.nodes)
+          .flatMap((b) => Object.values(b))
+          .find((n) => n.kind === 'tab' && (n.url ?? '').includes(host));
+      }, AGENT_HOST);
+    }
+    if (!working) throw new Error('open_tab made no tab');
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: working.id });
+    await shell.getByRole('status').filter({ hasText: 'Claude Code is reading this tab' }).waitFor({ timeout: 10_000 });
+    await shell.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await rest(shell);
+    await quietBanners(app);
+    await iconsLoaded(shell);
+    await capture(app, 'Chord', 'agents');
+  } finally {
+    agent.child.kill();
+    for (const res of held) res.destroy();
     await app.close();
     server.close();
   }
