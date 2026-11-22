@@ -165,11 +165,14 @@ function client(path: string): ChildProcess {
  *
  * Measured (2026-11-22): Windows x64 here (11 Pro, about 396,000 handles in the system) 104 to 163 ms a lookup, the
  * helper's own work 57 to 85 ms of it (the table 31 to 50, its scan 2 to 3, the queries 3 to 4, the chain 21 to 28).
- * CI's Windows arm64: a lookup 582 ms warm, the helper's own work 456 ms; its first start about 3 s cold (the first
- * .NET program on a fresh runner). Before the scan read the table in place (each entry marshalled, twice), a lookup
- * took 3.6 s there. Linux: one ss (tens of ms in WSL's Ubuntu). macOS: one lsof of this user's sockets.
+ * CI's Windows arm64, over two runs: a lookup 582, 606 and 1,271 ms (the helper's own work 456 ms in one, 286 ms of it
+ * its queries waiting out the 250 ms deadline for one stuck on a file with I/O pending, never one of the pipe's: its
+ * server ends never block); its first start 3.0 and 3.7 s cold (the first .NET program on a fresh runner). That runner
+ * is noisy, and 600 to 1,300 ms while the card shows is acceptable: its budget is about 1.5 times the worst seen. Before
+ * the scan read the table in place (each entry marshalled, twice), a lookup took 3.6 s there. Linux: one ss (tens of
+ * ms in WSL's Ubuntu). macOS: one lsof of this user's sockets.
  */
-const PEER_BUDGET_MS: Partial<Record<NodeJS.Platform, number>> = { win32: 1000, linux: 500, darwin: 1500 };
+const PEER_BUDGET_MS: Partial<Record<string, number>> = { win32: 1000, 'win32/arm64': 1900, linux: 500, darwin: 1500 };
 /** Windows: the helper's first start on the machine, cold (what restrict-pipe pays in M1b). A ceiling, not a target. */
 const PEER_COLD_MS = 6000;
 
@@ -214,8 +217,9 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
     // Off any call's path (it runs while the card shows), but it delays the card's *Started by*. Budgets per OS, from
     // what was measured (PEER_BUDGET_MS); the message carries what was seen.
     const seen = `${process.platform}/${process.arch}: helper's first start ${cold.toFixed(0)} ms, lookup ${lookup.toFixed(0)} ms, again ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}`;
-    expect(lookup, seen).toBeLessThan(PEER_BUDGET_MS[process.platform] ?? 1000);
-    expect(warm, seen).toBeLessThan(PEER_BUDGET_MS[process.platform] ?? 1000);
+    const budget = PEER_BUDGET_MS[`${process.platform}/${process.arch}`] ?? PEER_BUDGET_MS[process.platform] ?? 1000;
+    expect(lookup, seen).toBeLessThan(budget);
+    expect(warm, seen).toBeLessThan(budget);
     expect(cold, seen).toBeLessThan(PEER_COLD_MS);
   }, 30_000);
 });
