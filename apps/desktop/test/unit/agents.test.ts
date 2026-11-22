@@ -541,6 +541,40 @@ describe('Zero cost, and off in packaged builds', () => {
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
   }, 20_000);
 
+  it('a bridge PID is claimed first come, first served: a later connection claiming it is no claim (M2a)', async () => {
+    const ud = profile();
+    const asked: { claimed: number; held: number[] }[] = [];
+    const service = new AgentService({
+      userData: ud,
+      browser,
+      ask: answering('once'),
+      helper: null,
+      waitMs: 2000,
+      actions: true,
+      peer: async (_socket, _endpoint, claimed, held) => {
+        asked.push({ claimed, held: [...held] });
+        return null;
+      },
+    });
+    await service.start();
+    cleanup.push(() => service.stop());
+    // An idle connection (a hello, then nothing) claims this process's PID first; the bridge here claims it too.
+    const idle = await connectEndpoint(ud, { initialize: null, bridgePid: process.pid, parentPid: 1, cwd: ud, toolsVersion: agentToolsVersion() });
+    await expect.poll(() => service.connections.size).toBe(1);
+    const second = client(ud);
+    await second.initialize();
+    expect((await second.call('list_tabs')).error).toBe(false);
+    expect(asked).toEqual([{ claimed: -1, held: [process.pid] }]);
+    second.close();
+    // Once the idle one goes, its claim goes with it: the next to claim the PID holds it.
+    idle!.destroy();
+    await expect.poll(() => service.connections.size).toBe(0);
+    const third = client(ud);
+    await third.initialize();
+    expect((await third.call('list_tabs')).error).toBe(false);
+    expect(asked[1]).toEqual({ claimed: process.pid, held: [] });
+  }, 20_000);
+
   // [argv after the executable (and, in development, the app's folder), is it chord mcp?]
   const argv: [string[], boolean][] = [
     [['mcp'], true],

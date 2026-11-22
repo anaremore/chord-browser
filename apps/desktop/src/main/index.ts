@@ -1143,6 +1143,8 @@ if (!app.requestSingleInstanceLock()) {
           changed: () => agentBrowser.agentsChanged(),
           helper: helper && existsSync(helper) ? helper : null,
           actions: agentActions({ packaged: app.isPackaged }),
+          // E2E only (development builds): the OS can't say who's calling, as in the Flatpak or without ss.
+          ...(!app.isPackaged && process.env['CHORD_E2E_NO_PEER'] === '1' ? { peer: async () => null } : {}),
           waitMs,
           dispatch: (command) => agentBrowser.store.dispatch(command),
           neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
@@ -1316,20 +1318,28 @@ if (!app.requestSingleInstanceLock()) {
         /**
          * S18 M2a's spike: input sent for the agent to its tab at `url` (and `text` inserted), inside one of its calls so the
          * tab is parked and painting, as an action's will be; and what Chord's own listeners took each event for: the
-         * agent's, yours, or one that came after the send had returned (none should).
+         * agent's, yours, or one that came after the send had returned (none should). `unchecked` sends what Chord never
+         * would (a shortcut), to show its shortcuts stop it a second time; otherwise such an event is `refused`.
          */
-        agentInputSpike: async (url: string, events: AgentInputEvent[], text?: string) => {
-          const { sendAgentInput, isAgentInput } = await import('./control/input');
+        agentInputSpike: async (url: string, events: AgentInputEvent[], text?: string, unchecked = false) => {
+          const { sendAgentInput, isAgentInput, AgentInputRefused } = await import('./control/input');
           const [nodeId, contents] = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url) ?? [];
           const held = [...(agents?.service?.connections ?? [])][0];
           if (!nodeId || !contents || !held) return null;
-          const seen = { agent: 0, yours: 0, after: 0 };
+          const seen = { agent: 0, yours: 0, after: 0, late: [] as string[] };
           let inside = false;
-          const count = () => void (!inside ? seen.after++ : isAgentInput(contents) ? seen.agent++ : seen.yours++);
+          const count = (_event: unknown, input: { type: string }) => {
+            if (!inside) {
+              seen.after++;
+              seen.late.push(input.type);
+            } else if (isAgentInput(contents)) seen.agent++;
+            else seen.yours++;
+          };
           const names = ['before-input-event', 'before-mouse-event', 'input-event'] as const;
           for (const name of names) contents.on(name as 'input-event', count);
           const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
           let shown = false;
+          let refused = false;
           try {
             await held.connection.agent.call(
               nodeId,
@@ -1337,8 +1347,13 @@ if (!app.requestSingleInstanceLock()) {
                 await wait(300);
                 shown = Object.values(browser!.store.state.windows).some((w) => w.agentTab === nodeId);
                 inside = true;
-                sendAgentInput(contents, events);
-                if (text) await contents.insertText(text);
+                try {
+                  sendAgentInput(contents, events, unchecked);
+                  if (text) await contents.insertText(text);
+                } catch (error) {
+                  if (!(error instanceof AgentInputRefused)) throw error;
+                  refused = true;
+                }
                 inside = false;
                 await wait(300);
               },
@@ -1347,7 +1362,7 @@ if (!app.requestSingleInstanceLock()) {
           } finally {
             for (const name of names) contents.off(name as 'input-event', count);
           }
-          return { ...seen, paused: held.connection.agent.state(nodeId).paused, shown };
+          return { ...seen, paused: held.connection.agent.state(nodeId).paused, shown, refused };
         },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),

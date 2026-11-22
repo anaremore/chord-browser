@@ -8,8 +8,8 @@
  *
  * - **Windows:** window-owner.exe's `pipe-clients` lists the PIDs of the clients connected to Chord's agent pipe.
  *   It can't say which connection is whose, so a connection's peer is the bridge PID its hello claims when that
- *   PID is among them and no other live connection holds it; else the one client no other connection holds; else
- *   unknown.
+ *   PID is among them and the claim is its own (AgentService.claims: first come, first served, from the hello on);
+ *   else the one client no other connection holds or claimed; else unknown.
  * - **Linux:** `ss -xpn` (iproute2) gives each Unix socket's peer; Chord's end is its socket's inode
  *   (`/proc/self/fd/<fd>`). Without `ss` (a minimal system, or inside the Flatpak, which can't see the host's
  *   processes anyway), unknown.
@@ -71,38 +71,35 @@ export function choosePeer(clients: readonly number[], claimed: number, held: Re
 
 /* ---------- Linux ---------- */
 
-/** One Unix socket from `ss -xpnH`: its inode, its peer's, and the PIDs holding it. */
+/** One Unix socket from `ss -xpnH`: the inode of its peer, and the PIDs holding it. */
 export interface UnixSocketRow {
-  inode: number;
   peer: number;
   pids: number[];
 }
 
 /**
  * `ss -xpnH`'s lines: `u_str ESTAB 0 0 <local> <inode> <peer address> <peer inode> users:(("name",pid=1,fd=3),…)`.
- * Addresses can hold spaces (a socket's path), so the numbers are read from around them: the inode is the last number
- * before the peer's address, found from the end.
+ * Either address can hold spaces (a socket's path), so only what can be read for sure is read: the peer's inode (the
+ * last number before `users:`) and the PIDs. That's enough: the other end of Chord's socket is the row whose peer is it.
  */
 export function parseSs(stdout: string): UnixSocketRow[] {
   const rows: UnixSocketRow[] = [];
   for (const line of stdout.split('\n')) {
     const users = line.indexOf(' users:(');
     const head = (users >= 0 ? line.slice(0, users) : line).trim();
-    // …<local> <inode> <peer address> <peer inode>: the peer address is * when unnamed, which is most clients'.
-    const match = /\s(\d+)\s+(\S+)\s+(\d+)$/.exec(head);
+    const match = /^u_\S+\s.*\s(\d+)$/.exec(head);
     if (!match) continue;
     const pids = users >= 0 ? [...line.slice(users).matchAll(/pid=(\d+)/g)].map((m) => Number(m[1])) : [];
-    rows.push({ inode: Number(match[1]), peer: Number(match[3]), pids: [...new Set(pids)] });
+    rows.push({ peer: Number(match[1]), pids: [...new Set(pids)] });
   }
   return rows;
 }
 
 /** The PID holding the other end of Chord's socket with this inode, or null (none, or more than one process). */
 export function linuxPeer(rows: readonly UnixSocketRow[], inode: number): number | null {
-  const ours = rows.find((r) => r.inode === inode);
-  if (!ours || ours.peer <= 0) return null;
-  const theirs = rows.find((r) => r.inode === ours.peer);
-  return theirs?.pids.length === 1 ? theirs.pids[0]! : null;
+  if (inode <= 0) return null;
+  const pids = new Set(rows.filter((r) => r.peer === inode).flatMap((r) => r.pids));
+  return pids.size === 1 ? [...pids][0]! : null;
 }
 
 /* ---------- macOS ---------- */

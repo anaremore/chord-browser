@@ -67,7 +67,10 @@ export function sameProgram(a: string | null, b: string): boolean {
 export async function ancestry(pid: number, depth = 3): Promise<ProcessInfo[]> {
   if (!Number.isInteger(pid) || pid <= 1) return [];
   if (process.platform === 'win32') {
-    const ps = `$p=${pid}; $out=@(); for ($i=0; $i -lt ${depth} -and $p -gt 4; $i++) { $o = Get-CimInstance Win32_Process -Filter "ProcessId=$p" | Select-Object ProcessId,Name,ExecutablePath,ParentProcessId; if (-not $o) { break }; $out += $o; $p = $o.ParentProcessId }; ConvertTo-Json -Compress -InputObject $out`;
+    // Windows never reparents: a parent that exited leaves its PID in ParentProcessId, free for another process. One
+    // created after its child isn't its parent (the PID was reused), and the chain stops there. Linux and macOS give an
+    // orphan to init (or launchd), so their parent PID is never stale.
+    const ps = `$p=${pid}; $out=@(); $born=$null; for ($i=0; $i -lt ${depth} -and $p -gt 4; $i++) { $o = Get-CimInstance Win32_Process -Filter "ProcessId=$p" | Select-Object ProcessId,Name,ExecutablePath,ParentProcessId,CreationDate; if (-not $o -or ($born -and $o.CreationDate -gt $born)) { break }; $born = $o.CreationDate; $out += ($o | Select-Object ProcessId,Name,ExecutablePath,ParentProcessId); $p = $o.ParentProcessId }; ConvertTo-Json -Compress -InputObject $out`;
     const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 10_000 }).catch(() => ({ stdout: '[]' }));
     const parsed = attempt(() => JSON.parse(stdout.trim() || '[]') as unknown) ?? [];
     return ([] as { ProcessId: number; Name: string; ExecutablePath: string | null; ParentProcessId: number }[])

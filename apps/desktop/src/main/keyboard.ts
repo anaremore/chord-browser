@@ -23,8 +23,14 @@ export interface KeyboardHandlers {
 
 export function attachShortcuts(contents: WebContents, handlers: KeyboardHandlers): void {
   contents.on('before-input-event', (event, input) => {
-    // Keys Chord sends a page for an agent (control/input.ts) are never shortcuts of Chord's.
-    if (handlers.paused?.(contents) || isAgentInput(contents)) return;
+    // Keys Chord sends a page for an agent (control/input.ts) are never shortcuts of Chord's: one that is (reserved or
+    // page-first) is stopped here, so it reaches neither the page nor, unhandled, the ⋯ menu's accelerators after it.
+    // control/input.ts refuses such keys before they're sent; this is the second lock.
+    if (isAgentInput(contents)) {
+      if (findShortcut(input, platform, undefined, shortcutOverrides())) event.preventDefault();
+      return;
+    }
+    if (handlers.paused?.(contents)) return;
     if (input.type === 'keyUp' && input.key === 'Control') {
       handlers.onControlUp(contents);
       return;

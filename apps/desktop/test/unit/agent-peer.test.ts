@@ -37,6 +37,11 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     [[10, 20], 10, [10], 20],
     [[10], 10, [10], null],
     [[], 10, [], null],
+    // A PID another live connection claimed first comes as no claim (-1; AgentService.claims), held by that one:
+    // an idle relay's identity can't be borrowed before it's looked up.
+    [[10, 20], -1, [10], 20],
+    [[10, 20, 30], -1, [10], null],
+    [[10], -1, [10], null],
   ];
   it.each(cases)('clients %j, claimed %i, held %j: %s', (clients, claimed, held, peer) => expect(choosePeer(clients, claimed, new Set(held))).toBe(peer));
 });
@@ -48,28 +53,36 @@ describe('Linux: ss’s Unix sockets', () => {
     'u_str ESTAB 0      0      /tmp/with a space/s 6001 * 6002 users:(("x",pid=500,fd=3),("x",pid=501,fd=3))',
     'u_str ESTAB 0      0      * 6002 * 6001',
     'u_str LISTEN 0 4096 /run/user/1000/chord-agent-0123456789abcdef/s 5000 * 0 users:(("chord",pid=300,fd=39))',
+    // A peer's address with spaces (and numbers) in it, on both ends.
+    'u_str ESTAB 0 0 /tmp/a 1 b/s 8001 /tmp/c 2 d/s 8002 users:(("chord",pid=300,fd=41))',
+    'u_str ESTAB 0 0 /tmp/c 2 d/s 8002 /tmp/a 1 b/s 8001 users:(("srv",pid=700,fd=5))   ',
     'garbage',
+    'Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port 9',
   ].join('\n');
 
-  it('parses each row: its inode, its peer’s and who holds it', () => {
+  it('parses each row: its peer’s inode and who holds it, whatever spaces the addresses hold', () => {
     expect(parseSs(ss)).toEqual([
-      { inode: 5001, peer: 5002, pids: [300] },
-      { inode: 5002, peer: 5001, pids: [400] },
-      { inode: 6001, peer: 6002, pids: [500, 501] },
-      { inode: 6002, peer: 6001, pids: [] },
-      { inode: 5000, peer: 0, pids: [300] },
+      { peer: 5002, pids: [300] },
+      { peer: 5001, pids: [400] },
+      { peer: 6002, pids: [500, 501] },
+      { peer: 6001, pids: [] },
+      { peer: 0, pids: [300] },
+      { peer: 8002, pids: [300] },
+      { peer: 8001, pids: [700] },
     ]);
   });
 
-  // [Chord's socket's inode, the peer]
+  // [Chord's socket's inode, the peer]: whoever holds the socket whose peer is Chord's.
   const cases: [number, number | null][] = [
     [5001, 400],
+    [8001, 700],
     // Its peer is held by nobody we can see, or by two processes: unknown.
     [6001, null],
     [6002, null],
     // Not connected, or not there.
     [5000, null],
     [7000, null],
+    [0, null],
   ];
   it.each(cases)('inode %i: %s', (inode, peer) => expect(linuxPeer(parseSs(ss), inode)).toBe(peer));
 });

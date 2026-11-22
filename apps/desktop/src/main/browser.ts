@@ -498,8 +498,11 @@ export class Browser {
           options.screenShare.forgetTab(nodeId);
           options.httpAuth.forgetTab(nodeId, true);
         });
-        // Clicking into a split's pane focuses it: the address, buttons and keys act on it from then on.
-        contents.on('focus', () => this.paneFocused(nodeId));
+        // Clicking into a split's pane focuses it: the address, buttons and keys act on it from then on. Not a click Chord
+        // sends for an agent (control/input.ts), should the page take focus from it.
+        contents.on('focus', () => {
+          if (!isAgentInput(contents)) this.paneFocused(nodeId);
+        });
         contents.on('input-event', (_event, input) => {
           // A click Chord sends for an agent (control/input.ts) doesn't move your focus to its pane.
           if (input.type === 'mouseDown' && !isAgentInput(contents)) this.paneFocused(nodeId);

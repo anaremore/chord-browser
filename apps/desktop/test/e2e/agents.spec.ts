@@ -89,6 +89,29 @@ async function answer(app: ElectronApplication, name: string, button: 'Deny' | '
   await expect(card).toHaveCount(0);
 }
 
+test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_E2E_NO_PEER: '1' });
+  try {
+    await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CLAUDE);
+    const calling = mcp.call('list_tabs');
+    const popover = await pageWhere(app, isPopover);
+    const card = cardOf(popover, 'Claude Code');
+    await expect(card).toContainText('Chord can’t tell which program started it.');
+    await expect(card.getByRole('button', { name: 'Always allow', exact: true })).toHaveCount(0);
+    await answer(app, 'Claude Code', 'Allow once');
+    expect((await calling).isError).toBe(false);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 /** Settings → Agents, opened from the window. */
 async function agentsSettings(app: ElectronApplication, shell: Page): Promise<Page> {
   await runAction(shell, 'app.settings');
@@ -399,33 +422,55 @@ test('input Chord sends an agent’s tab is trusted by the page, reaches a parke
     await answer(app, 'Codex', 'Allow once');
     await opening;
     // The tab isn't on screen: the hook sends inside one of the agent's calls, so it's parked and painting, as an action's will be.
-    type Seen = { agent: number; yours: number; after: number; paused: boolean; shown: boolean } | null;
-    const send = (events: unknown[], text?: string) =>
-      app.evaluate((_electron, [url, events, text]) => (globalThis as unknown as { chordTestHooks: { agentInputSpike(u: string, e: unknown[], t?: string): Promise<Seen> } }).chordTestHooks.agentInputSpike(url, events, text), [
+    type Seen = { agent: number; yours: number; after: number; late: string[]; paused: boolean; shown: boolean; refused: boolean } | null;
+    type Hook = { chordTestHooks: { agentInputSpike(u: string, e: unknown[], t?: string, unchecked?: boolean): Promise<Seen> } };
+    const send = (events: unknown[], text?: string, unchecked = false) =>
+      app.evaluate((_electron, [url, events, text, unchecked]) => (globalThis as unknown as Hook).chordTestHooks.agentInputSpike(url, events, text, unchecked), [
         `${site.origin}/act`,
         events,
         text,
+        unchecked,
       ] as const);
     const click = (x: number, y: number) => [
       { type: 'mouseMove', x, y },
       { type: 'mouseDown', x, y, button: 'left', clickCount: 1 },
       { type: 'mouseUp', x, y, button: 'left', clickCount: 1 },
     ];
+    // A click: each event seen while the send runs, none after.
     const clicked = await send(click(120, 40));
     expect(clicked).toMatchObject({ yours: 0, after: 0, paused: false, shown: false });
     expect(clicked!.agent).toBeGreaterThan(0);
-    // Into the field: a key, Enter, and text inserted as one piece.
-    const typed = await send([...click(120, 100), { type: 'keyDown', keyCode: 'A' }, { type: 'char', keyCode: 'a' }, { type: 'keyUp', keyCode: 'A' }, { type: 'keyDown', keyCode: 'Return' }, { type: 'keyUp', keyCode: 'Return' }], 'hé');
-    expect(typed).toMatchObject({ yours: 0, after: 0, paused: false });
+    // The wheel: seen while the send runs too; the scroll it starts comes after (gesture events, from the page's
+    // renderer), and is nothing any of Chord's listeners for your hands act on (a press of a key or a button).
+    const wheeled = await send([{ type: 'mouseWheel', x: 120, y: 40, deltaX: 0, deltaY: -40 }]);
+    test.info().annotations.push({ type: 'late after the wheel', description: wheeled!.late.join(' ') || 'none' });
+    expect(wheeled).toMatchObject({ yours: 0, paused: false });
+    expect(wheeled!.agent).toBeGreaterThan(0);
+    expect(wheeled!.late.filter((t) => /^(mouseDown|mouseUp|keyDown|keyUp|rawKeyDown|char)$/.test(t))).toEqual([]);
+    // Into the field: text inserted as one piece, then Enter (keys of press_key's list only).
+    const typed = await send([...click(120, 100), { type: 'keyDown', keyCode: 'Return' }, { type: 'char', keyCode: '\r' }, { type: 'keyUp', keyCode: 'Return' }], 'hé');
+    expect(typed).toMatchObject({ yours: 0, after: 0, paused: false, refused: false });
     const log = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
     await expect.poll(log).toContain('click:true');
     const text = await log();
-    expect(text).toContain('keydown-a:true');
     expect(text).toContain('keydown-Enter:true');
     expect(text).toContain('beforeinput-insertText:true');
     expect(text).not.toContain(':false');
     // Nothing of Chord's ran for it: no pause, and no bar but the working one, now gone.
     await expect(shell.getByRole('status').filter({ hasText: /Paused/ })).toHaveCount(0);
+
+    // Ctrl+W (⌘W): never sent for an agent; and if one ever were, Chord's shortcuts stop it, so neither the page nor
+    // the ⋯ menu's accelerators get it. Its tab, and your tabs, stay open.
+    const mod = process.platform === 'darwin' ? 'meta' : 'control';
+    const ctrlW = [{ type: 'keyDown', keyCode: 'W', modifiers: [mod] }, { type: 'keyUp', keyCode: 'W', modifiers: [mod] }];
+    const yours = shell.getByRole('tree', { name: 'Unpinned tabs' }).getByRole('treeitem');
+    const before = await yours.count();
+    expect(await send(ctrlW)).toMatchObject({ refused: true, agent: 0, yours: 0 });
+    expect(await send(ctrlW, undefined, true)).toMatchObject({ refused: false, yours: 0, after: 0 });
+    await shell.waitForTimeout(500);
+    expect((await mcp.call('list_tabs')).text).toContain('"a1"');
+    expect(await yours.count()).toBe(before);
+    expect(await log()).not.toContain('keydown-w');
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

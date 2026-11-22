@@ -7,6 +7,7 @@ export * from './control-tools';
 export * from './control-gate';
 export * from './control-refs';
 export * from './agent-tools';
+export * from './agent-input';
 export * from './effects';
 export * from './ids';
 export * from './import';

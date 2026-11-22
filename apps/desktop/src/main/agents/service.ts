@@ -54,6 +54,8 @@ export interface HeldConnection {
   parent: Promise<ProcessInfo[]> | null;
   /** The process at its other end, as the OS says (peer.ts), once looked up; null if it couldn't say. */
   peerPid?: number | null;
+  /** Its claim on its hello's bridge PID: it holds that PID only if this is the claim on it (AgentService.claims). */
+  claim?: object;
   /** The sign-ins it was let in with (the window you answered in, or those of its Always allow). */
   profileId: ProfileId | null;
   /** Let in for good (Always allow, now or before). */
@@ -71,6 +73,11 @@ export class AgentService {
   private endpoint: Endpoint | null = null;
   private starting: Promise<void> | null = null;
   readonly connections = new Set<HeldConnection>();
+  /**
+   * Bridge PIDs claimed by live connections, each by the first to claim it, from its hello on (M2a): another connection
+   * claiming it can't be taken for that process, even while the first is idle and hasn't been looked up yet.
+   */
+  private readonly claims = new Map<number, object>();
   /** The agents' chords: made with the first connection, so with no agent there are none and nothing runs for them. */
   chords: AgentChords | null = null;
   /** The DACL helper's run, once per endpoint (Windows). */
@@ -103,6 +110,9 @@ export class AgentService {
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
           let gone = false;
+          // Its claim to be that bridge process, first come, first served (whoStarted).
+          const claim = {};
+          if (!this.claims.has(hello.bridgePid)) this.claims.set(hello.bridgePid, claim);
           // Nothing of it is handled until the pipe's restriction (Windows' DACL, started by the first connection) has
           // finished, however it ended: its messages wait meanwhile, as they do for the connection's code. A failed one
           // (logged, and tried twice) doesn't hold connections back: the token still gates every one.
@@ -138,7 +148,7 @@ export class AgentService {
                 return answer.grant;
               },
             });
-            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null, letIn: false };
+            const record: HeldConnection = { connection, hello, socket, parent: null, profileId: null, always: false, allowedParent: null, letIn: false, claim };
             held = record;
             this.connections.add(record);
             // Settings → Agents lists the stopped ones: it hears when one stops or goes on.
@@ -165,6 +175,7 @@ export class AgentService {
             },
             closed: () => {
               gone = true;
+              if (this.claims.get(hello.bridgePid) === claim) this.claims.delete(hello.bridgePid);
               if (!held) return;
               held.connection.closed();
               this.connections.delete(held);
@@ -194,6 +205,7 @@ export class AgentService {
     this.endpoint?.close();
     this.endpoint = null;
     this.restricted = null;
+    this.claims.clear();
     for (const held of this.connections) held.connection.closed();
     this.connections.clear();
     this.publishLetIn();
@@ -208,13 +220,17 @@ export class AgentService {
   private async whoStarted(held: HeldConnection): Promise<ProcessInfo[]> {
     // A packaged build before AGENT_ACTIONS_RELEASED: M1's lookup, from the bridge's word.
     if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid));
+    // Taken by other live connections: the peers they were given, and the bridge PIDs they claimed first.
     const others = new Set<number>();
     for (const other of this.connections) if (other !== held && typeof other.peerPid === 'number') others.add(other.peerPid);
+    for (const [pid, claim] of this.claims) if (claim !== held.claim) others.add(pid);
+    // A PID another connection claimed first is no claim at all (-1 is never a process).
+    const claimed = held.claim && this.claims.get(held.hello.bridgePid) === held.claim ? held.hello.bridgePid : -1;
     const peer = this.deps.peer ?? (async (socket: Socket, endpoint: string, claimed: number, taken: ReadonlySet<number>) => {
       const { peerOf, peerDeps } = await import('./peer');
       return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper));
     });
-    const pid = await peer(held.socket, this.endpoint?.path ?? '', held.hello.bridgePid, others);
+    const pid = await peer(held.socket, this.endpoint?.path ?? '', claimed, others);
     held.peerPid = pid;
     if (pid === null) return [];
     const { ancestry, sameProgram } = await import('./parent');

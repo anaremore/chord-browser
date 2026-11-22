@@ -6,21 +6,40 @@
  *
  * - an agent's tab pauses when you press a key there, and a navigation just after your key or click is yours
  *   (agents/chords.ts, `USER_MS`): the agent's own never is;
- * - Chord's shortcuts (keyboard.ts) never run for it;
+ * - Chord's shortcuts (keyboard.ts) and DevTools' keys (devtools.ts) never run for it: one that is a shortcut is
+ *   stopped there, so the ⋯ menu's accelerators never see it either;
  * - a split's pane isn't focused by it (browser.ts).
  *
- * Electron emits those events while `sendInputEvent` runs, before it returns (M2a's spike, on each CI OS:
- * agents.spec.ts), so a count of sends under way is exact: no queue to match, nothing left over to mistake a key of
- * yours for one of the agent's.
+ * Before any of that, an event Chord never sends for an agent (core's agentInputAllowed: a modifier, a key off
+ * press_key's list, a right-click) is refused, and nothing of its batch is sent.
+ *
+ * Electron emits those events for clicks and keys while `sendInputEvent` runs, before it returns (M2a's spike, on
+ * each CI OS: agents.spec.ts), so for them a count of sends under way is exact: no queue to match, nothing left over
+ * to mistake a key of yours for one of the agent's. The wheel is seen inside too, but the scroll it starts comes
+ * after (`gestureScroll*`, and `input-event`'s `mouseWheel` once the page has handled it): none of the listeners
+ * above acts on those, and the one that does (history's scroll save) is right to.
  */
+import { agentInputAllowed } from '@chord/core';
 import type { KeyboardInputEvent, MouseInputEvent, MouseWheelInputEvent, WebContents } from 'electron';
 
 export type AgentInputEvent = KeyboardInputEvent | MouseInputEvent | MouseWheelInputEvent;
 
 const sending = new WeakMap<WebContents, number>();
 
-/** Sends the events, in order, as the agent's. */
-export function sendAgentInput(contents: WebContents, events: readonly AgentInputEvent[]): void {
+/** An event Chord never sends for an agent (core's agentInputAllowed): nothing of the batch was sent. */
+export class AgentInputRefused extends Error {
+  constructor(readonly event: AgentInputEvent) {
+    super(`Chord never sends ${event.type}${'keyCode' in event ? ` ${event.keyCode}` : ''} for an agent`);
+  }
+}
+
+/**
+ * Sends the events, in order, as the agent's: all of them, or, if any is one Chord never sends for an agent (a
+ * modifier, a key off the list, a right-click), none (AgentInputRefused). `unchecked` is for the E2E hook alone, to
+ * show Chord's shortcuts stop such a key a second time.
+ */
+export function sendAgentInput(contents: WebContents, events: readonly AgentInputEvent[], unchecked = false): void {
+  if (!unchecked) for (const event of events) if (!agentInputAllowed(event)) throw new AgentInputRefused(event);
   if (contents.isDestroyed()) return;
   sending.set(contents, (sending.get(contents) ?? 0) + 1);
   try {
