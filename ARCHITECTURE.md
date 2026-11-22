@@ -544,7 +544,7 @@ As built (`core/idle.ts`, `main/idle.ts`):
 3. **Main checks the sender on every message.** `event.sender.id` must be registered under an allowed role, `event.senderFrame` must be the main frame, and `senderFrame.url` must be the expected `chord://<surface>` origin. Unknown channels are dropped and logged; payloads over 256 KB are rejected. Large data (attachments, screenshots) moves by reference ID, never inline.
 4. **Web content gets almost nothing:** no IPC of its own. The exceptions:
    - the extension library's preload: it runs in every page of a profile that has extensions, and does nothing outside extension pages and extensions' isolated worlds. Extension pages get only what it injects ([§12](#12-extensions));
-   - the page preload's badge (§9, counts on tabs), and in an outside agent's tabs its hold on the page's dialogs, file pickers and leave-page prompts (S18; hidden in release builds until 0.14.0);
+   - the page preload's badge (§9, counts on tabs), and in an outside agent's tabs its hold on the page's dialogs, file pickers and leave-page prompts (S18; in release builds since 0.14.0);
    - the passwords sentinel's channels: from its own isolated world to main, in a tab's main frame, while passwords are on (§9, *Passwords: the detector*).
 5. **Electron 45 constraint:** sandboxed preloads no longer have the `events`, `timers`, `url`, or `Buffer` modules, so preloads are written against browser APIs only.
 
