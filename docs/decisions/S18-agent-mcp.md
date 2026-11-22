@@ -144,7 +144,7 @@ A call that needs an answer waits on the card: the first call of a connection wa
 
 ## M2: plan (acting on pages)
 
-*Planning thread, 2026-11-21. For the owner's review, with the mock `mocks/agents-s18-m2.html` (outside the repo, as M1's was). Nothing here is built yet. The owner's decisions above and in the brief (elements, not pixels; the three approvals; Stop and pause; the never-offered list; one shared control layer; peer PID) are taken as settled. The **Questions for the owner** at the end are the only open points.*
+*Planning thread, 2026-11-21; approved by the owner 2026-11-22 with the mock `mocks/agents-s18-m2.html` (outside the repo, as M1's was), answers at the end. The owner's decisions above and in the brief (elements, not pixels; the three approvals; Stop and pause; the never-offered list; one shared control layer; peer PID) are settled.*
 
 Outside agents and the assistant gain **click, type and press a key** on a page, plus a few cheap neighbors. They act on elements from an accessibility snapshot, never on pixel positions. Each tool goes through the shared control layer (`main/control/`), so the assistant and outside agents get the same tools, the same gate and the same cards, each in its own place.
 
@@ -303,7 +303,7 @@ The assistant gets all eight tools, behind the same gate, where it already reads
 - **No address** but http(s) for `navigate`; never a *Never* site (as `open_tab`), never `chord://`, `javascript:`, `data:`, `file:`.
 - **No vault in agents' tabs** (`PasswordService.pageOf`, M1): no autofill, no save prompt.
 - **No permission** (camera, location…) in agents' tabs (`permissions.ts`'s `agentTab`, M1).
-- **No acting on shared tabs** in M2: a tab you share stays read-only (*Questions*, 2).
+- **No acting on shared tabs** in M2: a tab you share stays read-only (the owner's answer 2).
 - *Unit test:* a table of each of these through the tools' handlers, with a fake page.
 
 ### Who's calling (peer PID)
@@ -359,12 +359,14 @@ Behind `AGENT_ACTIONS_RELEASED` (core, false) until M2d lands, as M1 was behind 
 - **Pages never lower the bar.** A page's own hints (a tool's `readOnlyHint`, ARIA, form attributes) never turn a risky step into an action that doesn't ask; they can only make one ask. Chord never injects a WebMCP shim into a page's main world.
 - **Untrusted, and only where reading is allowed.** Site tools' names, descriptions, schemas and outputs are untrusted data, wrapped like page text (§11.4). Only the main frame's own, same-origin tools are offered, never in a private window, on a Chord page or on a *Never* site. The assistant gets them through the same gate.
 
-### Questions for the owner
+### Owner's answers (2026-11-22)
 
-1. **The agent's reason on the card.** The M1 mock's M2 preview showed the agent's own words (*It's reading your orders to find the return window.*). The plan leaves them off: a page can steer what an agent says, and the card is where you decide. Keep it off, or show it labeled (*Claude Code says: …*)?
-2. **Shared tabs.** M2 keeps a tab you share read-only. Should sharing have a second choice, *Share and let it act*, now or later?
-3. **Site approvals for agents let in once.** The plan offers *Always on this site* only to agents you always allow (others have no lasting identity to keep it with). OK?
-4. **`forward`**: leave out (as above), or add with `back`?
+The owner approved the plan and the mock: build as drawn.
+
+1. **The agent's reason on the card:** left off. Cards show only what Chord sees.
+2. **Shared tabs:** read-only in M2. *Share and let it act* is for later.
+3. **Always on this site:** offered only to agents you always allow; one let in once gets **Allow for now**.
+4. **`forward`:** left out.
 
 ## Antigravity (2026-11-21, before 0.14.0)
 
