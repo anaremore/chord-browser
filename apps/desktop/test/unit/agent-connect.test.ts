@@ -218,9 +218,29 @@ describe('Always allow', () => {
   it('who started it, past a helper the agent runs tools from (language_server_*) to the app behind it', async () => {
     const helper = { pid: 9, name: 'language_server_linux_x64', path: '/opt/Antigravity/resources/bin/language_server_linux_x64', cwd: null, ppid: 8 };
     const app = { pid: 8, name: 'antigravity', path: '/opt/Antigravity/antigravity', cwd: null, ppid: 1 };
-    expect(startedByOf([helper, app])).toEqual(app);
-    expect(startedByOf([claude])).toEqual(claude);
-    expect(startedByOf([helper])).toEqual(helper);
+    const at = (name: string, path: string) => ({ pid: 1, name, path, cwd: null, ppid: 1 });
+    // [the bridge's parent, its parent, who started it]
+    const table: [string, ProcessInfo, ProcessInfo | null, string][] = [
+      ['Linux: the helper in the app’s folder', helper, app, 'antigravity'],
+      [
+        'macOS: the helper in the app bundle',
+        at('language_server_macos_arm', '/Applications/Antigravity.app/Contents/Resources/bin/language_server_macos_arm'),
+        at('Antigravity', '/Applications/Antigravity.app/Contents/MacOS/Antigravity'),
+        'Antigravity',
+      ],
+      [
+        'Windows: the helper in the app’s folder (any case)',
+        at('language_server_windows_x64.exe', 'C:\\Users\\me\\AppData\\Local\\Programs\\Antigravity\\resources\\bin\\language_server_windows_x64.exe'),
+        at('Antigravity.exe', 'C:\\Users\\Me\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe'),
+        'Antigravity.exe',
+      ],
+      // The attack: a program that calls itself so, anywhere else, is named as itself (and so gets a card).
+      ['a language_server_x outside its parent’s folder', at('language_server_x', '/tmp/evil/language_server_x'), at('claude', '/home/me/.local/bin/claude'), 'language_server_x'],
+      ['a language_server_x in a folder named like its parent’s', at('language_server_x', '/home/me/.local/bin-evil/language_server_x'), at('claude', '/home/me/.local/bin/claude'), 'language_server_x'],
+      ['a helper with no parent', helper, null, 'language_server_linux_x64'],
+      ['no helper', claude, app, 'claude.exe'],
+    ];
+    for (const [what, first, next, named] of table) expect(startedByOf(next ? [first, next] : [first])?.name, what).toBe(named);
     expect(startedByOf([])).toBeNull();
     const t = setup();
     const asked = t.cards.ask({ name: 'antigravity-cli', folder: '/home/me/code', parent: Promise.resolve([helper, app]) }, new AbortController().signal);
@@ -229,6 +249,16 @@ describe('Always allow', () => {
     expect(t.cards.cardFor('w1')).toMatchObject({ name: 'antigravity-cli', startedBy: 'antigravity' });
     t.cards.answer(t.cards.cardFor('w1')!.id, 'always', 'w1');
     expect(await asked).toMatchObject({ grant: 'always', allowedParent: '/opt/Antigravity/antigravity' });
+
+    // Claude Code is allowed for good; a helper-named program it didn't install, giving Claude Code's name, is asked.
+    const u = setup();
+    u.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [{ name: 'Claude Code', parent: '/home/me/.local/bin/claude', profileId: 'default', allowedAt: 1, lastUsedAt: 1 }] } });
+    const borrowed = u.cards.ask({ name: 'Claude Code', folder: '/home/me', parent: Promise.resolve([at('language_server_x', '/tmp/evil/language_server_x'), at('claude', '/home/me/.local/bin/claude')]) }, new AbortController().signal);
+    await tick();
+    await tick();
+    expect(u.cards.cardFor('w1')).toMatchObject({ name: 'Claude Code', startedBy: 'language_server_x' });
+    u.cards.answer(u.cards.cardFor('w1')!.id, 'deny', 'w1');
+    expect((await borrowed).grant).toBe('deny');
   });
 
   it('over the cap, the ones used longest ago go', () => {

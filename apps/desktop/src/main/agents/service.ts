@@ -87,16 +87,19 @@ export class AgentService {
         log: this.deps.log,
         // The path comes with it: a connection can arrive before startEndpoint has returned, and must never skip the DACL.
         onFirstConnection: (path) => {
-          if (this.deps.restrict) this.restricted = this.deps.restrict(path);
-          else if (process.platform === 'win32' && this.deps.helper) this.restricted = restrictPipe(this.deps.helper, path);
+          const helper = this.deps.helper;
+          const restrict = this.deps.restrict ?? (process.platform === 'win32' && helper ? (p: string) => restrictPipe(helper, p) : null);
+          if (restrict) this.restricted = restrictWithRetry(restrict, path, this.deps.log);
+          else if (process.platform === 'win32') warn(this.deps.log, 'the agent pipe is open to this user only by its token: window-owner.exe is missing, so its access isn’t tightened');
         },
         onConnection: ({ token: _token, ...hello }, send, socket) => {
           // The connection's code loads with the first one; messages that come meanwhile wait.
           const queued: Record<string, unknown>[] = [];
           let held: HeldConnection | null = null;
           let gone = false;
-          // Nothing of it is handled until the pipe is restricted (Windows' DACL, started by the first connection): its
-          // messages wait meanwhile, as they do for the connection's code.
+          // Nothing of it is handled until the pipe's restriction (Windows' DACL, started by the first connection) has
+          // finished, however it ended: its messages wait meanwhile, as they do for the connection's code. A failed one
+          // (logged, and tried twice) doesn't hold connections back: the token still gates every one.
           void Promise.all([import('./connection'), this.deps.chords && !this.chords ? import('./chords') : null, this.restricted?.catch(() => -1)]).then(([{ agentConnection }, chordsModule]) => {
             if (chordsModule && this.deps.chords && !this.chords) {
               this.chords = new chordsModule.AgentChords(this.deps.chords);
@@ -275,8 +278,30 @@ export function restrictPipe(helper: string, path: string): Promise<number> {
     execFile(helper, ['restrict-pipe', path], { windowsHide: true, timeout: 10_000 }, (error) => {
       if (!error) return resolve(0);
       const code = (error as NodeJS.ErrnoException & { code?: unknown }).code;
-      if (typeof code === 'number') console.warn(`[chord] couldn't tighten the agent pipe's access (window-owner exited ${code})`);
+      // Not started (missing, blocked) or killed at the timeout: no exit code of its own, so the reason is the error's.
+      if (typeof code !== 'number') lastRestrictError = (error as { killed?: boolean }).killed ? 'it timed out' : error.message;
       resolve(typeof code === 'number' ? code : -1);
     });
   });
+}
+
+/** Why the last restrict-pipe run had no exit code of its own (it didn't start, or timed out). */
+let lastRestrictError = '';
+
+const warn = (log: AgentServiceDeps['log'], message: string) => {
+  log?.(`agents: ${message}`);
+  console.warn(`[chord] ${message}`);
+};
+
+/** The pipe restricted, tried once more if it fails; every failure logged with its reason. Resolves with the last outcome. */
+export async function restrictWithRetry(restrict: (path: string) => Promise<number>, path: string, log?: AgentServiceDeps['log']): Promise<number> {
+  let code = -1;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    lastRestrictError = '';
+    code = await restrict(path).catch((error: unknown) => ((lastRestrictError = error instanceof Error ? error.message : String(error)), -1));
+    if (code === 0) return 0;
+    const why = code === -1 ? lastRestrictError || 'it didn’t run' : `window-owner exited ${code}`;
+    warn(log, `couldn’t tighten the agent pipe’s access (try ${attempt} of 2: ${why})${attempt === 2 ? '; the token still gates every connection' : ''}`);
+  }
+  return code;
 }

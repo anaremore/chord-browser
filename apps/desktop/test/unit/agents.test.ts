@@ -28,7 +28,7 @@ import { runBridge } from '../../src/main/agents/bridge';
 import { connectEndpoint, endpointPath, LIVE_MAX, lines, readEndpoint, startEndpoint, UNAUTHENTICATED_MAX } from '../../src/main/agents/endpoint';
 import { privateFolder, relayFolder, relayUserData, userCache } from '../../src/main/agents/relay-folder';
 import type { ConnectAnswer, ConnectingAgent } from '../../src/main/agents/connect';
-import { AgentService, QUEUED_MAX } from '../../src/main/agents/service';
+import { AgentService, QUEUED_MAX, restrictWithRetry } from '../../src/main/agents/service';
 import { watchAgents } from '../../src/main/agents/switch';
 import type { ControlBrowser } from '../../src/main/control/tools';
 import type { Change } from '../../src/main/store';
@@ -229,6 +229,29 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect((await c.call('list_tabs')).error).toBe(false);
     expect(events).toEqual(['restricted', 'asked']);
     expect(await service.restricted).toBe(0);
+  });
+
+  it('restricting the pipe: a failure is logged with its reason and tried once more; the outcome is kept', async () => {
+    // [what each try does, the outcome, how many warnings]
+    const table: [string, (number | Error)[], number, number][] = [
+      ['fine at once', [0], 0, 0],
+      ['fails, then works', [5, 0], 0, 1],
+      ['fails twice', [5, 7], 7, 2],
+      ['doesn’t start, twice', [new Error('spawn window-owner.exe ENOENT'), new Error('spawn window-owner.exe ENOENT')], -1, 2],
+    ];
+    for (const [what, tries, outcome, warnings] of table) {
+      const logged: string[] = [];
+      let n = 0;
+      const restrict = async () => {
+        const next = tries[n++]!;
+        if (next instanceof Error) throw next;
+        return next;
+      };
+      expect(await restrictWithRetry(restrict, 'pipe', (...a: unknown[]) => void logged.push(a.join(' '))), what).toBe(outcome);
+      expect(logged, what).toHaveLength(warnings);
+      if (what.startsWith('doesn’t start')) expect(logged[0]).toContain('ENOENT');
+      if (what === 'fails twice') expect(logged[1]).toContain('the token still gates every connection');
+    }
   });
 
   it('Remove in Settings hangs up on that agent, let in for good by that program, and leaves an Allow once one alone', async () => {

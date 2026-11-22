@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parse } from 'jsonc-parser';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addToAntigravity, antigravityConfig, undoAntigravity } from '../../src/main/agents/antigravity';
+import { addToAntigravity, antigravityConfig, AntigravityUndos, undoAntigravity } from '../../src/main/agents/antigravity';
 import { mcpArgv, type SetupWhere } from '../../src/main/agents/settings';
 
 const dirs: string[] = [];
@@ -74,12 +74,41 @@ describe('Add to Antigravity', () => {
     expect(servers(file)['github']).toEqual({ command: 'gh-mcp', args: [] });
   });
 
-  it('a file that can’t be parsed as JSONC, or isn’t an object, is left alone', () => {
-    for (const text of ['{ not json', '[]', '"servers"', JSON.stringify({ mcpServers: ['chord'] })]) {
+  it('a file that can’t be parsed as JSONC, isn’t an object, or gives a key twice is left alone', () => {
+    const twice = '{"mcpServers": {"chord": {"command": "a", "args": []}, "chord": {"command": "b", "args": []}}}';
+    for (const text of ['{ not json', '[]', '"servers"', JSON.stringify({ mcpServers: ['chord'] }), twice, '{"mcpServers": {}, "mcpServers": {}}']) {
       const file = config(text);
       expect(addToAntigravity(CHORD, file), text).toEqual({ ok: false, why: 'invalid' });
       expect(readFileSync(file, 'utf8')).toBe(text);
     }
+  });
+
+  it('a file with CRLF line endings keeps them, with no LF alone', () => {
+    const file = config('{\r\n  "mcpServers": {\r\n    "github": {"command": "gh-mcp", "args": []}\r\n  }\r\n}\r\n');
+    expect(addToAntigravity(CHORD, file).ok).toBe(true);
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('"chord"');
+    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+  });
+
+  it('Undo by token: one that couldn’t read or write the file keeps its token to try again; done or changed, it goes', () => {
+    const file = config(JSON.stringify({ mcpServers: { github: GITHUB } }));
+    const undos = new AntigravityUndos(() => file);
+    const added = undos.add(CHORD);
+    if (!added.ok || !added.token) throw new Error('not added');
+    const good = readFileSync(file, 'utf8');
+    writeFileSync(file, '{ broken');
+    expect(undos.undo(added.token)).toEqual({ ok: false, why: 'invalid' });
+    writeFileSync(file, good);
+    expect(undos.undo(added.token)).toEqual({ ok: true, token: null });
+    expect(servers(file)).toEqual({ github: GITHUB });
+    expect(undos.undo(added.token)).toEqual({ ok: false, why: 'gone' });
+    // Changed since: nothing to undo, and the token goes.
+    const again = undos.add(CHORD);
+    if (!again.ok || !again.token) throw new Error('not added');
+    writeFileSync(file, JSON.stringify({ mcpServers: { chord: { command: 'other', args: [] } } }));
+    expect(undos.undo(again.token)).toEqual({ ok: false, why: 'changed' });
+    expect(undos.undo(again.token)).toEqual({ ok: false, why: 'gone' });
   });
 
   it('Undo re-reads the file: what Antigravity changed meanwhile stays; a chord entry that isn’t Chord’s any more is left', () => {

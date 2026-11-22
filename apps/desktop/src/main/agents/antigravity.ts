@@ -25,7 +25,8 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
+import type { AntigravityAnswer } from '@chord/ipc';
+import { applyEdits, findNodeAtLocation, modify, parse, parseTree, type Node as JsonNode, type ParseError } from 'jsonc-parser';
 
 /** An MCP server as Antigravity lists it. */
 export interface McpServerEntry {
@@ -61,7 +62,6 @@ export interface AntigravityUndo {
 export type AntigravityProblem = 'invalid' | 'link' | 'unwritable' | 'changed';
 
 const BOM = '\uFEFF';
-const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: '\n' } };
 
 type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -88,7 +88,7 @@ function load(file: string): { text: string | null; config: Json; mode: number |
   if (body.trim() === '') return { text, config: {}, mode };
   const errors: ParseError[] = [];
   const config: unknown = parse(body, errors, { allowTrailingComma: true, disallowComments: false });
-  if (errors.length > 0 || !isObject(config)) return 'invalid';
+  if (errors.length > 0 || !isObject(config) || duplicateKeys(body)) return 'invalid';
   const servers = config['mcpServers'];
   if (servers !== undefined && !isObject(servers)) return 'invalid';
   return { text, config, mode };
@@ -98,9 +98,21 @@ function load(file: string): { text: string | null; config: Json; mode: number |
 function edited(text: string | null, value: unknown): string {
   const bom = text?.startsWith(BOM) ? BOM : '';
   const body = (text ?? '').replace(/^\uFEFF/, '');
+  // Its own line endings: a file written on Windows keeps CRLF, never a mix.
+  const eol = body.includes('\r\n') ? '\r\n' : '\n';
   const base = body.trim() === '' ? '{}' : body;
-  const next = applyEdits(base, modify(base, ['mcpServers', 'chord'], value, FORMAT));
-  return bom + (next.endsWith('\n') || body.trim() !== '' ? next : `${next}\n`);
+  const next = applyEdits(base, modify(base, ['mcpServers', 'chord'], value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }));
+  return bom + (next.endsWith(eol) || body.trim() !== '' ? next : `${next}${eol}`);
+}
+
+/** A key given twice at the top level or in `mcpServers` (`"chord"` twice): which one Antigravity reads is anyone's guess, so it's left alone. */
+function duplicateKeys(body: string): boolean {
+  const root = parseTree(body, [], { allowTrailingComma: true, disallowComments: false });
+  const twice = (node: JsonNode | undefined) => {
+    const keys = (node?.children ?? []).map((p) => p.children?.[0]?.value as unknown);
+    return new Set(keys).size !== keys.length;
+  };
+  return twice(root) || twice(findNodeAtLocation(root!, ['mcpServers']));
 }
 
 /** Written beside it, then renamed over it: a reader never sees half a file. New: 0600 in a 0700 folder; existing: its mode. */
@@ -108,7 +120,7 @@ function writeAtomic(file: string, text: string, mode: number | null): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
-    writeFileSync(temp, text, { mode: mode ?? 0o600 });
+    writeFileSync(temp, text, { mode: mode ?? 0o600, flag: 'wx' });
     if (mode !== null) chmodSync(temp, mode);
     renameSync(temp, file);
   } catch (error) {
@@ -145,4 +157,32 @@ export function undoAntigravity(undo: AntigravityUndo): { ok: true } | { ok: fal
     return { ok: false, why: 'unwritable' };
   }
   return { ok: true };
+}
+
+/**
+ * Settings' Add and its Undo, by token (the last few kept). A token goes once its Undo is done, or once there's
+ * nothing left to undo (Chord's entry changed since); an Undo that couldn't read or write the file keeps it, to try
+ * again.
+ */
+export class AntigravityUndos {
+  private readonly undos = new Map<string, AntigravityUndo>();
+
+  constructor(private readonly file: () => string = () => antigravityConfig()) {}
+
+  add(entry: McpServerEntry): AntigravityAnswer {
+    const result = addToAntigravity(entry, this.file());
+    if (!result.ok) return result;
+    const token = randomBytes(12).toString('hex');
+    this.undos.set(token, result.undo);
+    while (this.undos.size > 5) this.undos.delete(this.undos.keys().next().value!);
+    return { ok: true, token };
+  }
+
+  undo(token: string): AntigravityAnswer {
+    const undo = this.undos.get(token);
+    if (!undo) return { ok: false, why: 'gone' };
+    const undone = undoAntigravity(undo);
+    if (undone.ok || undone.why === 'changed') this.undos.delete(token);
+    return undone.ok ? { ok: true, token: null } : undone;
+  }
 }

@@ -35,8 +35,7 @@ import { showDevelopmentDockIcon } from './app-icon';
 import { Browser } from './browser';
 import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
-import { randomBytes } from 'node:crypto';
-import type { AntigravityUndo } from './agents/antigravity';
+import type { AntigravityUndos } from './agents/antigravity';
 import type { ConnectCards } from './agents/connect';
 import type { SetupWhere } from './agents/settings';
 import { pageOf } from './view-page';
@@ -551,22 +550,11 @@ function registerIpc(): void {
     return agentsView(browser!.store.state, connected, setupLines(setupWhere()));
   });
   // Settings → Agents' *Add to Antigravity* (S18): Chord's own entry in its MCP config, and its Undo (the last few kept).
-  const antigravityUndos = new Map<string, AntigravityUndo>();
+  let antigravity: AntigravityUndos | null = null;
   handle('settings:antigravity', async (request): Promise<AntigravityAnswer> => {
-    const [{ addToAntigravity, undoAntigravity }, { mcpArgv }] = await Promise.all([import('./agents/antigravity'), import('./agents/settings')]);
-    if (request.do === 'undo') {
-      const undo = antigravityUndos.get(request.token);
-      if (!undo) return { ok: false, why: 'gone' };
-      antigravityUndos.delete(request.token);
-      const undone = undoAntigravity(undo);
-      return undone.ok ? { ok: true, token: null } : undone;
-    }
-    const result = addToAntigravity(mcpArgv(setupWhere()));
-    if (!result.ok) return result;
-    const token = randomBytes(12).toString('hex');
-    antigravityUndos.set(token, result.undo);
-    while (antigravityUndos.size > 5) antigravityUndos.delete(antigravityUndos.keys().next().value!);
-    return { ok: true, token };
+    const [{ AntigravityUndos }, { mcpArgv }] = await Promise.all([import('./agents/antigravity'), import('./agents/settings')]);
+    antigravity ??= new AntigravityUndos();
+    return request.do === 'undo' ? antigravity.undo(request.token) : antigravity.add(mcpArgv(setupWhere()));
   });
   handle('auth:unlock', async ({ id }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');

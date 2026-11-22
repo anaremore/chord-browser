@@ -61,12 +61,26 @@ const LOOKUP_MS = 5000;
 /** The longest folder the card shows; longer ones lose their middle. */
 const FOLDER_MAX = 120;
 
+/** The folder a program is installed in: its app bundle on macOS (`…/Antigravity.app`), else its own folder. */
+function installFolder(path: string): string {
+  const bundle = /^(.*?\.app)[\\/]/i.exec(path);
+  return (bundle ? bundle[1]! : path.replace(/[\\/][^\\/]*$/, '')).replace(/\\/g, '/').toLowerCase();
+}
+
+/** Whether `path` lies inside `folder` (its separators and, as on Windows and macOS, its case aside). */
+const inside = (path: string, folder: string) => path.replace(/\\/g, '/').toLowerCase().startsWith(`${folder}/`);
+
 /**
- * The program that started it, as the card names it and Always allow keeps it: the bridge's parent, past a helper
- * the agent runs its tools from (Antigravity's `language_server_*`, reportedly) to the app behind it.
+ * The program that started it, as the card names it and Always allow keeps it: the bridge's parent, or, past a
+ * helper the agent runs its tools from (Antigravity's `language_server_*`, reportedly), the app behind it. Only a
+ * helper inside that app's own install folder is passed: a program anywhere else that calls itself so is named as
+ * itself, and can't borrow the app's Always allow.
  */
 export function startedByOf(chain: readonly ProcessInfo[]): ProcessInfo | null {
-  return chain.find((p) => !/^language_server/i.test(p.name ?? '')) ?? chain[0] ?? null;
+  const [first, next] = chain;
+  if (!first) return null;
+  const helper = /^language_server/i.test(first.name ?? '') && first.path && next?.path && inside(first.path, installFolder(next.path));
+  return helper ? next! : first;
 }
 
 const firstOf = (parent: Promise<ProcessInfo[]>): Promise<ProcessInfo | null> =>

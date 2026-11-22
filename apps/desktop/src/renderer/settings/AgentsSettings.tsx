@@ -74,8 +74,11 @@ const ANTIGRAVITY_PROBLEMS: Record<Exclude<AntigravityAnswer, { ok: true }>['why
  */
 function AntigravityRow() {
   const [said, setSaid] = useState<{ text: string; undo: string | null } | null>(null);
+  // An Undo that couldn't read or write the file keeps its button, to try again.
   const run = (request: Parameters<typeof api.settings.antigravity>[0], done: string) =>
-    void api.settings.antigravity(request).then((answer) => setSaid(answer.ok ? { text: done, undo: answer.token } : { text: ANTIGRAVITY_PROBLEMS[answer.why], undo: null }));
+    void api.settings.antigravity(request).then((answer) =>
+      setSaid(answer.ok ? { text: done, undo: answer.token } : { text: ANTIGRAVITY_PROBLEMS[answer.why], undo: request.do === 'undo' && answer.why !== 'changed' && answer.why !== 'gone' ? request.token : null }),
+    );
   return (
     <>
       <div className={local.addRow}>
