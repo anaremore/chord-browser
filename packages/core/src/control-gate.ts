@@ -26,8 +26,14 @@ export type Grant = 'once' | 'always' | 'deny';
  * What a grant leaves behind for the agent's later calls: `always` for this
  * kind and subject, a lasting no (a denied connection stays denied), or
  * nothing (it counted for this call only). A risky step asks every time.
+ *
+ * A site (M2c, the site card): *Allow for now* (`once`) lasts as long as the
+ * agent (a connection, a chat), as *Always on this site* does here (the front
+ * door keeps the latter for good too); and a no lasts as long, so a page can't
+ * make the agent ask again and again.
  */
 export function grantAfter(kind: ApprovalKind, grant: Grant): 'always' | 'deny' | null {
+  if (kind === 'site') return grant === 'deny' ? 'deny' : 'always';
   if (grant === 'once') return null;
   if (grant === 'deny') return kind === 'connection' ? 'deny' : null;
   return kind === 'step' ? null : 'always';

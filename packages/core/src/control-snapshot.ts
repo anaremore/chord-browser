@@ -137,7 +137,7 @@ export interface SnapshotOutline {
 
 /** What an agent hears for a ref that isn't good (M2c's actions), one sentence each. */
 export const ELEMENT_REFUSALS = {
-  unknown: (ref: string) => `There's no element ${ref.slice(0, 12)} in that tab. Call snapshot for the page's elements.`,
+  unknown: (ref: string) => `There’s no element ${ref.slice(0, 12)} in that tab. Call snapshot for the page’s elements.`,
   stale: 'That ref is from an earlier snapshot. Call snapshot again, then use its refs.',
 } as const;
 

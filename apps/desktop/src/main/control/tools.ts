@@ -16,8 +16,22 @@ import {
   fieldCount,
   formRead,
   formResult,
+  ACT_REFUSALS,
+  actDone,
+  actPhrase,
+  barAddress,
+  ELEMENT_REFUSALS,
   ElementRefs,
   isActionTool,
+  isPressKey,
+  NAVIGATE_URL_MAX,
+  pressKeyEvents,
+  quotedName,
+  TYPE_TEXT_MAX,
+  type ActDescription,
+  type ActTool,
+  type ElementTool,
+  type PressKey,
   isNeverReadable,
   nodeOf,
   pageResult,
@@ -37,7 +51,9 @@ import {
 import type { WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
+import type { ActAnswer } from './act';
 import type { PageRead } from './extract';
+import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
 import type { ControlScope, ToolOutput } from './scope';
 
@@ -74,8 +90,9 @@ interface Call {
 /** A tool call from a model: through the gate, then its handler. */
 export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
   const spec = controlTool(name);
-  // M2's tools exist only where the scope offers them (a build that has M2): elsewhere they're unknown, as they were.
-  if (!spec || (isActionTool(spec.name) && !scope.actions)) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
+  // M2's tools exist only where the scope offers them (a build that has M2), and acting only where it lets its agent
+  // act (outside agents in M2c): elsewhere they're unknown, as they were.
+  if (!spec || (isActionTool(spec.name) && (!scope.actions || (spec.level === 'act' && !scope.act)))) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
   const off = scope.off();
   if (off) return refuse(off);
   const ref = args['tab_id'];
@@ -103,6 +120,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
         if (spec.name === 'read_form' || spec.name === 'propose_fill') return await formTool(call, spec.name, args);
         if (spec.name === 'page_diagnostics') return await diagnosticsTool(call, args);
         if (spec.name === 'snapshot') return await snapshotTool(call, args);
+        if (spec.level === 'act') return await actTool(call, spec.name as ActTool, args);
         return await readTool(call, spec.name, args);
       } catch (error) {
         return { text: toolResult({ error: error instanceof Error ? error.message : String(error) }, false), isError: true };
@@ -349,6 +367,155 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
+}
+
+/* ---------- Acting (S18 M2c) ---------- */
+
+/**
+ * An action on one of the agent's own tabs (never a shared one, M2's answer: shared tabs stay read-only). Element tools
+ * name a ref from the tab's latest snapshot, on the page it's on now (a stale one is refused), and the element is
+ * checked again in the page before anything is sent (control/act.ts). The first action on a site asks the site card:
+ * *Allow for now* (the agent's life), *Always on this site* (kept with its allowance), or a no that lasts as long.
+ * Every rule is asked again after the card. The bar says what it's doing meanwhile; the result says whether the page
+ * went somewhere else (its refs are then stale). navigate and back need no ref and no site card, as open_tab.
+ */
+async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>): Promise<ToolOutput> {
+  const { scope, browser } = call;
+  const host = scope.act!;
+  const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs for the tabs there are.');
+  if (isOutput(found)) return found;
+  const node = found;
+  if (!scope.readable(node)) return refuse(unreadable(scope, node));
+  const notHere = host.mayAct(node);
+  if (notHere) return refuse(notHere);
+  if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
+  const page = await loadedPage(browser, node.id);
+  if (!page) return refuse('That tab could not be loaded.');
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+  if (loaded) return refuse(loaded);
+  const ref = scope.refs.refFor(node.id);
+  const done = async (navigated: boolean, loading: boolean, what: string): Promise<ToolOutput> => {
+    const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
+    if (after) return refuse(after);
+    if (navigated) scope.memory.elements?.get(node.id)?.forget();
+    await call.activity(tool, what, page.url());
+    return {
+      text: toolResult({
+        tab_id: ref,
+        done: what,
+        navigated,
+        ...(loading ? { loading: true } : {}),
+        page_id: page.id,
+        url: page.url(),
+        title: page.title(),
+        ...(navigated ? { note: 'The page changed: call snapshot again before using refs from before.' } : {}),
+      }),
+    };
+  };
+
+  if (tool === 'navigate' || tool === 'back') {
+    let target = '';
+    if (tool === 'navigate') {
+      target = typeof args['url'] === 'string' ? args['url'].trim() : '';
+      if (!/^https?:\/\//i.test(target) || target.length > NAVIGATE_URL_MAX) return refuse(`navigate takes an http or https address of at most ${NAVIGATE_URL_MAX} characters.`);
+      if (isNeverReadable(target, scope.neverSites())) return refuse(NEVER);
+    } else if (!page.canGoBack()) return refuse(ACT_REFUSALS.noBack);
+    const before = page.id;
+    host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
+    try {
+      const { loading } = tool === 'navigate' ? await page.navigate(target) : await page.back();
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      return await done(page.id !== before, loading, tool === 'navigate' ? `Went to ${barAddress(target)}` : 'Went back');
+    } finally {
+      host.doing(node.id, null);
+    }
+  }
+
+  // An element, by its ref from the tab's latest snapshot, on the page it's on now.
+  const lookup = scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id) ?? { ok: false as const, why: 'unknown' as const };
+  if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(args['ref'] ?? '')) : ELEMENT_REFUSALS.stale);
+  const owner = scope.agent.id;
+  const element = await page.act(owner, lookup.token, lookup.key, { op: 'describe' });
+  if (!element.ok) return refuse(element.why === 'stale' ? ELEMENT_REFUSALS.stale : ACT_REFUSALS.changed);
+  const key = args['key'];
+  const text = args['text'];
+  const choice = typeof args['option'] === 'string' ? args['option'] : '';
+  if (tool === 'press_key' && !isPressKey(key)) return refuse(ACT_REFUSALS.key);
+  if (tool === 'type' && (typeof text !== 'string' || text.length > TYPE_TEXT_MAX)) return refuse(ACT_REFUSALS.text);
+  if (tool === 'type' && !element.editable) return refuse(ACT_REFUSALS.notEditable);
+  if (tool === 'select_option' && !element.select) return refuse(ACT_REFUSALS.notSelect);
+  if (tool !== 'hover' && element.disabled) return refuse(ACT_REFUSALS.disabled);
+  const description: ActDescription = { tool: tool as ElementTool, name: element.name, role: element.role, ...(isPressKey(key) ? { key } : {}), ...(tool === 'select_option' ? { choice } : {}) };
+
+  // The first action on a site asks the user; their answer lasts as long as the agent, or for good.
+  const site = host.siteOf(page.url());
+  if (!site) return refuse(ACT_REFUSALS.noSite);
+  // What the user said already: a no (for as long as the agent), a yes for now (the gate keeps it), or for good.
+  const remembered = scope.agent.granted('site', site);
+  if (remembered === 'deny') return refuse(ACT_REFUSALS.siteDenied(site));
+  if (!remembered && !host.siteAllowed(site)) {
+    const answer = await scope.agent.ask({ kind: 'site', tool, description: actPhrase(description), target: [page.url()], tab: node.id, subject: site }, call.signal, scope.cardWaitMs);
+    if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+    if (answer === 'deny') return refuse(ACT_REFUSALS.siteDenied(site));
+    // A fresh Always on this site (the gate's own memory of a yes is `always` too, for the agent's life only).
+    if (answer === 'always') host.keepSite(site);
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+    const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+    if (after) return refuse(after);
+    // The page moved on while the card waited: its refs are stale.
+    if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    // And on another site now, it'd need its own yes.
+    if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
+  }
+
+  host.doing(node.id, description);
+  const pageAtCheck = page.id;
+  try {
+    let refused: string | null = null;
+    const { navigated, loading } = await page.afterActing(async () => {
+      if (tool === 'select_option') {
+        const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
+        if (!pointed.ok) return void (refused = actRefusal(pointed));
+        const chosen = await page.act(owner, lookup.token, lookup.key, { op: 'choose', option: choice });
+        if (!chosen.ok) refused = chosen.why === 'no-choice' ? ACT_REFUSALS.noChoice(choice) : actRefusal(chosen);
+        return;
+      }
+      const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
+      if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
+      if (call.stopped()) return void (refused = CONTROL_REFUSALS.stopped);
+      // The page went somewhere between the check and the input: a click there would land on another page's element.
+      if (page.id !== pageAtCheck) return void (refused = ELEMENT_REFUSALS.stale);
+      if (tool === 'hover') return page.click(pointed.x, pointed.y, true);
+      if (tool === 'press_key') {
+        const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
+        if (!focused.ok) return void (refused = actRefusal(focused));
+        return page.keys(pressKeyEvents(key as PressKey) as AgentInputEvent[]);
+      }
+      page.click(pointed.x, pointed.y);
+      if (tool !== 'type') return;
+      if (args['replace'] !== false) {
+        const selected = await page.act(owner, lookup.token, lookup.key, { op: 'select' });
+        if (!selected.ok) return void (refused = actRefusal(selected));
+      }
+      await page.insertText(text as string);
+      if (args['submit'] === true) page.keys(pressKeyEvents('Enter') as AgentInputEvent[]);
+    });
+    if (refused) return refuse(refused);
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+    return await done(navigated, loading, actDone(description));
+  } finally {
+    host.doing(node.id, null);
+  }
+}
+
+/** The page's no, in words for the agent. */
+function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
+  if (answer.why === 'stale') return ELEMENT_REFUSALS.stale;
+  if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
+  if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
+  if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';
+  return ACT_REFUSALS.changed;
 }
 
 /* ---------- page_diagnostics (ARCHITECTURE.md §11.3) ---------- */

@@ -74,7 +74,7 @@ export function agentsView(state: State, connected: readonly ConnectedAgent[], s
   const tabsOf = (chordId: ChordId | null) => (chordId ? Object.values(state.nodes).reduce((n, bucket) => n + Object.values(bucket ?? {}).filter((node) => node.kind === 'tab' && node.chordId === chordId).length, 0) : 0);
   const allowed = state.settings.agentsAllowed.map((a: AgentAllowance) => {
     const live = connected.find((c) => c.always && c.name === a.name);
-    return { name: a.name, parent: a.parent, signIns: signInsName(state, a.profileId), connected: Boolean(live), tabs: tabsOf(live?.chordId ?? null), lastUsedAt: a.lastUsedAt };
+    return { name: a.name, parent: a.parent, signIns: signInsName(state, a.profileId), connected: Boolean(live), tabs: tabsOf(live?.chordId ?? null), lastUsedAt: a.lastUsedAt, sites: a.actSites ?? [] };
   });
   return {
     setup,

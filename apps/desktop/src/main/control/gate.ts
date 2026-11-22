@@ -103,6 +103,11 @@ export class ControlAgent {
     return this.grants.get(`${kind}:${subject}`);
   }
 
+  /** The user took back what they said for good about this kind and subject (a site removed in Settings): it asks again. */
+  forget(kind: ApprovalKind, subject: string): void {
+    this.grants.delete(`${kind}:${subject}`);
+  }
+
   /** Hear of every change of state (calls, cards, pause, Stop); returns how to stop hearing. */
   listen(listener: () => void): () => void {
     this.listeners.add(listener);

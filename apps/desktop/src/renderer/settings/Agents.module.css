@@ -108,3 +108,30 @@
   color: var(--color-fg-muted);
   font: var(--text-small);
 }
+
+/* The sites an agent may act on without asking (S18 M2c; mocks/agents-s18-m2.html §5), under its row. */
+.sites {
+  margin: 0 var(--space-4) var(--space-2) calc(var(--space-4) + var(--size-swatch) + var(--space-3));
+  padding-inline-start: var(--space-3);
+  border-inline-start: var(--size-focus-ring) solid var(--color-divider);
+}
+
+.sitesCaption {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font: var(--text-small);
+}
+
+.site {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-block-size: var(--size-hit-min);
+}
+
+.siteName {
+  flex: 1;
+  min-inline-size: 0;
+  font: var(--text-body);
+  overflow-wrap: anywhere;
+}

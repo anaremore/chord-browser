@@ -9,13 +9,14 @@
  * Agents' switch (off by default) is the only way here.
  */
 import { execFile } from 'node:child_process';
-import type { AgentHello, Command, NodeId, ProfileId } from '@chord/core';
+import { AGENT_ACT_SITES_MAX, type AgentAllowance, type AgentHello, type Command, type Grant, type NodeId, type ProfileId } from '@chord/core';
 import type { ControlBrowser } from '../control/tools';
 import { startEndpoint, type Endpoint } from './endpoint';
 import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
+import type { SiteQuestion } from './site-cards';
 import type { PeerLookup } from './peer';
 // The service loads with the first time Agents is on, never at launch: so does what decides a tab can be shared.
 import { shareable, type AgentShares } from './shares';
@@ -26,6 +27,10 @@ export interface AgentServiceDeps {
   browser: ControlBrowser;
   /** The connect card (connect.ts): asks you, or lets in an agent you allowed for good. */
   ask(who: ConnectingAgent, signal: AbortSignal): Promise<ConnectAnswer>;
+  /** The site card (site-cards.ts, M2c): an agent's first action on a site. Absent, every site is a no. */
+  askSite?(question: SiteQuestion, signal: AbortSignal): Promise<Grant>;
+  /** The settings' allowances, to read and keep an always-allowed agent's sites (M2c). */
+  allowances?: { list(): readonly AgentAllowance[]; set(list: AgentAllowance[]): void };
   /** What Settings → Agents shows changed: an agent connected, went, stopped or continued. */
   changed?(): void;
   /** Windows: window-owner.exe, for the pipe's DACL; null where there's none. */
@@ -141,7 +146,21 @@ export class AgentService {
               ...(this.deps.neverSites ? { neverSites: this.deps.neverSites } : {}),
               shares: () => this.shares,
               allowedProfile: () => held?.profileId ?? null,
+              sites: {
+                allowed: (site) => Boolean(held && this.allowanceOf(held)?.actSites?.includes(site)),
+                keep: (site) => {
+                  const allowance = held && this.allowanceOf(held);
+                  if (!allowance || !this.deps.allowances) return;
+                  const sites = [...(allowance.actSites ?? []).filter((s) => s !== site), site].slice(-AGENT_ACT_SITES_MAX);
+                  this.deps.allowances.set(this.deps.allowances.list().map((a) => (a === allowance ? { ...a, actSites: sites } : a)));
+                  this.deps.changed?.();
+                },
+              },
               present: async (card, signal) => {
+                // The site card (M2c): Always on this site only for an agent you always allow (it has an allowance to keep it with).
+                if (card.kind === 'site' && held && this.deps.askSite) {
+                  return this.deps.askSite({ name: held.connection.name, site: card.subject, action: card.description, always: Boolean(this.allowanceOf(held)) }, signal);
+                }
                 if (card.kind !== 'connection' || !held) return 'deny';
                 // Who started it, looked up while the card shows (about 1 s on Windows), never inside a call.
                 held.parent ??= this.whoStarted(held).catch(() => []);
@@ -257,6 +276,12 @@ export class AgentService {
     return chain[0] && sameProgram(chain[0].path, process.execPath) ? chain.slice(1) : chain.slice(0, 3);
   }
 
+  /** The allowance an always-allowed connection came in by (its name and program), if it still exists. */
+  private allowanceOf(held: HeldConnection): AgentAllowance | null {
+    if (!held.always || !held.allowedParent) return null;
+    return this.deps.allowances?.list().find((a) => a.name === held.connection.name && a.parent === held.allowedParent) ?? null;
+  }
+
   /** Stop for every agent (Ctrl+. / ⌘. in M1c): calls in flight answer now, later ones are refused. */
   stopAll(): void {
     for (const held of this.connections) held.connection.agent.stop();
@@ -333,6 +358,11 @@ export class AgentService {
   /** An agent removed from Allowed in Settings: it's let go now, and asks again next time. */
   disconnect(name: string, parent: string): void {
     for (const held of [...this.connections]) if (held.always && held.connection.name === name && held.allowedParent === parent) held.socket.destroy();
+  }
+
+  /** A site removed from an allowance in Settings (M2c): its connections ask again there from their next action, mid-task too. */
+  forgetSite(name: string, parent: string, site: string): void {
+    for (const held of this.connections) if (held.always && held.connection.name === name && held.allowedParent === parent) held.connection.agent.forget('site', site);
   }
 }
 

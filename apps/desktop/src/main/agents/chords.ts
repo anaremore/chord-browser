@@ -26,7 +26,7 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { randomBytes } from 'node:crypto';
-import { isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { ACT_BAR_MIN_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -79,6 +79,8 @@ export class AgentChords {
   private readonly undos = new Map<string, { chord: Chord; tabs: TabNode[]; record: AgentChord | null }>();
   /** When you last pressed a key, clicked or typed an address in each agent tab. */
   private readonly userActs = new Map<NodeId, number>();
+  /** What the agent is doing on each tab (M2c), and since when: a wording stays at least ACT_BAR_MIN_MS. */
+  private readonly doings = new Map<NodeId, { text: string; since: number; clear?: ReturnType<typeof setTimeout> }>();
   private readonly unsubscribe: () => void;
   /** A tab handed over to you: the agents' refs for it say it's closed. Set by the service. */
   onHandedOver: ((nodeId: NodeId) => void) | null = null;
@@ -127,15 +129,45 @@ export class AgentChords {
     if (chord.done) return null;
     if (chord.agent.isStopped) return { name: chord.name, chordId: chord.chordId, state: 'stopped' };
     if (state.paused) return { name: chord.name, chordId: chord.chordId, state: 'paused' };
-    if (state.calls > 0 || state.cards.length > 0) return { name: chord.name, chordId: chord.chordId, state: 'working' };
+    if (state.cards.length > 0) return { name: chord.name, chordId: chord.chordId, state: 'working', waiting: true };
+    const doing = this.doings.get(nodeId)?.text;
+    if (state.calls > 0 || doing) return { name: chord.name, chordId: chord.chordId, state: 'working', ...(doing ? { doing } : {}) };
     return null;
+  }
+
+  /**
+   * What the agent is doing on a tab now (M2c: core's barDoing), or null when it's done. The bar shows each wording at
+   * least ACT_BAR_MIN_MS, so a fast agent doesn't make it flicker: a newer one waits out the rest of the older's time,
+   * and the last one stays that long after the action ends.
+   */
+  doing(nodeId: NodeId, doing: BarDoing | null): void {
+    const chord = this.chordOfTab(nodeId);
+    if (!chord) return;
+    const now = this.deps.now?.() ?? Date.now();
+    const current = this.doings.get(nodeId);
+    if (current?.clear) clearTimeout(current.clear);
+    if (doing) {
+      this.doings.set(nodeId, { text: barDoing(doing), since: now });
+      return this.update(chord);
+    }
+    if (!current) return;
+    const left = ACT_BAR_MIN_MS - (now - current.since);
+    const end = () => {
+      if (this.doings.get(nodeId) !== current) return;
+      this.doings.delete(nodeId);
+      const still = this.chordOfTab(nodeId);
+      if (still) this.update(still);
+    };
+    if (left <= 0) return end();
+    current.clear = setTimeout(end, left);
+    current.clear.unref?.();
   }
 
   /** The agent's state changed: each of its tabs' bars, and whether each runs at full speed. */
   private update(chord: AgentChord): void {
     for (const tab of this.tabsOf(chord.chordId)) {
       const live = this.live(chord, tab.id);
-      const key = live ? live.state : '';
+      const key = live ? `${live.state}${live.waiting ? ':waiting' : ''}${live.doing ? `:${live.doing}` : ''}` : '';
       if ((this.shown.get(tab.id) ?? '') !== key) {
         if (key) this.shown.set(tab.id, key);
         else this.shown.delete(tab.id);

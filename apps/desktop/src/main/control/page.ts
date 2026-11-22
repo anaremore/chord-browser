@@ -14,7 +14,9 @@ import { readDiagnostics, type DiagnosticsRead } from './diagnostics';
 import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillHighlight, type FillOutcome, type FormPage } from './forms';
 import { fetchPdf } from './pdf';
-import type { FillWrite, SnapshotRead } from '@chord/core';
+import { ACT_LOAD_MS, type FillWrite, type SnapshotRead } from '@chord/core';
+import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
+import { sendAgentInput, type AgentInputEvent } from './input';
 import { snapshotPage } from './snapshot';
 
 export interface ControlPage {
@@ -34,6 +36,27 @@ export interface ControlPage {
   undoFill(undo: string): Promise<{ restored: number; kept: number } | null>;
   /** A PDF's bytes through the page's own session; `readable` checks each address it ends up at. */
   fetchPdf(url: string, readable: (finalUrl: string) => boolean): Promise<Uint8Array>;
+
+  /* Acting (S18 M2c): for outside agents' own tabs, through the gate. */
+
+  /** One step of an action on an element of `owner`'s latest snapshot (control/act.ts). */
+  act(owner: string, token: string, key: number, op: ActOp): Promise<ActAnswer>;
+  /** A click at a point of the view in CSS pixels (scaled by the page's zoom here), or the pointer moved there (`hover`). */
+  click(x: number, y: number, hover?: boolean): void;
+  /** Keys, as the agent's (control/input.ts refuses anything off its list). */
+  keys(events: readonly AgentInputEvent[]): void;
+  /** Text put in where the focus is, as one insertion (never as keys). */
+  insertText(text: string): Promise<void>;
+  /**
+   * Runs `act` (the input), then waits for what it set off: a navigation's load (at most ACT_LOAD_MS), or the page
+   * quiet for a moment. Says whether the page went somewhere else (its page id changed).
+   */
+  afterActing(act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }>;
+  /** Goes to an address, or back, and waits for the load (at most ACT_LOAD_MS). */
+  navigate(url: string): Promise<{ loading: boolean }>;
+  back(): Promise<{ loading: boolean }>;
+  canGoBack(): boolean;
+  title(): string;
 }
 
 let lastPageId = 0;
@@ -72,5 +95,59 @@ export function controlPage(contents: WebContents): ControlPage {
     fillForm: (args) => fillFormPage(contents, args),
     undoFill: (undo) => undoFillPage(contents, undo),
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),
+    act: (owner, token, key, op) => actOnPage(contents, owner, token, key, op),
+    click: (x, y, hover = false) => {
+      // The page's CSS pixels to the view's: sendInputEvent's points are the view's, the page zoomed in them.
+      const zoom = contents.getZoomFactor();
+      const at = { x: Math.round(x * zoom), y: Math.round(y * zoom) };
+      sendAgentInput(contents, hover ? [{ type: 'mouseMove', ...at }] : [{ type: 'mouseMove', ...at }, { type: 'mouseDown', ...at, button: 'left', clickCount: 1 }, { type: 'mouseUp', ...at, button: 'left', clickCount: 1 }]);
+    },
+    keys: (events) => sendAgentInput(contents, events),
+    insertText: (text) => (contents.isDestroyed() ? Promise.resolve() : contents.insertText(text)),
+    afterActing: (act) => afterActing(contents, act),
+    navigate: (url) => loaded(contents, () => contents.loadURL(url).catch(() => undefined)),
+    back: () => loaded(contents, () => contents.navigationHistory.goBack()),
+    canGoBack: () => !contents.isDestroyed() && contents.navigationHistory.canGoBack(),
+    title: () => (contents.isDestroyed() ? '' : contents.getTitle()),
   };
+}
+
+/** Starts a load and waits for it to stop (at most ACT_LOAD_MS): `loading` if it's still going then. */
+function loaded(contents: WebContents, start: () => unknown): Promise<{ loading: boolean }> {
+  return new Promise((done) => {
+    if (contents.isDestroyed()) return done({ loading: false });
+    const timer = setTimeout(() => finish(true), ACT_LOAD_MS);
+    const stopped = () => finish(false);
+    function finish(loading: boolean) {
+      clearTimeout(timer);
+      if (!contents.isDestroyed()) contents.off('did-stop-loading', stopped);
+      done({ loading });
+    }
+    contents.on('did-stop-loading', stopped);
+    void start();
+  });
+}
+
+/** How long after an action Chord waits for it to start a navigation before it waits for the page to settle instead. */
+const NAVIGATION_START_MS = 150;
+
+/** The input, then a navigation it set off (to its load) or the page settling. */
+async function afterActing(contents: WebContents, act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }> {
+  if (contents.isDestroyed()) return { navigated: false, loading: false };
+  const before = pageIdOf(contents);
+  let started = false;
+  const onStart = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>) => {
+    if (details.isMainFrame && !details.isSameDocument) started = true;
+  };
+  contents.on('did-start-navigation', onStart);
+  try {
+    await act();
+    await new Promise((r) => setTimeout(r, NAVIGATION_START_MS));
+    let loading = false;
+    if (started && !contents.isDestroyed() && contents.isLoading()) loading = (await loaded(contents, () => undefined)).loading;
+    else await settle(contents);
+    return { navigated: contents.isDestroyed() || pageIdOf(contents) !== before, loading };
+  } finally {
+    if (!contents.isDestroyed()) contents.off('did-start-navigation', onStart);
+  }
 }

@@ -417,8 +417,8 @@ describe('Settings → Agents', () => {
       setup: { claude: 'c', codex: 'x' },
       stopped: [{ id: 'agent:2', name: 'Codex', tabs: 0 }],
       allowed: [
-        { name: 'Claude Code', parent: CLAUDE_PATH, signIns: 'Work’s sign-ins', connected: true, tabs: 0, lastUsedAt: 5 },
-        { name: 'Codex', parent: '/opt/codex', signIns: '', connected: false, tabs: 0, lastUsedAt: 6 },
+        { name: 'Claude Code', parent: CLAUDE_PATH, signIns: 'Work’s sign-ins', connected: true, tabs: 0, lastUsedAt: 5, sites: [] },
+        { name: 'Codex', parent: '/opt/codex', signIns: '', connected: false, tabs: 0, lastUsedAt: 6, sites: [] },
       ],
     });
   });

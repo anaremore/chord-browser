@@ -90,7 +90,7 @@ export interface AgentToolSpec {
   level: ControlTier;
   description: string;
   inputSchema: Record<string, unknown>;
-  annotations: { readOnlyHint: boolean; openWorldHint: true };
+  annotations: { readOnlyHint: boolean; destructiveHint?: boolean; openWorldHint: true };
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -134,6 +134,17 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
     'snapshot',
     `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
   ),
+  ...(
+    [
+      ['click', 'Click an element in one of your own tabs by its ref from that tab’s latest snapshot. The first action on a site asks the user. Returns what happened: whether the page went somewhere else (then its refs are stale: call snapshot).', true],
+      ['type', 'Type text into a text field in one of your own tabs by its ref: what’s there is replaced unless replace is false; submit presses Enter after. Never a password, code or card number (those fields have no ref: the user fills them).', true],
+      ['press_key', 'Press one key in an element of one of your own tabs, by its ref. Only the keys listed; text goes in with type.', true],
+      ['select_option', 'Choose an option of a list in one of your own tabs, by the list’s ref and the option’s label from the snapshot.', false],
+      ['hover', 'Point at an element in one of your own tabs by its ref, for menus that open on hover.', false],
+      ['navigate', 'Go to a web address (http or https) in one of your own tabs, signed in as the user. Waits for the page to load.', false],
+      ['back', 'Go back a page in one of your own tabs. Waits for the page to load.', false],
+    ] as const
+  ).map(([name, description, destructive]): AgentToolSpec => ({ name, level: 'act', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: false, destructiveHint: destructive, openWorldHint: true } })),
 ];
 
 /** The tools of this build: M1's, and M2's when it has them (agentActions). */

@@ -7,6 +7,7 @@ import { formatKeys, PASSWORD_REGENERATE_KEYS, SAFE_BROWSING_NOTICE, type Platfo
 import {
   SYSTEM_SHARE_SOURCE,
   type AgentConnectCard,
+  type AgentSiteCard,
   type AuthPrompt,
   type DrmNotice,
   type FindState,
@@ -530,6 +531,31 @@ function AgentConnectCardView({ card }: { card: AgentConnectCard }) {
           { label: 'Deny', look: 'link', onClick: () => respond('deny') },
           { label: 'Allow once', look: card.noProgram ? 'primary' : 'quiet', onClick: () => respond('once') },
           ...(card.noProgram ? [] : [{ label: 'Always allow', look: 'primary' as const, onClick: () => respond('always') }]),
+        ]}
+      />
+    </div>
+  );
+}
+
+/**
+ * An outside agent's first action on a site (S18 M2c; mocks/agents-s18-m2.html §1): where the connect card shows, never
+ * taking the keyboard. What it wants to do is Chord's words for what it sees, never the agent's. *Always on this site*
+ * only for an agent you always allow; otherwise *Allow for now* is the filled pill.
+ */
+function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
+  const respond = (answer: 'deny' | 'once' | 'always') => void api.agents.respond(card.id, answer);
+  const title = `Let ${card.name} click and type on ${card.site}?`;
+  return (
+    <div className={styles.card} role="alertdialog" aria-label={title}>
+      <AgentCardBody
+        title={title}
+        note={`It wants to ${card.action}.`}
+        closeLabel="Close"
+        onClose={() => respond('deny')}
+        actions={[
+          { label: 'Deny', look: 'link', onClick: () => respond('deny') },
+          { label: 'Allow for now', look: card.always ? 'quiet' : 'primary', onClick: () => respond('once') },
+          ...(card.always ? [{ label: 'Always on this site', look: 'primary' as const, onClick: () => respond('always') }] : []),
         ]}
       />
     </div>
@@ -1230,7 +1256,7 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
         {announced}
       </p>
       {state.find && <FindBar find={state.find} />}
-      {state.agentCard && <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />}
+      {state.agentCard && (state.agentCard.kind === 'site' ? <AgentSiteCardView key={state.agentCard.id} card={state.agentCard} /> : <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />)}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}

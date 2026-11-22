@@ -941,11 +941,12 @@ export interface PopoverState {
   /** The Effects card for the site on screen (DESIGN.md §7.15); `opened` changes each time it opens, and it takes the keyboard. */
   effects: { host: string; opened: number } | null;
   /** An outside agent asks to use Chord (S18 M1d): centered at the top of the page, never taking the keyboard. */
-  agentCard: AgentConnectCard | null;
+  agentCard: AgentConnectCard | AgentSiteCard | null;
 }
 
 /** The connect card (S18 M1d; mocks/agents-s18-m1.html §1). */
 export interface AgentConnectCard {
+  kind?: 'connect';
   id: string;
   /** The name the agent gives (a hint, never proof). */
   name: string;
@@ -960,14 +961,30 @@ export interface AgentConnectCard {
   noProgram?: boolean;
 }
 
+/** The site card (S18 M2c; mocks/agents-s18-m2.html §1): an outside agent's first action on a site. */
+export interface AgentSiteCard {
+  kind: 'site';
+  id: string;
+  /** The name the agent gives. */
+  name: string;
+  /** The site (a registrable domain, or an address with its port). */
+  site: string;
+  /** What it wants to do first, in Chord's words: `click “Start a return”`. */
+  action: string;
+  /** *Always on this site* is offered: only to an agent you always allow. */
+  always: boolean;
+}
+
 /** Settings → Agents (S18 M1d; mocks/agents-s18-m1.html §4). */
 export interface AgentsView {
   /** The lines to paste into a terminal, from this Chord's own executable. */
   setup: { claude: string; codex: string };
   /** Connected agents you stopped, each to let continue. */
   stopped: { id: string; name: string; tabs: number }[];
-  /** Agents let in for good. */
-  allowed: { name: string; parent: string; signIns: string; connected: boolean; tabs: number; lastUsedAt: number }[];
+  /** Agents let in for good, each with the sites it may act on without asking (M2c). */
+  allowed: { name: string; parent: string; signIns: string; connected: boolean; tabs: number; lastUsedAt: number; sites: string[] }[];
+  /** This build lets agents act on pages (M2, agentActions): Settings shows the sites. */
+  acting?: boolean;
 }
 
 /** Settings → Agents' *Add to Antigravity*: add Chord to its MCP config, or Undo that. */
@@ -979,7 +996,7 @@ export type AntigravityRequest = { do: 'add' } | { do: 'undo'; token: string };
  */
 export type AntigravityAnswer = { ok: true; token: string | null } | { ok: false; why: 'invalid' | 'link' | 'unwritable' | 'changed' | 'gone' };
 
-export type AgentsRequest = { do: 'view' } | { do: 'remove'; name: string; parent: string } | { do: 'continue'; id: string };
+export type AgentsRequest = { do: 'view' } | { do: 'remove'; name: string; parent: string } | { do: 'removeSite'; name: string; parent: string; site: string } | { do: 'continue'; id: string };
 
 export const OTHER_BROWSERS = ['chrome', 'edge', 'firefox', 'safari', 'brave'] as const;
 export type OtherBrowserId = (typeof OTHER_BROWSERS)[number];
@@ -1731,6 +1748,8 @@ export const invokeChannels = {
     request: z.discriminatedUnion('do', [
       z.strictObject({ do: z.literal('view') }),
       z.strictObject({ do: z.literal('remove'), name: z.string().min(1).max(60), parent: z.string().min(1).max(1000) }),
+      // M2c: a site an agent may act on without asking, removed (it asks again there).
+      z.strictObject({ do: z.literal('removeSite'), name: z.string().min(1).max(60), parent: z.string().min(1).max(1000), site: z.string().min(1).max(253) }),
       z.strictObject({ do: z.literal('continue'), id: z.string().min(1).max(40) }),
     ]),
     response: z.custom<AgentsView>(),
