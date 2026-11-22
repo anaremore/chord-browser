@@ -413,7 +413,7 @@ The `snapshot` tool and element refs, as the plan has them, behind `AGENT_ACTION
 
 | What | Budget | Seen |
 |---|---|---|
-| The script on a typical page (1,500 elements: 1,203 nodes, 600 refs), round trip from main | median 25 ms, worst 60 ms | median 12.8 to 15.9 ms, worst 21 to 28 ms (three runs each on X11 and Wayland, the Linux container) |
+| The script on a typical page (1,500 elements: 1,203 nodes, 600 refs), round trip from main | median 25 ms, worst 60 ms; the Intel Mac runner 45 and 90 ms | median 12.8 to 15.9 ms, worst 21 to 28 ms (three runs each on X11 and Wayland, the Linux container); CI's runners: median 11.0 (Windows x64) to 19.9 ms (Linux arm64), worst up to 36 ms; the Intel Mac (macos-15-intel) median 26.9 and 30.2 ms, worst 57 ms |
 | The script on a 20,000-element page (2,000 refs, the cap) | 300 ms | median 127 to 166 ms, worst 194 ms (it scanned to its 150 ms bound); since text nodes count toward the scan (review 1 of #104), median 75 to 91 ms, worst 138 ms (cut at 20,000 nodes looked at: 8,890 in the outline) |
 | The script on a page of 2,000,000 text nodes | 300 ms | median 31 to 34 ms, worst 49 ms (cut at 20,000) |
 | Main's part (cleaning, refs, outline, result), typical page | median 3 ms (the plan: under 2) | 0.6 to 1.8 ms (Windows x64, `pnpm test:perf`) |

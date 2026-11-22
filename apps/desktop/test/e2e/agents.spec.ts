@@ -171,8 +171,9 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
       console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${seen}`);
       if (rows === 300) {
         expect(measured.keys, seen).toBe(600);
-        expect(median, seen).toBeLessThan(SNAPSHOT_TYPICAL_MEDIAN_MS);
-        expect(worst, seen).toBeLessThan(SNAPSHOT_TYPICAL_WORST_MS);
+        const typical = SNAPSHOT_TYPICAL_MS[`${process.platform}/${process.arch}`] ?? SNAPSHOT_TYPICAL_MS['default']!;
+        expect(median, seen).toBeLessThan(typical.median);
+        expect(worst, seen).toBeLessThan(typical.worst);
       } else {
         expect(worst, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
         // A page of 2,000,000 text nodes is cut at the scan's bound like any other (review 1 of #104).
@@ -195,9 +196,14 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
  * 127 to 166 ms median, 194 ms at worst; once text nodes counted toward the scan (review 1 of #104), 75 to 91 ms median
  * and 138 ms at worst, and a page of 2,000,000 text nodes 31 to 34 ms median, 49 ms at worst. The budgets are the plan's,
  * at least 1.5 times the worst seen.
+ *
+ * CI's runners (2026-11-22, #104), the typical page's median and worst: Windows x64 11.0 and 16.1 ms, Linux x64 X11 11.3
+ * and 27.4, Wayland 15.1 and 36.2, macOS arm64 13.5 and 29.9, Windows arm64 19.1 and 23.2, Linux arm64 19.9 and 35.6;
+ * the Intel Mac (macos-15-intel) 26.9 and 57.3, then 30.2 and 49.5 on its retry. That runner gets its own budget, about
+ * 1.5 times the worst it showed; every other keeps the plan's. The 20,000-element and text-flood pages were 156 ms at
+ * worst on any runner.
  */
-const SNAPSHOT_TYPICAL_MEDIAN_MS = 25;
-const SNAPSHOT_TYPICAL_WORST_MS = 60;
+const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = { default: { median: 25, worst: 60 }, 'darwin/x64': { median: 45, worst: 90 } };
 const SNAPSHOT_HUGE_MS = 300;
 
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
