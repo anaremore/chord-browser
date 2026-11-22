@@ -8,6 +8,7 @@
  */
 import { findShortcut, type ActionId } from '@chord/core';
 import type { WebContents } from 'electron';
+import { isAgentInput } from './control/input';
 import { platform } from './platform';
 import { shortcutOverrides } from './shortcut-overrides';
 
@@ -22,7 +23,8 @@ export interface KeyboardHandlers {
 
 export function attachShortcuts(contents: WebContents, handlers: KeyboardHandlers): void {
   contents.on('before-input-event', (event, input) => {
-    if (handlers.paused?.(contents)) return;
+    // Keys Chord sends a page for an agent (control/input.ts) are never shortcuts of Chord's.
+    if (handlers.paused?.(contents) || isAgentInput(contents)) return;
     if (input.type === 'keyUp' && input.key === 'Control') {
       handlers.onControlUp(contents);
       return;

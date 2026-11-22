@@ -281,6 +281,11 @@ test.beforeAll(async () => {
     '/dialog': '<title>Greeter</title><p>Hello there.</p><script>setTimeout(() => alert("Hi from the page"), 50)</script>',
     // A page that downloads a file as it loads: refused in an agent's tab.
     '/download': '<title>Download</title><p>Fetching…</p><script>setTimeout(() => { location.href = "/file.zip" }, 50)</script>',
+    // M2a: a button and a field at known places, and a log of what reached them, and whether the page took it as trusted.
+    '/act':
+      '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
+      '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
+      'b.addEventListener("click", (e) => log("click", e)); i.addEventListener("keydown", (e) => log("keydown-" + e.key, e)); i.addEventListener("beforeinput", (e) => log("beforeinput-" + e.inputType, e));</script>',
   };
   const server = createServer((req, res) => {
     if (req.url === '/file.zip') {
@@ -373,6 +378,56 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
     await shell.getByRole('button', { name: 'Keep', description: 'Claude Code finished. Keep these tabs?' }).click();
     await expect(shell.getByRole('region', { name: 'Claude Code’s tabs' })).toHaveCount(0);
     await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Release notes');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+/* ---------- Acting: the agent's input is the page's, never yours (S18 M2a) ---------- */
+
+test('input Chord sends an agent’s tab is trusted by the page, reaches a parked tab, and is never taken for yours', async () => {
+  test.setTimeout(90_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/act` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    // The tab isn't on screen: the hook sends inside one of the agent's calls, so it's parked and painting, as an action's will be.
+    type Seen = { agent: number; yours: number; after: number; paused: boolean; shown: boolean } | null;
+    const send = (events: unknown[], text?: string) =>
+      app.evaluate((_electron, [url, events, text]) => (globalThis as unknown as { chordTestHooks: { agentInputSpike(u: string, e: unknown[], t?: string): Promise<Seen> } }).chordTestHooks.agentInputSpike(url, events, text), [
+        `${site.origin}/act`,
+        events,
+        text,
+      ] as const);
+    const click = (x: number, y: number) => [
+      { type: 'mouseMove', x, y },
+      { type: 'mouseDown', x, y, button: 'left', clickCount: 1 },
+      { type: 'mouseUp', x, y, button: 'left', clickCount: 1 },
+    ];
+    const clicked = await send(click(120, 40));
+    expect(clicked).toMatchObject({ yours: 0, after: 0, paused: false, shown: false });
+    expect(clicked!.agent).toBeGreaterThan(0);
+    // Into the field: a key, Enter, and text inserted as one piece.
+    const typed = await send([...click(120, 100), { type: 'keyDown', keyCode: 'A' }, { type: 'char', keyCode: 'a' }, { type: 'keyUp', keyCode: 'A' }, { type: 'keyDown', keyCode: 'Return' }, { type: 'keyUp', keyCode: 'Return' }], 'hé');
+    expect(typed).toMatchObject({ yours: 0, after: 0, paused: false });
+    const log = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    await expect.poll(log).toContain('click:true');
+    const text = await log();
+    expect(text).toContain('keydown-a:true');
+    expect(text).toContain('keydown-Enter:true');
+    expect(text).toContain('beforeinput-insertText:true');
+    expect(text).not.toContain(':false');
+    // Nothing of Chord's ran for it: no pause, and no bar but the working one, now gone.
+    await expect(shell.getByRole('status').filter({ hasText: /Paused/ })).toHaveCount(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

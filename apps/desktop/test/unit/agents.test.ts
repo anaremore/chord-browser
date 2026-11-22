@@ -504,6 +504,43 @@ describe('Zero cost, and off in packaged builds', () => {
     expect(held!.hello).not.toHaveProperty('token');
   });
 
+  // M2a: Started by comes from the process at the other end, as the OS says (peer.ts), never the hello's parentPid.
+  // [the peer the OS gives, M2 in this build, whose chain the card gets: 'parent' (this process's parent: the peer is
+  // Chord's own executable, the bridge), 'none', or 'hello' (M1's: from the hello's parentPid, this process)]
+  const started: [string, number | null, boolean, 'parent' | 'none' | 'hello'][] = [
+    ['the bridge, in Chord’s executable: who started it', process.pid, true, 'parent'],
+    ['unknown: nobody, so no program and no Always allow', null, true, 'none'],
+    ['a packaged build before M2: the hello’s word, as in M1', null, false, 'hello'],
+  ];
+  it.each(started)('who started it: %s', async (_name, peerPid, actions, want) => {
+    const ud = profile();
+    let asked: { claimed: number; endpoint: string } | null = null;
+    const service = new AgentService({
+      userData: ud,
+      browser,
+      ask: answering('once'),
+      helper: null,
+      waitMs: 2000,
+      actions,
+      peer: async (_socket, endpoint, claimed) => {
+        asked = { claimed, endpoint };
+        return peerPid;
+      },
+    });
+    await service.start();
+    cleanup.push(() => service.stop());
+    const c = client(ud);
+    await c.initialize();
+    expect((await c.call('list_tabs')).error).toBe(false);
+    const [held] = [...service.connections];
+    const chain = await held!.parent!;
+    if (want === 'none') expect(chain).toEqual([]);
+    else expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
+    if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
+    else expect(asked).toBeNull();
+    expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
+  }, 20_000);
+
   // [argv after the executable (and, in development, the app's folder), is it chord mcp?]
   const argv: [string[], boolean][] = [
     [['mcp'], true],

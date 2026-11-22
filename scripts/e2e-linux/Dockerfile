@@ -36,10 +36,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # - xdotool: a real pointer for the tests that drag across Chord's views
 #   (split.spec.ts). Playwright's mouse goes straight to one page, past
 #   the window's own routing between views; CI installs it too.
+# - iproute2: ss, which tells Chord who's at the other end of an agent's
+#   socket (S18 M2a, agents/peer.ts); the runner image and desktop Ubuntu
+#   have it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils \
-      xvfb xauth openbox weston xdotool \
+      xvfb xauth openbox weston xdotool iproute2 \
       dbus \
       libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 \
       libcups2t64 libcurl4t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 libglib2.0-0t64 \

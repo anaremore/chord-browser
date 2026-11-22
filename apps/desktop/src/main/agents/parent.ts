@@ -55,6 +55,14 @@ async function processInfo(pid: number): Promise<ProcessInfo> {
   return { pid, name: path ? basename(path) : null, path, cwd: file('cwd'), ppid: match ? Number(match[1]) : null };
 }
 
+/** Whether two executables' paths name the same program (links resolved; Windows' and macOS' case ignored). */
+export function sameProgram(a: string | null, b: string): boolean {
+  if (!a) return false;
+  const real = (p: string) => attempt(() => realpathSync(p)) ?? p;
+  const fold = (p: string) => (process.platform === 'linux' ? p : p.toLowerCase());
+  return fold(real(a)) === fold(real(b));
+}
+
 /** The process and up to `depth - 1` of its ancestors. */
 export async function ancestry(pid: number, depth = 3): Promise<ProcessInfo[]> {
   if (!Number.isInteger(pid) || pid <= 1) return [];

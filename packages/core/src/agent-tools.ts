@@ -33,8 +33,9 @@ export interface AgentHello {
   token: string;
   /** The client's own `initialize` params (its clientInfo is self-reported: a hint, never proof). */
   initialize: Record<string, unknown> | null;
+  /** The bridge's own PID: on Windows, which of the pipe's clients is this connection's, when the OS agrees (agents/peer.ts). */
   bridgePid: number;
-  /** Who started `chord mcp`: Chord looks up its chain lazily, while a card shows (never inside a call). */
+  /** Who started `chord mcp`, by the bridge's word. Unused since M2a: Chord asks the OS who's at the other end instead (agents/peer.ts). */
   parentPid: number;
   /** The folder the client started it in. */
   cwd: string;
@@ -48,6 +49,17 @@ export interface AgentHello {
  * Development and E2E builds have it all either way.
  */
 export const AGENTS_RELEASED = true as boolean;
+
+/**
+ * Whether M2 (agents and the assistant act on pages; docs/decisions/S18-agent-mcp.md, "M2: plan") ships in release
+ * builds: false until a release turns it on, so its slices (M2a–M2f) land one by one without a packaged build seeing
+ * a half. Development and E2E builds have each slice as it lands. With it false, packaged builds keep M1's ways:
+ * no acting tools, and the connect card's *Started by* from the hello's word (M2a's peer lookup waits too).
+ */
+export const AGENT_ACTIONS_RELEASED = false as boolean;
+
+/** Whether this build has M2's slices (AGENT_ACTIONS_RELEASED, or any build that isn't packaged). */
+export const agentActions = (build: { packaged: boolean }, released = AGENT_ACTIONS_RELEASED): boolean => !build.packaged || released;
 
 /**
  * Whether Chord serves the endpoint (S18 M1d): Settings → Agents' switch, off by default, in every build

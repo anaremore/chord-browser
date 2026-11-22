@@ -30,6 +30,7 @@ import { isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type Chord,
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
+import { isAgentInput } from '../control/input';
 import type { Change } from '../store';
 import type { AgentHeld } from '../tabs';
 import { onNeverSite } from './scope';
@@ -206,11 +207,12 @@ export class AgentChords {
   wire(contents: WebContents, nodeId: NodeId): void {
     // Made while the agent already works on the tab (its first load, or after it slept): full speed now too.
     if (this.unthrottled.has(nodeId)) contents.setBackgroundThrottling(false);
+    // Only your hands: input Chord sends for an agent (control/input.ts) never pauses it or makes a navigation yours.
     contents.on('before-mouse-event', (_event, mouse) => {
-      if (mouse.type === 'mouseDown') this.userActed(nodeId);
+      if (mouse.type === 'mouseDown' && !isAgentInput(contents)) this.userActed(nodeId);
     });
     contents.on('before-input-event', (_event, input) => {
-      if (input.type !== 'keyDown') return;
+      if (input.type !== 'keyDown' || isAgentInput(contents)) return;
       this.userActed(nodeId);
       const chord = this.chordOfTab(nodeId);
       if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);

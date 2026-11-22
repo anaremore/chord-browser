@@ -21,12 +21,22 @@
 //     the user, and denies network logons. Chord runs it once, on the first connection.
 //   window-owner pipe-dacl <pipe>
 //     Prints that pipe's DACL as SDDL (tests).
+//   window-owner pipe-clients <pipe> <server's process id>
+//     Prints the process ids of the clients connected to that pipe's instances, which the
+//     server (Chord) holds, on one line, space-separated (S18 M2a, "who's calling").
+//     GetNamedPipeClientProcessId needs the server's own handle to an instance, and Node
+//     never gives Chord its handle (a pipe socket's fd is -1 on Windows), so this finds it:
+//     the server's handles from the system's handle table, only its files, each copied here
+//     (DuplicateHandle: the same user's process) and kept if it's the server end of this
+//     pipe. A query on a file can block when the file has I/O pending, so each runs on a
+//     worker thread that's given up on after QUERY_MS.
 //
 // Exit codes: 0 done, 2 bad arguments, 3 a window isn't the process's, 4 the call failed,
-// 5 the pipe couldn't be opened.
+// 5 the pipe (for pipe-clients, the server's process) couldn't be opened.
 // Built with the C# compiler that ships with Windows (.NET Framework 4.8,
 // scripts/build-window-owner.mjs), so building it needs no SDK.
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
@@ -147,6 +157,233 @@ static class WindowOwner
         }
     }
 
+    // pipe-clients: the system's handle table, and the queries on each of the server's files.
+    [StructLayout(LayoutKind.Sequential)]
+    struct HandleEntry
+    {
+        public IntPtr Object;
+        public UIntPtr UniqueProcessId;
+        public UIntPtr HandleValue;
+        public uint GrantedAccess;
+        public ushort CreatorBackTraceIndex;
+        public ushort ObjectTypeIndex;
+        public uint HandleAttributes;
+        public uint Reserved;
+    }
+
+    const int SystemExtendedHandleInformation = 64;
+    const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
+    const uint PROCESS_DUP_HANDLE = 0x40;
+    const uint DUPLICATE_SAME_ACCESS = 2;
+    const uint FILE_TYPE_PIPE = 3;
+    const uint PIPE_SERVER_END = 1;
+    const int FileNameInfo = 2;
+    const uint GENERIC_READ = 0x80000000;
+    const uint FILE_SHARE_READ = 1;
+    const int QUERY_MS = 100;
+
+    [DllImport("ntdll.dll")]
+    static extern int NtQuerySystemInformation(int infoClass, IntPtr info, int length, out int needed);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, bool inherit, uint options);
+
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentProcessId();
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetFileType(IntPtr file);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetNamedPipeInfo(IntPtr pipe, out uint flags, IntPtr outSize, IntPtr inSize, IntPtr maxInstances);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetFileInformationByHandleEx(IntPtr file, int infoClass, IntPtr info, uint size);
+
+    /** The pipe's name as a handle to it gives it (\chord-agent-…), or null. */
+    static string PipeName(IntPtr pipe)
+    {
+        IntPtr buffer = Marshal.AllocHGlobal(1024);
+        try
+        {
+            if (!GetFileInformationByHandleEx(pipe, FileNameInfo, buffer, 1024)) return null;
+            int bytes = Marshal.ReadInt32(buffer);
+            return bytes > 0 && bytes <= 1020 ? Marshal.PtrToStringUni(buffer + 4, bytes / 2) : null;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /** What a query on one of the server's handles found. */
+    enum Found { Other, Client, Stuck }
+
+    /**
+     * Runs the queries one at a time on a thread of its own. One that doesn't come back in QUERY_MS (a file with
+     * I/O pending) is given up on with its thread, a background one that doesn't keep this program running, and the
+     * next query gets a new thread.
+     */
+    sealed class Worker
+    {
+        readonly object gate = new object();
+        Func<uint> job;
+        uint result;
+        bool done;
+        Thread thread;
+
+        void Loop(object mine)
+        {
+            while (true)
+            {
+                Func<uint> run;
+                lock (gate)
+                {
+                    while (job == null && thread == mine) Monitor.Wait(gate);
+                    if (thread != mine) return;
+                    run = job;
+                }
+                uint answer = 0;
+                try { answer = run(); } catch { }
+                lock (gate)
+                {
+                    if (thread != mine) return; // given up on meanwhile: no longer the worker
+                    result = answer;
+                    done = true;
+                    job = null;
+                    Monitor.PulseAll(gate);
+                }
+            }
+        }
+
+        /** The query's answer (0 for none), or Stuck. */
+        public Found Run(Func<uint> f, out uint answer)
+        {
+            answer = 0;
+            lock (gate)
+            {
+                if (thread == null)
+                {
+                    var t = new Thread(Loop) { IsBackground = true };
+                    thread = t;
+                    t.Start(t);
+                }
+                job = f;
+                done = false;
+                Monitor.PulseAll(gate);
+                var deadline = DateTime.UtcNow.AddMilliseconds(QUERY_MS);
+                while (!done)
+                {
+                    int left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                    if (left <= 0 || !Monitor.Wait(gate, left)) break;
+                }
+                if (!done)
+                {
+                    job = null;
+                    thread = null;
+                    Monitor.PulseAll(gate);
+                    return Found.Stuck;
+                }
+                answer = result;
+                return answer != 0 ? Found.Client : Found.Other;
+            }
+        }
+    }
+
+    /** The handle table: every process's handles, as the system has them now; null if it can't be had. */
+    static IntPtr HandleTable(out long count)
+    {
+        int size = 1 << 20, needed;
+        count = 0;
+        for (int tries = 0; tries < 8; tries++)
+        {
+            IntPtr table = Marshal.AllocHGlobal(size);
+            int status = NtQuerySystemInformation(SystemExtendedHandleInformation, table, size, out needed);
+            if (status == 0)
+            {
+                count = Marshal.ReadIntPtr(table).ToInt64();
+                return table;
+            }
+            Marshal.FreeHGlobal(table);
+            if (status != STATUS_INFO_LENGTH_MISMATCH) return IntPtr.Zero;
+            size = Math.Max(size * 2, needed + (1 << 16));
+        }
+        return IntPtr.Zero;
+    }
+
+    static HandleEntry EntryAt(IntPtr table, long i)
+    {
+        // The table: a count and a reserved word, then the entries.
+        return (HandleEntry)Marshal.PtrToStructure(new IntPtr(table.ToInt64() + IntPtr.Size * 2 + i * Marshal.SizeOf(typeof(HandleEntry))), typeof(HandleEntry));
+    }
+
+    static int PipeClients(string name, uint server)
+    {
+        // Files are one object type: this program's own file handle says which, so only the server's files are queried.
+        IntPtr own = CreateFileW(System.Reflection.Assembly.GetExecutingAssembly().Location, GENERIC_READ, FILE_SHARE_READ, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        if (own == new IntPtr(-1)) return 4;
+        IntPtr process = OpenProcess(PROCESS_DUP_HANDLE, false, server);
+        if (process == IntPtr.Zero)
+        {
+            CloseHandle(own);
+            return 5;
+        }
+        long count;
+        IntPtr table = HandleTable(out count);
+        try
+        {
+            if (table == IntPtr.Zero) return 4;
+            ulong self = GetCurrentProcessId();
+            int fileType = -1;
+            for (long i = 0; i < count && fileType < 0; i++)
+            {
+                HandleEntry e = EntryAt(table, i);
+                if (e.UniqueProcessId.ToUInt64() == self && e.HandleValue.ToUInt64() == (ulong)own.ToInt64()) fileType = e.ObjectTypeIndex;
+            }
+            if (fileType < 0) return 4;
+            string leaf = name.Substring(@"\\.\pipe".Length); // \chord-agent-…, as a handle to it names it
+            var clients = new List<uint>();
+            var worker = new Worker();
+            for (long i = 0; i < count; i++)
+            {
+                HandleEntry e = EntryAt(table, i);
+                if (e.UniqueProcessId.ToUInt64() != server || e.ObjectTypeIndex != fileType) continue;
+                IntPtr copy;
+                if (!DuplicateHandle(process, new IntPtr(unchecked((long)e.HandleValue.ToUInt64())), GetCurrentProcess(), out copy, 0, false, DUPLICATE_SAME_ACCESS)) continue;
+                IntPtr h = copy;
+                uint client;
+                Found found = worker.Run(() =>
+                {
+                    uint flags, pid;
+                    if (GetFileType(h) != FILE_TYPE_PIPE) return 0;
+                    if (!GetNamedPipeInfo(h, out flags, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) || (flags & PIPE_SERVER_END) == 0) return 0;
+                    if (!string.Equals(PipeName(h), leaf, StringComparison.OrdinalIgnoreCase)) return 0;
+                    return GetNamedPipeClientProcessId(h, out pid) ? pid : 0;
+                }, out client);
+                if (found == Found.Client && !clients.Contains(client)) clients.Add(client);
+                // A copy a query is still stuck on stays open: closing it under the query could hand its number to another handle.
+                if (found != Found.Stuck) CloseHandle(copy);
+            }
+            Console.WriteLine(string.Join(" ", clients));
+            return 0;
+        }
+        finally
+        {
+            if (table != IntPtr.Zero) Marshal.FreeHGlobal(table);
+            CloseHandle(process);
+            CloseHandle(own);
+        }
+    }
+
     static bool Handle(string text, out IntPtr value)
     {
         ulong number;
@@ -171,6 +408,12 @@ static class WindowOwner
         {
             if (!AgentPipe.IsMatch(args[1])) return 2;
             return args[0] == "restrict-pipe" ? RestrictPipe(args[1]) : PipeDacl(args[1]);
+        }
+        if (args.Length == 3 && args[0] == "pipe-clients")
+        {
+            uint server;
+            if (!AgentPipe.IsMatch(args[1]) || !uint.TryParse(args[2], out server) || server == 0) return 2;
+            return PipeClients(args[1], server);
         }
         if (args.Length == 2 && args[0] == "get" && Handle(args[1], out window))
         {

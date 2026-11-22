@@ -70,6 +70,7 @@ import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, w
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { attachContextMenu } from './context-menu';
+import { isAgentInput } from './control/input';
 import { DevTools } from './devtools';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
 import { Effects } from './effects/service';
@@ -500,7 +501,8 @@ export class Browser {
         // Clicking into a split's pane focuses it: the address, buttons and keys act on it from then on.
         contents.on('focus', () => this.paneFocused(nodeId));
         contents.on('input-event', (_event, input) => {
-          if (input.type === 'mouseDown') this.paneFocused(nodeId);
+          // A click Chord sends for an agent (control/input.ts) doesn't move your focus to its pane.
+          if (input.type === 'mouseDown' && !isAgentInput(contents)) this.paneFocused(nodeId);
           // Scrolling, typing or a click changes what the saved history should bring back (scroll, form fields).
           if (input.type === 'mouseWheel' || input.type === 'keyDown' || input.type === 'mouseUp') this.histories.touch(nodeId);
         });

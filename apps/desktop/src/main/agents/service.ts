@@ -38,6 +38,10 @@ export interface AgentServiceDeps {
   chords?: AgentChordsDeps;
   dispatch?(command: Command): void;
   neverSites?(): readonly string[];
+  /** M2's slices (agentActions): without them, *Started by* comes from the hello's word, as in M1. */
+  actions?: boolean;
+  /** Who's at the other end of a connection (peer.ts); tests give their own. Null: the OS can't say. */
+  peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>): Promise<number | null>;
 }
 
 /** A connection Chord holds: the agent, and who started it once looked up (for M1d's card and Settings). */
@@ -48,6 +52,8 @@ export interface HeldConnection {
   /** Its end of the endpoint: Remove in Settings hangs up on it. */
   socket: Socket;
   parent: Promise<ProcessInfo[]> | null;
+  /** The process at its other end, as the OS says (peer.ts), once looked up; null if it couldn't say. */
+  peerPid?: number | null;
   /** The sign-ins it was let in with (the window you answered in, or those of its Always allow). */
   profileId: ProfileId | null;
   /** Let in for good (Always allow, now or before). */
@@ -121,7 +127,7 @@ export class AgentService {
               present: async (card, signal) => {
                 if (card.kind !== 'connection' || !held) return 'deny';
                 // Who started it, looked up while the card shows (about 1 s on Windows), never inside a call.
-                held.parent ??= import('./parent').then(({ ancestry }) => ancestry(hello.parentPid)).catch(() => []);
+                held.parent ??= this.whoStarted(held).catch(() => []);
                 const answer = await this.deps.ask({ name: held.connection.name, folder: hello.cwd, parent: held.parent }, signal);
                 held.profileId = answer.profileId;
                 held.always = answer.grant === 'always';
@@ -191,6 +197,29 @@ export class AgentService {
     for (const held of this.connections) held.connection.closed();
     this.connections.clear();
     this.publishLetIn();
+  }
+
+  /**
+   * Who started a connection's agent (M2a): the process at its other end as the OS says (peer.ts), never the
+   * hello's word for it. That's `chord mcp` (Chord's own executable), and who started it is its parent; anything else
+   * that holds the token and connected is the client itself. Unknown, nobody: the card names no program, and Always
+   * allow isn't offered.
+   */
+  private async whoStarted(held: HeldConnection): Promise<ProcessInfo[]> {
+    // A packaged build before AGENT_ACTIONS_RELEASED: M1's lookup, from the bridge's word.
+    if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid));
+    const others = new Set<number>();
+    for (const other of this.connections) if (other !== held && typeof other.peerPid === 'number') others.add(other.peerPid);
+    const peer = this.deps.peer ?? (async (socket: Socket, endpoint: string, claimed: number, taken: ReadonlySet<number>) => {
+      const { peerOf, peerDeps } = await import('./peer');
+      return peerOf(socket, endpoint, claimed, taken, peerDeps(this.deps.helper));
+    });
+    const pid = await peer(held.socket, this.endpoint?.path ?? '', held.hello.bridgePid, others);
+    held.peerPid = pid;
+    if (pid === null) return [];
+    const { ancestry, sameProgram } = await import('./parent');
+    const chain = await ancestry(pid, 4);
+    return chain[0] && sameProgram(chain[0].path, process.execPath) ? chain.slice(1) : chain.slice(0, 3);
   }
 
   /** Stop for every agent (Ctrl+. / ⌘. in M1c): calls in flight answer now, later ones are refused. */
