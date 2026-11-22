@@ -47,10 +47,13 @@ jobs:
             exit 0
           fi
           [ "$(git rev-list --parents -n 1 HEAD | wc -w)" = 3 ] || { echo "::error::HEAD isn't the pull request's merge commit"; exit 1; }
-          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          # --no-renames: a file moved lists both its paths, so a test moved into docs/ still counts as code.
+          git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed"
           code=false
           while IFS= read -r file; do
             case "$file" in
+              # Test fixtures are code, Markdown or not.
+              apps/*/test/* | packages/*/test/*) code=true; echo "Test file: $file"; break ;;
               *.md | docs/* | site/* | mocks/*) ;;
               *) code=true; echo "Not docs: $file"; break ;;
             esac
@@ -188,9 +191,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
-    # A whole suite took 30 to 46 minutes, the Intel Macs being the slowest and the most variable, and a shard
-    # takes about half of that or less. This limit only has to catch a hung job.
-    timeout-minutes: 40
+    # A whole suite took 30 to 46 minutes. --shard splits by test count, not time, so a macOS shard can hold
+    # well over half of it (28 minutes on Intel, 2026-11-22), and Intel varies most. Elsewhere a shard took up to
+    # 17 minutes. These limits only have to catch a hung job.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
     strategy:
       fail-fast: false
       matrix:
