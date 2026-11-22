@@ -432,6 +432,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     const before = page.id;
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
+      // The tab's load can take a while: the user taking the tab, or Stop, meanwhile stops it here.
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       const went = tool === 'navigate' ? await page.navigate(target) : await page.back(back!);
       if (!went) return refuse(ACT_REFUSALS.noBack);
       const { loading } = went;
@@ -452,6 +455,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (tool === 'press_key' && !isPressKey(key)) return refuse(ACT_REFUSALS.key);
   if (tool === 'type' && (typeof text !== 'string' || text.length > TYPE_TEXT_MAX)) return refuse(ACT_REFUSALS.text);
   if (tool === 'select_option' && !asked) return refuse(ACT_REFUSALS.notSelect);
+  // The page and its site, before anything is asked of it: everything after is for this page on this site only.
+  const pageAtCheck = page.id;
+  const site = host.siteOf(page.url());
+  if (!site) return refuse(ACT_REFUSALS.noSite);
   // The element as it is now; for select_option, the choice matched against the page's own options before anything is
   // asked, so the card and the bar show the page's label, never the agent's words.
   const element = await page.act(owner, lookup.token, lookup.key, { op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
@@ -468,7 +475,6 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
    * there; the card's wait can be long), never on a page that moved on since the element was checked. Asked right
    * before every input and every text put in, and right after the card.
    */
-  const pageAtCheck = page.id;
   const halt = (): string | null => {
     if (call.stopped()) return CONTROL_REFUSALS.stopped;
     if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
@@ -488,9 +494,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     return halt();
   };
 
+  // The describe was on this page, on this site: one that went elsewhere meanwhile gets no card (it'd show the first
+  // page's words for another site).
+  if (page.id !== pageAtCheck || host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
   // The first action on a site asks the user; their answer lasts as long as the agent, or for good.
-  const site = host.siteOf(page.url());
-  if (!site) return refuse(ACT_REFUSALS.noSite);
   // What the user said already: a no (for as long as the agent), a yes for now (the gate keeps it), or for good.
   const remembered = scope.agent.granted('site', site);
   if (remembered === 'deny') return refuse(ACT_REFUSALS.siteDenied(site));
@@ -498,8 +505,6 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     const answer = await scope.agent.ask({ kind: 'site', tool, description: actPhrase(description), target: [page.url()], tab: node.id, subject: site }, call.signal, scope.cardWaitMs);
     if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
     if (answer === 'deny') return refuse(ACT_REFUSALS.siteDenied(site));
-    // A fresh Always on this site (the gate's own memory of a yes is `always` too, for the agent's life only).
-    if (answer === 'always') host.keepSite(site);
     // The card's wait can be long: Stop, the user taking the tab, the page moving on meanwhile, all stop it here.
     const halted = halt();
     if (halted) return refuse(halted);
@@ -508,6 +513,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
     // And on another site now, it'd need its own yes.
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
+    // It runs, on the page and site the card named: the yes is kept now (the agent's life; a fresh Always for good).
+    scope.agent.keep('site', site, answer);
+    if (answer === 'always') host.keepSite(site);
   }
 
   host.doing(node.id, description);

@@ -111,6 +111,12 @@ export class ControlAgent {
     return this.grants.get(`${kind}:${subject}`);
   }
 
+  /** What the user answered, kept as the gate keeps it (grantAfter): a site's yes, once its action runs (see openCard). */
+  keep(kind: ApprovalKind, subject: string, grant: Grant): void {
+    const keep = grantAfter(kind, grant);
+    if (keep) this.grants.set(`${kind}:${subject}`, keep);
+  }
+
   /** The user took back what they said for good about this kind and subject (a site removed in Settings): it asks again. */
   forget(kind: ApprovalKind, subject: string): void {
     this.grants.delete(`${kind}:${subject}`);
@@ -248,7 +254,9 @@ export class ControlAgent {
         const grant = await this.present({ ...card, id }, cancel.signal);
         if (cancel.signal.aborted) return 'deny';
         const keep = grantAfter(card.kind, grant);
-        if (keep) this.grants.set(grantKey(card), keep);
+        // A yes for a site is kept by the action it was for, once it runs on that page and site (keep): the page may
+        // have gone elsewhere while the card was up. A no is kept at once, whatever became of the page.
+        if (keep && !(card.kind === 'site' && keep !== 'deny')) this.grants.set(grantKey(card), keep);
         // Answered after everyone asking had gone (*waiting*): the retry gets it, rather than a second card.
         if (grant === 'once' && open.askers === 0) this.late.set(key, { at: Date.now(), url: card.target[0] ?? '' });
         return grant;

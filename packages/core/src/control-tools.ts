@@ -12,7 +12,7 @@ import { ASSISTANT_FORM_AREA_MAX, ASSISTANT_FORM_MAX_FIELDS } from './assistant-
 import { NAVIGATE_URL_MAX, PRESS_KEYS, TYPE_TEXT_MAX } from './control-act';
 
 // Core compiles without DOM types; URL is a global in Node and every browser.
-declare const URL: new (url: string) => { protocol: string; host: string; hostname: string; origin: string; pathname: string; search: string; hash: string; href: string };
+declare const URL: new (url: string) => { protocol: string; host: string; hostname: string; port: string; origin: string; pathname: string; search: string; hash: string; href: string };
 
 /** `read_tab` ranges: Claude saves text results over 50,000 characters to a file a browse thread can't open. */
 export const ASSISTANT_READ_MAX = 40_000;
@@ -204,6 +204,20 @@ export function cleanNeverSites(sites: readonly string[]): string[] {
   return [...new Set(sites.map((s) => s.trim()).filter(Boolean))];
 }
 
+/**
+ * A host as one way of writing it: lowercase, IDNA (punycode, as URL gives it), without the trailing dot of a fully
+ * qualified name (`bank.example.` is `bank.example`). Empty for what isn't a host.
+ */
+export function normalHost(host: string): string {
+  const bare = host.trim().replace(/\.+$/, '');
+  if (!bare) return '';
+  try {
+    return new URL(`http://${bare}/`).hostname.replace(/\.+$/, '');
+  } catch {
+    return '';
+  }
+}
+
 export function isNeverReadable(url: string, neverSites: readonly string[]): boolean {
   let u: InstanceType<typeof URL>;
   try {
@@ -212,12 +226,22 @@ export function isNeverReadable(url: string, neverSites: readonly string[]): boo
     return true;
   }
   if (!/^(https?|file):$/.test(u.protocol)) return true;
-  const host = u.hostname.replace(/^www\./, '');
+  const host = normalHost(u.hostname).replace(/^www\./, '');
+  const origin = `${u.protocol}//${normalHost(u.hostname)}${u.port ? `:${u.port}` : ''}`;
   return neverSites.some((site) => {
-    const s = site.trim().toLowerCase();
+    const s = site.trim();
     if (!s) return false;
-    if (s === u.origin.toLowerCase()) return true;
-    const bare = s.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/:].*$/, '');
+    // An origin entry, written however: its scheme, host and port, compared as the page's.
+    const scheme = /^(https?):\/\//i.exec(s);
+    if (scheme) {
+      try {
+        const e = new URL(s);
+        if (`${e.protocol}//${normalHost(e.hostname)}${e.port ? `:${e.port}` : ''}` === origin) return true;
+      } catch {
+        // Not an address: compared by its host below.
+      }
+    }
+    const bare = normalHost(s.replace(/^https?:\/\//i, '').replace(/[/:].*$/, '')).replace(/^www\./, '');
     return bare !== '' && (host === bare || host.endsWith(`.${bare}`));
   });
 }

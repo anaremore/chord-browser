@@ -885,6 +885,50 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.input).toEqual([]);
   });
 
+  // ---------- Neon's review of #110 ----------
+
+  it('the page went to another site while the element was described: no card for that site, nothing kept, nothing sent', async () => {
+    let t: Awaited<ReturnType<typeof acting>> | undefined;
+    t = await acting({
+      onAct: (events, op) => {
+        if (op !== 'describe' || !t || t.at.url.includes('bank.test')) return;
+        t.at.url = 'https://bank.test/login';
+        events.emit('did-navigate');
+      },
+    });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    expect(t.cards).toEqual([]);
+    expect([t.agent.granted('site', 'bank.test'), t.agent.granted('site', 'news.test')]).toEqual([undefined, undefined]);
+    expect(t.at.input).toEqual([]);
+  });
+
+  it('a yes on the card is kept only once the action runs on that page: the page moving on meanwhile keeps nothing (a no is kept)', async () => {
+    let t: Awaited<ReturnType<typeof acting>> | undefined;
+    const move = () => {
+      t!.at.url = 'https://news.test/other';
+      t!.pages.get('n1')!.events.emit('did-navigate');
+    };
+    t = await acting({ onCard: () => move() });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    expect(t.agent.granted('site', 'news.test')).toBeUndefined();
+    expect(t.at.input).toEqual([]);
+    // It runs: kept for the agent's life.
+    const u = await acting();
+    await u.call('click', { tab_id: u.tab, ref: 'e1' });
+    expect(u.agent.granted('site', 'news.test')).toBe('always');
+    // A no is kept whatever became of the page.
+    const v = await acting({ answer: 'deny' });
+    await v.call('click', { tab_id: v.tab, ref: 'e1' });
+    expect(v.agent.granted('site', 'news.test')).toBe('deny');
+  });
+
+  it('navigate and back: a pause that comes after the tab was loaded sends nothing', async () => {
+    let t: Awaited<ReturnType<typeof acting>> | undefined;
+    t = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
+    expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect(t.at.loads).toEqual([]);
+  });
+
   // ---------- Review 1 of #110 ----------
 
   it('Stop during an action: nothing more goes in (the text, the Enter), though the action had started', async () => {
