@@ -528,6 +528,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // done: the page went (a submit's Enter navigated it), so its document, and where its focus was, are gone too.
       const down = await page.act(owner, lookup.token, lookup.key, { op: 'unguard' });
       if (down.ok && down.moved) refused = ACT_REFUSALS.focusMoved;
+      else if (down.ok && down.lost) refused = ACT_REFUSALS.focusLost;
       return !refused;
     };
     const { navigated, loading } = await page.afterActing(async () => {

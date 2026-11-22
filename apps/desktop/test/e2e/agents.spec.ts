@@ -104,11 +104,17 @@ const shopResults = (q: string) =>
   // click: the last hit test must wait for the pointer's move to have reached the page).
   '<div role=button tabindex=0 style="inline-size:160px;block-size:40px" onclick="document.getElementById(\'log\').textContent = \'hover deal clicked\'" ' +
   'onmouseenter="const r = this.getBoundingClientRect(), f = document.createElement(\'iframe\'); f.title = \'Popup\'; f.srcdoc = \'x\'; ' +
-  'f.style.cssText = \'position:fixed;border:0;left:\' + r.left + \'px;top:\' + r.top + \'px;width:\' + r.width + \'px;height:\' + r.height + \'px\'; document.body.append(f)">Hover deal</div>' +
+  'f.style.cssText = \'position:absolute;border:0;left:\' + (r.left + scrollX) + \'px;top:\' + (r.top + scrollY) + \'px;width:\' + r.width + \'px;height:\' + r.height + \'px\'; document.body.append(f)">Hover deal</div>' +
   // Review 3 of #110: a button the page swallows pointer moves over (its own capture listener, put first): the move is
   // never seen, so the click fails closed.
   '<button id=sticky onclick="document.getElementById(\'log\').textContent = \'sticky deal clicked\'">Sticky deal</button>' +
-  '<script>addEventListener(\'mousemove\', (e) => { if (e.target.id === \'sticky\') e.stopImmediatePropagation(); }, true);</script></main>';
+  // Review 4: one button clicked twice at one point; one that, clicked, puts another in its place, over which the page
+  // swallows moves too (so the move to it is never seen: only the last one, over the button gone, was).
+  '<button style="inline-size:160px;block-size:40px" onclick="this.dataset.n = Number(this.dataset.n || 0) + 1; document.getElementById(\'log\').textContent = \'counted \' + this.dataset.n">Count</button>' +
+  '<button style="inline-size:160px;block-size:40px" onclick="swapDeal(this)">Swap</button>' +
+  '<script>addEventListener(\'mousemove\', (e) => { if (String(e.target.id).startsWith(\'sticky\')) e.stopImmediatePropagation(); }, true);' +
+  'function swapDeal(old) { const b = document.createElement(\'button\'); b.id = \'sticky-b\'; b.textContent = \'Swapped deal\'; b.style.cssText = old.style.cssText; ' +
+  'b.onclick = () => { document.getElementById(\'log\').textContent = \'swapped deal clicked\'; }; old.replaceWith(b); }</script></main>';
 
 /** A ref from a snapshot's outline, by its line's start (`button "Start a return"`). */
 const refOf = (outline: string, line: string) => {
@@ -178,10 +184,20 @@ test('acting: an agent types, clicks and chooses in its own tab; the first actio
     expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).not.toContain('hover deal clicked');
     expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Sticky deal"') })).text).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
     expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).not.toContain('sticky deal clicked');
-    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(results, 'combobox "Shipping"'), option: 'Overnight' })).text).toBe('That list has no such choice. Call snapshot for its choices.');
-    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(results, 'combobox "Shipping"'), option: 'Pickup' })).text).toBe('That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.');
+    // Review 4: twice at one point, both clicks go in; a button that took another's place at the point, with the move
+    // to it never seen, is refused (the last move seen there was over the one gone).
+    const content = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Count"') })).text)).toMatchObject({ data: { done: 'Clicked “Count”' } });
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Count"') })).text)).toMatchObject({ data: { done: 'Clicked “Count”' } });
+    expect(await content()).toContain('counted 2');
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Swap"') })).text)).toMatchObject({ data: { done: 'Clicked “Swap”' } });
+    const swapped = await snap();
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(swapped, 'button "Swapped deal"') })).text).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect(await content()).not.toContain('swapped deal clicked');
+    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(swapped, 'combobox "Shipping"'), option: 'Overnight' })).text).toBe('That list has no such choice. Call snapshot for its choices.');
+    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(swapped, 'combobox "Shipping"'), option: 'Pickup' })).text).toBe('That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.');
     // A choice by its label.
-    const chose = await mcp.call('select_option', { tab_id: 'a1', ref: refOf(results, 'combobox "Shipping"'), option: 'Express' });
+    const chose = await mcp.call('select_option', { tab_id: 'a1', ref: refOf(swapped, 'combobox "Shipping"'), option: 'Express' });
     expect(JSON.parse(chose.text)).toMatchObject({ data: { done: 'Chose “Express” in “Shipping”' } });
     expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).toContain('shipping Express');
     // Somewhere else, and back.
