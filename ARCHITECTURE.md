@@ -1621,7 +1621,7 @@ A laptop never holds signing keys.
 | Linux X11 E2E | `xvfb-run` ✅ |
 | Linux Wayland E2E | headless Weston (`--backend=headless-backend.so`), copied from Electron's own `run-tests-wayland.sh` ✅. Wayland is the default since Electron 38 ✅. |
 
-Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all of the above.
+Every PR runs lint, typecheck, unit tests, E2E, and **visual captures** on all of the above. Each OS's E2E is split into shards that run side by side (2 on macOS, 3 elsewhere; `.github/workflows/ci.yml` says why), and one `E2E` status sums them up. A PR that changes only docs, `site/` or Markdown skips E2E, Chord Player and the password detector's corpora; a push to main always runs everything.
 
 ### 15.5 Testing
 
