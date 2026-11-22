@@ -41,8 +41,10 @@ export interface ControlPage {
 
   /** One step of an action on an element of `owner`'s latest snapshot (control/act.ts). */
   act(owner: string, token: string, key: number, op: ActOp): Promise<ActAnswer>;
-  /** A click at a point of the view in CSS pixels (scaled by the page's zoom here), or the pointer moved there (`hover`). */
-  click(x: number, y: number, hover?: boolean): void;
+  /** The pointer moved to a point of the view in CSS pixels (scaled by the page's zoom here). */
+  pointer(x: number, y: number): void;
+  /** The button pressed and let go there (after pointer, and a last hit test). */
+  press(x: number, y: number): void;
   /** Keys, as the agent's (control/input.ts refuses anything off its list). */
   keys(events: readonly AgentInputEvent[]): void;
   /** Text put in where the focus is, as one insertion (never as keys). */
@@ -56,6 +58,8 @@ export interface ControlPage {
   navigate(url: string): Promise<{ loading: boolean }>;
   back(): Promise<{ loading: boolean }>;
   canGoBack(): boolean;
+  /** The address back would go to, or null. */
+  backUrl(): string | null;
   title(): string;
 }
 
@@ -96,11 +100,13 @@ export function controlPage(contents: WebContents): ControlPage {
     undoFill: (undo) => undoFillPage(contents, undo),
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),
     act: (owner, token, key, op) => actOnPage(contents, owner, token, key, op),
-    click: (x, y, hover = false) => {
-      // The page's CSS pixels to the view's: sendInputEvent's points are the view's, the page zoomed in them.
-      const zoom = contents.getZoomFactor();
-      const at = { x: Math.round(x * zoom), y: Math.round(y * zoom) };
-      sendAgentInput(contents, hover ? [{ type: 'mouseMove', ...at }] : [{ type: 'mouseMove', ...at }, { type: 'mouseDown', ...at, button: 'left', clickCount: 1 }, { type: 'mouseUp', ...at, button: 'left', clickCount: 1 }]);
+    pointer: (x, y) => sendAgentInput(contents, [{ type: 'mouseMove', ...viewPoint(contents, x, y) }]),
+    press: (x, y) => {
+      const at = viewPoint(contents, x, y);
+      sendAgentInput(contents, [
+        { type: 'mouseDown', ...at, button: 'left', clickCount: 1 },
+        { type: 'mouseUp', ...at, button: 'left', clickCount: 1 },
+      ]);
     },
     keys: (events) => sendAgentInput(contents, events),
     insertText: (text) => (contents.isDestroyed() ? Promise.resolve() : contents.insertText(text)),
@@ -108,8 +114,18 @@ export function controlPage(contents: WebContents): ControlPage {
     navigate: (url) => loaded(contents, () => contents.loadURL(url).catch(() => undefined)),
     back: () => loaded(contents, () => contents.navigationHistory.goBack()),
     canGoBack: () => !contents.isDestroyed() && contents.navigationHistory.canGoBack(),
+    backUrl: () => {
+      if (contents.isDestroyed() || !contents.navigationHistory.canGoBack()) return null;
+      return contents.navigationHistory.getEntryAtIndex(contents.navigationHistory.getActiveIndex() - 1)?.url ?? null;
+    },
     title: () => (contents.isDestroyed() ? '' : contents.getTitle()),
   };
+}
+
+/** The page's CSS pixels to the view's: sendInputEvent's points are the view's, the page zoomed in them. */
+function viewPoint(contents: WebContents, x: number, y: number): { x: number; y: number } {
+  const zoom = contents.getZoomFactor();
+  return { x: Math.round(x * zoom), y: Math.round(y * zoom) };
 }
 
 /** Starts a load and waits for it to stop (at most ACT_LOAD_MS): `loading` if it's still going then. */

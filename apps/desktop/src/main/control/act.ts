@@ -5,7 +5,12 @@
  * it (SNAPSHOT_LIB, the same rules). Then, by what's asked:
  *
  * - `describe`: what it is (disabled, takes text, a select), and the role and name the snapshot gave it.
- * - `focus`: focused, for a key pressed in it.
+ * - `focus`: focused, for a key pressed in it; `focused`: whether it has the focus now (through open shadow roots).
+ *   Text and keys go wherever the focus is, so main asks this right before each, and a page that moved the focus (a
+ *   mousedown handler sending it to a password field) gets nothing. Every answer carries the field as it is now, which
+ *   main checks with core's sensitiveField, as the snapshot did.
+ * - `hit`: just before the button goes down, the point is still the element's: the press is sent only then. A hit on a
+ *   frame (an iframe, an embed) is never the element's, even one inside it.
  * - `point`: scrolled to the middle of the view (at once), and hit-tested at its middle, then at the middles of its
  *   quarters: the point to send the click to, in the page's CSS pixels, or what covers it (its role and name).
  * - `select`: a text field's contents selected (all of it), so the text `insertText` puts in replaces it.
@@ -15,7 +20,7 @@
  * Each action outlines its element in the agents' blue for a moment (the Web Animations API: nothing is added to the
  * page), shown and gone at once with reduced motion. Main never waits on a hung page: each call has its own limit.
  */
-import { ACT_SETTLE_MS, ACT_SETTLE_QUIET_MS } from '@chord/core';
+import { ACT_SETTLE_MS, ACT_SETTLE_QUIET_MS, type SnapshotField } from '@chord/core';
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 import { ASSISTANT_WORLD } from './extract';
@@ -24,11 +29,18 @@ import { SNAPSHOT_LIB } from './snapshot';
 /** How long a step in the page may take: a busy page answers within it. */
 const ACT_PAGE_MS = 3000;
 
-export type ActOp = { op: 'point'; highlight: boolean } | { op: 'select' } | { op: 'focus' } | { op: 'choose'; option: string } | { op: 'describe' };
+export type ActOp =
+  | { op: 'point'; highlight: boolean }
+  | { op: 'hit'; x: number; y: number }
+  | { op: 'select' }
+  | { op: 'focus' }
+  | { op: 'focused' }
+  | { op: 'choose'; option: string }
+  | { op: 'describe'; option?: string };
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string }
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean }
   | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-choice' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 function actScript(owner: string, token: string, key: number, op: ActOp): string {
@@ -47,9 +59,25 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const disabled = el.matches(':disabled') || String(el.getAttribute('aria-disabled')).toLowerCase() === 'true';
   const editable = el.isContentEditable || (el.localName === 'textarea' && !el.readOnly) || (el.localName === 'input' && !el.readOnly && TEXT_TYPES.has(String(el.type || '').toLowerCase()));
   const select = el.localName === 'select';
-  const said = { role: entry.role, name: entry.name };
-  if (args.op === 'describe') return { ok: true, ...said, disabled, editable, select };
-  if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said }; }
+  // A field as it is now, for main's sensitiveField: a page can turn a field into a password field after the snapshot.
+  const said = { role: entry.role, name: entry.name, ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
+  // What has the focus now, through open shadow roots: text and keys go to it, so it must be this element.
+  const deepFocus = () => {
+    let f = document.activeElement;
+    while (f && f.shadowRoot && f.shadowRoot.activeElement) f = f.shadowRoot.activeElement;
+    return f;
+  };
+  // A choice by the page's own label: matched before anything is asked, so only the page's words are ever shown.
+  const optionIndex = (want) => [...el.options].findIndex((o) => !o.disabled && clip(o.label || o.text, NAME_MAX) === String(want).replace(/\s+/g, ' ').trim());
+  if (args.op === 'describe') {
+    if (args.option === undefined) return { ok: true, ...said, disabled, editable, select };
+    if (!select) return { ok: false, why: 'not-select' };
+    const index = optionIndex(args.option);
+    if (index < 0) return { ok: false, why: 'no-choice' };
+    return { ok: true, ...said, disabled, editable, select, choice: clip(el.options[index].label || el.options[index].text, NAME_MAX) };
+  }
+  if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
+  if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
   if (args.op === 'select') {
     el.focus({ preventScroll: true });
     if (isField(el)) el.select();
@@ -59,7 +87,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   if (args.op === 'choose') {
     if (!select) return { ok: false, why: 'not-select' };
     const want = String(args.option).replace(/\s+/g, ' ').trim();
-    const index = [...el.options].findIndex((o) => !o.disabled && clip(o.label || o.text, NAME_MAX) === want);
+    const index = optionIndex(want);
     if (index < 0) return { ok: false, why: 'no-choice' };
     if (el.selectedIndex !== index) {
       Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex').set.call(el, index);
@@ -68,11 +96,6 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     }
     return { ok: true, ...said, choice: want };
   }
-  // point: to the middle of the view, then the hit test at its middle and its quarters' middles.
-  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-  const r = el.getBoundingClientRect();
-  const left = Math.max(r.left, 0), top = Math.max(r.top, 0), right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight);
-  if (right - left < 1 || bottom - top < 1) return { ok: false, why: 'changed' };
   const within = (hit) => {
     for (let n = hit; n; n = n.parentNode || n.host) if (n === el) return true;
     return false;
@@ -82,12 +105,34 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     while (hit && hit.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); if (!inner || inner === hit) break; hit = inner; }
     return hit;
   };
+  // A hit on a frame (another document, maybe another site's) is never the element's, even inside it.
+  const FRAMES = new Set(['iframe', 'frame', 'embed', 'object']);
+  const ours = (hit) => hit && within(hit) && !FRAMES.has(hit.localName);
+  // What covers it, by its nearest named ancestor with a role.
+  const coverOf = (cover) => {
+    for (let n = cover; n && n.nodeType === 1; n = n.parentElement || (n.getRootNode && n.getRootNode().host)) {
+      if (FRAMES.has(n.localName)) return { role: 'frame', name: clip(n.getAttribute('title') || '', NAME_MAX) };
+      const r2 = roleNow(n);
+      if (r2) return { role: r2, name: nameOf(n, r2) };
+    }
+    return { role: cover ? cover.localName : 'element', name: '' };
+  };
+  // hit: just before the button goes down, the point is still the element's (nothing moved over it since point).
+  if (args.op === 'hit') {
+    const hit = deepest(args.x, args.y);
+    return ours(hit) ? { ok: true, ...said } : { ok: false, why: 'covered', cover: coverOf(hit) };
+  }
+  // point: to the middle of the view, then the hit test at its middle and its quarters' middles.
+  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  const r = el.getBoundingClientRect();
+  const left = Math.max(r.left, 0), top = Math.max(r.top, 0), right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight);
+  if (right - left < 1 || bottom - top < 1) return { ok: false, why: 'changed' };
   const w = right - left, h = bottom - top;
   const points = [[left + w / 2, top + h / 2], [left + w / 4, top + h / 4], [left + (3 * w) / 4, top + h / 4], [left + w / 4, top + (3 * h) / 4], [left + (3 * w) / 4, top + (3 * h) / 4]];
   let cover = null;
   for (const [x, y] of points) {
     const hit = deepest(x, y);
-    if (hit && within(hit)) {
+    if (ours(hit)) {
       if (args.highlight) {
         const quiet = matchMedia('(prefers-reduced-motion: reduce)').matches;
         const ring = '0 0 0 3px oklch(0.55 0.12 250 / 0.9), 0 0 0 7px oklch(0.55 0.12 250 / 0.18)';
@@ -97,12 +142,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     }
     if (!cover && hit) cover = hit;
   }
-  // What covers it, by its nearest named ancestor with a role.
-  for (let n = cover; n && n.nodeType === 1; n = n.parentElement || (n.getRootNode && n.getRootNode().host)) {
-    const r2 = roleNow(n);
-    if (r2) return { ok: false, why: 'covered', cover: { role: r2, name: nameOf(n, r2) } };
-  }
-  return { ok: false, why: 'covered', cover: { role: cover ? cover.localName : 'element', name: '' } };
+  return { ok: false, why: 'covered', cover: coverOf(cover) };
 })(${JSON.stringify(args)})`;
 }
 

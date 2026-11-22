@@ -52,8 +52,12 @@ export type CallRefusal = 'stopped' | 'paused';
 
 /** What an answer for good covers: the kind and subject (*Allow for this chat* covers the tool, on any tab). */
 const grantKey = (card: { kind: ApprovalKind; subject: string }) => `${card.kind}:${card.subject}`;
-/** Which card an ask waits on: the kind, subject and tab, so a card only ever answers for the tab it names. */
-const openKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }) => `${card.kind}:${card.subject}:${card.tab ?? ''}`;
+/**
+ * Which card an ask waits on: the kind, subject and tab, so a card only ever answers for the tab it names. A site card
+ * (M2c) is the agent's for the site, whatever its tab: two tabs of it on one site wait on one card, and one answer
+ * settles both (it's for the site, and lasts the agent's life anyway).
+ */
+const openKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }) => (card.kind === 'site' ? `site:${card.subject}` : `${card.kind}:${card.subject}:${card.tab ?? ''}`);
 
 interface OpenCard {
   cancel: AbortController;

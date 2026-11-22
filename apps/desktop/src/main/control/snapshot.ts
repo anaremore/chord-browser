@@ -158,6 +158,9 @@ export const SNAPSHOT_LIB = String.raw`
     return true;
   };
   const SKIP = new Set(['script', 'style', 'template', 'noscript', 'head', 'link', 'meta', 'option', 'optgroup', 'datalist', 'svg', 'canvas', 'video', 'audio', 'object', 'embed', 'br']);
+  // A field's description, for core's sensitiveField: an input's type, a text area's, a select's, or text for any other
+  // field (an editor). The snapshot gives it with each field, and an action checks it again before text or a key goes in.
+  const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
   // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
   const roleNow = (el) => {
     const own = String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
@@ -218,7 +221,7 @@ export function snapshotScript(owner: string, token: string): string {
       if (el.localName === 'select' && !el.multiple) { const o = el.options[el.selectedIndex]; if (o) node.choice = clip(o.label || o.text, args.nameMax); }
       // Described as a field, for core's sensitiveField: inputs, text areas, selects (a card's expiry month), and any
       // other text field (a contenteditable, a role=textbox), whose type is text.
-      if (isField(el) || TYPED.has(role)) node.field = { type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) };
+      if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
         else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name }); }
@@ -239,7 +242,7 @@ export function snapshotScript(owner: string, token: string): string {
     const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox') };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
-    node.field = { type: 'text', autocomplete: clip(start.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(start.getAttribute('name'), 60), id: clip(start.id, 60), label: labelOf(start), placeholder: clip(start.getAttribute('aria-placeholder'), 100) };
+    node.field = fieldOf(start);
     if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name }); }
     nodes.push(node);
   } else walk(start, 0, false, false);

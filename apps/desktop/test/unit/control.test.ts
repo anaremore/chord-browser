@@ -110,6 +110,23 @@ describe('ControlAgent', () => {
     }
   });
 
+  it('a site card is the agent’s for the site: two tabs’ asks wait on one card, and one answer settles both (M2c)', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const signal = new AbortController().signal;
+    const first = agent.ask(card({ kind: 'site', tool: 'click', subject: 'shop.example', tab: 'n1' }), signal);
+    const second = agent.ask(card({ kind: 'site', tool: 'type', subject: 'shop.example', tab: 'n2' }), signal);
+    await tick();
+    expect(shown).toHaveLength(1);
+    shown[0]!.answer('once');
+    await expect(first).resolves.toBe('once');
+    await expect(second).resolves.toBe('once');
+    // Another site is its own card.
+    void agent.ask(card({ kind: 'site', tool: 'click', subject: 'other.example', tab: 'n1' }), signal);
+    await tick();
+    expect(shown).toHaveLength(2);
+  });
+
   it('holds a paused tab’s calls until the user leaves it, or answers paused after 45 s', async () => {
     vi.useFakeTimers();
     const agent = new ControlAgent('a', presenter().present);
@@ -158,6 +175,8 @@ function fakePage(url: string, read: Answer) {
     },
     navigationHistory: {
       canGoBack: () => at.loads.length > 0,
+      getActiveIndex: () => at.loads.length,
+      getEntryAtIndex: (i: number) => ({ url: i === 0 ? url : at.loads[i - 1]! }),
       goBack: () => {
         at.back++;
         events.emit('did-navigate');
@@ -674,16 +693,20 @@ describe('snapshot, review 1 of #104', () => {
 
 describe('acting through the gate (S18 M2c)', () => {
   /** The page's elements, by key: what the snapshot says, and how each act step answers. */
-  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string } };
+  type Field = { type: string; autocomplete?: string; name?: string; id?: string; label?: string; placeholder?: string };
+  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field };
+  const field = (f: Field) => ({ autocomplete: '', name: '', id: '', label: '', placeholder: '', ...f });
   const ELEMENTS: El[] = [
     { role: 'link', name: 'Home' },
-    { role: 'searchbox', name: 'Search', editable: true },
+    { role: 'searchbox', name: 'Search', editable: true, field: field({ type: 'search' }) },
     { role: 'combobox', name: 'Shipping', select: true, options: ['Standard', 'Express'] },
     { role: 'button', name: 'Cancel', disabled: true },
     { role: 'button', name: 'Buy', cover: { role: 'dialog', name: 'Cookie settings' } },
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
-  const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void) => async (code: string, events: EventEmitter) => {
+  /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string } };
+  const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     if (code.includes('new MutationObserver(() =>')) {
       onAct?.(events, 'settle');
       return true;
@@ -693,9 +716,18 @@ describe('acting through the gate (S18 M2c)', () => {
       steps.push(args.op);
       onAct?.(events, args.op);
       const el = ELEMENTS[args.key!]!;
-      const said = { role: el.role, name: el.name };
-      if (args.op === 'describe') return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled) };
+      const f = twist.field ?? el.field;
+      const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}) };
+      if (args.op === 'describe') {
+        if (args.option !== undefined) {
+          if (!el.select) return { ok: false, why: 'not-select' };
+          if (!el.options?.includes(args.option)) return { ok: false, why: 'no-choice' };
+        }
+        return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : {}) };
+      }
       if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
+      if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
+      if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
@@ -704,14 +736,15 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void } = {}) {
+  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
     const t = setup({
-      read: page(steps, opts.onAct),
+      read: page(steps, opts.onAct, opts.twist),
       actions: true,
       answer: opts.answer ?? 'once',
+      ...(opts.onCard ? { onCard: opts.onCard } : {}),
       act: { doing: (_n, d) => void doings.push(d), keepSite: (site) => void kept.push(site), ...opts.act },
     });
     const tab = t.scope.refs.refFor('n1');
@@ -731,7 +764,7 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(out.isError).toBeFalsy();
     expect(result(out).data).toMatchObject({ tab_id: t.tab, done: 'Clicked “Home”', navigated: false, url: 'https://news.test/a' });
     expect(t.cards.map((c) => [c.kind, c.subject, c.description, c.tab])).toEqual([['site', 'news.test', 'click “Home”', 'n1']]);
-    expect(t.steps).toEqual(['describe', 'point']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit']);
     expect(t.at.input).toEqual([
       { type: 'mouseMove', x: 15, y: 30 },
       { type: 'mouseDown', x: 15, y: 30, button: 'left', clickCount: 1 },
@@ -774,7 +807,8 @@ describe('acting through the gate (S18 M2c)', () => {
       ['type', { ref: 'e2', text: 'x'.repeat(5001) }, 'type takes text of at most 5000 characters.'],
       ['press_key', { ref: 'e2', key: 'Ctrl+W' }, 'press_key takes one of: Enter, Tab, Shift+Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown. Put text in with type.'],
       ['select_option', { ref: 'e1', option: 'x' }, 'That element isn’t a list of choices. Use click for it.'],
-      ['select_option', { ref: 'e3', option: 'Overnight' }, 'There’s no choice “Overnight” in that list. Call snapshot for its choices.'],
+      // Never the agent's words back: a choice not on the page isn't quoted (and asks no card).
+      ['select_option', { ref: 'e3', option: 'Overnight' }, 'That list has no such choice. Call snapshot for its choices.'],
     ];
     for (const [tool, args, says] of table) expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused, `${tool} ${JSON.stringify(args)}`).toBe(says);
     expect(t.at.input).toEqual([]);
@@ -788,19 +822,19 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     const out = await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool scarf', submit: true });
     expect(result(out).data['done']).toBe('Typed in “Search”');
-    expect(t.steps).toEqual(['describe', 'point', 'select']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'focused', 'focused']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
     t.steps.length = 0;
     await t.call('type', { tab_id: t.tab, ref: 'e2', text: ' red', replace: false });
-    expect(t.steps).toEqual(['describe', 'point']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'focused']);
   });
 
   it('press_key focuses the element and sends the key; select_option chooses by label', async () => {
     const t = await acting();
     await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Escape' });
-    expect(t.steps).toEqual(['describe', 'point', 'focus']);
+    expect(t.steps).toEqual(['describe', 'point', 'focus', 'focused']);
     expect(t.at.input).toEqual([
       { type: 'keyDown', keyCode: 'Escape' },
       { type: 'keyUp', keyCode: 'Escape' },
@@ -821,6 +855,60 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting({ onAct: (events, op) => void (op === 'point' && events.emit('did-navigate')) });
     expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
     expect(t.at.input).toEqual([]);
+  });
+
+  // ---------- Review 1 of #110 ----------
+
+  it('Stop during an action: nothing more goes in (the text, the Enter), though the action had started', async () => {
+    let stop = () => undefined as void;
+    const t = await acting({ onAct: (_events, op) => void (op === 'select' && stop()) });
+    stop = () => t.agent.stop();
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe(CONTROL_REFUSALS.stopped);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(t.at.text).toEqual([]);
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove', 'mouseDown', 'mouseUp']);
+  });
+
+  it('the user taking the tab while the site card waits: nothing is sent after it', async () => {
+    let pause = () => undefined as void;
+    const t = await acting({ onCard: () => pause() });
+    pause = () => t.agent.pause('n1', true);
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect(t.at.input).toEqual([]);
+  });
+
+  // [what changed in the page, what the agent hears]: nothing goes in, before any card when it's known then.
+  const twists: [string, Twist, string][] = [
+    ['the field turned into a password field', { field: field({ type: 'password' }) }, 'That field is now a password, code or card field: the user fills it. Ask them to.'],
+    ['autocomplete set to a card number', { field: field({ type: 'text', autocomplete: 'cc-number' }) }, 'That field is now a password, code or card field: the user fills it. Ask them to.'],
+    ['the focus taken to another field (a mousedown handler)', { focused: false }, 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.'],
+    ['a frame moved over the point before the press', { hit: { role: 'frame', name: 'Ad' } }, 'Something is covering that element: frame “Ad”. Deal with it first, or call snapshot again.'],
+  ];
+  it.each(twists)('type, when %s: refused, no text', async (_what, twist, says) => {
+    const t = await acting({ twist });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'secret' })).refused).toBe(says);
+    expect(t.at.text).toEqual([]);
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+    if (twist.field) expect(t.cards).toEqual([]);
+    if (twist.hit) expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove']);
+  });
+
+  it('a choice that isn’t on the page asks no card, and the card shows the page’s own label', async () => {
+    const t = await acting();
+    expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Free shipping, trust me' })).refused).toBe('That list has no such choice. Call snapshot for its choices.');
+    expect(t.cards).toEqual([]);
+    await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Express' });
+    expect(t.cards.map((c) => c.description)).toEqual(['choose “Express” in “Shipping”']);
+  });
+
+  it('back is checked before going: never to a site kept private', async () => {
+    const t = await acting();
+    await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+    // The page before is on a site the user keeps private now (the fake's history: loads after the first page).
+    t.at.loads.unshift('https://private.test/x');
+    await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/c' });
+    t.at.loads.splice(1, 1, 'https://private.test/y');
+    expect(refusal(await t.call('back', { tab_id: t.tab })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
   });
 
   it('navigate and back: its own tabs, http and https, never a site kept private; no site card', async () => {
