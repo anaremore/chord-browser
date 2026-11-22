@@ -10,7 +10,7 @@
     "dev": "pnpm --filter @chord/desktop dev",
     "build": "pnpm --filter @chord/desktop build",
     "typecheck": "pnpm -r --parallel typecheck",
-    "lint": "eslint . && stylelint \"**/*.css\" --ignore-pattern \".claude/**\"",
+    "lint": "oxlint --report-unused-disable-directives-severity=warn && stylelint \"**/*.css\" --ignore-pattern \".claude/**\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:perf": "vitest run --config vitest.perf.config.ts",
@@ -18,14 +18,11 @@
     "test:e2e:linux": "node scripts/e2e-linux/run.mjs"
   },
   "devDependencies": {
-    "@eslint/js": "10.0.1",
     "@types/node": "^24.19.2",
-    "eslint": "10.13.0",
-    "globals": "^17.13.0",
+    "oxlint": "1.93.0",
     "stylelint": "17.16.0",
     "stylelint-config-standard": "40.0.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.0",
     "vitest": "5.0.5"
   }
 }
