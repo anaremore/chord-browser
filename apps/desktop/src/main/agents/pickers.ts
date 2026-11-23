@@ -63,13 +63,20 @@ const REARM_TRIES = 8;
 /** Each command's limit: a hung page never leaves the hold half on, or a frame waiting. */
 const COMMAND_MS = 3000;
 
-/** Starts holding pickers in `contents`; `held` hears each one held. */
-export function holdFilePickers(contents: WebContents, held: (detail: string) => void): void {
-  if (contents.isDestroyed()) return;
+/**
+ * Starts holding pickers in `contents`; `held` hears each one held. Resolves once its first arming is done (on or not):
+ * the tab's page is loaded only then (tabs.ts), since a frame whose navigation was under way when the frames' auto-attach
+ * began is held at its start without the hold hearing of it, and its page never finishes loading (CI's arm64, #112).
+ */
+export function holdFilePickers(contents: WebContents, held: (detail: string) => void): Promise<void> {
+  if (contents.isDestroyed()) return Promise.resolve();
   const debug = contents.debugger;
   /** The attachment armed now: a detach (or another arm) makes answers from before it count for nothing. */
   let generation = 0;
   let tries = 0;
+  /** The first arming's frames' auto-attach is on (or that arming is over): what tabs.ts waits on to load the page. */
+  let framesOn: () => void = () => undefined;
+  const framesReady = new Promise<void>((done) => (framesOn = done));
   let timer: ReturnType<typeof setTimeout> | null = null;
   lost.add(contents);
   /** A command's answer (true: it answered without an error), within COMMAND_MS. */
@@ -89,11 +96,14 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
    * in the agent's tab rather than one that could show a picker (Neon's review 7 of #110).
    */
   const hold = async (sessionId?: string): Promise<boolean> => {
+    // Its frames first: held from their start once this is on (the browser answers it, with or without a page yet, so
+    // the tab's page can load right after: tabs.ts waits on it). An auto-attach that failed (or never answered) leaves
+    // them unheld, so the hold isn't on.
+    const attached = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
+    if (!sessionId) framesOn();
     await send('Page.enable', undefined, sessionId);
     const intercepted =
       (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
-    // Its frames held too: an auto-attach that failed (or never answered) leaves them unheld, so the hold isn't on.
-    const attached = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
     const on = intercepted && attached;
     if (sessionId && on) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
     if (sessionId && !on) unsecured.add(contents);
@@ -186,5 +196,8 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     tries = 0;
     void arm();
   });
-  void arm();
+  // The page loads once its frames are held from their start (or the first arming ended without that): the rest of the
+  // arming (the page's own interception) goes on beside the load.
+  void arm().then(() => framesOn());
+  return framesReady;
 }

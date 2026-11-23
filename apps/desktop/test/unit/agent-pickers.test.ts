@@ -41,13 +41,13 @@ describe('holdFilePickers', () => {
     const held: string[] = [];
     holdFilePickers(contents, (d) => void held.push(d));
     await settle();
-    expect(names(sent)).toEqual(['Page.enable', 'Page.setInterceptFileChooserDialog', 'Target.setAutoAttach']);
-    expect(sent[1]![1]).toEqual({ enabled: true });
-    expect(sent[2]![1]).toEqual({ autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] });
+    expect(names(sent)).toEqual(['Target.setAutoAttach', 'Page.enable', 'Page.setInterceptFileChooserDialog']);
+    expect(sent[2]![1]).toEqual({ enabled: true });
+    expect(sent[0]![1]).toEqual({ autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] });
     events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
     await settle();
     // Its interception on, and only then let go on.
-    expect(names(sent.slice(3))).toEqual(['Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Target.setAutoAttach@s1', 'Runtime.runIfWaitingForDebugger@s1']);
+    expect(names(sent.slice(3))).toEqual(['Target.setAutoAttach@s1', 'Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Runtime.runIfWaitingForDebugger@s1']);
     events.emit('message', {}, 'Page.fileChooserOpened', { mode: 'selectSingle' }, 's1');
     expect(held).toEqual(['a file picker']);
     expect(pickersLost(contents)).toBe(false);
@@ -64,7 +64,7 @@ describe('holdFilePickers', () => {
     expect(pickersLost(contents)).toBe(true);
     await vi.advanceTimersByTimeAsync(300);
     expect(state.attaches).toBe(2);
-    expect(names(sent)).toEqual(['Page.enable', 'Page.setInterceptFileChooserDialog', 'Target.setAutoAttach']);
+    expect(names(sent)).toEqual(['Target.setAutoAttach', 'Page.enable', 'Page.setInterceptFileChooserDialog']);
     expect(pickersLost(contents)).toBe(false);
   });
 
@@ -107,7 +107,7 @@ describe('holdFilePickers', () => {
     expect(pickersLost(contents)).toBe(true);
     events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(names(sent).filter((n) => n.endsWith('@s1'))).toEqual(['Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Page.setInterceptFileChooserDialog@s1', 'Target.setAutoAttach@s1']);
+    expect(names(sent).filter((n) => n.endsWith('@s1'))).toEqual(['Target.setAutoAttach@s1', 'Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Page.setInterceptFileChooserDialog@s1']);
     // An action tries once more, and it's on once the interception answers.
     state.fail.clear();
     await expect(retryPickers(contents)).resolves.toBe(true);

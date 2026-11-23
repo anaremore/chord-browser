@@ -219,8 +219,11 @@ export class TabManager {
             ...(this.deps.agentTab?.(nodeId) ? { disableDialogs: true, additionalArguments: [AGENT_TAB_ARG], nodeIntegrationInSubFrames: true } : {}),
           },
         });
-    // And its file pickers held for its whole life, at a layer no page reaches (agents/pickers.ts).
-    if (!internal && this.deps.agentTab?.(nodeId)) holdFilePickers(view.webContents, (detail) => this.deps.onAgentRefused?.(nodeId, 'file', detail));
+    // And its file pickers held for its whole life, at a layer no page reaches (agents/pickers.ts), armed before its
+    // page loads (a frame already on its way when the hold starts would be held without the hold hearing of it).
+    // Only an agent's tab waits: any other loads at once, as before (a load asked for right after, an image search's
+    // POST, must come after this one, never be overtaken by it).
+    const armed = !internal && this.deps.agentTab?.(nodeId) ? holdFilePickers(view.webContents, (detail) => this.deps.onAgentRefused?.(nodeId, 'file', detail)) : null;
     view.setBorderRadius(frameRadius[platform]);
     this.views.set(nodeId, view);
     if (internal) this.internal.add(nodeId);
@@ -234,7 +237,8 @@ export class TabManager {
     // Muted stays muted: after sleeping, a restart, or a move to other sign-ins (a new page each time).
     if (node.muted) contents.setAudioMuted(true);
     const url = node.url;
-    this.whenProxied(contents, () => {
+    const load = () => {
+      if (contents.isDestroyed()) return;
       if (nav) {
         // Back where it was: same page, same back/forward list, same scroll position.
         contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
@@ -245,7 +249,8 @@ export class TabManager {
           // Load failures surface through did-fail-load; nothing to do here.
         });
       }
-    });
+    };
+    this.whenProxied(contents, () => (armed ? void armed.then(load) : load()));
     return view;
   }
 
