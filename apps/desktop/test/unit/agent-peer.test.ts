@@ -215,6 +215,12 @@ const PEER_BUDGET_MS: Partial<Record<string, { first: number; again: number }>> 
   linux: { first: 500, again: 500 },
   darwin: { first: 1500, again: 1500 },
 };
+/**
+ * A query stuck on a file with I/O pending is waited out (the helper's 250 ms deadline): a lookup with one stuck may
+ * take that much more, so its budget has it added. Seen: CI's Windows x64 (#112, 2026-11-23), a warm lookup of 426 ms
+ * with one stuck and one skipped, against its 400 ms.
+ */
+const STUCK_WAIT_MS = 250;
 /** Windows: the helper's first start on the machine, cold (what restrict-pipe pays in M1b), 3.0 to 3.9 s seen on arm64. A ceiling, not a target. */
 const PEER_COLD_MS = 6000;
 
@@ -270,10 +276,12 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
     }
     // Off any call's path (it runs while the card shows), but it delays the card's *Started by*. Budgets per OS, from
     // what was measured (PEER_BUDGET_MS); the message carries what was seen.
-    const seen = `${process.platform}/${process.arch}: helper's first start ${cold.toFixed(0)} ms, lookup ${lookup.toFixed(0)} ms, again ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}`;
+    const seen = `${process.platform}/${process.arch}: helper's first start ${cold.toFixed(0)} ms, lookup ${lookup.toFixed(0)} ms, again ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}, again ${JSON.stringify(second.timings ?? {})}`;
     const budget = PEER_BUDGET_MS[`${process.platform}/${process.arch}`] ?? PEER_BUDGET_MS[process.platform] ?? { first: 1000, again: 1000 };
-    expect(lookup, seen).toBeLessThan(budget.first);
-    expect(warm, seen).toBeLessThan(budget.again);
+    // A lookup that waited out a stuck query gets that wait on top (STUCK_WAIT_MS).
+    const stuck = (timings: Record<string, number> | undefined) => ((timings?.['stuck'] ?? 0) > 0 ? STUCK_WAIT_MS : 0);
+    expect(lookup, seen).toBeLessThan(budget.first + stuck(first.timings));
+    expect(warm, seen).toBeLessThan(budget.again + stuck(second.timings));
     expect(cold, seen).toBeLessThan(PEER_COLD_MS);
   }, 60_000);
 });
