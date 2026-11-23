@@ -499,8 +499,10 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
 test('a step answered late: waiting, then the Allow counts for that same step once (M2d)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  // Cards answer within 3 s here, not 45, so a late answer is quick to show.
-  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_AGENT_WAIT_MS: '3000' });
+  // Cards answer within 8 s here, not 45, so a late answer is quick to show. The connect card waits that long too: at
+  // 3 s, CI's macOS arm64 showed it and let its buttons take a click too late (#112), and open_tab came back waiting,
+  // with no tab.
+  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_AGENT_WAIT_MS: '8000' });
   reached.length = 0;
   try {
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
@@ -508,7 +510,7 @@ test('a step answered late: waiting, then the Allow counts for that same step on
     await mcp.request('initialize', CODEX);
     const opening = mcp.call('open_tab', { url: `${site.origin}/checkout` });
     await answer(app, 'Codex', 'Allow once');
-    await opening;
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
     const popover = await pageWhere(app, isPopover);
     const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const item = refOf(outline, 'link "Item 7"');
@@ -853,8 +855,15 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
  * the Intel Mac (macos-15-intel) 26.9 and 57.3, then 30.2 and 49.5 on its retry. That runner gets its own budget, about
  * 1.5 times the worst it showed; every other keeps the plan's. The 20,000-element and text-flood pages were 156 ms at
  * worst on any runner.
+ *
+ * macOS arm64 later (#112 at 7b66028, 2026-11-23): the typical page 24.2 and 60.2 ms, again 14.5 and 43.7, and /noisy
+ * 25.9 and 35.8, against 13.5 and 29.9 on #104. That runner gets its own budget too, about 1.5 times the worst seen.
  */
-const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = { default: { median: 25, worst: 60 }, 'darwin/x64': { median: 45, worst: 90 } };
+const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = {
+  default: { median: 25, worst: 60 },
+  'darwin/x64': { median: 45, worst: 90 },
+  'darwin/arm64': { median: 40, worst: 90 },
+};
 /** The huge pages' budget, on the median of five runs (a single pause can take one run far past it). */
 const SNAPSHOT_HUGE_MS = 300;
 /**
