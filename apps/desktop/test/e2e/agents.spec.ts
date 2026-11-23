@@ -485,6 +485,7 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
 
     // A search: reading, no card; it goes.
     const searched = await mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'searchbox "Search shop"'), text: 'wool', submit: true });
+    expect(searched.text, 'the search’s result, not a refusal').toMatch(/^\{/);
     expect(JSON.parse(searched.text)).toMatchObject({ data: { navigated: true } });
     await expect(stepCardOf(popover, /on /)).toHaveCount(0);
     mcp.child.stdin!.end();

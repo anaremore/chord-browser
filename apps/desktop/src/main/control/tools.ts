@@ -809,9 +809,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // it (the page runs between the test and the press too).
       page.pointer(pointed.x, pointed.y);
       let hit = await page.act(owner, lookup.token, lookup.key, { op: 'hit', x: pointed.x, y: pointed.y });
-      // The pointer was there already (a second click at the point): no move was sent. One off and back is, and the page
-      // must see both, as any click's move (its mouseenter and mousemove handlers run before the test).
-      if (!hit.ok && hit.why === 'no-move' && hit.there) {
+      // The move to the point not seen as the page's last: the pointer was there already (a second click at the point:
+      // no move was sent), or another move came after it (Windows sends the real cursor's move when a window changes
+      // under it: CI's Windows x64, #112), and the page only keeps the last. One off and back, and the page must see
+      // both, as any click's move (its mouseenter and mousemove handlers run before the test). A page that swallows
+      // moves still sees neither: no press.
+      if (!hit.ok && hit.why === 'no-move') {
         const off = { x: pointed.x + 3, y: pointed.y };
         page.pointer(off.x, off.y);
         const seen = await page.act(owner, lookup.token, lookup.key, { op: 'hit', ...off, onlyMove: true });
