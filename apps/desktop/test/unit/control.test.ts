@@ -511,6 +511,24 @@ describe('Cards, review 1 of #76', () => {
     expect(shown).toHaveLength(2);
   });
 
+  it('step cards never coalesce: two calls for one step ask two cards, and one Allow runs one (Neon’s review of #112)', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const step = card({ kind: 'step', tool: 'click', subject: 'n1|p1|e4|click||false', tab: 'n1', target: ['https://shop.test/checkout'] });
+    const first = agent.ask(step, new AbortController().signal);
+    const second = agent.ask(step, new AbortController().signal);
+    await tick();
+    expect(shown).toHaveLength(2);
+    shown[0]!.answer('once');
+    await expect(first).resolves.toBe('once');
+    let settled = false;
+    void second.then(() => (settled = true));
+    await tick();
+    expect(settled).toBe(false);
+    shown[1]!.answer('deny');
+    await expect(second).resolves.toBe('deny');
+  });
+
   it('a step’s late Allow counts for that same step only (tab, page, ref, action), for 2 minutes (S18 M2d)', async () => {
     vi.useFakeTimers();
     const { shown, present } = presenter();
@@ -795,10 +813,10 @@ describe('snapshot, review 1 of #104', () => {
 describe('acting through the gate (S18 M2c)', () => {
   /** The page's elements, by key: what the snapshot says, and how each act step answers. */
   type Field = { type: string; autocomplete?: string; name?: string; id?: string; label?: string; placeholder?: string };
-  type Risk = { tag: string; type: string; href: string; multiline: boolean; submits: boolean; form: { method: string; search: boolean; action: string; fields: (Field & { text: boolean })[] } | null };
+  type Risk = { tag: string; type: string; href: string; text?: string; multiline: boolean; submits: boolean; form: { method: string; search: boolean; action: string; url?: string; fields: (Field & { text: boolean })[] } | null };
   type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field; risk?: Partial<Risk> };
   /** What the page says the step is (S18 M2d): a link's address, a field's form; nothing risky unless a row says so. */
-  const riskOf = (el: El): Risk => ({ tag: el.role === 'link' ? 'a' : el.editable ? 'input' : 'div', type: '', href: el.role === 'link' ? '/home' : '', multiline: false, submits: false, form: null, ...el.risk });
+  const riskOf = (el: El): Risk => ({ tag: el.role === 'link' ? 'a' : el.editable ? 'input' : 'div', type: '', href: el.role === 'link' ? '/home' : '', text: '', multiline: false, submits: false, form: null, ...el.risk });
   const field = (f: Field) => ({ autocomplete: '', name: '', id: '', label: '', placeholder: '', ...f });
   const ELEMENTS: El[] = [
     { role: 'link', name: 'Home' },
@@ -889,7 +907,8 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(out.isError).toBeFalsy();
     expect(result(out).data).toMatchObject({ tab_id: t.tab, done: 'Clicked “Home”', navigated: false, url: 'https://news.test/a' });
     expect(t.cards.map((c) => [c.kind, c.subject, c.description, c.tab])).toEqual([['site', 'news.test', 'click “Home”', 'n1']]);
-    expect(t.steps).toEqual(['describe', 'point', 'hit']);
+    // Described again right before the press (#112: the pointer's move can change the step).
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'describe']);
     expect(t.at.input).toEqual([
       { type: 'mouseMove', x: 15, y: 30 },
       { type: 'mouseDown', x: 15, y: 30, button: 'left', clickCount: 1 },
@@ -949,13 +968,14 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(result(out).data['done']).toBe('Typed in “Search”');
     // Each input with the page preload's guard up (guard, the focus checked, the input, unguard).
     // Enter's keydown first, then everything checked again before its character (a keydown handler can move the focus).
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'focused', 'unguard']);
+    // A text field in no form with submit is a send (M2d): the step card, then the element described again after it.
+    expect(t.steps).toEqual(['describe', 'describe', 'point', 'hit', 'describe', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'focused', 'unguard']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
     t.steps.length = 0;
     await t.call('type', { tab_id: t.tab, ref: 'e2', text: ' red', replace: false });
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'guard', 'focused', 'unguard']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'describe', 'guard', 'focused', 'unguard']);
   });
 
   it('press_key focuses the element and sends the key; select_option chooses by label', async () => {
@@ -963,7 +983,7 @@ describe('acting through the gate (S18 M2c)', () => {
     await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Escape' });
     // Focused, then the guard up and the focus checked under it (the guard takes what has the focus as the element).
     // A key that types nothing goes in at once (its keydown may move the focus: that's it working).
-    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'focused', 'unguard']);
+    expect(t.steps).toEqual(['describe', 'point', 'focus', 'describe', 'guard', 'focused', 'unguard']);
     expect(t.at.input).toEqual([
       { type: 'keyDown', keyCode: 'Escape' },
       { type: 'keyUp', keyCode: 'Escape' },
@@ -1026,8 +1046,9 @@ describe('acting through the gate (S18 M2c)', () => {
   const deepRows: [string, string, { hit?: unknown; closed?: boolean; unavailable?: boolean }, string][] = [
     ['click', 'a frame in a closed shadow root under the point', { hit: { ok: false, why: 'covered', cover: { role: 'frame', name: 'Inner ad' } } }, 'Something is covering that element: frame “Inner ad”. Deal with it first, or call snapshot again.'],
     ['click', 'a file input in a closed shadow root under the point', { hit: { ok: false, why: 'file' } }, 'That opens a file picker: agents never choose files. Ask the user to.'],
-    ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
-    ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
+    ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
+    ['click', 'a closed shadow root in the element (#112)', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
+    ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
   ];
   it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
@@ -1051,7 +1072,7 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting({ twist: { there: true } });
     expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
     expect((t.at.input as { type: string; x: number }[]).map((e) => `${e.type} ${e.x}`)).toEqual(['mouseMove 10', 'mouseMove 13', 'mouseMove 10', 'mouseDown 10', 'mouseUp 10']);
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'hit', 'hit']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'hit', 'hit', 'describe']);
     // Not seen off the point (a page swallowing moves there): no press.
     const u = await acting({ twist: { there: true, noMoveOff: true } });
     expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
@@ -1192,6 +1213,50 @@ describe('acting through the gate (S18 M2c)', () => {
     }
   });
 
+  // ---------- #112 review 1 ----------
+
+  it('the page changes the form while the card is up (fields added, another address): nothing goes after Allow', async () => {
+    const f = (label: string, autocomplete = '') => ({ ...field({ type: 'text', label, autocomplete }), text: true });
+    const checkout: El = { role: 'button', name: 'Place order', risk: { tag: 'button', type: 'submit', submits: true, form: { method: 'post', search: false, action: '/order', url: 'https://news.test/order', fields: [f('Shipping')] } } };
+    ELEMENTS.push(checkout);
+    try {
+      const t = await acting({
+        act: { siteAllowed: () => true },
+        onCard: () => void (checkout.risk = { ...checkout.risk, form: { method: 'post', search: false, action: '/pay', url: 'https://news.test/pay', fields: [f('Shipping'), f('Card', 'cc-number')] } }),
+      });
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: `e${ELEMENTS.length}` })).refused).toBe('The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.');
+      expect(t.at.input.filter((e) => (e as { type: string }).type === 'mouseDown')).toEqual([]);
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('type with submit: the card shows the text, and a late Allow is for that text only', async () => {
+    const t = await acting({ answer: 'deny', act: { siteAllowed: () => true } });
+    await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'hello there', submit: true });
+    await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'something else', submit: true });
+    const steps = t.cards.filter((c) => c.kind === 'step');
+    expect(steps.map((c) => c.step?.typed)).toEqual(['hello there', 'something else']);
+    expect(steps[0]!.subject).not.toBe(steps[1]!.subject);
+  });
+
+  it('hover goes with the form guard too: a form its page sends on the pointer is stopped', async () => {
+    const t = await acting({ deep: { posts: true } });
+    expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.');
+    expect(t.at.debugging).toContain('Fetch.enable');
+  });
+
+  it('navigate to an address that signs out or deletes: the step card first; Don’t goes nowhere', async () => {
+    const t = await acting({ answer: 'deny', act: { siteAllowed: () => true } });
+    expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/account/logout' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
+    expect(t.at.loads).toEqual([]);
+    expect(t.cards.map((c) => [c.kind, c.description, c.step?.why])).toEqual([['step', 'go to news.test/account/logout', 'sign-out']]);
+    // An address with no such word goes without one.
+    const u = await acting({ act: { siteAllowed: () => true } });
+    await u.call('navigate', { tab_id: u.tab, url: 'https://news.test/checkout' });
+    expect(u.cards).toEqual([]);
+  });
+
   // ---------- Review 1 of #110 ----------
 
   it('Stop during an action: nothing more goes in (the text, the Enter), though the action had started', async () => {
@@ -1278,7 +1343,7 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(u.at.active).toBe(1);
   });
 
-  it('navigate and back: its own tabs, http and https, never a site kept private; no site card', async () => {
+  it('navigate and back: its own tabs, http and https, never a site kept private; the site card once, as any action', async () => {
     const t = await acting();
     expect(refusal(await t.call('back', { tab_id: t.tab })).refused).toBe('That tab has nowhere to go back to.');
     expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'javascript:alert(1)' })).refused).toBe('navigate takes an http or https address of at most 2048 characters.');
@@ -1287,7 +1352,8 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(went.data).toMatchObject({ done: 'Went to news.test/returns', navigated: true });
     expect(t.at.loads).toEqual(['https://news.test/returns?token=1']);
     expect(result(await t.call('back', { tab_id: t.tab })).data).toMatchObject({ done: 'Went back', navigated: true });
-    expect(t.cards).toEqual([]);
+    // The site card, once for the site (#112: navigate goes through it as other actions do).
+    expect(t.cards.map((c) => [c.kind, c.subject, c.description])).toEqual([['site', 'news.test', 'go to news.test/returns']]);
     expect(t.doings).toEqual([{ tool: 'navigate', to: 'news.test/returns' }, null, { tool: 'back' }, null]);
   });
 });

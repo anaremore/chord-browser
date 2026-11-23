@@ -300,7 +300,7 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
 
     // A text box whose closed root sends the focus to a password field: nothing typed.
     const notes = await mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Notes box"'), text: 'typed-into-a-closed-password' });
-    expect.soft(notes.text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.');
+    expect.soft(notes.text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.');
     expect.soft(await inPage('window.__secret.value')).toBe('');
 
     // A key whose own capture listener (put first) sends it to a password field, unseen after: nothing goes in.
@@ -327,7 +327,9 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
         .toMatch(what);
       heldSoFar.length = 0;
     };
-    for (const button of ['Closed upload', 'Late upload', 'Late closed upload', 'Frame upload']) {
+    // A click inside a closed root isn't made at all (#112: what it is can't be classified there).
+    expect.soft((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Closed upload"') })).text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.');
+    for (const button of ['Late upload', 'Late closed upload', 'Frame upload']) {
       const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${button}"`) });
       expect.soft(clicked.isError, button).toBe(false);
       heldSoFar.push(...clicked.held);
@@ -337,7 +339,7 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     heldSoFar.push(...framePicker.held);
     await heardOf(/showOpenFilePicker/);
 
-    // A button in a closed root, clicked twice at one point: both clicks go in (the second's pointer moved off and back).
+    // A button in a shadow root, clicked twice at one point: both clicks go in (the second's pointer moved off and back).
     for (let i = 0; i < 2; i++) expect.soft(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') })).text)).toMatchObject({ data: { done: 'Clicked “Step up”' } });
     expect.soft(await inPage('document.getElementById("log").textContent')).toContain('stepped 2');
 
@@ -471,6 +473,15 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
     outline = await snap();
     expect((await withStep(mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Email"'), key: 'Enter' }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
     expect((await withStep(mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Email"'), text: 'me@example.com', submit: true }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
+    expect(reached).toEqual(['POST /order']);
+    // #112 review 1: what the button really does, not what it looks like.
+    outline = await snap();
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Look"') }), /^Delete this on /, 'Don’t')).text).toBe(STEP_NO);
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Save"') }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
+    const draft = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Save draft"') });
+    await expect(stepCardOf(popover, /^Place the order on /)).toContainText('It reads “Pay $500”.', { timeout: 15_000 });
+    expect((await withStep(draft, /^Place the order on /, 'Don’t')).text).toBe(STEP_NO);
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Jetzt kaufen"') }), /^Place the order on /, 'Don’t')).text).toBe(STEP_NO);
     expect(reached).toEqual(['POST /order']);
 
     // A search: reading, no card; it goes.
@@ -963,7 +974,7 @@ test.beforeAll(async () => {
       // A button whose closed root holds the file input it clicks (the preload's listener sees only the button).
       'const cupRoot = cup.attachShadow({ mode: "closed" }); cupRoot.innerHTML = "<span>Closed upload</span><input type=file style=\\"display:none\\">";' +
       'cup.addEventListener("click", () => cupRoot.querySelector("input").click());' +
-      'const stepRoot = step.attachShadow({ mode: "closed" }); stepRoot.innerHTML = "<style>:host{display:inline-block;width:160px;height:40px}</style><span style=\\"display:block;width:100%;height:100%\\">+</span>";' +
+      'const stepRoot = step.attachShadow({ mode: "open" }); stepRoot.innerHTML = "<style>:host{display:inline-block;width:160px;height:40px}</style><span style=\\"display:block;width:100%;height:100%\\">+</span>";' +
       'step.addEventListener("click", () => { step.dataset.n = Number(step.dataset.n || 0) + 1; log.textContent = "stepped " + step.dataset.n; });' +
       // And the file input its button clicks, its click kept from anything after.
       'addEventListener("click", (e) => { if (e.target.id === "up3") e.stopImmediatePropagation(); }, true);' +
@@ -986,6 +997,12 @@ test.beforeAll(async () => {
       // A one-field form that POSTs (Enter in it submits), and a search (Enter in it is reading).
       '<form method=post action=/newsletter><label>Email <input name=email></label></form>' +
       '<form method=get action=/search role=search><label>Search shop <input type=search name=q></label></form>' +
+      // #112 review 1: a search form's button that posts somewhere else (formaction, formmethod); a button of no known
+      // type (a submit); an aria-label over other words; a label in German.
+      '<form method=get action=/search role=search><label>Find <input type=search name=q2></label><button formaction=/account/delete formmethod=post>Look</button></form>' +
+      '<form method=post action=/notes-bogus><label>Title <input name=t></label><button type=bogus>Save</button></form>' +
+      '<button aria-label="Save draft" onclick="0">Pay $500</button>' +
+      '<button onclick="0">Jetzt kaufen</button>' +
       '</main>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +

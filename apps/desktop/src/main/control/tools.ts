@@ -6,8 +6,9 @@
  * The refusals are one sentence each, as the assistant has always said them.
  */
 import { pickersUnsecured } from '../agents/pickers';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
+  addressWhy,
   classifyStep,
   stepFields,
   type RiskAction,
@@ -439,6 +440,44 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (!back) return refuse(ACT_REFUSALS.noBack);
       if (!/^https?:\/\//i.test(back.url) || isNeverReadable(back.url, scope.neverSites())) return refuse(NEVER);
     }
+    const goingTo = tool === 'navigate' ? target : (back?.url ?? '');
+    // The site it goes to asks first, as any action on a site does (Neon's review of #112): the site card, once.
+    const goingSite = host.siteOf(goingTo);
+    if (!goingSite) return refuse(ACT_REFUSALS.noSite);
+    const remembered = scope.agent.granted('site', goingSite);
+    if (remembered === 'deny') return refuse(ACT_REFUSALS.siteDenied(goingSite));
+    if (!remembered && !host.siteAllowed(goingSite)) {
+      const answer = await scope.agent.ask({ kind: 'site', tool, description: `go to ${barAddress(goingTo)}`, target: [page.url()], tab: node.id, subject: goingSite }, call.signal, scope.cardWaitMs);
+      if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+      if (answer === 'deny') return refuse(ACT_REFUSALS.siteDenied(goingSite));
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+      scope.agent.keep('site', goingSite, answer);
+      if (answer === 'always') host.keepSite(goingSite);
+    }
+    // An address that deletes or signs out (core's addressWhy, as a link's): the step card first (#112 review 1).
+    const goingWhy = addressWhy(goingTo);
+    if (goingWhy) {
+      const answer = await scope.agent.ask(
+        {
+          kind: 'step',
+          tool,
+          description: `go to ${barAddress(goingTo)}`,
+          target: [page.url()],
+          tab: node.id,
+          subject: `${node.id}|${page.id}|${tool}|${goingTo}`,
+          step: { why: goingWhy, site: goingSite, fields: [], more: 0 },
+        },
+        call.signal,
+        scope.cardWaitMs,
+      );
+      if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+      if (answer === 'deny') return refuse(ACT_REFUSALS.stepDenied);
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+      // Back must still go to the entry the card named.
+      if (tool === 'back' && page.backEntry()?.url !== goingTo) return refuse(ELEMENT_REFUSALS.stale);
+    }
     const before = page.id;
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
@@ -533,11 +572,16 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   // The step (S18 M2d): what it is, from the page as it is now (core's classifyStep), never from the agent's words. A
   // risky one asks every time (the step card); an `act` one goes, with any form it would send stopped (guardSubmits),
   // and a step that tried to send one asks from then on. No description from the page: as a form's submit.
-  const stepKey = `${node.id}|${page.id}|${String(args['ref'])}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}`;
+  // A late Allow is for this very step: its tab, page, ref, action, and for type what it types (#112 review 1).
+  const typed = tool === 'type' && typeof text === 'string' ? createHash('sha256').update(`${args['replace'] !== false}|${text}`).digest('hex').slice(0, 16) : '';
   // A step that tried to send, by the element as the page names it (a new snapshot gives it a new ref).
   const sendKey = `${node.id}|${page.id}|${element.role}|${element.name}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}`;
   const sending = (scope.memory.sending ??= new Set());
   const step: RiskClass = sending.has(sendKey) ? { class: 'risky', why: 'submit' } : stepOf(tool, args, element);
+  // And what the card showed (Neon's review of #112): why it asks, and the element's shape (its link, its form's
+  // address, method and fields). Any of it changed, it's another step: a late Allow never covers it.
+  const shown = createHash('sha256').update(`${step.class === 'risky' ? step.why : 'act'}|${stepShape(element)}`).digest('hex').slice(0, 16);
+  const stepKey = `${node.id}|${page.id}|${String(args['ref'])}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}|${typed}|${shown}`;
   if (step.class === 'risky') {
     const { fields, more } = stepFields(element.risk?.form?.fields.map((f) => f.label) ?? []);
     const answer = await scope.agent.ask(
@@ -548,7 +592,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         target: [page.url()],
         tab: node.id,
         subject: stepKey,
-        step: { why: step.why, site, fields, more },
+        step: { why: step.why, site, fields, more, ...(element.risk?.text ? { shows: element.risk.text } : {}), ...(tool === 'type' && typeof text === 'string' ? { typed: text } : {}) },
         // Show me: the element outlined in its page, the card still up (the service shows the tab in the window).
         show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
       },
@@ -564,7 +608,29 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (after) return refuse(after);
     if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
+    // What the card showed is what goes (#112 review 1): described again, the same step, the same name, the same form
+    // (where it goes, how, and its fields). A page that changed any of it while the card was up gets nothing.
+    const now = await page.act(owner, lookup.token, lookup.key, { op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
+    if (!now.ok) return refuse(actRefusal(now));
+    if (now.field && sensitiveField(now.field)) return refuse(ACT_REFUSALS.sensitive);
+    const stepNow = stepOf(tool, args, now);
+    if (now.name !== element.name || stepNow.class !== 'risky' || stepNow.why !== step.why || stepShape(now) !== stepShape(element)) return refuse(ACT_REFUSALS.stepChanged);
   }
+
+  /**
+   * The step as it is right before its input (Neon's review of #112): after the pointer moved (a page's mouseenter can
+   * change a link, a form's address or its fields) and after any card. Not the step that was checked (named the same,
+   * shaped the same, no riskier, and for a risky one the same why): nothing goes in.
+   */
+  const sameStep = async (): Promise<string | null> => {
+    const now = await page.act(owner, lookup.token, lookup.key, { op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
+    if (!now.ok) return actRefusal(now);
+    if (now.field && sensitiveField(now.field)) return ACT_REFUSALS.sensitive;
+    if (now.name !== element.name || stepShape(now) !== stepShape(element)) return ACT_REFUSALS.stepChanged;
+    const again = stepOf(tool, args, now);
+    if (step.class === 'act' ? again.class !== 'act' : again.class !== 'risky' || again.why !== step.why) return ACT_REFUSALS.stepChanged;
+    return null;
+  };
 
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
@@ -680,14 +746,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // The field as it is now, after any card's wait: never one the page made a password, code or card field.
       if (pointed.field && sensitiveField(pointed.field)) return void (refused = ACT_REFUSALS.sensitive);
       if ((refused = halt())) return;
-      if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
-      // From here input goes in: the debugger's checks (deep.ts), and for a step that isn't risky, any form it would
-      // send stopped before it leaves.
+      // From here input goes in: the debugger's checks (deep.ts), and the form guard: for an `act` step, any form sent
+      // is stopped before it leaves; for an allowed risky one, only the form the card showed goes (or, with none shown,
+      // one to the page's own origin: a Delete button posting its own hidden form), anything else stopped (#112).
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      if (step.class === 'act' && !(await deep.guardSubmits())) return void (refused = ACT_REFUSALS.noCheck);
+      const allowed = step.class === 'act' ? null : (element.risk?.form?.url ?? { origin: originOf(page.url()) });
+      if (!(await deep.guardSubmits(allowed))) return void (refused = ACT_REFUSALS.noCheck);
       if ((refused = halt())) return;
+      if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
       if (tool === 'select_option') {
+        if ((refused = await sameStep())) return;
         // By the page's whole label, as describe matched it (the card showed it clipped).
         const chosen = await page.act(owner, lookup.token, lookup.key, { op: 'choose', option: asked });
         if (!chosen.ok) refused = actRefusal(chosen);
@@ -696,6 +765,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (tool === 'press_key') {
         const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
         if (!focused.ok) return void (refused = actRefusal(focused));
+        if ((refused = await sameStep())) return;
         return void (await guarded('keyup', pressKey(key as PressKey), !typesInto(key as PressKey)));
       }
       // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
@@ -717,10 +787,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (!hit.ok) return void (refused = actRefusal(hit));
       const under = await deep.hit(pointed.x + (hit.scrollX ?? 0), pointed.y + (hit.scrollY ?? 0));
       if (!under.ok) return void (refused = deepRefusal(under));
-      if (tool === 'type') {
-        const open = await deep.open();
-        if (!open.ok) return void (refused = deepRefusal(open));
-      }
+      // Nothing in it hidden in a closed shadow root (the hit test can't see past one to say what's clicked: #112).
+      const open = await deep.open();
+      if (!open.ok) return void (refused = deepRefusal(open));
+      if ((refused = await sameStep())) return;
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
       page.press(pointed.x, pointed.y);
@@ -772,6 +842,9 @@ function stepOf(tool: ActTool, args: Record<string, unknown>, element: Extract<A
     ? {
         method: risk.form.method,
         search: risk.form.search,
+        searchFields: risk.form.searchFields,
+        hidden: risk.form.hidden,
+        overflow: risk.form.overflow,
         textFields: fields.filter((f) => f.text).length,
         otherFields: fields.filter((f) => !f.text).length,
         payment: kinds.includes('payment'),
@@ -780,7 +853,24 @@ function stepOf(tool: ActTool, args: Record<string, unknown>, element: Extract<A
         action: risk.form.action,
       }
     : null;
-  return classifyStep(action, { tag: risk.tag, role: element.role, type: risk.type, name: element.name, href: risk.href, editable: element.editable === true, multiline: risk.multiline, submits: risk.submits, form });
+  return classifyStep(action, { tag: risk.tag, role: element.role, type: risk.type, name: element.name, ...(risk.text ? { text: risk.text } : {}), href: risk.href, ...(risk.hrefUnknown ? { hrefUnknown: true } : {}), editable: element.editable === true, multiline: risk.multiline, submits: risk.submits, form });
+}
+
+/** What a step card showed of a form, to check it's still so after the answer: where it goes, how, its fields. */
+function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
+  const risk = element.risk;
+  if (!risk) return '';
+  const form = risk.form;
+  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.text, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
+}
+
+/** An address's origin, or empty. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
 }
 
 const emptyRisk: RiskElement = { tag: '', role: '', type: '', name: '', href: '', editable: false, multiline: false, submits: false, form: null };

@@ -31,6 +31,8 @@ export interface StepQuestion {
   fields: string[];
   more: number;
   danger: boolean;
+  shows?: string;
+  typed?: string;
   /** Show me: the tab shown in that window, the element outlined; the card stays. */
   show(windowId: WindowId): void;
 }
@@ -48,6 +50,9 @@ interface Waiting {
   answer(answer: 'deny' | 'once' | 'always', windowId: WindowId | null): void;
   show?(windowId: WindowId): void;
 }
+
+/** Cut to `max` characters, with an ellipsis. */
+const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 export class SiteCards {
   private readonly waiting = new Map<string, Waiting>();
@@ -95,6 +100,8 @@ export class SiteCards {
           fields: question.fields.map((f) => plain(f).slice(0, 60)).slice(0, 6),
           more: Math.max(0, Math.floor(question.more)),
           danger: question.danger,
+          ...(question.shows ? { shows: plain(question.shows).slice(0, 60) } : {}),
+          ...(question.typed !== undefined ? { typed: cut(plain(question.typed), 120) } : {}),
         },
         windowId: this.deps.lastWindow(),
         answer: (answer) => {

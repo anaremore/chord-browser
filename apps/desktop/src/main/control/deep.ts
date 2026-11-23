@@ -50,7 +50,7 @@ export interface DeepSession {
    * own `form.submit()`, `requestSubmit` on a key) is stopped before it leaves (S18 M2d): an action classed `act` never
    * sends a form. Its page's requests otherwise (a fetch, a beacon) go on as they were.
    */
-  guardSubmits(): Promise<boolean>;
+  guardSubmits(allowed?: string | { origin: string } | null): Promise<boolean>;
   /** A form was stopped (guardSubmits). */
   submitsBlocked(): boolean;
   /** Lets go of the debugger (detached if the session attached it). */
@@ -89,6 +89,8 @@ const CHECK_FN = String.raw`function (owner, token, key) {
     if (n.nodeType === 1 && FRAMES.has(n.localName)) return { ok: false, why: 'covered', cover: coverOf(n) };
     if (n.nodeType === 1 && opensFiles(n)) return { ok: false, why: 'file' };
     if (n === el) { ours = true; break; }
+    // Inside a closed shadow root (Neon's review of #112): what it is can't be classified there, so it isn't clicked.
+    if (n.parentNode && n.parentNode.nodeType === 11 && n.parentNode.mode === 'closed') return { ok: false, why: 'closed' };
   }
   if (!ours) return { ok: false, why: 'covered', cover: coverOf(hit.nodeType === 1 ? hit : up(hit)) };
   for (let n = el; n; n = up(n)) if (n.nodeType === 1 && n.localName === 'label' && opensFiles(n)) return { ok: false, why: 'file' };
@@ -122,13 +124,31 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     const contexts: { id: number; frameId?: string; type?: string }[] = [];
     let fetching = false;
     let blocked = false;
+    /** What a risky step's Allow lets through (once): the form the card showed, or a post to the page's own origin. */
+    let allowed: string | { origin: string } | null = null;
+    const sameForm = (url: string) => {
+      if (!allowed) return false;
+      try {
+        const u = new URL(url);
+        if (typeof allowed === 'string') {
+          const a = new URL(allowed);
+          return u.origin === a.origin && u.pathname === a.pathname && u.search === a.search;
+        }
+        return u.origin === allowed.origin;
+      } catch {
+        return false;
+      }
+    };
     const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
       if (sessionId) return;
       if (method === 'Fetch.requestPaused') {
-        const paused = params as { requestId?: string; request?: { method?: string } };
+        const paused = params as { requestId?: string; request?: { method?: string; url?: string } };
         if (!paused.requestId) return;
         const how = String(paused.request?.method ?? 'GET').toUpperCase();
-        if (how === 'GET' || how === 'HEAD') void debug.sendCommand('Fetch.continueRequest', { requestId: paused.requestId }).catch(() => undefined);
+        const letThrough = how === 'GET' || how === 'HEAD' || sameForm(String(paused.request?.url ?? ''));
+        // A risky step's one form goes once: a second post meanwhile is stopped like any other.
+        if (how !== 'GET' && how !== 'HEAD' && letThrough) allowed = null;
+        if (letThrough) void debug.sendCommand('Fetch.continueRequest', { requestId: paused.requestId }).catch(() => undefined);
         else {
           blocked = true;
           // Answered with nothing (a 204): the form goes nowhere and the page stays as it was (a failed request would
@@ -252,7 +272,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },
         held: () => !pickersLost(contents),
-        guardSubmits: async () => {
+        guardSubmits: async (letThrough) => {
+          allowed = letThrough ?? null;
           if (fetching) return true;
           fetching = Boolean(await send('Fetch.enable', { patterns: [{ resourceType: 'Document', requestStage: 'Request' }] }));
           return fetching;

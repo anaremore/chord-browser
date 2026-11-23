@@ -71,4 +71,12 @@ describe('The site card', () => {
     expect(await asked).toBe('once');
     expect(t.cards.cardFor('w1')).toBeNull();
   });
+
+  it('a step card shows what the element shows and what it types, cut', () => {
+    const t = setup();
+    void t.cards.askStep({ name: 'Codex', title: 'Send this on shop.test?', action: 'click “Save draft”', fields: [], more: 0, danger: false, shows: 'Pay $500', typed: 'x'.repeat(200), show: () => undefined }, new AbortController().signal);
+    const card = t.cards.cardFor('w1') as { shows?: string; typed?: string };
+    expect(card.shows).toBe('Pay $500');
+    expect(card.typed).toHaveLength(120);
+  });
 });

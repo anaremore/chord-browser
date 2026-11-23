@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { classifyStep, riskWordsWhy, stepDanger, stepFields, stepTitle, type RiskAction, type RiskElement, type RiskForm } from '../src/control-risk';
+import { addressWhy, classifyStep, riskWordsWhy, stepDanger, stepFields, stepTitle, type RiskAction, type RiskElement, type RiskForm } from '../src/control-risk';
 
-const form = (f: Partial<RiskForm> = {}): RiskForm => ({ method: 'post', search: false, textFields: 2, otherFields: 1, payment: false, password: false, labels: [], action: '', ...f });
+const form = (f: Partial<RiskForm> = {}): RiskForm => ({ method: 'post', search: false, searchFields: 0, hidden: 0, overflow: false, textFields: 2, otherFields: 1, payment: false, password: false, labels: [], action: '', ...f });
 const el = (e: Partial<RiskElement> = {}): RiskElement => ({ tag: 'button', role: 'button', type: 'button', name: '', href: '', editable: false, multiline: false, submits: false, form: null, ...e });
 const link = (name: string, href = 'shop example items 7') => el({ tag: 'a', role: 'link', type: '', name, href });
 const submitIn = (f: RiskForm, name = 'Continue') => el({ type: 'submit', name, submits: true, form: f });
@@ -29,7 +29,14 @@ const rows: [string, RiskAction, RiskElement, string][] = [
   ['a form’s submit named Delete my account', click, submitIn(form(), 'Delete my account'), 'risky delete'],
   ['a form posting to a delete address', click, submitIn(form({ action: 'account delete' })), 'risky delete'],
   ['a search form (GET, role=search)', click, submitIn(form({ method: 'get', search: true, textFields: 1, otherFields: 2 }), 'Search'), 'act'],
-  ['a search form (GET, one text field)', click, submitIn(form({ method: 'get', textFields: 1, otherFields: 0 }), 'Go'), 'act'],
+  ['a search form (GET, one visible search field and nothing else)', click, submitIn(form({ method: 'get', searchFields: 1, textFields: 1, otherFields: 0 }), 'Go'), 'act'],
+  // #112 review 1: the search downgrade, narrowed.
+  ['a GET form with one text field that isn’t a search field', click, submitIn(form({ method: 'get', textFields: 1, otherFields: 0 }), 'Go'), 'risky submit'],
+  ['a one-search-field GET form with a hidden field', click, submitIn(form({ method: 'get', searchFields: 1, textFields: 1, otherFields: 0, hidden: 1 }), 'Go'), 'risky submit'],
+  ['a role=search form described only in part (past the cap)', click, submitIn(form({ method: 'get', search: true, overflow: true }), 'Search'), 'risky submit'],
+  ['a link whose address can’t be read', click, { ...link('Next'), hrefUnknown: true }, 'risky confirm'],
+  ['Enter on a box in a form (implicit submission)', { tool: 'press_key', key: 'Enter' }, el({ tag: 'input', role: 'checkbox', type: 'checkbox', form: form() }), 'risky submit'],
+  ['a name with a zero-width space (P\u200Bay)', click, el({ name: 'P\u200Bay now' }), 'risky pay'],
   ['a one-field form that POSTs (a newsletter)', click, submitIn(form({ textFields: 1, otherFields: 0 }), 'Go'), 'risky submit'],
   ['a search form with a password field', click, submitIn(form({ method: 'get', search: true, password: true }), 'Search'), 'risky sign-in'],
   ['a form with a payment field', click, submitIn(form({ payment: true })), 'risky pay'],
@@ -47,7 +54,7 @@ const rows: [string, RiskAction, RiskElement, string][] = [
   // Keys.
   ['Enter in a form’s text field', { tool: 'press_key', key: 'Enter' }, field(form()), 'risky submit'],
   ['Enter in a single-field form that POSTs', { tool: 'press_key', key: 'Enter' }, field(form({ textFields: 1, otherFields: 0 })), 'risky submit'],
-  ['Enter in a single-field GET form (a search)', { tool: 'press_key', key: 'Enter' }, field(form({ method: 'get', textFields: 1, otherFields: 0 })), 'act'],
+  ['Enter in a single-search-field GET form', { tool: 'press_key', key: 'Enter' }, field(form({ method: 'get', searchFields: 1, textFields: 1, otherFields: 0 })), 'act'],
   ['Enter in a text area', { tool: 'press_key', key: 'Enter' }, field(form(), true), 'risky send'],
   ['Enter in a text field in no form', { tool: 'press_key', key: 'Enter' }, field(null), 'risky send'],
   ['Enter on a button named Delete', { tool: 'press_key', key: 'Enter' }, el({ name: 'Delete' }), 'risky delete'],
@@ -62,6 +69,23 @@ const rows: [string, RiskAction, RiskElement, string][] = [
   ['words inside other words (Repayment, Postcode, Booklet)', click, el({ name: 'Repayment Postcode Booklet' }), 'act'],
   ['a name in capitals', click, el({ name: 'PLACE ORDER' }), 'risky pay'],
   ['camelCase in a name', click, el({ name: 'deleteItem' }), 'risky delete'],
+  // #112 review 1: more words, other languages, and what it shows as well as its name.
+  ['a button named Confirm', click, el({ name: 'Confirm' }), 'risky confirm'],
+  ['a button named Continue, in no form', click, el({ name: 'Continue' }), 'risky confirm'],
+  ['a button named Transfer funds', click, el({ name: 'Transfer funds' }), 'risky pay'],
+  ['a button named Archive', click, el({ name: 'Archive' }), 'risky delete'],
+  ['German: Jetzt kaufen', click, el({ name: 'Jetzt kaufen' }), 'risky pay'],
+  ['German: Konto löschen', click, el({ name: 'Konto löschen' }), 'risky delete'],
+  ['French: Passer la commande', click, el({ name: 'Passer la commande' }), 'risky pay'],
+  ['French: Se déconnecter', click, link('Se déconnecter'), 'risky sign-out'],
+  ['Spanish: Eliminar cuenta', click, el({ name: 'Eliminar cuenta' }), 'risky delete'],
+  ['Portuguese: Finalizar compra', click, el({ name: 'Finalizar compra' }), 'risky pay'],
+  ['Italian: Invia messaggio', click, el({ name: 'Invia messaggio' }), 'risky send'],
+  ['Japanese: 購入する (within the text)', click, el({ name: '今すぐ購入する' }), 'risky pay'],
+  ['Japanese: ログアウト', click, link('ログアウト'), 'risky sign-out'],
+  ['an aria-label that says Save draft on a button that reads Pay $500', click, el({ name: 'Save draft', text: 'Pay $500' }), 'risky pay'],
+  ['a form’s submit whose visible text names the costlier why', click, { ...submitIn(form(), 'Save'), text: 'Delete everything' }, 'risky delete'],
+  ['Don’t save is not a donation', click, el({ name: 'Don’t save' }), 'act'],
 ];
 
 describe('classifyStep: the plan’s table', () => {
@@ -88,4 +112,17 @@ describe('the step card’s words', () => {
     expect(riskWordsWhy('Pay and delete')).toBe('pay');
     expect(riskWordsWhy('Send or sign out')).toBe('sign-out');
   });
+});
+
+describe('addressWhy: an address an agent goes to (navigate, back)', () => {
+  it.each([
+    ['https://shop.test/account/logout', 'sign-out'],
+    ['https://shop.test/items/7/delete', 'delete'],
+    ['https://shop.test/x?action=delete', 'delete'],
+    ['https://shop.test/checkout', null],
+    ['https://shop.test/post/12', null],
+    ['not an address', null],
+    [`https://shop.test/${'x'.repeat(2100)}`, 'confirm'],
+    ['https://shop.test/%E0%A4%A', 'confirm'],
+  ] as const)('%s', (url, why) => expect(addressWhy(url)).toBe(why));
 });

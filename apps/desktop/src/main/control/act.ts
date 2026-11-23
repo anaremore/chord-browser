@@ -52,9 +52,18 @@ export interface ActRisk {
   tag: string;
   type: string;
   href: string;
+  /** What it shows, when that isn't its name (an aria-label over other words): both count, and the card shows both. */
+  text: string;
   multiline: boolean;
   submits: boolean;
-  form: { method: string; search: boolean; action: string; fields: ActFormField[] } | null;
+  /** A link (or one it's inside) whose address couldn't be read: asks, as unknown. */
+  hrefUnknown: boolean;
+  /**
+   * Its form as it would be sent: the submitter's own `formaction` and `formmethod` first; `url`, the whole address;
+   * `search`, inside (or itself) `role=search`; its visible search fields and its hidden ones counted; `overflow`, more
+   * fields than are listed (or an address that can't be read).
+   */
+  form: { method: string; search: boolean; searchFields: number; hidden: number; overflow: boolean; action: string; url: string; fields: ActFormField[] } | null;
 }
 
 export type ActAnswer =
@@ -107,34 +116,72 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // (each described as the snapshot describes a field: never a value). Only the page's structure: its words for a
   // button are the snapshot's name, already checked above.
   const riskOf = () => {
-    const tag = el.localName;
-    const type = tag === 'input' || tag === 'button' ? String(el.getAttribute('type') || (tag === 'button' ? 'submit' : 'text')).toLowerCase() : '';
-    const formOf = el.form !== undefined ? el.form : el.closest('form');
+    // What a click on it acts on (#112 review 1): a label's control (a label for a submit button submits), else a
+    // submit button or link it's inside (a span in a link goes where the link does), else itself.
+    const control = el.localName === 'label' && el.control ? el.control : null;
+    const inButton = !control && el.localName !== 'button' ? el.closest('button') : null;
+    const target = control || inButton || el;
+    const tag = target.localName;
+    // The type the browser goes by (a button's invalid or missing type is submit), not the attribute as written.
+    const type = tag === 'input' || tag === 'button' ? String(target.type || '').toLowerCase() : '';
+    const formOf = target.form !== undefined ? target.form : target.closest('form');
     // A submit button submits only in a form (a button outside one, the default type or not, is a page's own button).
     const submits = Boolean(formOf) && ((tag === 'button' && type === 'submit') || (tag === 'input' && (type === 'submit' || type === 'image')));
-    const addressOf = (url) => { try { const u = new URL(url, location.href); return clip(decodeURIComponent(u.pathname + ' ' + u.search), 300); } catch { return ''; } };
-    const href = tag === 'a' && el.hasAttribute('href') ? addressOf(el.getAttribute('href')) : '';
-    const multiline = tag === 'textarea' || (el.isContentEditable && tag !== 'input');
+    // An address's words; null when it can't be read (too long, not decodable): unknown, so it asks.
+    const addressOf = (url) => {
+      try {
+        const u = new URL(url, location.href);
+        if (u.href.length > 2048) return null;
+        return clip(decodeURIComponent(u.pathname + ' ' + u.search), 2048);
+      } catch {
+        return null;
+      }
+    };
+    // What it shows, when its name says otherwise (an aria-label over other words).
+    const shownText = clip(String(el.innerText || el.value || ''), NAME_MAX);
+    const text = shownText && shownText.toLowerCase() !== String(entry.name).toLowerCase() ? shownText : '';
+    // A link, or a link it's inside.
+    const link = el.closest('a[href]');
+    const linkWords = link ? addressOf(link.getAttribute('href')) : '';
+    const multiline = target.localName === 'textarea' || (el.isContentEditable && el.localName !== 'input');
     let form = null;
+    // A form's own properties, never what a field named action, method or elements puts in their place (clobbering).
+    const formGet = (f, prop) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f);
     if (formOf) {
-      const SKIPPED = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
+      const SKIPPED = new Set(['submit', 'button', 'reset', 'image', 'file']);
       const TEXTY = new Set(['text', 'email', 'search', 'url', 'tel', 'number', 'password', '']);
       const fields = [];
-      for (const f of formOf.elements) {
-        if (fields.length >= 50) break;
+      let hidden = 0, searchFields = 0, overflow = false;
+      for (const f of formGet(formOf, 'elements')) {
         if (!isField(f)) continue;
         const t = typeOf(f);
         if (SKIPPED.has(t)) continue;
-        fields.push({ ...fieldOf(f), text: f.localName === 'textarea' || (f.localName === 'input' && TEXTY.has(t)) });
+        // Hidden fields go with it unseen: counted (a one-field GET form with one is no search), never listed.
+        if (t === 'hidden') { hidden++; continue; }
+        if (fields.length >= 50) { overflow = true; break; }
+        const seen = visibleField(f, t);
+        if (seen && t === 'search') searchFields++;
+        fields.push({ ...fieldOf(f), text: seen && (f.localName === 'textarea' || (f.localName === 'input' && TEXTY.has(t))) });
       }
+      // As it would be sent: a submit button's own formaction and formmethod win over its form's (a GET to a delete
+      // address is no search).
+      const own = submits && target.hasAttribute('formaction') ? target.formAction : '';
+      const method = submits && target.hasAttribute('formmethod') && target.formMethod ? target.formMethod : formGet(formOf, 'method') || 'get';
+      const url = own || formGet(formOf, 'action') || location.href;
+      const action = addressOf(url);
       form = {
-        method: String(formOf.getAttribute('method') || 'get').toLowerCase(),
-        search: Boolean(formOf.closest('[role=search]') || formOf.querySelector('input[type=search]') || formOf.getAttribute('role') === 'search'),
-        action: addressOf(formOf.getAttribute('action') || location.href),
+        method: String(method).toLowerCase(),
+        search: Boolean(Element.prototype.closest.call(formOf, '[role=search]')),
+        searchFields,
+        hidden,
+        // A form described only in part, or whose address can't be read, is never a search.
+        overflow: overflow || action === null,
+        action: action || '',
+        url: clip(String(url), 2048),
         fields,
       };
     }
-    return { tag, type, href, multiline, submits, form };
+    return { tag: link && !control && !inButton ? 'a' : tag, type, href: linkWords || '', hrefUnknown: Boolean(link) && linkWords === null, text, multiline, submits, form };
   };
   if (args.op === 'describe') {
     if (args.option === undefined) return { ok: true, ...said, disabled, editable, select, risk: riskOf() };

@@ -45,7 +45,7 @@ export interface ControlCard {
   /** What an `always` covers, with the kind: the tool for a read, the site for an action. */
   subject: string;
   /** A risky step (S18 M2d): why it asks, and what goes with it (a form's fields, by label). */
-  step?: { why: RiskWhy; site: string; fields: string[]; more: number };
+  step?: { why: RiskWhy; site: string; fields: string[]; more: number; shows?: string; typed?: string };
   /** Show me (a step card): the element outlined in its page, the card still up. */
   show?: () => void;
 }
@@ -65,6 +65,12 @@ const grantKey = (card: { kind: ApprovalKind; subject: string }) => `${card.kind
  * every tab waiting on it has its bar say so.
  */
 const openKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }): string => (card.kind === 'site' ? `site:${card.subject}` : `${card.kind}:${card.subject}:${card.tab ?? ''}`);
+/**
+ * A risky step's card is never shared (Neon's review of #112): each call asks its own, so one Allow runs one action,
+ * however many calls ask for the same step at once. Its late answer is still kept by the step (openKey).
+ */
+let lastStepCard = 0;
+const cardKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }): string => (card.kind === 'step' ? `${openKey(card)}#${++lastStepCard}` : openKey(card));
 
 interface OpenCard {
   id: string;
@@ -222,7 +228,7 @@ export class ControlAgent {
       // A step's late Allow counts for 2 minutes, and only for that same step (its key names the tab, page, ref and action).
       if (Date.now() - late.at <= (card.kind === 'step' ? STEP_LATE_MS : CONTROL_WAIT_MS) && late.url === (card.target[0] ?? '')) return late.grant;
     }
-    const open = this.open.get(key) ?? this.openCard(card);
+    const open = (card.kind === 'step' ? undefined : this.open.get(key)) ?? this.openCard(card);
     // Another tab waiting on a card up already (a site card is the site's): its bar says it's waiting too.
     const tab = card.tab ?? NO_TAB;
     if (!open.tabs.has(tab)) {
@@ -252,7 +258,9 @@ export class ControlAgent {
   private openCard(card: Omit<ControlCard, 'id'>): OpenCard {
     const id = `c${++this.lastCard}`;
     const tab = card.tab ?? NO_TAB;
-    const key = openKey(card);
+    // Where it waits (a step's own), and what its late answer is kept by (the step).
+    const key = cardKey(card);
+    const lateKey = openKey(card);
     const cancel = new AbortController();
     this.step(tab, { t: 'ask', card: id });
     const open: OpenCard = { id, tabs: new Set([tab]), cancel, askers: 0, answer: Promise.resolve<Grant>('deny') };
@@ -266,7 +274,7 @@ export class ControlAgent {
         if (keep && !(card.kind === 'site' && keep !== 'deny')) this.grants.set(grantKey(card), keep);
         // Answered after everyone asking had gone (*waiting*): the retry gets it, rather than a second card.
         // A site's *Always* too: it isn't kept until its action runs (keep), so the retry carries it, and keeps it if it runs.
-        if (grant !== 'deny' && open.askers === 0) this.late.set(key, { at: Date.now(), url: card.target[0] ?? '', grant });
+        if (grant !== 'deny' && open.askers === 0) this.late.set(lateKey, { at: Date.now(), url: card.target[0] ?? '', grant });
         return grant;
       } catch {
         return 'deny';

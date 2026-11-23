@@ -176,6 +176,8 @@ export class AgentService {
                       fields: step.fields,
                       more: step.more,
                       danger: stepDanger(step.why),
+                      ...(step.shows ? { shows: step.shows } : {}),
+                      ...(step.typed !== undefined ? { typed: step.typed } : {}),
                       show: (windowId) => {
                         if (card.tab) this.deps.showTab?.(windowId, card.tab);
                         card.show?.();

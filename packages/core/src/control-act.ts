@@ -146,9 +146,10 @@ export const ACT_REFUSALS = {
   focusMoved: 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.',
   // The focus went where Chord can't see (into a frame) while text or a key went in: some of it may have gone there.
   focusLost: 'The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.',
-  closed: 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.',
+  closed: 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.',
   // S18 M2d: risky steps.
   stepDenied: 'The user said no to this step. Don’t try it another way; ask the user what to do.',
+  stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
   wouldSend: 'That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',

@@ -583,7 +583,20 @@ function AgentStepCardView({ card }: { card: AgentStepCard }) {
         title={card.title}
         note={
           <>
-            {card.name} is about to {card.action}.{goes && <br />}
+            {card.name} is about to {card.action}.
+            {card.shows && (
+              <>
+                <br />
+                It reads “{card.shows}”.
+              </>
+            )}
+            {card.typed !== undefined && (
+              <>
+                <br />
+                It types: “{card.typed}”
+              </>
+            )}
+            {goes && <br />}
             {goes}
           </>
         }
@@ -1272,7 +1285,8 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
     let current = true;
     const { width, height } = el.getBoundingClientRect();
     void api.popover.size(width, height).then(() => {
-      if (current) setAnnounced(`${card.name} wants to use Chord`);
+      // What the card asks, by its own title: a site card's and a step card's are their questions (#112).
+      if (current) setAnnounced(card.kind === 'step' ? card.title : card.kind === 'site' ? `Let ${card.name} click and type on ${card.site}?` : `${card.name} wants to use Chord`);
     });
     return () => {
       current = false;

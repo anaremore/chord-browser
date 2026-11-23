@@ -992,6 +992,10 @@ export interface AgentStepCard {
   /** What goes with it: up to 6 fields' labels, then how many more. */
   fields: string[];
   more: number;
+  /** What the element shows, when its name says otherwise (both are on the card). */
+  shows?: string;
+  /** What type will put in (and send), cut: the user is allowing that text. */
+  typed?: string;
   /** Allow in the danger color (paying, deleting). */
   danger: boolean;
 }
