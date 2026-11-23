@@ -845,6 +845,72 @@ test('between actions: what the tab sends asks (“Codex’s tab wants to send d
   }
 });
 
+test('Allow until done: no more cards for that site from this tab; a new site still asks; your taking the tab ends it; a new agent session asks again (the owner, 2026-11-23)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/live` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const host = new URL(site.origin).host;
+    const third = `localhost:${new URL(site.origin).port}`;
+    const ownSite = popover.getByRole('alertdialog', { name: new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`) });
+    const polls = () => reached.filter((r) => r === 'POST /poll').length;
+    // The poll's card: Allow until done.
+    await expect(ownSite).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await ownSite.getByRole('button', { name: 'Allow until done', exact: true }).click();
+    await expect(ownSite).toHaveCount(0);
+    // 3 s on: the polls go, and no card asks again.
+    const sent = polls();
+    await popover.waitForTimeout(3000);
+    expect(polls()).toBeGreaterThanOrEqual(sent + 2);
+    await expect(ownSite).toHaveCount(0);
+    // A new site still asks (in an action: the action's card), and Don't keeps it from there.
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const telling = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Tell a partner"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const other = popover.getByRole('alertdialog', { name: new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`) });
+    await expect(other).toBeVisible({ timeout: 15_000 });
+    await expect(other.getByRole('button', { name: 'Allow until done', exact: true })).toBeVisible();
+    await popover.waitForTimeout(600);
+    await other.getByRole('button', { name: 'Don’t', exact: true }).click();
+    await telling;
+    expect(reached).not.toContain('POST /partner');
+    // You take the tab (a key in it): Allow until done ends. Once you let the agent continue, the poll asks again.
+    await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Live/ }).click();
+    await pressReal(app, `${site.origin}/live`, 'Down');
+    await shell.getByRole('button', { name: 'Let Codex continue' }).click();
+    await expect(ownSite).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await ownSite.getByRole('button', { name: 'Don’t', exact: true }).click();
+    // A new agent session (the first one ends): its own tab's poll asks again.
+    mcp.child.stdin!.end();
+    await mcp.exited;
+    const again = relay(profile);
+    await again.request('initialize', CODEX);
+    const reopening = again.call('open_tab', { url: `${site.origin}/live` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await reopening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    await expect(ownSite).toBeVisible({ timeout: 15_000 });
+    again.child.stdin!.end();
+    await again.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('between actions, the noise: a poll that posts, a feed that only reads, an autosave (a report for the owner, 2026-11-23, not a budget)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1409,6 +1475,7 @@ test.beforeAll(async () => {
     // The noise between actions: a poll that posts every second, a live feed that only reads, and an autosave as you type.
     '/live':
       '<title>Live</title><main><label>Draft <input id=d oninput="clearTimeout(window.t); window.t = setTimeout(() => fetch(\'/autosave\', { method: \'POST\', body: this.value }), 500)"></label>' +
+      '<button onclick="fetch(location.origin.replace(\'127.0.0.1\', \'localhost\') + \'/partner\', { method: \'POST\', body: \'x\' }).catch(() => {})">Tell a partner</button>' +
       '<script>setInterval(() => fetch("/poll", { method: "POST", body: "x" }).catch(() => {}), 1000); setInterval(() => fetch("/updates").catch(() => {}), 1000);</script></main>',
     // Dialogs while an agent acts: held, answered as Cancel would be, the tab never frozen.
     '/dialogs':

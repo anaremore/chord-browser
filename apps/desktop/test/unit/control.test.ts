@@ -13,7 +13,7 @@ import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, type ControlBrowser } from '../../src/main/control/tools';
 import { focusToGiveBack } from '../../src/main/control/page';
-import { holdSends, sendHoldDeps, failHeld } from '../../src/main/control/sends';
+import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
 
@@ -1259,7 +1259,7 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(answered()).toBe(before);
     // One card for both (the same site), and a no fails them.
     const asked: string[][] = [];
-    sendHoldDeps(contents, { whose: () => 'agent', ask: async (sites) => (asked.push(sites), false), siteOf: (u) => new URL(u).host });
+    sendHoldDeps(contents, { whose: () => 'agent', ask: async (sites) => (asked.push(sites), 'deny' as const), siteOf: (u) => new URL(u).host });
     await new Promise((r) => setTimeout(r, 0));
     expect(asked).toEqual([['news.test']]);
     expect(answered()).toBe(before + 2);
@@ -1274,8 +1274,8 @@ describe('acting through the gate (S18 M2c)', () => {
     const contents = t.pages.get('n1')!.contents;
     let whose: 'agent' | 'user' = 'agent';
     const asked: string[][] = [];
-    let answer: (yes: boolean) => void = () => undefined;
-    sendHoldDeps(contents, { whose: () => whose, ask: (sites) => (asked.push(sites), new Promise<boolean>((done) => (answer = done))), siteOf: (u) => new URL(u).host });
+    let answer: (yes: SendAnswer) => void = () => undefined;
+    sendHoldDeps(contents, { whose: () => whose, ask: (sites) => (asked.push(sites), new Promise<SendAnswer>((done) => (answer = done))), siteOf: (u) => new URL(u).host });
     const paused = (id: string, url: string) => t.at.emitDebug!('Fetch.requestPaused', { requestId: id, request: { method: 'POST', url }, resourceType: 'XHR' });
     paused('a1', 'https://news.test/save');
     paused('a2', 'https://news.test/save');
@@ -1283,7 +1283,7 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(asked).toEqual([['news.test']]);
     const continued = () => t.at.debugging.filter((m) => m === 'Fetch.continueRequest').length;
     const before = continued();
-    answer(true);
+    answer('once');
     await new Promise((r) => setTimeout(r, 0));
     // The two for news.test went; tracker.test asks on its own card.
     expect(continued()).toBe(before + 2);
@@ -1295,6 +1295,48 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.debugging.filter((m) => m === 'Fetch.failRequest').length).toBe(failed + 1);
     paused('u1', 'https://news.test/mine');
     expect(continued()).toBe(before + 3);
+  });
+
+  it('Allow until done (the owner, 2026-11-23): no more cards for those sites from this tab; a new site, a delete address, your taking the tab, and the agent’s end each ask again', async () => {
+    const t = await acting();
+    const contents = t.pages.get('n1')!.contents;
+    let whose: 'agent' | 'user' = 'agent';
+    const asked: string[][] = [];
+    let next: SendAnswer = 'until';
+    sendHoldDeps(contents, { whose: () => whose, ask: async (sites) => (asked.push(sites), next), siteOf: (u) => new URL(u).host });
+    const continued = () => t.at.debugging.filter((m) => m === 'Fetch.continueRequest').length;
+    const paused = async (id: string, url: string, method = 'POST') => {
+      t.at.emitDebug!('Fetch.requestPaused', { requestId: id, request: { method, url }, resourceType: method === 'GET' ? 'Document' : 'XHR' });
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    await paused('p1', 'https://news.test/poll');
+    expect(asked).toEqual([['news.test']]);
+    const base = continued();
+    // The polls after it: no card, they go.
+    await paused('p2', 'https://news.test/poll');
+    await paused('p3', 'https://news.test/poll');
+    expect(asked.length).toBe(1);
+    expect(continued()).toBe(base + 2);
+    // A new site asks; a document to a delete address on that same site asks as its step.
+    next = 'deny';
+    await paused('n1', 'https://tracker.test/x');
+    await paused('d1', 'https://news.test/account/delete', 'GET');
+    expect(asked).toEqual([['news.test'], ['tracker.test'], ['news.test']]);
+    // Your taking the tab ends it: once the agent has it again, the site asks again.
+    whose = 'user';
+    failHeld(contents);
+    whose = 'agent';
+    await paused('p4', 'https://news.test/poll');
+    expect(asked.length).toBe(4);
+    // And the agent's end (its connection) ends it too.
+    next = 'until';
+    await paused('p5', 'https://news.test/poll');
+    await paused('p6', 'https://news.test/poll');
+    expect(asked.length).toBe(5);
+    endUntil(contents);
+    next = 'deny';
+    await paused('p7', 'https://news.test/poll');
+    expect(asked.length).toBe(6);
   });
 
   it('a 307 to another site after Allow is held again, for its own card; a document going to a delete address asks as that step (Neon’s review 2 of #112)', async () => {

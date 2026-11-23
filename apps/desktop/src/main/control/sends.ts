@@ -23,7 +23,10 @@
  *     (its page's site, its form's target site, its link's address), never everything.
  *   - **Between actions**, a card asks *Codex's tab wants to send data to its site* (`SendHoldDeps.ask`, the agent's
  *     own gate); what's sent to the same sites while it's up joins it, anything else waits for the next.
- *   Allow lets it go; Don't or no answer fails it, and the agent hears so with its next result.
+ *   Allow lets it go; Don't or no answer fails it, and the agent hears so with its next result. *Allow until done*
+ *   (the owner, 2026-11-23) lets go what this tab sends to those sites from then on too, without a card, until the
+ *   agent is done with it: its connection ends, it's stopped, the tab closes, or you take the tab over. Never
+ *   remembered past that; a new site still asks, and so does a step that deletes or signs out.
  * - **Yours**: while you have the tab (a key or click of yours paused the agent there), what it sends is yours and
  *   goes. Your taking it over, and Stop, fail what was held for the agent and take its card down (`failHeld`).
  *
@@ -51,12 +54,15 @@ const RESPONSES = ['Document', 'XHR', 'Fetch', 'Other'];
 const PATTERNS = [{ requestStage: 'Request' }, ...RESPONSES.map((resourceType) => ({ resourceType, requestStage: 'Response' }))];
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 
+/** A send card's answer: Don't (or none), Allow, or *Allow until done* (those sites, this tab, until the agent's done). */
+export type SendAnswer = 'deny' | 'once' | 'until';
+
 /** What a tab's hold needs from its agent's chord (agents/chords.ts), once its page is wired. */
 export interface SendHoldDeps {
   /** Whose the tab's sends are now: the agent's (held, asked), yours (they go), or no one's to ask (dropped). */
   whose(): 'agent' | 'user' | 'none';
-  /** Between actions: the card, *Codex's tab wants to send data to …* (or the step an address is: `why`); true for Allow. */
-  ask(sites: string[], why: RiskWhy | null, signal: AbortSignal): Promise<boolean>;
+  /** Between actions: the card, *Codex's tab wants to send data to …* (or the step an address is: `why`). */
+  ask(sites: string[], why: RiskWhy | null, signal: AbortSignal): Promise<SendAnswer>;
   /** A request's site, as the card names it. */
   siteOf(url: string): string;
 }
@@ -71,8 +77,8 @@ export interface SendWatch {
   nextHeld(): Promise<'held'>;
   /** Cancelled: you took the tab over, or Stop (failHeld). The action's card comes down. */
   readonly cancelled: AbortSignal;
-  /** Allow: what's held for these sites goes, and what's sent to them from now on in this action. */
-  allow(sites: ReadonlySet<string>): void;
+  /** Allow: what's held for these sites goes, and what's sent to them from now on in this action (`until`: and after it, until the agent's done). */
+  allow(sites: ReadonlySet<string>, until?: boolean): void;
   /** Don't: all of it dropped, and anything sent from now on in this action. */
   deny(): void;
   /** The action's over: anything still held is asked about as the tab's (the card between actions). */
@@ -104,6 +110,8 @@ interface Hold {
   idle: Paused[];
   /** The card up between actions: its sites, and what's held for them. */
   card: { sites: Set<string>; held: Paused[]; cancel: AbortController } | null;
+  /** *Allow until done*: sites this tab's sends go to without a card, until the agent's done with it (failHeld, endUntil). */
+  until: Set<string>;
   go(p: Paused): void;
   drop(p: Paused): void;
 }
@@ -144,6 +152,7 @@ export function holdSends(contents: WebContents): void {
     action: null,
     idle: [],
     card: null,
+    until: new Set(),
     go: (p) => answer('Fetch.continueRequest', { requestId: p.requestId }, p.sessionId),
     drop: (p) =>
       p.type === 'Document'
@@ -181,6 +190,8 @@ export function holdSends(contents: WebContents): void {
     if (REPORTS.has(type)) return hold.drop(p);
     const whose = hold.deps?.whose() ?? 'agent';
     if (whose === 'user') return hold.go(p);
+    // Allowed until done: data to those sites goes (a step an address is still asks).
+    if (whose === 'agent' && !p.why && hold.until.has(siteBy(hold, url))) return hold.go(p);
     const action = hold.action;
     if (action) {
       if (action.denied) return hold.drop(p);
@@ -230,14 +241,16 @@ function askNext(hold: Hold): void {
   const card = { sites: new Set(step ? [] : sites), held: batch, cancel: new AbortController() };
   hold.card = card;
   void deps.ask(sites, step?.why ?? null, card.cancel.signal).then(
-    (allow) => settleCard(hold, card, allow),
-    () => settleCard(hold, card, false),
+    (answer) => settleCard(hold, card, answer),
+    () => settleCard(hold, card, 'deny'),
   );
 }
 
-function settleCard(hold: Hold, card: NonNullable<Hold['card']>, allow: boolean): void {
+function settleCard(hold: Hold, card: NonNullable<Hold['card']>, answer: SendAnswer): void {
   if (hold.card !== card) return;
   hold.card = null;
+  const allow = answer !== 'deny';
+  if (answer === 'until' && hold.deps?.whose() === 'agent') for (const site of card.sites) hold.until.add(site);
   // Still the agent's to send: you may have taken the tab meanwhile (then it was failed already: failHeld).
   const go = allow && hold.deps?.whose() === 'agent';
   for (const p of card.held) (go ? hold.go : hold.drop)(p);
@@ -252,6 +265,8 @@ function settleCard(hold: Hold, card: NonNullable<Hold['card']>, allow: boolean)
 export function failHeld(contents: object): void {
   const hold = holds.get(contents);
   if (!hold) return;
+  // Allow until done ends too: you took the tab, or the agent was stopped.
+  hold.until.clear();
   const failed = [...hold.idle.splice(0), ...(hold.card ? hold.card.held.splice(0) : []), ...(hold.action ? hold.action.held.splice(0) : [])];
   if (hold.card) {
     const card = hold.card;
@@ -282,9 +297,10 @@ export function watchSends(contents: WebContents, allowed: Allowed | null): Send
     sitesOf: (urls) => [...new Set(urls.map((u) => siteBy(hold, u)))],
     nextHeld: () => (action.held.length || action.denied ? Promise.resolve('held' as const) : new Promise<'held'>((done) => action.waiting.push(() => done('held')))),
     cancelled: action.cancel.signal,
-    allow: (sites) => {
+    allow: (sites, until) => {
       if (action.denied) return;
       for (const site of sites) action.sites.add(site);
+      if (until) for (const site of sites) hold.until.add(site);
       const still: Paused[] = [];
       for (const p of action.held.splice(0)) {
         // A document going somewhere risky is allowed by its own address only (its card named that step).
@@ -310,6 +326,11 @@ export function watchSends(contents: WebContents, allowed: Allowed | null): Send
       if (left.length) heldBetween(hold, left);
     },
   };
+}
+
+/** The agent's done with the tab (its connection ended): *Allow until done* ends. */
+export function endUntil(contents: object): void {
+  holds.get(contents)?.until.clear();
 }
 
 /** Every request the tab makes paused at its start, in the page or a frame or worker (agents/pickers.ts, before it runs). */

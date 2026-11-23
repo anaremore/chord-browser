@@ -181,6 +181,8 @@ export class AgentService {
                       danger: sends ? sends.other : stepDanger(step.why) || Boolean(step.to),
                       ...(sends ? { sends } : {}),
                       ...(step.idle ? { idle: true } : {}),
+                      // Allow until done: on a send card (between actions or in one), never on a risky step's.
+                      ...(sends ? { untilDone: true } : {}),
                       ...(step.going ? { going: step.going } : {}),
                       ...(step.to ? { to: step.to } : {}),
                       ...(step.shows ? { shows: step.shows } : {}),

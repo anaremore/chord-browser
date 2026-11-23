@@ -35,6 +35,7 @@ export interface StepQuestion {
   typed?: string;
   sends?: { sites: string[]; other: boolean };
   idle?: boolean;
+  untilDone?: boolean;
   going?: string;
   to?: string;
   /** Show me: the tab shown in that window, the element outlined; the card stays. */
@@ -108,6 +109,7 @@ export class SiteCards {
           ...(question.typed !== undefined ? { typed: cut(plain(question.typed), 120) } : {}),
           ...(question.sends ? { sends: { sites: question.sends.sites.map((s) => plain(s).slice(0, 253)).slice(0, 8), other: question.sends.other } } : {}),
           ...(question.idle ? { idle: true } : {}),
+          ...(question.untilDone ? { untilDone: true } : {}),
           ...(question.going ? { going: plain(question.going).slice(0, 200) } : {}),
           ...(question.to ? { to: plain(question.to).slice(0, 253) } : {}),
         },
@@ -116,8 +118,8 @@ export class SiteCards {
           if (!this.waiting.delete(id)) return;
           signal.removeEventListener('abort', onAbort);
           this.deps.changed();
-          // A step's yes is for this once, whatever button said it.
-          resolve(answer === 'deny' ? 'deny' : 'once');
+          // A step's yes is for this once, whatever button said it; a send card's *Allow until done* is `always` (sends.ts).
+          resolve(answer === 'deny' ? 'deny' : answer === 'always' && question.untilDone ? 'always' : 'once');
         },
         show: (windowId) => question.show(windowId),
       };

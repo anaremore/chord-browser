@@ -26,7 +26,7 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { dropAgentGuard } from '../control/page';
-import { failHeld, sendHoldDeps } from '../control/sends';
+import { endUntil, failHeld, sendHoldDeps } from '../control/sends';
 import { randomBytes } from 'node:crypto';
 import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
@@ -267,19 +267,21 @@ export class AgentChords {
       if (input.type === 'keyDown' && !isAgentInput(contents)) yours();
     });
     contents.on('will-prevent-unload', (event) => event.preventDefault());
-    // What it sends (control/sends.ts): the agent's (held, asked) unless you have the tab; once the agent is done, only
-    // what follows your own key or click goes, the rest no one is there to ask about.
+    // What it sends (control/sends.ts): the agent's (held, asked) unless you have the tab (it's paused); once the agent is
+    // done, only what follows your own key or click goes, the rest no one is there to ask about.
     sendHoldDeps(contents, {
       whose: () => {
         const chord = this.chordOfTab(nodeId);
         if (!chord) return 'user';
-        if (chord.agent.state(nodeId).paused || this.yoursNow(nodeId) !== null) return 'user';
-        if (chord.done) return 'none';
+        // Paused: you have the tab. Holding goes on once the agent continues (the owner, 2026-11-23).
+        if (chord.agent.state(nodeId).paused) return 'user';
+        // A done agent's tab: only what follows your own key or click there goes.
+        if (chord.done) return this.yoursNow(nodeId) !== null ? 'user' : 'none';
         return 'agent';
       },
       ask: async (sites, why, signal) => {
         const chord = this.chordOfTab(nodeId);
-        if (!chord || chord.done) return false;
+        if (!chord || chord.done) return 'deny';
         const takeDown = new AbortController();
         signal.addEventListener('abort', () => takeDown.abort(), { once: true });
         const site = siteOfUrl(contents.getURL()) ?? sites[0] ?? '';
@@ -299,7 +301,8 @@ export class AgentChords {
         );
         // No answer in time: the card comes down, and what it held fails.
         if (answer === 'waiting') takeDown.abort();
-        return answer === 'once' || answer === 'always';
+        // A send card's `always` is *Allow until done* (never remembered: a step card's answers aren't).
+        return answer === 'always' && !why ? 'until' : answer === 'once' || answer === 'always' ? 'once' : 'deny';
       },
       siteOf: (url) => siteOfUrl(url) ?? hostOf(url),
     });
@@ -363,6 +366,14 @@ export class AgentChords {
 
   /** The agent's connection ended: its chord stays, and you're asked what becomes of its tabs. */
   done(agent: ControlAgent): void {
+    // *Allow until done* ends with the agent (control/sends.ts).
+    const ended = this.chordOf(agent);
+    if (ended) {
+      for (const tab of this.tabsOf(ended)) {
+        const page = this.deps.page(tab.id);
+        if (page && !page.isDestroyed()) endUntil(page);
+      }
+    }
     const chordId = this.chordOf(agent);
     const chord = chordId ? this.chords.get(chordId) : undefined;
     if (!chord) return;

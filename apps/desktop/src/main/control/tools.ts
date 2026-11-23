@@ -1023,7 +1023,8 @@ async function askHeld(
         w.deny();
         return halted;
       }
-      w.allow(new Set(sites));
+      // *Allow until done* (the send card's `always`): those sites, this tab, until the agent's done (sends.ts).
+      w.allow(new Set(sites), answer === 'always' && !step);
       continue;
     }
     w.deny();

@@ -575,7 +575,7 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
  * list what goes with it by label. Show me leaves the card up; Don't (or ×) says no; Allow is red for paying and deleting.
  */
 function AgentStepCardView({ card }: { card: AgentStepCard }) {
-  const respond = (answer: 'deny' | 'once' | 'show') => void api.agents.respond(card.id, answer);
+  const respond = (answer: 'deny' | 'once' | 'always' | 'show') => void api.agents.respond(card.id, answer);
   const goes = card.sends
     ? `Goes to: ${card.sends.sites.join(', ')}`
     : card.fields.length
@@ -626,6 +626,8 @@ function AgentStepCardView({ card }: { card: AgentStepCard }) {
         actions={[
           { label: 'Show me', look: 'link', left: true, onClick: () => respond('show') },
           { label: 'Don’t', look: 'quiet', onClick: () => respond('deny') },
+          // Those sites, from this tab, until the agent's done (the owner, 2026-11-23): never on a risky step's card.
+          ...(card.untilDone ? [{ label: 'Allow until done', look: 'quiet' as const, onClick: () => respond('always') }] : []),
           { label: 'Allow', look: card.danger ? 'danger' : 'primary', onClick: () => respond('once') },
         ]}
       />
