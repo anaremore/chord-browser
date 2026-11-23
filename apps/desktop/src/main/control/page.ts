@@ -9,7 +9,7 @@
  * It goes in every read's result as `page_id`. A page starts being followed
  * the first time a tool reads it, so pages no agent reads cost nothing.
  */
-import type { WebContents } from 'electron';
+import { webContents as allContents, type WebContents } from 'electron';
 import { readDiagnostics, type DiagnosticsRead } from './diagnostics';
 import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillHighlight, type FillOutcome, type FormPage } from './forms';
@@ -24,6 +24,8 @@ import { snapshotPage } from './snapshot';
 export interface ControlPage {
   /** The page id now (see above). */
   readonly id: string;
+  /** Its document's number: changes with another document only, from when it starts (a pushState changes the page id, not this). */
+  readonly document: number;
   /** Where the page is now, which can be ahead of its tab's saved address. */
   url(): string;
   /** The page went (its tab closed, slept or crashed). */
@@ -56,9 +58,10 @@ export interface ControlPage {
   guard(until: 'keyup' | 'beforeinput'): Promise<boolean>;
   /**
    * The guard down, once the input's last event came (at most 250 ms): what it (or a frame's) stopped. `gone`: no
-   * guard was up there (another document: the page went); `timeout`: the page didn't answer.
+   * guard was ever up in that document (another document: the page went); `expired`: it was, and ran out or was
+   * dropped (the user took the tab); `timeout`: the page didn't answer.
    */
-  unguard(): Promise<{ moved: boolean; lost: boolean } | 'gone' | 'timeout'>;
+  unguard(): Promise<{ moved: boolean; lost: boolean } | 'gone' | 'expired' | 'timeout'>;
   /** The debugger's checks for one action (control/deep.ts); null if it can't be had. */
   deep(owner: string, token: string, key: number): Promise<DeepSession | null>;
   /** Text put in where the focus is, as one insertion (never as keys). */
@@ -81,18 +84,25 @@ export interface ControlPage {
 }
 
 let lastPageId = 0;
-const followed = new WeakMap<WebContents, { id: string }>();
+const followed = new WeakMap<WebContents, { id: string; document: number; starts: number }>();
 
 /** The page id of a WebContents, following its navigations from the first time it's asked. */
 export function pageIdOf(contents: WebContents): string {
   let entry = followed.get(contents);
   if (!entry) {
-    const made = { id: `p${++lastPageId}` };
+    const made = { id: `p${++lastPageId}`, document: 0, starts: 0 };
     entry = made;
     followed.set(contents, made);
     const next = () => (made.id = `p${++lastPageId}`);
-    // did-navigate is the main frame's alone; did-navigate-in-page fires for frames too.
-    contents.on('did-navigate', next);
+    // did-navigate is the main frame's alone (another document); did-navigate-in-page fires for frames too.
+    contents.on('did-navigate', () => {
+      made.document++;
+      next();
+    });
+    // Another document on its way (it may not have arrived yet).
+    contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) made.starts++;
+    });
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
       if (isMainFrame) next();
     });
@@ -100,9 +110,40 @@ export function pageIdOf(contents: WebContents): string {
   return entry.id;
 }
 
-/** The adapter for a page Chord holds. */
+/**
+ * How many documents the page has had, or started to go to, since Chord followed it: another only with another
+ * document (not a pushState), counted from the moment it starts (a page whose script went with its old document
+ * answers no more before the new one arrives).
+ */
+export function documentOf(contents: WebContents): number {
+  pageIdOf(contents);
+  const entry = followed.get(contents)!;
+  return entry.document + entry.starts;
+}
+
+/** Pages whose guard is up now: what a frame's preload is told as it starts (agentGuardUp). */
+const guardsUp = new WeakSet<object>();
+
+/** Whether an action's guard is up in the page now (a frame made meanwhile asks, and starts with its own up). */
+export function agentGuardUp(contents: object): boolean {
+  return guardsUp.has(contents);
+}
+
+/**
+ * Takes the guard down at once, every frame's too: the user took the tab (their key or click pauses the agent there),
+ * and their keys are never stopped. The action itself stops at its next check (the pause).
+ */
+export function dropAgentGuard(contents: WebContents): void {
+  if (!guardsUp.has(contents) || contents.isDestroyed()) return;
+  guardsUp.delete(contents);
+  toFrames(contents, false);
+  void inPreload(contents, 'globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.drop()');
+}
+
 /** Tells every frame of the page but the top one whether the guard is up. */
 function toFrames(contents: WebContents, up: boolean): void {
+  if (up) guardsUp.add(contents);
+  else guardsUp.delete(contents);
   if (contents.isDestroyed()) return;
   const main = contents.mainFrame;
   for (const frame of main?.framesInSubtree ?? []) {
@@ -115,6 +156,7 @@ function toFrames(contents: WebContents, up: boolean): void {
   }
 }
 
+/** The adapter for a page Chord holds. */
 export function controlPage(contents: WebContents): ControlPage {
   /** A frame's guard stopped a key or an insertion while the guard was up. */
   let frameStopped = false;
@@ -122,6 +164,9 @@ export function controlPage(contents: WebContents): ControlPage {
   return {
     get id() {
       return contents.isDestroyed() ? '' : pageIdOf(contents);
+    },
+    get document() {
+      return contents.isDestroyed() ? -1 : documentOf(contents);
     },
     url: () => (contents.isDestroyed() ? '' : contents.getURL()),
     gone: () => contents.isDestroyed(),
@@ -156,13 +201,24 @@ export function controlPage(contents: WebContents): ControlPage {
       contents.ipc?.off('page:agentGuardStopped', onFrameStopped);
       if (answer === PRELOAD_TIMEOUT) return 'timeout';
       if (!answer || typeof answer !== 'object') return 'gone';
+      if ((answer as { expired?: unknown }).expired === true) return 'expired';
       const { moved, lost } = answer as { moved?: unknown; lost?: unknown };
       return { moved: moved === true || frameStopped, lost: lost === true };
     },
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
-    insertText: (text) => (contents.isDestroyed() ? Promise.resolve() : contents.insertText(text)),
+    // Within a moment, as every step: a hung page doesn't hold the action (the guard comes down after it anyway).
+    insertText: async (text) => {
+      if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
+    },
     afterActing: (act) => afterActing(contents, act),
-    navigate: (url) => loaded(contents, () => contents.loadURL(url).catch(() => undefined)),
+    navigate: async (url) => {
+      const yours = await focusedPage();
+      try {
+        return await loaded(contents, () => contents.loadURL(url).catch(() => undefined));
+      } finally {
+        await giveBackFocus(contents, yours);
+      }
+    },
     backEntry: () => {
       if (contents.isDestroyed()) return null;
       const index = contents.navigationHistory.getActiveIndex() - 1;
@@ -171,7 +227,12 @@ export function controlPage(contents: WebContents): ControlPage {
     },
     back: async (entry) => {
       if (contents.isDestroyed() || contents.navigationHistory.getEntryAtIndex(entry.index)?.url !== entry.url) return null;
-      return loaded(contents, () => contents.navigationHistory.goToIndex(entry.index));
+      const yours = await focusedPage();
+      try {
+        return await loaded(contents, () => contents.navigationHistory.goToIndex(entry.index));
+      } finally {
+        await giveBackFocus(contents, yours);
+      }
     },
     title: () => (contents.isDestroyed() ? '' : contents.getTitle()),
   };
@@ -218,6 +279,8 @@ const NAVIGATION_START_MS = 150;
 async function afterActing(contents: WebContents, act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }> {
   if (contents.isDestroyed()) return { navigated: false, loading: false };
   const before = pageIdOf(contents);
+  // Where your focus is: an agent's tab never keeps it after its action (a page it took somewhere can take it).
+  const yours = await focusedPage();
   let started = false;
   const onStart = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>) => {
     if (details.isMainFrame && !details.isSameDocument) started = true;
@@ -232,5 +295,27 @@ async function afterActing(contents: WebContents, act: () => void | Promise<void
     return { navigated: contents.isDestroyed() || pageIdOf(contents) !== before, loading };
   } finally {
     if (!contents.isDestroyed()) contents.off('did-start-navigation', onStart);
+    await giveBackFocus(contents, yours);
   }
+}
+
+/** The page with the focus now (Electron's), or null; none where there's no Electron (the unit tests). */
+async function focusedPage(): Promise<WebContents | null> {
+  try {
+    return allContents?.getFocusedWebContents?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Your focus, after an agent's action (Neon's review of #110, seen in agents.spec): input Chord sends a parked tab can
+ * leave no page with the focus, and a navigation it sets off gives the agent's new page the focus. Either way it goes
+ * back to the page that had it, never left with the agent's tab, or with nothing, while you use another. A page of
+ * yours you went to meanwhile keeps it.
+ */
+async function giveBackFocus(contents: WebContents, yours: WebContents | null): Promise<void> {
+  if (!yours || yours === contents || yours.isDestroyed()) return;
+  const now = await focusedPage();
+  if (now === null || now === contents) yours.focus();
 }

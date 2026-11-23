@@ -16,19 +16,23 @@
  *
  * The node checks run in Chord's own isolated world (ASSISTANT_WORLD, found by its snapshots: a page can't reach it or
  * change what its functions do), on nodes CDP hands it. Finding that world's context needs `Runtime.enable` (its
- * contexts are named only to a client that enables it): once per document, after the page's stored console entries
- * are discarded (so enabling replays none: no cost from a page that logged a thousand large objects, and nothing for a
- * page's getters to notice), and disabled again at once; the context is kept for the document's later actions, which
- * only `Runtime.evaluate` and `Runtime.callFunctionOn` in it (neither needs Runtime enabled). If the debugger can't be
- * had, nothing is pressed or typed.
+ * contexts are named only to a client that enables it): once per document, disabled again at once, the context kept
+ * for the document's later actions, which only `Runtime.evaluate` and `Runtime.callFunctionOn` in it (neither needs
+ * Runtime enabled). Enabling replays the page's stored console entries (at most about 1,000): that's paid on a
+ * document's first action only, and the entries stay for page_diagnostics and DevTools. Every object the session
+ * gets is in its own group, released when it closes (an agent's tab stays attached: nothing is kept alive). If the
+ * debugger can't be had, nothing is pressed or typed.
  */
 import type { WebContents } from 'electron';
+import { pickersLost } from '../agents/pickers';
 import { withDebugger } from '../debugger-queue';
 import { pageCall } from '../page-call';
 import { SNAPSHOT_LIB } from './snapshot';
 
 /** At most this long for the whole session (a hung page): then it's let go, and whatever waited is refused. */
 const DEEP_SESSION_MS = 20_000;
+/** The group every object a session gets is in, released when it closes. */
+const OBJECT_GROUP = 'chord-acting';
 /** Each command's limit. */
 const DEEP_COMMAND_MS = 3000;
 
@@ -93,7 +97,8 @@ const hasClosedRoot = (node: Node | undefined): boolean => {
  * (or, if someone's DevTools have it, used as it is), Chord's world found, the element in hand. Null if it can't be.
  */
 export async function openDeep(contents: WebContents, owner: string, token: string, key: number): Promise<DeepSession | null> {
-  if (contents.isDestroyed()) return null;
+  // An agent's tab whose file picker hold is down (agents/pickers.ts): nothing is pressed or typed until it's back.
+  if (contents.isDestroyed() || pickersLost(contents)) return null;
   let release: (value: void) => void = () => undefined;
   const released = new Promise<void>((done) => (release = done));
   let ready: (session: DeepSession | null) => void = () => undefined;
@@ -127,6 +132,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       if (closed) return;
       closed = true;
       debug.off('message', onMessage);
+      // What the session held of the page goes (a node a page since removed would stay alive otherwise).
+      if (!contents.isDestroyed() && debug.isAttached()) debug.sendCommand('Runtime.releaseObjectGroup', { objectGroup: OBJECT_GROUP }).catch(() => undefined);
       // Only what the session attached; an agent's tab keeps its own attachment (nothing else was turned on: Runtime
       // was enabled and disabled within the session).
       if (mine && !contents.isDestroyed() && debug.isAttached()) debug.detach();
@@ -151,7 +158,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       let world: number | null = null;
       const known = worlds.get(contents);
       if (main && known && known.document === document && (await isOurs(known.world))) world = known.world;
-      if (main && world === null && (await send('Runtime.discardConsoleEntries')) && (await send('Runtime.enable'))) {
+      if (main && world === null && (await send('Runtime.enable'))) {
         await send('Runtime.disable');
         for (const c of contexts) {
           if (c.frameId !== main || c.type !== 'isolated') continue;
@@ -165,6 +172,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       const element = world
         ? await send<{ result: { objectId?: string } }>('Runtime.evaluate', {
             contextId: world,
+            objectGroup: OBJECT_GROUP,
             expression: `(() => { const r = globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return null; const e = r.keep[${JSON.stringify(key)}]; return (e && e.ref.deref()) || null; })()`,
           })
         : null;
@@ -194,10 +202,11 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
             if (!owner) return { ok: false, why: 'covered', cover: { role: 'frame', name: '' } };
             backendNodeId = owner.backendNodeId;
           }
-          const resolved = await send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId, executionContextId: worldId });
+          const resolved = await send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId, executionContextId: worldId, objectGroup: OBJECT_GROUP });
           if (!resolved?.object.objectId) return { ok: false, why: 'no-check', step: `resolve ${lastError}` };
           const checked = await send<{ result: { value?: DeepAnswer } }>('Runtime.callFunctionOn', {
             objectId: resolved.object.objectId,
+            objectGroup: OBJECT_GROUP,
             functionDeclaration: CHECK_FN,
             arguments: [{ value: owner }, { value: token }, { value: key }],
             returnByValue: true,

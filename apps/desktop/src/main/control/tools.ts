@@ -460,6 +460,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (tool === 'select_option' && !asked) return refuse(ACT_REFUSALS.notSelect);
   // The page and its site, before anything is asked of it: everything after is for this page on this site only.
   const pageAtCheck = page.id;
+  const documentAtCheck = page.document;
   const site = host.siteOf(page.url());
   if (!site) return refuse(ACT_REFUSALS.noSite);
   // The element as it is now; for select_option, the choice matched against the page's own options before anything is
@@ -546,7 +547,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      * again between its events (a key's keydown, then its character); it says why it stopped, if it did. A key or an
      * insertion the page would get anywhere else is stopped there, and the action ends. The guard always comes down.
      */
-    const guarded = async (until: 'keyup' | 'beforeinput', input: () => Promise<string | null>): Promise<boolean> => {
+    const guarded = async (until: 'keyup' | 'beforeinput', input: () => Promise<string | null>, typesNothing = false): Promise<boolean> => {
       if (!(await page.guard(until))) {
         await page.unguard();
         refused = ACT_REFUSALS.changed;
@@ -565,22 +566,33 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         refused = failed;
         return false;
       }
-      if (down === 'gone') {
-        // No guard there any more: another document (a submit's Enter navigated the page), and where its focus was
-        // went with it. The same document (a pushState changes the page id too) always answers: no answer is a no.
-        return true;
-      }
-      if (down === 'timeout') {
+      // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
+      // done (no guard there, or the script asked went with the old one). A guard that ran out in the same document,
+      // or the same document not answering: a no.
+      if (down === 'gone' || ((down === 'timeout' || down === 'expired') && page.document !== documentAtCheck)) return true;
+      if (down === 'expired' || down === 'timeout') {
         refused = ACT_REFUSALS.focusLost;
         return false;
       }
       if (down.moved) refused = ACT_REFUSALS.focusMoved;
-      else if (down.lost) refused = ACT_REFUSALS.focusLost;
+      // A key that types nothing (Tab, an arrow, Escape) may take the focus anywhere, a frame too: its keyup there is
+      // that, not text gone astray.
+      else if (down.lost && !typesNothing) refused = ACT_REFUSALS.focusLost;
       return !refused;
     };
-    /** A key: its keydown, then (the page's keydown handlers have run) everything checked again, then the rest of it. */
+    /**
+     * A key. One that types a character into a field (Enter, Space in a text field): its keydown, then (the page's
+     * keydown handlers have run) everything checked again, then the rest of it. Any other key goes in at once: its own
+     * keydown may move the focus (Tab, an arrow in a radio group) or go somewhere (Enter on a link), and that's the key
+     * working, not the page in its way.
+     */
+    const typesInto = (pressed: PressKey) => element.editable === true && (pressKeyEvents(pressed) as AgentInputEvent[]).some((e) => e.type === 'char');
     const pressKey = (pressed: PressKey) => async (): Promise<string | null> => {
       const [down, ...rest] = pressKeyEvents(pressed) as AgentInputEvent[];
+      if (!typesInto(pressed)) {
+        page.keys([down!, ...rest]);
+        return null;
+      }
       page.keys([down!]);
       const again = await stillOk();
       // Never the character: the key's let go of, nothing typed.
@@ -611,7 +623,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (tool === 'press_key') {
         const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
         if (!focused.ok) return void (refused = actRefusal(focused));
-        return void (await guarded('keyup', pressKey(key as PressKey)));
+        return void (await guarded('keyup', pressKey(key as PressKey), !typesInto(key as PressKey)));
       }
       // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
       // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. The page's

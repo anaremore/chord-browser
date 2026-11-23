@@ -273,7 +273,10 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
       app.evaluate(({ webContents }, [url, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(url))!.executeJavaScript(js), [`${site.origin}/neon`, code] as const);
     // Your focus, before the agent acts (it must stay where it is: the agent's tab is parked, off screen).
     const focused = () => app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? null);
+    // Yours: the window's own page has it (as when you're in the address bar).
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.focus(), shell.url());
     const yours = await focused();
+    expect(yours).toBe(shell.url());
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const outline = await snap();
 
@@ -333,6 +336,27 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     // A button in a closed root, clicked twice at one point: both clicks go in (the second's pointer moved off and back).
     for (let i = 0; i < 2; i++) expect.soft(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') })).text)).toMatchObject({ data: { done: 'Clicked “Step up”' } });
     expect.soft(await inPage('document.getElementById("log").textContent')).toContain('stepped 2');
+
+    // A fresh frame with no address, its File System Access picker asked for right after it's put in: refused, never
+    // shown (the promise settles; a picker on screen would leave it waiting).
+    await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Fresh frame picker"') });
+    await expect.soft.poll(() => inPage('document.getElementById("log").textContent'), { timeout: 10_000 }).toMatch(/refused \w+/);
+
+    expect.soft(await focused(), 'after the pickers and the stepper').toBe(yours);
+    // Keys whose keydown moves the focus (Tab) or goes somewhere (Enter on a link): done, as they are.
+    await mcp.call('open_tab', { url: `${site.origin}/keys` });
+    // The agent's new tab, parked behind your page, leaves your focus where it was, or gives it back within a moment
+    // (window.ts' park: the OS can hand a view just shown the window's focus).
+    await expect.soft.poll(focused, { message: 'after open_tab', timeout: 2000 }).toBe(yours);
+    const keys = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a2' })).text) as { content: string }).content;
+    const tabbed = await mcp.call('press_key', { tab_id: 'a2', ref: refOf(keys, 'textbox "First"'), key: 'Tab' });
+    expect.soft(tabbed.isError, tabbed.text).toBe(false);
+    expect.soft(await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.activeElement.getAttribute("aria-label")'), `${site.origin}/keys`)).toBe('Second');
+    expect.soft(await focused(), 'after Tab').toBe(yours);
+    const entered = await mcp.call('press_key', { tab_id: 'a2', ref: refOf(keys, 'link "Onward"'), key: 'Enter' });
+    expect.soft(entered.isError, entered.text).toBe(false);
+    expect.soft(JSON.parse(entered.text)).toMatchObject({ data: { navigated: true, url: `${site.origin}/act` } });
+    expect.soft(await focused(), 'after Enter on a link').toBe(yours);
 
     // Your focus never moved to the agent's tab.
     expect.soft(await focused()).toBe(yours);
@@ -455,12 +479,16 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${actSeen}`);
         expect(actMedian, actSeen).toBeLessThan(ACT_POINT_MS.median);
         expect(actP95, actSeen).toBeLessThan(ACT_POINT_MS.p95);
-        // Neon's review of #110: the debugger's session a press or typing opens, on this page.
-        const dt = sorted(act.deep);
+        // Neon's review of #110: the debugger's session a press or typing opens, on this page. The document's first
+        // finds Chord's world (Runtime enabled once: the page's stored console replayed, ~1,000 entries at most on
+        // /noisy); the rest don't.
+        const [first, ...later] = act.deep;
+        const dt = sorted(later);
         const deepMedian = dt[Math.floor(dt.length / 2)]!;
         const deepP95 = dt[Math.floor(dt.length * 0.95)]!;
-        const deepSeen = `${path}: the debugger's session, median ${deepMedian.toFixed(1)} ms, p95 ${deepP95.toFixed(1)} ms (${dt.map((t) => t.toFixed(0)).join(' ')})`;
+        const deepSeen = `${path}: the debugger's session, first ${first!.toFixed(1)} ms, then median ${deepMedian.toFixed(1)} ms, p95 ${deepP95.toFixed(1)} ms (${dt.map((t) => t.toFixed(0)).join(' ')})`;
         console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${deepSeen}`);
+        expect(first!, deepSeen).toBeLessThan(ACT_DEEP_MS.first);
         expect(deepMedian, deepSeen).toBeLessThan(ACT_DEEP_MS.median);
         expect(deepP95, deepSeen).toBeLessThan(ACT_DEEP_MS.p95);
       } else {
@@ -503,8 +531,8 @@ const SNAPSHOT_HUGE_MS = 300;
  * "M2c: as built".
  */
 const ACT_POINT_MS = { median: 15, p95: 40 };
-/** The debugger's session for a press or typing (Neon's review of #110), on the typical page. */
-const ACT_DEEP_MS = { median: 25, p95: 60 };
+/** The debugger's session for a press or typing (Neon's review of #110): a document's first, then the rest. */
+const ACT_DEEP_MS = { first: 200, median: 25, p95: 60 };
 
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -780,6 +808,7 @@ test.beforeAll(async () => {
       '<button class=row onclick="document.getElementById(\'fr\').contentDocument.getElementById(\'fi\').click()">Frame upload</button>' +
       '<button class=row onclick="document.getElementById(\'fr\').contentWindow.showOpenFilePicker().catch(() => {})">Frame picker</button>' +
       '<x-step class=row role=button tabindex=0 aria-label="Step up" id=step></x-step>' +
+      '<button class=row onclick="const f = document.createElement(\'iframe\'); document.body.append(f); f.contentWindow.showOpenFilePicker().then(() => { log.textContent += \' picked\'; }, (e) => { log.textContent += \' refused \' + e.name; })">Fresh frame picker</button>' +
       '<p id=log></p></main><script>' +
       // A button whose closed root holds a frame, which takes the pointer once it moves over the button.
       'const dealRoot = deal.attachShadow({ mode: "closed" });' +
@@ -801,6 +830,8 @@ test.beforeAll(async () => {
       // And the file input its button clicks, its click kept from anything after.
       'addEventListener("click", (e) => { if (e.target.id === "up3") e.stopImmediatePropagation(); }, true);' +
       '</script>',
+    // Review 5 of #110: keys that move the focus or go somewhere on their keydown.
+    '/keys': '<title>Keys</title><main><input aria-label="First"> <input aria-label="Second"> <a href="/act">Onward</a></main>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +

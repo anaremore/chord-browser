@@ -15,7 +15,7 @@ import { AGENT_BAR_HEIGHT, clampPeekCard, DEFAULT_DEVTOOLS, devtoolsLayout, devt
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
-import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
+import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, webContents, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
 import { FrameSnapshots, offscreen } from './frame-snapshot';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
@@ -602,6 +602,9 @@ export class AppWindow {
    */
   park(views: readonly WebContentsView[]): void {
     if (this.window.isDestroyed()) return;
+    // Your focus stays where it is: adding or taking away a parked page (an agent's tab) mustn't leave it nowhere
+    // (Neon's review of #110, seen in agents.spec when an agent opened a tab).
+    const focused = webContents?.getFocusedWebContents?.() ?? null;
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
     this.parked = views.filter((view) => Boolean(pageOf(view)));
@@ -612,6 +615,15 @@ export class AppWindow {
       view.setVisible(true);
     }
     this.layout();
+    // Now, and again once the page just parked is on screen (the OS can hand it the window's focus then): back to the
+    // page that had it, if no page has it now.
+    if (!focused || this.parked.some((v) => v.webContents === focused)) return;
+    const giveBack = () => {
+      if (this.window.isDestroyed() || focused.isDestroyed() || focused.isFocused()) return;
+      if (!(webContents?.getFocusedWebContents?.() ?? null)) focused.focus();
+    };
+    giveBack();
+    for (const ms of [50, 200, 500]) setTimeout(giveBack, ms).unref?.();
   }
 
   /**

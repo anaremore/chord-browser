@@ -20,10 +20,12 @@ type GuardWindow = {
   __chordAgentGuard?: unknown;
 };
 
-export const GUARDED_EVENTS = ['keydown', 'keypress', 'keyup', 'beforeinput'] as const;
+export const GUARDED_EVENTS = ['keydown', 'keypress', 'keyup', 'beforeinput', 'compositionstart', 'compositionupdate', 'compositionend'] as const;
 
 export function installAgentGuard(win: GuardWindow): void {
   let armed: { expected: Focusable | null; until: string; moved: boolean; done: boolean; finished: (() => void) | null; timer: number } | null = null;
+  /** A guard was up in this document (this preload is the document's): one not up now ran out, or was dropped. */
+  let everArmed = false;
   const deepFocus = (): Focusable | null => {
     let f = win.document.activeElement;
     while (f && f.shadowRoot && f.shadowRoot.activeElement) f = f.shadowRoot.activeElement;
@@ -52,11 +54,18 @@ export function installAgentGuard(win: GuardWindow): void {
         if (armed === guard) armed = null;
       }, 30_000);
       armed = guard;
+      everArmed = true;
       return true;
     },
-    disarm(waitMs: number): Promise<{ moved: boolean; lost: boolean } | null> {
+    /** Down at once: the user took the tab (their key or click), and their keys are never stopped. */
+    drop(): void {
+      if (armed) win.clearTimeout(armed.timer);
+      armed = null;
+    },
+    disarm(waitMs: number): Promise<{ moved: boolean; lost: boolean } | { expired: true } | null> {
       const guard = armed;
-      if (!guard) return Promise.resolve(null);
+      // None up: in this document, it ran out (or was dropped); null only in another document (the page went).
+      if (!guard) return Promise.resolve(everArmed ? { expired: true } : null);
       return new Promise((resolve) => {
         const finish = () => {
           // A task later: the last event's own dispatch is over.
@@ -75,13 +84,15 @@ export function installAgentGuard(win: GuardWindow): void {
 }
 
 /**
- * A frame's guard, in an agent's tab: while main has the guard up (it says so over IPC, to every frame), every
+ * A frame's guard, in an agent's tab: while main has the guard up (it says so over IPC, to every frame, and to a
+ * frame made meanwhile when its preload asks, `upNow`), every
  * trusted key and insertion in this frame is stopped (an agent's text and keys are only ever for an element of the
  * top document; one that reaches a frame went there because the focus moved), and main hears of it.
  */
-export function installFrameGuard(win: GuardWindow, onArm: (listener: (up: boolean) => void) => void, stopped: () => void): void {
-  let up = false;
-  let timer = 0;
+export function installFrameGuard(win: GuardWindow, onArm: (listener: (up: boolean) => void) => void, stopped: () => void, upNow: boolean): void {
+  // A frame made (or gone to another page) while main's guard is up starts with its own up.
+  let up = upNow;
+  let timer = up ? win.setTimeout(() => (up = false), 30_000) : 0;
   onArm((now) => {
     up = now;
     win.clearTimeout(timer);

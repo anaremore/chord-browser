@@ -158,6 +158,8 @@ if (agentTab && protocol !== 'chrome-extension:' && protocol !== 'devtools:') {
       guardWindow,
       (listener) => ipcRenderer.on('chord:agentGuard', (_event, up: unknown) => listener(up === true)),
       () => ipcRenderer.send('page:agentGuardStopped'),
+      // Asked once, as the frame's page starts: a frame made while the guard is up starts with it up.
+      ipcRenderer.sendSync('page:agentGuardState') === true,
     );
   // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent. On the window,
   // the first listener there, so a page's own capture listener can't stop it first (Neon's review of #110). Behind it,

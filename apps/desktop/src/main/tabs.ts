@@ -15,6 +15,8 @@ import { pageCall } from './page-call';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
 import { holdFilePickers } from './agents/pickers';
+import { agentGuardUp } from './control/page';
+import { heldDetail } from './agents/held';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -460,10 +462,15 @@ export class TabManager {
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
     // An agent's tab (S18): a dialog or file picker its preload held, for the agent's next result. Any frame's.
-    contents.ipc.on('page:agentHeld', (_event, raw: unknown) => {
+    contents.ipc.on('page:agentHeld', (event, raw: unknown) => {
       if (!this.deps.agentTab?.(nodeId) || !raw || typeof raw !== 'object') return;
       const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
-      if ((kind === 'dialog' || kind === 'file') && typeof detail === 'string') this.deps.onAgentRefused?.(nodeId, kind, detail.slice(0, 500));
+      if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
+      this.deps.onAgentRefused?.(nodeId, kind, heldDetail(kind, detail, event.senderFrame?.origin ?? null, event.senderFrame?.parent ? (contents.mainFrame?.origin ?? null) : null));
+    });
+    // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
+    contents.ipc.on('page:agentGuardState', (event) => {
+      event.returnValue = Boolean(this.deps.agentTab?.(nodeId)) && agentGuardUp(contents);
     });
     // The count the page gives itself (counts on tabs, ARCHITECTURE.md §9), from Chord's page preload: its top frame's only.
     contents.ipc.on('page:badge', (event, raw: unknown) => {
@@ -608,3 +615,4 @@ export class TabManager {
     this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: icon });
   }
 }
+

@@ -25,6 +25,7 @@
  *
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
+import { dropAgentGuard } from '../control/page';
 import { randomBytes } from 'node:crypto';
 import { ACT_BAR_MIN_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
@@ -242,6 +243,8 @@ export class AgentChords {
     // Only your hands: input Chord sends for an agent (control/input.ts) never pauses it or makes a navigation yours.
     // Your hands: a key, or a button pressed (Neon's review of #110: a click is using the tab as much as a key is).
     const yours = () => {
+      // Never your keys stopped: an action's guard comes down at once (the action stops at its next check).
+      dropAgentGuard(contents);
       this.userActed(nodeId);
       const chord = this.chordOfTab(nodeId);
       if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
