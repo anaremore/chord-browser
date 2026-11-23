@@ -558,8 +558,11 @@ test('what an action sends asks first: held, one card, Allow sends and Don’t d
       await card.getByRole('button', { name: button, exact: true }).click();
       return call;
     };
+    // A frame of another site is named as one, its contents not readable (#112: never an empty node).
+    const outline = await snap();
+    expect(outline).toContain('- iframe "Sync" [contents not accessible: another site]');
     // The site card, once: a tab that sends nothing but the page's click beacon (dropped, no card).
-    const first = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'tab "Details"') });
+    const first = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'tab "Details"') });
     const siteCard = siteCardOf(popover, 'Codex');
     await expect(siteCard).toBeVisible({ timeout: 15_000 });
     await expect(siteCard).toContainText('It asks before anything it does sends data, and before it submits, pays, sends or deletes.');
@@ -584,6 +587,117 @@ test('what an action sends asks first: held, one card, Allow sends and Don’t d
     await new Promise((r) => setTimeout(r, 500));
     expect(reached.filter((r) => r.startsWith('POST'))).toEqual(['POST /prefs']);
     void third;
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('typing into a field that takes a value: set in its format, never typed into the field before it; text that lands elsewhere is an error (#112, bug 1)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/booking` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const popover = await pageWhere(app, isPopover);
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const ref = (name: string) => refOf(outline, `textbox "${name}"`);
+    /** The fields' values, as the page has them, its log, and what has the focus. */
+    const values = () =>
+      app.evaluate(({ webContents }, path) => {
+        const tab = webContents.getAllWebContents().find((w) => w.getURL().endsWith(path));
+        return tab!.executeJavaScript('Object.fromEntries([...document.querySelectorAll("input")].map((i) => [i.id, i.value]).concat([["log", log.textContent], ["focus", document.activeElement.id]]))') as Promise<Record<string, string>>;
+      }, '/booking');
+    // The owner's repro: text into the name (the site card first), then a time, with the name still focused.
+    const naming = mcp.call('type', { tab_id: 'a1', ref: ref('Customer name'), text: 'Repro' });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    expect(JSON.parse((await naming).text)).toMatchObject({ data: { done: 'Typed in “Customer name”' } });
+    expect((await values()).focus).toBe('cn');
+    expect(JSON.parse((await mcp.call('type', { tab_id: 'a1', ref: ref('Arrival'), text: '18:30' })).text)).toMatchObject({ data: { done: 'Typed in “Arrival”' } });
+    let now = await values();
+    expect(now).toMatchObject({ cn: 'Repro', t: '18:30' });
+    // The page heard it as it hears a person's: input, then change.
+    expect(now.log).toContain('input:t change:t');
+    // Each other kind, with the name focused again first (a click into it), and the name never changed.
+    const rows: [string, string, string][] = [
+      ['Day', 'd', '2026-11-23'],
+      ['When', 'dt', '2026-11-23T18:30'],
+      ['Month', 'm', '2026-11'],
+      ['Week', 'w', '2026-W48'],
+    ];
+    for (const [name, id, value] of rows) {
+      expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: ref('Customer name') })).text)).toMatchObject({ data: { done: 'Clicked “Customer name”' } });
+      expect((await values()).focus).toBe('cn');
+      expect(JSON.parse((await mcp.call('type', { tab_id: 'a1', ref: ref(name), text: value })).text)).toMatchObject({ data: { done: `Typed in “${name}”` } });
+      now = await values();
+      expect(now[id]).toBe(value);
+      expect(now.cn).toBe('Repro');
+    }
+    // A value not in the field's format: refused before anything, and nothing changed.
+    expect((await mcp.call('type', { tab_id: 'a1', ref: ref('Arrival'), text: 'half past six' })).text).toBe('A time field takes a value like 18:30; nothing was put in it.');
+    expect((await mcp.call('type', { tab_id: 'a1', ref: ref('Day'), text: 'tomorrow' })).text).toBe('A date field takes a value like 2026-11-23; nothing was put in it.');
+    // In the format, but no such date: the field doesn't take it, and that's said.
+    expect((await mcp.call('type', { tab_id: 'a1', ref: ref('Day'), text: '2026-02-31' })).text).toBe('A date field takes a value like 2026-11-23; nothing was put in it.');
+    expect(await values()).toMatchObject({ cn: 'Repro', t: '18:30', d: '2026-11-23' });
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('dialogs while an agent acts: alert, confirm and prompt are held and reported, answered as Cancel, and the tab never freezes (#112)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/dialogs` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const popover = await pageWhere(app, isPopover);
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const held: string[] = [];
+    const click = async (name: string) => {
+      const r = await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, `button "${name}"`) });
+      held.push(...r.held);
+      return r;
+    };
+    const first = click('Show notice');
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const started = Date.now();
+    expect(JSON.parse((await first).text)).toMatchObject({ data: { done: 'Clicked “Show notice”' } });
+    expect(JSON.parse((await click('Ask yes or no')).text)).toMatchObject({ data: { done: 'Clicked “Ask yes or no”' } });
+    expect(JSON.parse((await click('Ask a name')).text)).toMatchObject({ data: { done: 'Clicked “Ask a name”' } });
+    // The page went on at once each time: alert returned, confirm said no, prompt gave nothing.
+    const read = async () => {
+      const r = await mcp.call('read_tab', { tab_id: 'a1' });
+      held.push(...r.held);
+      return (JSON.parse(r.text) as { content: string }).content;
+    };
+    expect(await read()).toContain('after-alert yes-no=false name=null');
+    // Never frozen: three actions and a read well within a dialog's wait (a dialog left open would hang the read).
+    expect(Date.now() - started).toBeLessThan(20_000);
+    // Each held, and reported to the agent (with that action's result, or the next).
+    await expect.poll(async () => (await read(), held.join(' | ')), { timeout: 10_000 }).toContain('prompt: Your name?');
+    expect(held.join(' | ')).toContain('alert: Saved');
+    expect(held.join(' | ')).toContain('confirm: Keep it?');
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -1076,6 +1190,20 @@ test.beforeAll(async () => {
       '<button aria-label="Save draft" onclick="0">Pay $500</button>' +
       '<button onclick="0">Jetzt kaufen</button>' +
       '</main>',
+    // The owner's hand test of #112 (bug 1): a text field, then fields that take a value in a format (a time typed in
+    // after the text field had the focus went into the text field, and was reported done).
+    '/booking':
+      '<title>Booking</title><main><label>Customer name <input id=cn></label> <label>Arrival <input type=time id=t></label> ' +
+      '<label>Day <input type=date id=d></label> <label>When <input type=datetime-local id=dt></label> ' +
+      '<label>Month <input type=month id=m></label> <label>Week <input type=week id=w></label><p id=log></p>' +
+      '<script>for (const el of document.querySelectorAll("input")) { el.addEventListener("input", () => { log.textContent += "input:" + el.id + " "; }); el.addEventListener("change", () => { log.textContent += "change:" + el.id + " "; }); }</script></main>',
+    // Dialogs while an agent acts: held, answered as Cancel would be, the tab never frozen.
+    '/dialogs':
+      '<title>Dialogs</title><main>' +
+      '<button onclick="alert(\'Saved\'); log.textContent += \'after-alert \'">Show notice</button>' +
+      '<button onclick="log.textContent += \'yes-no=\' + confirm(\'Keep it?\') + \' \'">Ask yes or no</button>' +
+      '<button onclick="log.textContent += \'name=\' + prompt(\'Your name?\', \'Sam\') + \' \'">Ask a name</button>' +
+      '<p id=log></p></main>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +

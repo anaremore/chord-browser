@@ -831,7 +831,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; others?: number; unchanged?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     if (code.includes('__chordAgentGuard')) {
@@ -848,7 +848,7 @@ describe('acting through the gate (S18 M2c)', () => {
       onAct?.(events, 'settle');
       return true;
     }
-    const args = JSON.parse(code.slice(code.lastIndexOf('})(') + 3, -1)) as { op?: string; key?: number; option?: string; token?: string };
+    const args = JSON.parse(code.slice(code.lastIndexOf('})(') + 3, -1)) as { op?: string; key?: number; option?: string; token?: string; mode?: string };
     if (args.op) {
       steps.push(args.op);
       onAct?.(events, args.op);
@@ -873,6 +873,8 @@ describe('acting through the gate (S18 M2c)', () => {
       }
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
+      // Where typing went (#112): this field changed, and others (a twist's count) did too.
+      if (args.op === 'values') return args.mode === 'compare' ? { ok: true, ...said, changed: !twist.unchanged, has: false, others: twist.others ?? 0 } : { ok: true, ...said };
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
@@ -975,13 +977,14 @@ describe('acting through the gate (S18 M2c)', () => {
     // Each input with the page preload's guard up (guard, the focus checked, the input, unguard).
     // Enter's keydown first, then everything checked again before its character (a keydown handler can move the focus).
     // A text field in no form with submit is a send (M2d): the step card, then the element described again after it.
-    expect(t.steps).toEqual(['describe', 'describe', 'point', 'hit', 'describe', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'focused', 'unguard']);
+    // And every field's value remembered before the text, then compared after it (#112: where the text went).
+    expect(t.steps).toEqual(['describe', 'describe', 'point', 'hit', 'describe', 'select', 'guard', 'focused', 'values', 'unguard', 'values', 'guard', 'focused', 'focused', 'unguard']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
     t.steps.length = 0;
     await t.call('type', { tab_id: t.tab, ref: 'e2', text: ' red', replace: false });
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'describe', 'guard', 'focused', 'unguard']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'describe', 'guard', 'focused', 'values', 'unguard', 'values']);
   });
 
   it('press_key focuses the element and sends the key; select_option chooses by label', async () => {
@@ -1283,6 +1286,30 @@ describe('acting through the gate (S18 M2c)', () => {
     const u = await acting({ act: { siteAllowed: () => true } });
     await u.call('navigate', { tab_id: u.tab, url: 'https://news.test/checkout' });
     expect(u.cards).toEqual([]);
+  });
+
+  // ---------- The owner's hand test (#112) ----------
+
+  it('text that landed in another field is never done; nor is a field that didn’t change', async () => {
+    const t = await acting({ twist: { others: 1 } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: '18:30' })).refused).toBe('Another field changed while typing, so the text may have gone there instead. Nothing more was done: call snapshot and check the fields.');
+    const u = await acting({ twist: { unchanged: true } });
+    expect(refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).refused).toBe('That field didn’t change, so the text didn’t go in. Call snapshot and check the field.');
+  });
+
+  it('a time field is set, never typed into, and only to a value in its format', async () => {
+    ELEMENTS.push({ role: 'textbox', name: 'Delivery time', editable: true, field: field({ type: 'time' }), risk: { tag: 'input', type: 'time' } });
+    try {
+      const t = await acting();
+      const ref = `e${ELEMENTS.length}`;
+      expect(refusal(await t.call('type', { tab_id: t.tab, ref, text: 'half six' })).refused).toBe('A time field takes a value like 18:30; nothing was put in it.');
+      expect(result(await t.call('type', { tab_id: t.tab, ref, text: '18:30' })).data).toMatchObject({ done: 'Typed in “Delivery time”' });
+      expect(t.steps).toContain('setValue');
+      expect(t.at.text).toEqual([]);
+      expect((t.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toEqual([]);
+    } finally {
+      ELEMENTS.pop();
+    }
   });
 
   // ---------- Review 1 of #110 ----------

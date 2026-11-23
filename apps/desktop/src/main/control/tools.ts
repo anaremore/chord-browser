@@ -9,6 +9,8 @@ import { pickersUnsecured } from '../agents/pickers';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   addressWhy,
+  VALUE_TYPES,
+  valueFits,
   classifyStep,
   stepFields,
   type RiskAction,
@@ -520,6 +522,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
   if (tool === 'type' && !element.editable) return refuse(ACT_REFUSALS.notEditable);
+  // A field that isn't text (a time, a date, a color, a range: #112, the owner's hand test) is set, never typed into,
+  // and only to a value in its format.
+  const valueType = tool === 'type' && element.risk?.tag === 'input' && VALUE_TYPES.has(element.risk.type) ? element.risk.type : null;
+  if (valueType && !valueFits(valueType, text as string)) return refuse(ACT_REFUSALS.badValue(valueType));
   if (tool === 'select_option' && !element.select) return refuse(ACT_REFUSALS.notSelect);
   if (tool !== 'hover' && element.disabled) return refuse(ACT_REFUSALS.disabled);
   const choice = element.choice ?? '';
@@ -705,6 +711,14 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       else if (down.lost && !typesNothing) refused = ACT_REFUSALS.focusLost;
       return !refused;
     };
+    /** After text or a value went in: this field changed, or now holds the text; and no other field changed. */
+    const typedWhere = async (): Promise<string | null> => {
+      const after = await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'compare', text: text as string });
+      if (!after.ok) return after.why === 'no-values' ? ACT_REFUSALS.notTyped : actRefusal(after);
+      if ((after.others ?? 0) > 0) return ACT_REFUSALS.typedElsewhere;
+      if (!after.changed && !after.has) return ACT_REFUSALS.notTyped;
+      return null;
+    };
     /**
      * A key. One that types a character into a field (Enter, Space in a text field): its keydown, then (the page's
      * keydown handlers have run) everything checked again, then the rest of it. Any other key goes in at once: its own
@@ -775,6 +789,20 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if ((refused = await sameStep())) return;
         return void (await guarded('keyup', pressKey(key as PressKey), !typesInto(key as PressKey)));
       }
+      // A field that isn't text: set to its value, never clicked (its own picker would open) nor typed into; what else
+      // changed in the page meanwhile is checked as for text.
+      if (valueType) {
+        if ((refused = await sameStep())) return;
+        if ((refused = halt())) return;
+        await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'remember' });
+        const set = await page.act(owner, lookup.token, lookup.key, { op: 'setValue', value: text as string });
+        if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
+        if ((refused = await typedWhere())) return;
+        if (args['submit'] !== true) return;
+        const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
+        if (!focused.ok) return void (refused = actRefusal(focused));
+        return void (await guarded('keyup', pressKey('Enter')));
+      }
       // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
       // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. The page's
       // own test first, then the debugger's, which sees into closed shadow roots. It narrows the race; it can't close
@@ -807,10 +835,16 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if (!selected.ok) return void (refused = actRefusal(selected));
       }
       const typed = await guarded('beforeinput', async () => {
+        // Every field's value remembered first (in the page), to check where the text went.
+        await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'remember' });
         await page.insertText(text as string);
         return null;
       });
-      if (!typed || args['submit'] !== true) return;
+      if (!typed) return;
+      // Where it went: this field changed (or holds the text), and no other did (#112: text that lands in the field
+      // that had the focus before is never *done*).
+      if ((refused = await typedWhere())) return;
+      if (args['submit'] !== true) return;
       await guarded('keyup', pressKey('Enter'));
     });
     // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and the card

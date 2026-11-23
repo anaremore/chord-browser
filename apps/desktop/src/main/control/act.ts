@@ -38,6 +38,8 @@ export type ActOp =
   | { op: 'point'; highlight: boolean }
   | { op: 'hit'; x: number; y: number; onlyMove?: boolean }
   | { op: 'select' }
+  | { op: 'setValue'; value: string }
+  | { op: 'values'; mode: 'remember' | 'compare'; text?: string }
   | { op: 'focus' }
   | { op: 'focused' }
   | { op: 'choose'; option: string }
@@ -67,8 +69,8 @@ export interface ActRisk {
 }
 
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number }
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -192,6 +194,41 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   }
   if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
   if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
+  // setValue (#112, the owner's hand test): a field that isn't text (a time, a date, a color, a range) set to a value,
+  // as the fill sets one (the native setter, then input and change); one the browser won't take (out of range, not its
+  // format) is refused, and nothing is changed.
+  if (args.op === 'setValue') {
+    if (el.localName !== 'input') return { ok: false, why: 'changed' };
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    const before = el.value;
+    setter.call(el, String(args.value));
+    if (el.value !== String(args.value)) {
+      setter.call(el, before);
+      return { ok: false, why: 'bad-value' };
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true, ...said };
+  }
+  // values (#112): every field's value in the page, remembered before text goes in, then compared: whether this field
+  // changed (or now holds the text), and how many others did. The values never leave the page; only the counts do.
+  if (args.op === 'values') {
+    const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
+    const fields = [...document.querySelectorAll('input, textarea, select, [contenteditable=""], [contenteditable="true"]')].filter((f) => !(f.localName === 'input' && SKIP_TYPES.has(String(f.type).toLowerCase())));
+    const valueOf = (f) => (f.localName === 'input' || f.localName === 'textarea' || f.localName === 'select' ? String(f.value) : String(f.textContent));
+    if (args.mode === 'remember') {
+      globalThis.__chordValues = new Map(fields.map((f) => [f, valueOf(f)]));
+      if (!globalThis.__chordValues.has(el)) globalThis.__chordValues.set(el, valueOf(el));
+      return { ok: true, ...said };
+    }
+    const kept = globalThis.__chordValues;
+    globalThis.__chordValues = null;
+    if (!kept) return { ok: false, why: 'no-values' };
+    let others = 0;
+    for (const f of fields) if (f !== el && kept.has(f) && kept.get(f) !== valueOf(f)) others++;
+    const now = valueOf(el);
+    return { ok: true, ...said, changed: kept.get(el) !== now, has: typeof args.text === 'string' && args.text !== '' && now.includes(args.text), others };
+  }
   if (args.op === 'select') {
     el.focus({ preventScroll: true });
     if (isField(el)) el.select();
