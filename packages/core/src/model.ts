@@ -549,7 +549,9 @@ export const AGENTS_ALLOWED_MAX = 50;
 /** An allowance's sites, kept to what a site can be: a host-like name (a registrable domain, or an address with its port), once each, the newest kept. */
 function actSitesOf(value: unknown): { actSites?: string[] } {
   if (!Array.isArray(value)) return {};
-  const sites = [...new Set(value.filter((s): s is string => typeof s === 'string' && /^[a-z0-9.:[\]-]{1,253}$/i.test(s)).map((s) => s.toLowerCase()))];
+  // As a site is written now (core's normalHost, loginSite): lowercase, without a fully qualified name's trailing dot
+  // (an older one kept with it would never match again).
+  const sites = [...new Set(value.filter((s): s is string => typeof s === 'string' && /^[a-z0-9.:[\]-]{1,253}$/i.test(s)).map((s) => s.toLowerCase().replace(/\.+(?=$|:)/, '')).filter(Boolean))];
   return sites.length ? { actSites: sites.slice(-AGENT_ACT_SITES_MAX) } : {};
 }
 

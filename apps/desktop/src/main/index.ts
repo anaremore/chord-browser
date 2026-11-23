@@ -1426,7 +1426,7 @@ if (!app.requestSingleInstanceLock()) {
             const session = await openDeep(contents, 'timing', 'timing-act', key);
             if (!session) return { times, deep, failed: 'no session' };
             const scroll = (await contents.executeJavaScript('[scrollX, scrollY]')) as [number, number];
-            const hit = await session.hit(answer.x! + scroll[0], answer.y! + scroll[1], false);
+            const hit = await session.hit(answer.x! + scroll[0], answer.y! + scroll[1]);
             const open = await session.open();
             await session.close();
             deep.push(performance.now() - opened);

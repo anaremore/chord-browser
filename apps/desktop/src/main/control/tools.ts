@@ -397,7 +397,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
   const ref = scope.refs.refFor(node.id);
-  const done = async (navigated: boolean, loading: boolean, what: string, picker = false): Promise<ToolOutput> => {
+  const done = async (navigated: boolean, loading: boolean, what: string): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
     if (after) return refuse(after);
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
@@ -412,8 +412,6 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         url: page.url(),
         title: page.title(),
         ...(navigated ? { note: 'The page changed: call snapshot again before using refs from before.' } : {}),
-        // Agents never choose files: a picker the page opened was held, never shown.
-        ...(picker ? { held: 'The page opened a file picker: Chord held it (agents never choose files). Ask the user if a file is needed.' } : {}),
       }),
     };
   };
@@ -442,6 +440,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (!went) return refuse(ACT_REFUSALS.noBack);
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      // You took the tab while it loaded: it went, but the agent hears it's yours now.
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       return await done(page.id !== before, loading, tool === 'navigate' ? `Went to ${barAddress(target)}` : 'Went back');
     } finally {
       host.doing(node.id, null);
@@ -532,38 +532,64 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      * insides all to be seen (no closed shadow root), and Stop and a pause too. A key or an insertion the page would get
      * anywhere else is stopped there, and the action ends. False then.
      */
-    const guarded = async (until: 'keyup' | 'beforeinput', input: () => void | Promise<void>): Promise<boolean> => {
+    /** Under the guard, before each input: the focus the element's, its insides all to be seen, Stop and a pause. */
+    const stillOk = async (): Promise<string | null> => {
+      const focus = await focusOk();
+      if (focus) return focus;
+      const open = await deep!.open();
+      if (!open.ok) return deepRefusal(open);
+      return halt();
+    };
+    /**
+     * Text or keys in, with the page preload's guard up (the window's first listener; every frame's too): the guard
+     * takes what has the focus as the element, then stillOk checks it's this element's. `input` sends, and may check
+     * again between its events (a key's keydown, then its character); it says why it stopped, if it did. A key or an
+     * insertion the page would get anywhere else is stopped there, and the action ends. The guard always comes down.
+     */
+    const guarded = async (until: 'keyup' | 'beforeinput', input: () => Promise<string | null>): Promise<boolean> => {
       if (!(await page.guard(until))) {
+        await page.unguard();
         refused = ACT_REFUSALS.changed;
         return false;
       }
-      if ((refused = await focusOk())) {
-        await page.unguard();
-        return false;
+      let failed: string | null;
+      try {
+        failed = (await stillOk()) ?? (await input());
+      } catch {
+        // The input itself failed (the page went mid-way): nothing more goes in.
+        failed = ACT_REFUSALS.changed;
       }
-      const open = await deep!.open();
-      if (!open.ok) {
-        await page.unguard();
-        refused = deepRefusal(open);
-        return false;
-      }
-      if ((refused = halt())) {
-        await page.unguard();
-        return false;
-      }
-      await input();
-      // The input's events are on their way (each its own message): unguard waits for the last one.
+      // Always down: the input's events are on their way (each its own message), and unguard waits for the last one.
       const down = await page.unguard();
-      if (!down) {
-        // No guard to take down: the page went (a submit's Enter navigated it), so its document, and where its focus
-        // was, went with it. Otherwise it fails closed: nothing more goes in.
-        if (page.id !== pageAtCheck) return true;
+      if (failed) {
+        refused = failed;
+        return false;
+      }
+      if (down === 'gone') {
+        // No guard there any more: another document (a submit's Enter navigated the page), and where its focus was
+        // went with it. The same document (a pushState changes the page id too) always answers: no answer is a no.
+        return true;
+      }
+      if (down === 'timeout') {
         refused = ACT_REFUSALS.focusLost;
         return false;
       }
       if (down.moved) refused = ACT_REFUSALS.focusMoved;
       else if (down.lost) refused = ACT_REFUSALS.focusLost;
       return !refused;
+    };
+    /** A key: its keydown, then (the page's keydown handlers have run) everything checked again, then the rest of it. */
+    const pressKey = (pressed: PressKey) => async (): Promise<string | null> => {
+      const [down, ...rest] = pressKeyEvents(pressed) as AgentInputEvent[];
+      page.keys([down!]);
+      const again = await stillOk();
+      // Never the character: the key's let go of, nothing typed.
+      if (again) {
+        page.keys(rest.filter((e) => e.type === 'keyUp'));
+        return again;
+      }
+      page.keys(rest);
+      return null;
     };
     const { navigated, loading } = await page.afterActing(async () => {
       const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
@@ -578,23 +604,33 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         return;
       }
       if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
-      // From here input goes in: the debugger's checks, and any file picker the page opens held.
+      // From here input goes in: the debugger's checks (deep.ts).
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
       if ((refused = halt())) return;
       if (tool === 'press_key') {
         const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
         if (!focused.ok) return void (refused = actRefusal(focused));
-        return void (await guarded('keyup', () => page.keys(pressKeyEvents(key as PressKey) as AgentInputEvent[])));
+        return void (await guarded('keyup', pressKey(key as PressKey)));
       }
       // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
       // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. The page's
       // own test first, then the debugger's, which sees into closed shadow roots. It narrows the race; it can't close
       // it (the page runs between the test and the press too).
       page.pointer(pointed.x, pointed.y);
-      const hit = await page.act(owner, lookup.token, lookup.key, { op: 'hit', x: pointed.x, y: pointed.y });
+      let hit = await page.act(owner, lookup.token, lookup.key, { op: 'hit', x: pointed.x, y: pointed.y });
+      // The pointer was there already (a second click at the point): no move was sent. One off and back is, and the page
+      // must see both, as any click's move (its mouseenter and mousemove handlers run before the test).
+      if (!hit.ok && hit.why === 'no-move' && hit.there) {
+        const off = { x: pointed.x + 3, y: pointed.y };
+        page.pointer(off.x, off.y);
+        const seen = await page.act(owner, lookup.token, lookup.key, { op: 'hit', ...off, onlyMove: true });
+        if (!seen.ok) return void (refused = actRefusal(seen));
+        page.pointer(pointed.x, pointed.y);
+        hit = await page.act(owner, lookup.token, lookup.key, { op: 'hit', x: pointed.x, y: pointed.y });
+      }
       if (!hit.ok) return void (refused = actRefusal(hit));
-      const under = await deep.hit(pointed.x + (hit.scrollX ?? 0), pointed.y + (hit.scrollY ?? 0), hit.repeat === true);
+      const under = await deep.hit(pointed.x + (hit.scrollX ?? 0), pointed.y + (hit.scrollY ?? 0));
       if (!under.ok) return void (refused = deepRefusal(under));
       if (tool === 'type') {
         const open = await deep.open();
@@ -607,14 +643,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         const selected = await page.act(owner, lookup.token, lookup.key, { op: 'select' });
         if (!selected.ok) return void (refused = actRefusal(selected));
       }
-      if (!(await guarded('beforeinput', () => page.insertText(text as string)))) return;
-      if (args['submit'] !== true) return;
-      await guarded('keyup', () => page.keys(pressKeyEvents('Enter') as AgentInputEvent[]));
+      const typed = await guarded('beforeinput', async () => {
+        await page.insertText(text as string);
+        return null;
+      });
+      if (!typed || args['submit'] !== true) return;
+      await guarded('keyup', pressKey('Enter'));
     });
-    const picker = deep ? (await (deep as DeepSession).close()).picker : false;
+    if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    return await done(navigated, loading, actDone(description), picker);
+    return await done(navigated, loading, actDone(description));
   } finally {
     if (deep) await (deep as DeepSession).close();
     host.doing(node.id, null);

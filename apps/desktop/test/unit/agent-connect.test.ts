@@ -330,6 +330,11 @@ describe('Always allow', () => {
     expect((await borrowed).grant).toBe('deny');
   });
 
+  it('sites kept for good are as a site is written now: lowercase, no trailing dot (an older one would never match)', () => {
+    const [kept] = cleanAgentsAllowed([{ name: 'Codex', parent: '/bin/codex', profileId: 'default', allowedAt: 1, lastUsedAt: 1, actSites: ['Shop.Example.', 'shop.example', 'localhost.:8080', '.'] }]);
+    expect(kept!.actSites).toEqual(['shop.example', 'localhost:8080']);
+  });
+
   it('over the cap, the ones used longest ago go', () => {
     const rows = Array.from({ length: AGENTS_ALLOWED_MAX + 2 }, (_, i) => ({ name: `Agent ${i}`, parent: `/bin/a${i}`, profileId: 'default', allowedAt: i, lastUsedAt: i === 0 ? 10_000 : i }));
     const kept = cleanAgentsAllowed(rows);

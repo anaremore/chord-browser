@@ -46,10 +46,11 @@ export function installAgentGuard(win: GuardWindow): void {
     arm(until: string): boolean {
       if (armed) win.clearTimeout(armed.timer);
       const guard = { expected: deepFocus(), until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0 };
-      // Never left up: at most 5 s.
+      // Never left up for good: main takes it down when the input's in (or the action ends), at the latest after
+      // 30 s, longer than an action's worst path between arming and the input (its checks' limits).
       guard.timer = win.setTimeout(() => {
         if (armed === guard) armed = null;
-      }, 5000);
+      }, 30_000);
       armed = guard;
       return true;
     },
@@ -71,4 +72,26 @@ export function installAgentGuard(win: GuardWindow): void {
       });
     },
   };
+}
+
+/**
+ * A frame's guard, in an agent's tab: while main has the guard up (it says so over IPC, to every frame), every
+ * trusted key and insertion in this frame is stopped (an agent's text and keys are only ever for an element of the
+ * top document; one that reaches a frame went there because the focus moved), and main hears of it.
+ */
+export function installFrameGuard(win: GuardWindow, onArm: (listener: (up: boolean) => void) => void, stopped: () => void): void {
+  let up = false;
+  let timer = 0;
+  onArm((now) => {
+    up = now;
+    win.clearTimeout(timer);
+    if (now) timer = win.setTimeout(() => (up = false), 30_000);
+  });
+  const stop = (event: GuardEvent) => {
+    if (!up || !event.isTrusted || event.type === 'keyup') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    stopped();
+  };
+  for (const type of GUARDED_EVENTS) win.addEventListener(type, stop, true);
 }

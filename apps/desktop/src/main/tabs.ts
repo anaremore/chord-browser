@@ -14,6 +14,7 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
+import { holdFilePickers } from './agents/pickers';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -211,9 +212,13 @@ export class TabManager {
             contextIsolation: true,
             nodeIntegration: false,
             webviewTag: false,
-            ...(this.deps.agentTab?.(nodeId) ? { disableDialogs: true, additionalArguments: [AGENT_TAB_ARG] } : {}),
+            // An agent's tab: its preload runs in every frame of it too (sandboxed, as the page is), so its holds and
+            // its typing guard are in its frames as well (Neon's review of #110).
+            ...(this.deps.agentTab?.(nodeId) ? { disableDialogs: true, additionalArguments: [AGENT_TAB_ARG], nodeIntegrationInSubFrames: true } : {}),
           },
         });
+    // And its file pickers held for its whole life, at a layer no page reaches (agents/pickers.ts).
+    if (!internal && this.deps.agentTab?.(nodeId)) holdFilePickers(view.webContents, (detail) => this.deps.onAgentRefused?.(nodeId, 'file', detail));
     view.setBorderRadius(frameRadius[platform]);
     this.views.set(nodeId, view);
     if (internal) this.internal.add(nodeId);

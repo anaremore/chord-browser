@@ -54,8 +54,11 @@ export interface ControlPage {
    * input may reach. False if there's no guard to arm (then nothing is sent).
    */
   guard(until: 'keyup' | 'beforeinput'): Promise<boolean>;
-  /** The guard down, once the input's last event came (at most 250 ms): what it stopped; null if it wasn't up. */
-  unguard(): Promise<{ moved: boolean; lost: boolean } | null>;
+  /**
+   * The guard down, once the input's last event came (at most 250 ms): what it (or a frame's) stopped. `gone`: no
+   * guard was up there (another document: the page went); `timeout`: the page didn't answer.
+   */
+  unguard(): Promise<{ moved: boolean; lost: boolean } | 'gone' | 'timeout'>;
   /** The debugger's checks for one action (control/deep.ts); null if it can't be had. */
   deep(owner: string, token: string, key: number): Promise<DeepSession | null>;
   /** Text put in where the focus is, as one insertion (never as keys). */
@@ -98,7 +101,24 @@ export function pageIdOf(contents: WebContents): string {
 }
 
 /** The adapter for a page Chord holds. */
+/** Tells every frame of the page but the top one whether the guard is up. */
+function toFrames(contents: WebContents, up: boolean): void {
+  if (contents.isDestroyed()) return;
+  const main = contents.mainFrame;
+  for (const frame of main?.framesInSubtree ?? []) {
+    if (frame === main) continue;
+    try {
+      frame.send('chord:agentGuard', up);
+    } catch {
+      // A frame that went meanwhile.
+    }
+  }
+}
+
 export function controlPage(contents: WebContents): ControlPage {
+  /** A frame's guard stopped a key or an insertion while the guard was up. */
+  let frameStopped = false;
+  const onFrameStopped = () => void (frameStopped = true);
   return {
     get id() {
       return contents.isDestroyed() ? '' : pageIdOf(contents);
@@ -123,10 +143,21 @@ export function controlPage(contents: WebContents): ControlPage {
       ]);
     },
     keys: (events) => sendAgentInput(contents, events),
-    guard: async (until) => (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}) : false`)) === true,
+    guard: async (until) => {
+      // The frames' guards first (agent-guard.ts's installFrameGuard): whatever they stop meanwhile is heard here.
+      frameStopped = false;
+      contents.ipc?.on('page:agentGuardStopped', onFrameStopped);
+      toFrames(contents, true);
+      return (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}) : false`)) === true;
+    },
     unguard: async () => {
-      const answer = (await inPreload(contents, 'globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(250) : null')) as { moved?: unknown; lost?: unknown } | null;
-      return answer && typeof answer === 'object' ? { moved: answer.moved === true, lost: answer.lost === true } : null;
+      const answer = await inPreload(contents, 'globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(250) : null');
+      toFrames(contents, false);
+      contents.ipc?.off('page:agentGuardStopped', onFrameStopped);
+      if (answer === PRELOAD_TIMEOUT) return 'timeout';
+      if (!answer || typeof answer !== 'object') return 'gone';
+      const { moved, lost } = answer as { moved?: unknown; lost?: unknown };
+      return { moved: moved === true || frameStopped, lost: lost === true };
     },
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
     insertText: (text) => (contents.isDestroyed() ? Promise.resolve() : contents.insertText(text)),
@@ -149,10 +180,13 @@ export function controlPage(contents: WebContents): ControlPage {
 /** Electron's world for the page preload (contextIsolation's): where its agent guard is. */
 const PRELOAD_WORLD = 999;
 
-/** A script in the page preload's world, answered within a moment (null if not). */
+/** What inPreload answers when the page doesn't, in time or at all. */
+const PRELOAD_TIMEOUT = Symbol('timeout');
+
+/** A script in the page preload's world, answered within a moment (PRELOAD_TIMEOUT if not). */
 function inPreload(contents: WebContents, code: string): Promise<unknown> {
-  if (contents.isDestroyed()) return Promise.resolve(null);
-  return pageCall(contents.executeJavaScriptInIsolatedWorld(PRELOAD_WORLD, [{ code }]), null, 3000);
+  if (contents.isDestroyed()) return Promise.resolve(PRELOAD_TIMEOUT);
+  return pageCall(contents.executeJavaScriptInIsolatedWorld(PRELOAD_WORLD, [{ code }]), PRELOAD_TIMEOUT, 3000);
 }
 
 /** The page's CSS pixels to the view's: sendInputEvent's points are the view's, the page zoomed in them. */

@@ -36,7 +36,7 @@ const ACT_PAGE_MS = 3000;
 
 export type ActOp =
   | { op: 'point'; highlight: boolean }
-  | { op: 'hit'; x: number; y: number }
+  | { op: 'hit'; x: number; y: number; onlyMove?: boolean }
   | { op: 'select' }
   | { op: 'focus' }
   | { op: 'focused' }
@@ -45,8 +45,8 @@ export type ActOp =
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; repeat?: boolean; scrollX?: number; scrollY?: number }
-  | { ok: false; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number }
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -142,10 +142,10 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // handlers run before the move's own listeners, so once the move is seen here (and its dispatch over: a task later),
   // whatever they put over the point is there to be hit. It fails closed: a move never seen (a tab that draws no
   // frames, a page listener that swallows moves, a move into a frame, whose document gets it) gets no press, as the
-  // button going down would send the move then, and its handlers would run after this test. Unless the pointer was at
-  // that point already (a second click there) and the last move seen there was over this very node: no move is sent
-  // then, and nothing new is under the pointer for handlers to run on. Anything else there now (the page put another
-  // element at the point, whose mouseenter the press would set off) gets no press.
+  // button going down would send the move then, and its handlers would run after this test. A pointer that was at the
+  // point already (a second click there) gets no move: "there" says so, and main moves it off and back, which the
+  // page must see too ("onlyMove": just the move seen, no test). The moves are watched from point on (the watch stays
+  // until a test passes), so one that arrives before this script runs is seen too.
   if (args.op === 'hit') {
     const near = (e) => Math.abs(e.clientX - args.x) <= 2 && Math.abs(e.clientY - args.y) <= 2;
     const moved = globalThis.__chordMoved;
@@ -159,15 +159,16 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       });
     }
     await new Promise((done) => setTimeout(done, 0));
-    if (moved) { removeEventListener('mousemove', moved.listen, true); globalThis.__chordMoved = null; }
+    if (!arrived) {
+      const was = moved && moved.before;
+      return { ok: false, why: 'no-move', ...(was && near(was) ? { there: true } : {}) };
+    }
+    if (args.onlyMove) return { ok: true, ...said };
     const hit = deepest(args.x, args.y);
     if (!ours(hit)) return { ok: false, why: 'covered', cover: coverOf(hit) };
-    const before = moved && moved.before;
-    if (!arrived && !(before && near(before) && before.target && before.target.deref() === hit)) return { ok: false, why: 'no-move' };
-    // A second click without a fresh move: the debugger's own hit test (deep.ts) must find the very node too.
-    globalThis.__chordRepeat = arrived ? null : before.target;
+    if (moved) { removeEventListener('mousemove', moved.listen, true); globalThis.__chordMoved = null; }
     // Where the page is scrolled to: the debugger's hit test takes the document's coordinates.
-    return { ok: true, ...said, repeat: !arrived, scrollX, scrollY };
+    return { ok: true, ...said, scrollX, scrollY };
   }
   // point: to the middle of the view, then the hit test at its middle and its quarters' middles.
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
@@ -186,8 +187,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       // Where the pointer was last seen, before this action's move (kept by a listener that stays once an agent acts).
       if (!globalThis.__chordPointer) {
         const pointer = (globalThis.__chordPointer = { at: null });
-        // And what it was over: the deepest node there, through open shadow roots, as hit's test finds it.
-        addEventListener('mousemove', (e) => { if (e.isTrusted) pointer.at = { clientX: e.clientX, clientY: e.clientY, target: new WeakRef(e.composedPath()[0] || e.target) }; }, true);
+        addEventListener('mousemove', (e) => { if (e.isTrusted) pointer.at = { clientX: e.clientX, clientY: e.clientY }; }, true);
       }
       const watch = { seen: null, before: globalThis.__chordPointer.at, listen: (e) => { if (e.isTrusted) watch.seen = { clientX: e.clientX, clientY: e.clientY }; } };
       addEventListener('mousemove', watch.listen, true);

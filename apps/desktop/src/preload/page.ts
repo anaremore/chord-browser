@@ -24,7 +24,7 @@
  * so a site that checks for tampered APIs sees Chromium's.
  */
 import { contextBridge, ipcRenderer } from 'electron';
-import { installAgentGuard } from './agent-guard';
+import { installAgentGuard, installFrameGuard } from './agent-guard';
 import { holdForAgent } from './agent-hold';
 
 /** The page's globals this touches (the preload's project has no DOM types; this runs in the page's own world). */
@@ -128,30 +128,50 @@ function compatibility(report: (badge: Badge) => void): void {
 const AGENT_TAB_ARG = '--chord-agent-tab';
 const agentTab = typeof process !== 'undefined' && Array.isArray(process.argv) && process.argv.includes(AGENT_TAB_ARG);
 
-// Web pages only: not an extension's pages, which share the session, nor a blank frame's.
+// Is this the tab's top frame (in an agent's tab, the preload runs in its frames too)?
+const isTop = (() => {
+  try {
+    const g = globalThis as unknown as { top: unknown };
+    return g.top === globalThis;
+  } catch {
+    return false;
+  }
+})();
 const { protocol } = (globalThis as unknown as { location: { protocol: string } }).location;
-if (protocol === 'https:' || protocol === 'http:') {
+// Web pages only: not an extension's pages, which share the session, nor a blank frame's.
+if ((protocol === 'https:' || protocol === 'http:') && isTop) {
   // The page calls this through the bridge: only the value crosses, and main takes only the top frame's.
   const report = (badge: Badge) => ipcRenderer.send('page:badge', badge);
   contextBridge.executeInMainWorld({ func: compatibility, args: [report] });
-  if (agentTab) {
-    const held = (kind: 'dialog' | 'file', detail: string) => ipcRenderer.send('page:agentHeld', { kind, detail: String(detail).slice(0, 500) });
-    contextBridge.executeInMainWorld({ func: holdForAgent, args: [held] });
-    // The guard while an agent's text and keys go in: the window's first listeners (agent-guard.ts).
-    installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
-    // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent. On the window,
-    // the first listener there, so a page's own capture listener can't stop it first (Neon's review of #110).
-    const win = globalThis as unknown as { addEventListener(type: string, listener: (event: { composedPath(): unknown[]; preventDefault(): void }) => void, capture: boolean): void };
-    win.addEventListener(
-      'click',
-      (event) => {
-        const target = event.composedPath()[0] as { tagName?: string; type?: string } | undefined;
-        if (target?.tagName === 'INPUT' && target.type === 'file') {
-          event.preventDefault();
-          held('file', 'a file input');
-        }
-      },
-      true,
+}
+// An outside agent's tab: every frame of it, whatever its address (an about:blank, srcdoc or blob: frame takes its
+// parent's origin, and its pickers and dialogs would be the page's), but never an extension's or DevTools' page.
+if (agentTab && protocol !== 'chrome-extension:' && protocol !== 'devtools:') {
+  const held = (kind: 'dialog' | 'file', detail: string) => ipcRenderer.send('page:agentHeld', { kind, detail: String(detail).slice(0, 500) });
+  contextBridge.executeInMainWorld({ func: holdForAgent, args: [held] });
+  const guardWindow = globalThis as unknown as Parameters<typeof installAgentGuard>[0];
+  // The guard while an agent's text and keys go in: the window's first listeners (agent-guard.ts). A frame's blocks
+  // every key and insertion while main has it up (an agent's input is never for a frame), and says so.
+  if (isTop) installAgentGuard(guardWindow);
+  else
+    installFrameGuard(
+      guardWindow,
+      (listener) => ipcRenderer.on('chord:agentGuard', (_event, up: unknown) => listener(up === true)),
+      () => ipcRenderer.send('page:agentGuardStopped'),
     );
-  }
+  // A click on a file input (yours, in the agent's tab) opens no picker: it would act for the agent. On the window,
+  // the first listener there, so a page's own capture listener can't stop it first (Neon's review of #110). Behind it,
+  // main's interception holds any picker that still opens (agents/pickers.ts).
+  const win = globalThis as unknown as { addEventListener(type: string, listener: (event: { composedPath(): unknown[]; preventDefault(): void }) => void, capture: boolean): void };
+  win.addEventListener(
+    'click',
+    (event) => {
+      const target = event.composedPath()[0] as { tagName?: string; type?: string } | undefined;
+      if (target?.tagName === 'INPUT' && target.type === 'file') {
+        event.preventDefault();
+        held('file', 'a file input');
+      }
+    },
+    true,
+  );
 }

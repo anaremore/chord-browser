@@ -6,16 +6,21 @@
  * - **What's under the point**, through closed shadow roots, which `elementFromPoint` stops at (a button can hide a
  *   frame in one and let it take the pointer once it moves there): `DOM.getNodeForLocation`. The node found must be
  *   the ref's element or inside it (closed roots too: from inside one, `getRootNode().host` leads out), never a frame,
- *   never what opens a file picker, and for a second click at a point without a fresh move, the very node the last
- *   move was over.
+ *   never what opens a file picker (a file input, a label for one).
  * - **Closed shadow roots in what takes text or keys**: `document.activeElement` stops at a closed root's host too,
  *   so the focus could be on a password field inside it while the page says it's on the element. An element with a
  *   closed root in it (`DOM.describeNode` with `pierce`) is never typed in or pressed keys in.
- * - **File pickers**: while the session is open, one the page opens is intercepted, never shown
- *   (`Page.setInterceptFileChooserDialog`), and the action's result says so. Agents never choose files.
+ *
+ * An agent's tab has its debugger attached for its whole life (agents/pickers.ts holds its file pickers): the session
+ * uses it as it is and never detaches it. One that isn't attached (no agent's tab) is attached for the session.
  *
  * The node checks run in Chord's own isolated world (ASSISTANT_WORLD, found by its snapshots: a page can't reach it or
- * change what its functions do), on nodes CDP hands it. If the debugger can't be had, nothing is pressed or typed.
+ * change what its functions do), on nodes CDP hands it. Finding that world's context needs `Runtime.enable` (its
+ * contexts are named only to a client that enables it): once per document, after the page's stored console entries
+ * are discarded (so enabling replays none: no cost from a page that logged a thousand large objects, and nothing for a
+ * page's getters to notice), and disabled again at once; the context is kept for the document's later actions, which
+ * only `Runtime.evaluate` and `Runtime.callFunctionOn` in it (neither needs Runtime enabled). If the debugger can't be
+ * had, nothing is pressed or typed.
  */
 import type { WebContents } from 'electron';
 import { withDebugger } from '../debugger-queue';
@@ -30,22 +35,22 @@ const DEEP_COMMAND_MS = 3000;
 export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
 
 export interface DeepSession {
-  /**
-   * What's under (x, y), in the document's CSS pixels (the view's point plus the scroll: DOM.getNodeForLocation's),
-   * is the element's own; `repeat`: no fresh move was seen, so it must be the node the last one was over.
-   */
-  hit(x: number, y: number, repeat: boolean): Promise<DeepAnswer>;
+  /** What's under (x, y), in the document's CSS pixels (the view's point plus the scroll: DOM.getNodeForLocation's), is the element's own. */
+  hit(x: number, y: number): Promise<DeepAnswer>;
   /** The element holds no closed shadow root (what takes text and keys is all to be seen). */
   open(): Promise<DeepAnswer>;
-  /** Lets go of the debugger; says whether a file picker was held meanwhile. */
-  close(): Promise<{ picker: boolean }>;
+  /** Lets go of the debugger (detached if the session attached it). */
+  close(): Promise<void>;
 }
 
 type Debugger = WebContents['debugger'];
+
+/** Chord's world's context in each page's current document (its main frame's loader), found once per document. */
+const worlds = new WeakMap<WebContents, { document: string; world: number }>();
 type Node = { shadowRoots?: (Node & { shadowRootType?: string })[]; children?: Node[]; contentDocument?: Node; shadowRootType?: string };
 
 /** A frame's title or what covers a point, as act.ts names it. */
-const CHECK_FN = String.raw`function (owner, token, key, repeat) {
+const CHECK_FN = String.raw`function (owner, token, key) {
   ${SNAPSHOT_LIB}
   const hit = this;
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner);
@@ -64,17 +69,15 @@ const CHECK_FN = String.raw`function (owner, token, key, repeat) {
     return { role: cover && cover.localName ? cover.localName : 'element', name: '' };
   };
   // From the node up to the element, through closed roots too; a frame anywhere on the way is never the element's.
+  // What opens a file picker on the way too: a file input, or a label for one (its text, an icon in it).
   let ours = false;
   for (let n = hit; n; n = up(n)) {
     if (n.nodeType === 1 && FRAMES.has(n.localName)) return { ok: false, why: 'covered', cover: coverOf(n) };
+    if (n.nodeType === 1 && opensFiles(n)) return { ok: false, why: 'file' };
     if (n === el) { ours = true; break; }
   }
   if (!ours) return { ok: false, why: 'covered', cover: coverOf(hit.nodeType === 1 ? hit : up(hit)) };
-  if (hit.nodeType === 1 && opensFiles(hit)) return { ok: false, why: 'file' };
-  if (repeat) {
-    const last = globalThis.__chordRepeat && globalThis.__chordRepeat.deref();
-    if (last !== hit && !(hit.nodeType === 3 && last === up(hit))) return { ok: false, why: 'no-move' };
-  }
+  for (let n = el; n; n = up(n)) if (n.nodeType === 1 && n.localName === 'label' && opensFiles(n)) return { ok: false, why: 'file' };
   return { ok: true };
 }`;
 
@@ -97,16 +100,13 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
   const session = new Promise<DeepSession | null>((done) => (ready = done));
   void withDebugger(contents, async () => {
     const debug: Debugger = contents.debugger;
+    // An agent's tab: attached for its whole life (agents/pickers.ts), used as it is. Otherwise attached for this.
     const mine = !debug.isAttached();
-    let picker = false;
     const contexts: { id: number; frameId?: string; type?: string }[] = [];
     const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
-      if (sessionId) return;
-      if (method === 'Runtime.executionContextCreated') {
-        const c = (params as { context?: { id?: number; auxData?: { frameId?: string; type?: string } } }).context;
-        if (typeof c?.id === 'number') contexts.push({ id: c.id, ...(c.auxData?.frameId ? { frameId: c.auxData.frameId } : {}), ...(c.auxData?.type ? { type: c.auxData.type } : {}) });
-      }
-      if (method === 'Page.fileChooserOpened') picker = true;
+      if (sessionId || method !== 'Runtime.executionContextCreated') return;
+      const c = (params as { context?: { id?: number; auxData?: { frameId?: string; type?: string } } }).context;
+      if (typeof c?.id === 'number') contexts.push({ id: c.id, ...(c.auxData?.frameId ? { frameId: c.auxData.frameId } : {}), ...(c.auxData?.type ? { type: c.auxData.type } : {}) });
     };
     /** Why the last command had no answer (for the refusal's diagnostics). */
     let lastError = '';
@@ -123,18 +123,14 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       return answer ?? null;
     };
     let closed = false;
-    const close = async (): Promise<{ picker: boolean }> => {
-      if (closed) return { picker };
+    const close = async (): Promise<void> => {
+      if (closed) return;
       closed = true;
       debug.off('message', onMessage);
-      if (!contents.isDestroyed() && debug.isAttached()) {
-        // Letting go cancels a picker held meanwhile. Someone else's client keeps its attachment: what Chord turned on
-        // goes off, without waiting on the page.
-        if (mine) debug.detach();
-        else for (const [method, params] of [['Page.setInterceptFileChooserDialog', { enabled: false }], ['Runtime.disable', undefined]] as const) debug.sendCommand(method, params).catch(() => undefined);
-      }
+      // Only what the session attached; an agent's tab keeps its own attachment (nothing else was turned on: Runtime
+      // was enabled and disabled within the session).
+      if (mine && !contents.isDestroyed() && debug.isAttached()) debug.detach();
       release();
-      return { picker };
     };
     try {
       if (mine) debug.attach('1.3');
@@ -146,19 +142,22 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     const timer = setTimeout(() => void close(), DEEP_SESSION_MS);
     timer.unref?.();
     try {
-      const tree = await send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree');
+      const tree = await send<{ frameTree: { frame: { id: string; loaderId?: string } } }>('Page.getFrameTree');
       const main = tree?.frameTree.frame.id;
-      // Page's events (the picker opened), and the picker intercepted from now on.
-      const intercepted = main && (await send('Page.enable')) && (await send('Page.setInterceptFileChooserDialog', { enabled: true }));
-      // Runtime.enable names every context before it answers: Chord's world is the main frame's isolated one with its snapshots.
-      const enabled = intercepted && (await send('Runtime.enable'));
+      const document = tree?.frameTree.frame.loaderId ?? '';
+      const isOurs = async (id: number) =>
+        (await send<{ result: { value?: unknown } }>('Runtime.evaluate', { expression: 'globalThis.__chordSnapshots instanceof Map', contextId: id, returnByValue: true }))?.result.value === true;
+      // Chord's world: the one found before in this document, if it still answers; else found now (see above).
       let world: number | null = null;
-      if (enabled) {
+      const known = worlds.get(contents);
+      if (main && known && known.document === document && (await isOurs(known.world))) world = known.world;
+      if (main && world === null && (await send('Runtime.discardConsoleEntries')) && (await send('Runtime.enable'))) {
+        await send('Runtime.disable');
         for (const c of contexts) {
           if (c.frameId !== main || c.type !== 'isolated') continue;
-          const ours = await send<{ result: { value?: unknown } }>('Runtime.evaluate', { expression: 'globalThis.__chordSnapshots instanceof Map', contextId: c.id, returnByValue: true });
-          if (ours?.result.value === true) {
+          if (await isOurs(c.id)) {
             world = c.id;
+            worlds.set(contents, { document, world });
             break;
           }
         }
@@ -183,7 +182,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       };
       walk(tree!.frameTree as { frame: { id: string }; childFrames?: unknown[] });
       ready({
-        hit: async (x, y, repeat) => {
+        hit: async (x, y) => {
           const at = await send<{ backendNodeId: number; frameId: string }>('DOM.getNodeForLocation', { x: Math.round(x), y: Math.round(y), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false });
           if (!at) return { ok: false, why: 'no-check', step: `location ${lastError}` };
           let backendNodeId = at.backendNodeId;
@@ -200,7 +199,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           const checked = await send<{ result: { value?: DeepAnswer } }>('Runtime.callFunctionOn', {
             objectId: resolved.object.objectId,
             functionDeclaration: CHECK_FN,
-            arguments: [{ value: owner }, { value: token }, { value: key }, { value: repeat }],
+            arguments: [{ value: owner }, { value: token }, { value: key }],
             returnByValue: true,
           });
           const answer = checked?.result.value;

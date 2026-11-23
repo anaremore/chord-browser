@@ -80,7 +80,7 @@ export class ControlAgent {
   private readonly open = new Map<string, OpenCard>();
   /** Cards answered *once* after their asks had gone: the next ask of each takes it. */
   /** Cards answered *once* after their asks had gone: the next ask of each takes it, if it's soon and for the same address. */
-  private readonly late = new Map<string, { at: number; url: string }>();
+  private readonly late = new Map<string, { at: number; url: string; grant: 'once' | 'always' }>();
   /** Who hears when a state changes (an agent's bar). */
   private readonly listeners = new Set<() => void>();
   private readonly waiters = new Set<() => void>();
@@ -213,7 +213,7 @@ export class ControlAgent {
     if (late) {
       this.late.delete(key);
       // Only soon after, and only for the page it was given on: a once answers for one read of what the card named.
-      if (Date.now() - late.at <= CONTROL_WAIT_MS && late.url === (card.target[0] ?? '')) return 'once';
+      if (Date.now() - late.at <= CONTROL_WAIT_MS && late.url === (card.target[0] ?? '')) return late.grant;
     }
     const open = this.open.get(key) ?? this.openCard(card);
     // Another tab waiting on a card up already (a site card is the site's): its bar says it's waiting too.
@@ -258,7 +258,8 @@ export class ControlAgent {
         // have gone elsewhere while the card was up. A no is kept at once, whatever became of the page.
         if (keep && !(card.kind === 'site' && keep !== 'deny')) this.grants.set(grantKey(card), keep);
         // Answered after everyone asking had gone (*waiting*): the retry gets it, rather than a second card.
-        if (grant === 'once' && open.askers === 0) this.late.set(key, { at: Date.now(), url: card.target[0] ?? '' });
+        // A site's *Always* too: it isn't kept until its action runs (keep), so the retry carries it, and keeps it if it runs.
+        if (grant !== 'deny' && open.askers === 0) this.late.set(key, { at: Date.now(), url: card.target[0] ?? '', grant });
         return grant;
       } catch {
         return 'deny';

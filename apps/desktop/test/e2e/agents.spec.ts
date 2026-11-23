@@ -307,9 +307,32 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     // debugger's interception (in the action's own result): either way no picker, and the agent hears of it.
     const heard = [attach.text, ...attach.held, ...(await mcp.call('list_tabs')).held].join(' ');
     expect.soft(heard).toMatch(/a file input|a file picker/);
-    // One in a closed root: the debugger's interception holds it, and the action's result says so.
-    const closedUpload = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Closed upload"') });
-    expect.soft(closedUpload.text).toContain('The page opened a file picker: Chord held it');
+    // Held, wherever the picker comes from, for the tab's whole life (agents/pickers.ts' interception, the preload's
+    // holds in every frame): one in a closed root; one a page opens 1.5 s after the click (on the activation it gave);
+    // a srcdoc frame's input and its File System Access picker. Each is heard by the agent.
+    const heldSoFar: string[] = [];
+    const heardOf = async (what: RegExp) => {
+      await expect
+        .poll(async () => {
+          heldSoFar.push(...(await mcp.call('list_tabs')).held);
+          return heldSoFar.join(' | ');
+        }, { timeout: 10_000 })
+        .toMatch(what);
+      heldSoFar.length = 0;
+    };
+    for (const button of ['Closed upload', 'Late upload', 'Late closed upload', 'Frame upload']) {
+      const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${button}"`) });
+      expect.soft(clicked.isError, button).toBe(false);
+      heldSoFar.push(...clicked.held);
+      await heardOf(/a file (picker|input)/);
+    }
+    const framePicker = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Frame picker"') });
+    heldSoFar.push(...framePicker.held);
+    await heardOf(/showOpenFilePicker/);
+
+    // A button in a closed root, clicked twice at one point: both clicks go in (the second's pointer moved off and back).
+    for (let i = 0; i < 2; i++) expect.soft(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') })).text)).toMatchObject({ data: { done: 'Clicked “Step up”' } });
+    expect.soft(await inPage('document.getElementById("log").textContent')).toContain('stepped 2');
 
     // Your focus never moved to the agent's tab.
     expect.soft(await focused()).toBe(yours);
@@ -324,6 +347,16 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     await expect.soft(shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' })).toBeVisible();
     mcp.child.stdin!.end();
     await mcp.exited;
+    // Kept: its page is made again as a tab of yours (core's keepAgentTab), with none of the agent's settings: no held
+    // dialogs (alert shows Chord's own, not answered at once), the preload's agent guard gone, no debugger.
+    await shell.getByRole('button', { name: 'Keep', exact: true }).click();
+    const settingsOf = () =>
+      app.evaluate(async ({ webContents }, url) => {
+        const c = webContents.getAllWebContents().find((x) => x.getURL().startsWith(url) && !x.isDestroyed());
+        if (!c) return null;
+        return { guard: await c.executeJavaScriptInIsolatedWorld(999, [{ code: 'typeof globalThis.__chordAgentGuard' }]), debugger: c.debugger.isAttached() };
+      }, `${site.origin}/neon`);
+    await expect.poll(settingsOf, { timeout: 15_000 }).toEqual({ guard: 'undefined', debugger: false });
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
@@ -397,7 +430,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     type Times = { times: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
     const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
     const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
-    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
+    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/noisy', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
       await mcp.call('open_tab', { url: `${site.origin}${path}` });
       const measured = (await timesOf(`${site.origin}${path}`, runs))!;
       const ms = sorted(measured.times);
@@ -739,6 +772,14 @@ test.beforeAll(async () => {
       '<label class=row for=up2 style="cursor:pointer">Choose a photo</label><input type=file id=up2 style="display:none">' +
       '<button class=row id=attach onclick="document.getElementById(\'up3\').click()">Open attachments</button><input type=file id=up3 style="display:none">' +
       '<x-up class=row role=button tabindex=0 aria-label="Closed upload" id=cup></x-up>' +
+      // Round 5: pickers a page opens after the action, on the activation the click gave it; a frame's; a stepper in a
+      // closed root, clicked twice.
+      '<button class=row id=late onclick="setTimeout(() => { const i = document.createElement(\'input\'); i.type = \'file\'; i.click(); }, 1500)">Late upload</button>' +
+      '<button class=row id=lateClosed onclick="setTimeout(() => cupRoot.querySelector(\'input\').click(), 1500)">Late closed upload</button>' +
+      '<iframe id=fr title="Uploads" srcdoc="<input type=file id=fi>" style="width:200px;height:40px"></iframe>' +
+      '<button class=row onclick="document.getElementById(\'fr\').contentDocument.getElementById(\'fi\').click()">Frame upload</button>' +
+      '<button class=row onclick="document.getElementById(\'fr\').contentWindow.showOpenFilePicker().catch(() => {})">Frame picker</button>' +
+      '<x-step class=row role=button tabindex=0 aria-label="Step up" id=step></x-step>' +
       '<p id=log></p></main><script>' +
       // A button whose closed root holds a frame, which takes the pointer once it moves over the button.
       'const dealRoot = deal.attachShadow({ mode: "closed" });' +
@@ -755,6 +796,8 @@ test.beforeAll(async () => {
       // A button whose closed root holds the file input it clicks (the preload's listener sees only the button).
       'const cupRoot = cup.attachShadow({ mode: "closed" }); cupRoot.innerHTML = "<span>Closed upload</span><input type=file style=\\"display:none\\">";' +
       'cup.addEventListener("click", () => cupRoot.querySelector("input").click());' +
+      'const stepRoot = step.attachShadow({ mode: "closed" }); stepRoot.innerHTML = "<style>:host{display:inline-block;width:160px;height:40px}</style><span style=\\"display:block;width:100%;height:100%\\">+</span>";' +
+      'step.addEventListener("click", () => { step.dataset.n = Number(step.dataset.n || 0) + 1; log.textContent = "stepped " + step.dataset.n; });' +
       // And the file input its button clicks, its click kept from anything after.
       'addEventListener("click", (e) => { if (e.target.id === "up3") e.stopImmediatePropagation(); }, true);' +
       '</script>',
@@ -772,6 +815,8 @@ test.beforeAll(async () => {
     const rows = /^\/rows-(\d+)$/.exec(req.url ?? '');
     // A hostile page: 2,000,000 text nodes in one div (the parser would join them, so a script makes them).
     const texts = '<title>Texts</title><div id=d></div><script>const d = document.getElementById("d"); for (let i = 0; i < 2000000; i++) d.appendChild(document.createTextNode("x "));</script>';
+    // Round 5 of #110: a typical page that logged 1,000 large objects (acting's debugger session must not replay them).
+    const noisy = rowsPage(300) + '<script>for (let i = 0; i < 1000; i++) console.log({ i, big: "x".repeat(10000), list: Array.from({ length: 200 }, (_, j) => ({ j })) });</script>';
     // M2c: a shop to act on. Its search (a GET form) lands on its results, which echo what was searched.
     const shop = /^\/shop\/results\?q=([a-z0-9]*)$/.exec(req.url ?? '');
     const body = rows
@@ -780,7 +825,9 @@ test.beforeAll(async () => {
         ? shopResults(shop[1]!)
         : req.url === '/texts'
           ? texts
-          : pages[req.url ?? '/'];
+          : req.url === '/noisy'
+            ? noisy
+            : pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
   });

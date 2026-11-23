@@ -508,6 +508,22 @@ describe('Cards, review 1 of #76', () => {
     expect(shown).toHaveLength(2);
   });
 
+  it('a late Always on this site is carried to the retry, not lost to a second card; kept only by the action (keep)', async () => {
+    vi.useFakeTimers();
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const site = { kind: 'site' as const, tool: 'click', subject: 'shop.test', tab: 'n1', target: ['https://shop.test/'] };
+    const asked = agent.ask(card(site), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(asked).resolves.toBe('waiting');
+    shown.at(-1)!.answer('always');
+    await vi.advanceTimersByTimeAsync(0);
+    // Not kept yet: the action it was for hasn't run.
+    expect(agent.granted('site', 'shop.test')).toBeUndefined();
+    await expect(agent.ask(card(site), new AbortController().signal, 20)).resolves.toBe('always');
+    expect(shown).toHaveLength(1);
+  });
+
   it('a late once answers only for the tab and address its card named, and only soon after', async () => {
     vi.useFakeTimers();
     const { shown, present } = presenter();
@@ -757,14 +773,17 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; unguard?: 'timeout' | 'gone' };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     if (code.includes('__chordAgentGuard')) {
       const op = code.includes('.arm(') ? 'guard' : 'unguard';
       steps.push(op);
       onAct?.(events, op);
-      return op === 'guard' ? true : { moved: Boolean(twist.moved), lost: Boolean(twist.lost) };
+      if (op === 'guard') return true;
+      if (twist.unguard === 'gone') return null;
+      if (twist.unguard === 'timeout') return new Promise(() => undefined);
+      return { moved: Boolean(twist.moved), lost: Boolean(twist.lost) };
     }
     if (code.includes('new MutationObserver(() =>')) {
       onAct?.(events, 'settle');
@@ -787,6 +806,12 @@ describe('acting through the gate (S18 M2c)', () => {
       }
       if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
       if (args.op === 'hit' && twist.noMove) return { ok: false, why: 'no-move' };
+      // The pointer at the point already: no move the first time; then the move off (seen, unless the page swallows it).
+      if (args.op === 'hit' && twist.there) {
+        const hits = steps.filter((x) => x === 'hit').length;
+        if (hits === 1) return { ok: false, why: 'no-move', there: true };
+        if (hits === 2) return twist.noMoveOff ? { ok: false, why: 'no-move' } : { ok: true, ...said };
+      }
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
@@ -886,7 +911,8 @@ describe('acting through the gate (S18 M2c)', () => {
     const out = await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool scarf', submit: true });
     expect(result(out).data['done']).toBe('Typed in “Search”');
     // Each input with the page preload's guard up (guard, the focus checked, the input, unguard).
-    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'unguard']);
+    // Enter's keydown first, then everything checked again before its character (a keydown handler can move the focus).
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'focused', 'unguard']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
@@ -899,7 +925,7 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Escape' });
     // Focused, then the guard up and the focus checked under it (the guard takes what has the focus as the element).
-    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'focused', 'unguard']);
+    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'focused', 'focused', 'unguard']);
     expect(t.at.input).toEqual([
       { type: 'keyDown', keyCode: 'Escape' },
       { type: 'keyUp', keyCode: 'Escape' },
@@ -962,7 +988,6 @@ describe('acting through the gate (S18 M2c)', () => {
   const deepRows: [string, string, { hit?: unknown; closed?: boolean; unavailable?: boolean }, string][] = [
     ['click', 'a frame in a closed shadow root under the point', { hit: { ok: false, why: 'covered', cover: { role: 'frame', name: 'Inner ad' } } }, 'Something is covering that element: frame “Inner ad”. Deal with it first, or call snapshot again.'],
     ['click', 'a file input in a closed shadow root under the point', { hit: { ok: false, why: 'file' } }, 'That opens a file picker: agents never choose files. Ask the user to.'],
-    ['click', 'another node than the last move was over, with no fresh move', { hit: { ok: false, why: 'no-move' } }, 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.'],
     ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
     ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
     ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
@@ -973,15 +998,28 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused).toBe(says);
     expect(t.at.text).toEqual([]);
     expect((t.at.input as { type: string }[]).filter((e) => e.type !== 'mouseMove')).toEqual([]);
-    // And let go of after.
-    expect(t.at.debugging.includes('Page.setInterceptFileChooserDialog') || Boolean(deep.unavailable)).toBe(true);
+    // Chord's world found without replaying the page's console: its stored entries discarded first.
+    if (!deep.unavailable) expect(t.at.debugging.slice(0, 4)).toEqual(['Page.getFrameTree', 'Runtime.discardConsoleEntries', 'Runtime.enable', 'Runtime.disable']);
   });
 
-  it('a file picker the page opened while the agent clicked: held, never shown, and the agent hears so', async () => {
-    const t = await acting({ deep: { picker: true } });
-    const out = result(await t.call('click', { tab_id: t.tab, ref: 'e1' }));
-    expect(out.data['held']).toBe('The page opened a file picker: Chord held it (agents never choose files). Ask the user if a file is needed.');
-    expect(t.at.debugging).toContain('Page.setInterceptFileChooserDialog');
+  it('a second click at the point: the pointer moves off and back, and the page must see both moves before the press', async () => {
+    const t = await acting({ twist: { there: true } });
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+    expect((t.at.input as { type: string; x: number }[]).map((e) => `${e.type} ${e.x}`)).toEqual(['mouseMove 10', 'mouseMove 13', 'mouseMove 10', 'mouseDown 10', 'mouseUp 10']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'hit', 'hit']);
+    // Not seen off the point (a page swallowing moves there): no press.
+    const u = await acting({ twist: { there: true, noMoveOff: true } });
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect((u.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove', 'mouseMove']);
+  });
+
+  it('the guard always comes down, even when the input fails; a guard that doesn’t answer is a no', async () => {
+    const t = await acting({ twist: { unguard: 'timeout' } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+    // Another document (a submit navigated): the guard's gone with it, and that's done.
+    const u = await acting({ twist: { unguard: 'gone' } });
+    expect(result(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”' });
   });
 
   it('a field the page made a password field while the card was up: select_option and click refuse it at the point', async () => {
