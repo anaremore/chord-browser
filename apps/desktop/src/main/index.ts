@@ -1408,6 +1408,11 @@ if (!app.requestSingleInstanceLock()) {
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
          * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
          */
+        /** What agents' actions' pages sent while measuring (CHORD_MEASURE_SENDS; control/deep.ts), and how many actions. */
+        agentSends: async () => {
+          const { measuredSends } = await import('./control/deep');
+          return measuredSends;
+        },
         agentActTimes: async (url: string, runs: number) => {
           const [{ snapshotPage }, { actOnPage }, { openDeep }] = await Promise.all([import('./control/snapshot'), import('./control/act'), import('./control/deep')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];

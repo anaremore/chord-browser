@@ -534,6 +534,66 @@ test('a step answered late: waiting, then the Allow counts for that same step on
   }
 });
 
+test('how often a harmless action sends data: the measure behind the owner’s default (M2d; a report, not a budget)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_MEASURE_SENDS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/noise` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const popover = await pageWhere(app, isPopover);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    type Sent = { action: number; type: string; method: string; host: string; page: string };
+    const sends = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { agentSends(): Promise<Sent[]> } }).chordTestHooks.agentSends());
+    const rows: string[] = [];
+    let counted = 0;
+    /** One action: what its page sent (beyond its own document), by type and host. */
+    const act = async (what: string, run: () => Promise<{ text: string }>) => {
+      const before = (await sends()).length;
+      const out = await run();
+      await popover.waitForTimeout(400);
+      const sent = (await sends()).slice(before);
+      counted++;
+      const self = new URL(site.origin).host;
+      const kinds = sent.map((x) => `${x.method} ${x.type}${x.host === self ? '' : ` → ${x.host}`}`);
+      rows.push(`${what.padEnd(28)} ${sent.length ? kinds.join(', ') : '—'}${/"done"/.test(out.text) ? '' : ` [${out.text.slice(0, 40)}]`}`);
+    };
+    // The site card, once.
+    const first = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'tab "Details"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    await first;
+    for (const [what, line] of [
+      ['a tab (Reviews)', 'tab "Reviews"'],
+      ['a toggle (Dark mode)', 'checkbox "Dark mode"'],
+      ['Mark as read', 'button "Mark as read"'],
+      ['Like', 'button "Like"'],
+      ['Show more (a GET)', 'button "Show more"'],
+      ['a disclosure (Shipping info)', 'button "Shipping info"'],
+    ] as const) {
+      const ref = refOf(await snap(), line).toString();
+      await act(what, () => mcp.call('click', { tab_id: 'a1', ref }));
+    }
+    await act('a link with ping (Next page)', async () => mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "Next page"') }));
+    // The shop's everyday steps too: typing in its search, choosing an option, its links.
+    await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/shop` });
+    await act('type in a search box', async () => mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'searchbox "Search orders"'), text: 'wool' }));
+    console.log(`[send noise] ${counted} actions:\n${rows.join('\n')}`);
+    test.info().annotations.push({ type: 'send noise', description: rows.join(' | ') });
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1030,7 +1090,24 @@ test.beforeAll(async () => {
     const noisy = rowsPage(300) + '<script>for (let i = 0; i < 1000; i++) console.log({ i, big: "x".repeat(10000), list: Array.from({ length: 200 }, (_, j) => ({ j })) });</script>';
     // M2c: a shop to act on. Its search (a GET form) lands on its results, which echo what was searched.
     const shop = /^\/shop\/results\?q=([a-z0-9]*)$/.exec(req.url ?? '');
-    const body = rows
+    // The owner's default (2026-11-23): a page of everyday controls, for how often a harmless action sends data. Its
+    // "third party" is the same server by another name (localhost), so it's another site.
+    const port = (server.address() as AddressInfo).port;
+    const third = `http://localhost:${port}`;
+    const noise =
+      '<title>Inbox</title><main><script>addEventListener("click", () => navigator.sendBeacon("' + third + '/collect", "click"), true);' +
+      'const post = (u) => fetch(u, { method: "POST", body: "x" });</script>' +
+      '<label><input type=checkbox onchange="post(\'/prefs\')"> Dark mode</label>' +
+      '<button onclick="post(\'/messages/1/read\')">Mark as read</button>' +
+      '<button onclick="post(\'/posts/1/like\')">Like</button>' +
+      '<button onclick="fetch(\'/more\')">Show more</button>' +
+      '<div role=tablist><button role=tab onclick="0">Details</button><button role=tab onclick="0">Reviews</button></div>' +
+      '<details><summary>Shipping info</summary>Free over $50.</details>' +
+      '<a href="/noise" ping="' + third + '/ping">Next page</a>' +
+      '</main>';
+    const body = req.url === '/noise'
+      ? noise
+      : rows
       ? rowsPage(Number(rows[1]))
       : shop
         ? shopResults(shop[1]!)

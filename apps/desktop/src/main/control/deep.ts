@@ -31,6 +31,16 @@ import { SNAPSHOT_LIB } from './snapshot';
 
 /** At most this long for the whole session (a hung page): then it's let go, and whatever waited is refused. */
 const DEEP_SESSION_MS = 20_000;
+/**
+ * Measuring (the owner's *ask when it sends data*, 2026-11-23): with CHORD_MEASURE_SENDS set (development and E2E
+ * builds), an action's guard also watches every other request its page makes, holding none, and keeps those that
+ * send data (any method but GET and HEAD, by resource type and host) for the agentSends test hook. How often a
+ * harmless action would ask, before the effect layer is built.
+ */
+const MEASURING = Boolean(process.env['CHORD_MEASURE_SENDS']);
+export const measuredSends: { action: number; type: string; method: string; host: string; page: string }[] = [];
+let measuredAction = 0;
+
 /** The group every object a session gets is in, released when it closes. */
 const OBJECT_GROUP = 'chord-acting';
 /** Each command's limit. */
@@ -124,6 +134,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     const contexts: { id: number; frameId?: string; type?: string }[] = [];
     let fetching = false;
     let blocked = false;
+    /** This session's action, for measuring. */
+    let thisAction = 0;
     /** What a risky step's Allow lets through (once): the form the card showed, or a post to the page's own origin. */
     let allowed: string | { origin: string } | null = null;
     const sameForm = (url: string) => {
@@ -142,9 +154,23 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
       if (sessionId) return;
       if (method === 'Fetch.requestPaused') {
-        const paused = params as { requestId?: string; request?: { method?: string; url?: string } };
+        const paused = params as { requestId?: string; request?: { method?: string; url?: string }; resourceType?: string };
         if (!paused.requestId) return;
         const how = String(paused.request?.method ?? 'GET').toUpperCase();
+        // Measuring: anything but a document is noted (if it sends data) and goes on as it was.
+        if (MEASURING && paused.resourceType !== 'Document') {
+          if (how !== 'GET' && how !== 'HEAD') {
+            let host = '';
+            try {
+              host = new URL(String(paused.request?.url)).host;
+            } catch {
+              // An address that isn't one: noted without a host.
+            }
+            measuredSends.push({ action: thisAction, type: String(paused.resourceType ?? ''), method: how, host, page: contents.getURL() });
+          }
+          void debug.sendCommand('Fetch.continueRequest', { requestId: paused.requestId }).catch(() => undefined);
+          return;
+        }
         const letThrough = how === 'GET' || how === 'HEAD' || sameForm(String(paused.request?.url ?? ''));
         // A risky step's one form goes once: a second post meanwhile is stopped like any other.
         if (how !== 'GET' && how !== 'HEAD' && letThrough) allowed = null;
@@ -275,7 +301,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
         guardSubmits: async (letThrough) => {
           allowed = letThrough ?? null;
           if (fetching) return true;
-          fetching = Boolean(await send('Fetch.enable', { patterns: [{ resourceType: 'Document', requestStage: 'Request' }] }));
+          thisAction = ++measuredAction;
+          fetching = Boolean(await send('Fetch.enable', { patterns: MEASURING ? [{ requestStage: 'Request' }] : [{ resourceType: 'Document', requestStage: 'Request' }] }));
           return fetching;
         },
         submitsBlocked: () => blocked,
