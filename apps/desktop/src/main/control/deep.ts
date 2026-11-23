@@ -45,6 +45,14 @@ export interface DeepSession {
   open(): Promise<DeepAnswer>;
   /** Whether the tab's file picker hold is still on (an agent's tab's: asked before every input). */
   held(): boolean;
+  /**
+   * From now until the session closes, a document request that isn't a GET (a form posted, by any script: a button's
+   * own `form.submit()`, `requestSubmit` on a key) is stopped before it leaves (S18 M2d): an action classed `act` never
+   * sends a form. Its page's requests otherwise (a fetch, a beacon) go on as they were.
+   */
+  guardSubmits(): Promise<boolean>;
+  /** A form was stopped (guardSubmits). */
+  submitsBlocked(): boolean;
   /** Lets go of the debugger (detached if the session attached it). */
   close(): Promise<void>;
 }
@@ -112,8 +120,24 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     // An agent's tab: attached for its whole life (agents/pickers.ts), used as it is. Otherwise attached for this.
     const mine = !debug.isAttached();
     const contexts: { id: number; frameId?: string; type?: string }[] = [];
+    let fetching = false;
+    let blocked = false;
     const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
-      if (sessionId || method !== 'Runtime.executionContextCreated') return;
+      if (sessionId) return;
+      if (method === 'Fetch.requestPaused') {
+        const paused = params as { requestId?: string; request?: { method?: string } };
+        if (!paused.requestId) return;
+        const how = String(paused.request?.method ?? 'GET').toUpperCase();
+        if (how === 'GET' || how === 'HEAD') void debug.sendCommand('Fetch.continueRequest', { requestId: paused.requestId }).catch(() => undefined);
+        else {
+          blocked = true;
+          // Answered with nothing (a 204): the form goes nowhere and the page stays as it was (a failed request would
+          // put the browser's error page in the tab).
+          void debug.sendCommand('Fetch.fulfillRequest', { requestId: paused.requestId, responseCode: 204, responseHeaders: [] }).catch(() => undefined);
+        }
+        return;
+      }
+      if (method !== 'Runtime.executionContextCreated') return;
       const c = (params as { context?: { id?: number; auxData?: { frameId?: string; type?: string } } }).context;
       if (typeof c?.id === 'number') contexts.push({ id: c.id, ...(c.auxData?.frameId ? { frameId: c.auxData.frameId } : {}), ...(c.auxData?.type ? { type: c.auxData.type } : {}) });
     };
@@ -136,8 +160,12 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       if (closed) return;
       closed = true;
       debug.off('message', onMessage);
-      // What the session held of the page goes (a node a page since removed would stay alive otherwise).
-      if (!contents.isDestroyed() && debug.isAttached()) debug.sendCommand('Runtime.releaseObjectGroup', { objectGroup: OBJECT_GROUP }).catch(() => undefined);
+      // What the session held of the page goes (a node a page since removed would stay alive otherwise), and what it
+      // turned on goes off (a request paused meanwhile goes on: disabling lets it).
+      if (!contents.isDestroyed() && debug.isAttached()) {
+        debug.sendCommand('Runtime.releaseObjectGroup', { objectGroup: OBJECT_GROUP }).catch(() => undefined);
+        if (fetching) debug.sendCommand('Fetch.disable').catch(() => undefined);
+      }
       // Only what the session attached; an agent's tab keeps its own attachment (nothing else was turned on: Runtime
       // was enabled and disabled within the session).
       if (mine && !contents.isDestroyed() && debug.isAttached()) debug.detach();
@@ -224,6 +252,12 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },
         held: () => !pickersLost(contents),
+        guardSubmits: async () => {
+          if (fetching) return true;
+          fetching = Boolean(await send('Fetch.enable', { patterns: [{ resourceType: 'Document', requestStage: 'Request' }] }));
+          return fetching;
+        },
+        submitsBlocked: () => blocked,
         close,
       });
       await released;

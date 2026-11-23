@@ -11,7 +11,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import type { Grant, WindowId } from '@chord/core';
-import type { AgentSiteCard } from '@chord/ipc';
+import type { AgentSiteCard, AgentStepCard } from '@chord/ipc';
 import { plain } from './connect';
 
 /** What a site card asks: who, where, what first, and whether *Always on this site* is offered. */
@@ -23,6 +23,18 @@ export interface SiteQuestion {
   always: boolean;
 }
 
+/** What a step card asks (S18 M2d): who, what will happen, what it's about to do, what goes with it. */
+export interface StepQuestion {
+  name: string;
+  title: string;
+  action: string;
+  fields: string[];
+  more: number;
+  danger: boolean;
+  /** Show me: the tab shown in that window, the element outlined; the card stays. */
+  show(windowId: WindowId): void;
+}
+
 export interface SiteCardsDeps {
   /** The window used last (never a private one); null while there's none. */
   lastWindow(): WindowId | null;
@@ -31,9 +43,10 @@ export interface SiteCardsDeps {
 }
 
 interface Waiting {
-  card: AgentSiteCard;
+  card: AgentSiteCard | AgentStepCard;
   windowId: WindowId | null;
   answer(answer: 'deny' | 'once' | 'always', windowId: WindowId | null): void;
+  show?(windowId: WindowId): void;
 }
 
 export class SiteCards {
@@ -64,8 +77,44 @@ export class SiteCards {
     });
   }
 
+  /**
+   * Ask a risky step (S18 M2d), where the site card asks: Don't (or ×), Allow (once: never remembered), and Show me,
+   * which leaves it up. A no when `signal` aborts.
+   */
+  askStep(question: StepQuestion, signal: AbortSignal): Promise<Grant> {
+    if (signal.aborted) return Promise.resolve('deny');
+    return new Promise<Grant>((resolve) => {
+      const id = randomBytes(8).toString('hex');
+      const entry: Waiting = {
+        card: {
+          kind: 'step',
+          id,
+          name: plain(question.name).slice(0, 60),
+          title: plain(question.title).slice(0, 300),
+          action: plain(question.action).slice(0, 200),
+          fields: question.fields.map((f) => plain(f).slice(0, 60)).slice(0, 6),
+          more: Math.max(0, Math.floor(question.more)),
+          danger: question.danger,
+        },
+        windowId: this.deps.lastWindow(),
+        answer: (answer) => {
+          if (!this.waiting.delete(id)) return;
+          signal.removeEventListener('abort', onAbort);
+          this.deps.changed();
+          // A step's yes is for this once, whatever button said it.
+          resolve(answer === 'deny' ? 'deny' : 'once');
+        },
+        show: (windowId) => question.show(windowId),
+      };
+      const onAbort = () => entry.answer('deny', entry.windowId);
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.waiting.set(id, entry);
+      this.deps.changed();
+    });
+  }
+
   /** The card a window shows: the oldest waiting there. A card waiting for a window goes to this one if it's the one used last. */
-  cardFor(windowId: WindowId): AgentSiteCard | null {
+  cardFor(windowId: WindowId): AgentSiteCard | AgentStepCard | null {
     for (const entry of this.waiting.values()) if (entry.windowId === windowId) return entry.card;
     if (this.deps.lastWindow() === windowId) {
       for (const entry of this.waiting.values()) {
@@ -78,9 +127,14 @@ export class SiteCards {
   }
 
   /** Your answer, from the card in that window's popover (only that window's card). */
-  answer(id: string, answer: 'deny' | 'once' | 'always', windowId: WindowId): boolean {
+  answer(id: string, answer: 'deny' | 'once' | 'always' | 'show', windowId: WindowId): boolean {
     const entry = this.waiting.get(id);
     if (!entry || entry.windowId !== windowId) return false;
+    // Show me: only a step card's, and it stays up.
+    if (answer === 'show') {
+      entry.show?.(windowId);
+      return true;
+    }
     entry.answer(answer, windowId);
     return true;
   }

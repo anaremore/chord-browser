@@ -9,14 +9,14 @@
  * Agents' switch (off by default) is the only way here.
  */
 import { execFile } from 'node:child_process';
-import { AGENT_ACT_SITES_MAX, type AgentAllowance, type AgentHello, type Command, type Grant, type NodeId, type ProfileId } from '@chord/core';
+import { AGENT_ACT_SITES_MAX, stepDanger, stepTitle, type AgentAllowance, type AgentHello, type Command, type Grant, type NodeId, type ProfileId, type WindowId } from '@chord/core';
 import type { ControlBrowser } from '../control/tools';
 import { startEndpoint, type Endpoint } from './endpoint';
 import type { AgentChords, AgentChordsDeps } from './chords';
 import type { AgentConnection } from './connection';
 import type { ConnectAnswer, ConnectingAgent } from './connect';
 import type { ProcessInfo } from './parent';
-import type { SiteQuestion } from './site-cards';
+import type { SiteQuestion, StepQuestion } from './site-cards';
 import type { PeerLookup } from './peer';
 // The service loads with the first time Agents is on, never at launch: so does what decides a tab can be shared.
 import { shareable, type AgentShares } from './shares';
@@ -29,6 +29,10 @@ export interface AgentServiceDeps {
   ask(who: ConnectingAgent, signal: AbortSignal): Promise<ConnectAnswer>;
   /** The site card (site-cards.ts, M2c): an agent's first action on a site. Absent, every site is a no. */
   askSite?(question: SiteQuestion, signal: AbortSignal): Promise<Grant>;
+  /** The risky-step card (M2d), where the site card asks. */
+  askStep?(question: StepQuestion, signal: AbortSignal): Promise<Grant>;
+  /** Show me: the agent's tab shown over that window's chord. */
+  showTab?(windowId: WindowId, nodeId: NodeId): void;
   /** The settings' allowances, to read and keep an always-allowed agent's sites (M2c). */
   allowances?: { list(): readonly AgentAllowance[]; set(list: AgentAllowance[]): void };
   /** What Settings → Agents shows changed: an agent connected, went, stopped or continued. */
@@ -160,6 +164,25 @@ export class AgentService {
                 // The site card (M2c): Always on this site only for an agent you always allow (it has an allowance to keep it with).
                 if (card.kind === 'site' && held && this.deps.askSite) {
                   return this.deps.askSite({ name: held.connection.name, site: card.subject, action: card.description, always: Boolean(this.allowanceOf(held)) }, signal);
+                }
+                // A risky step (M2d): every time, never remembered; Show me shows its tab and outlines the element.
+                if (card.kind === 'step' && card.step && held && this.deps.askStep) {
+                  const step = card.step;
+                  return this.deps.askStep(
+                    {
+                      name: held.connection.name,
+                      title: stepTitle(step.why, step.site),
+                      action: card.description,
+                      fields: step.fields,
+                      more: step.more,
+                      danger: stepDanger(step.why),
+                      show: (windowId) => {
+                        if (card.tab) this.deps.showTab?.(windowId, card.tab);
+                        card.show?.();
+                      },
+                    },
+                    signal,
+                  );
                 }
                 if (card.kind !== 'connection' || !held) return 'deny';
                 // Who started it, looked up while the card shows (about 1 s on Windows), never inside a call.

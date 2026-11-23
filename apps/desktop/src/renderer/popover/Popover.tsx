@@ -8,6 +8,7 @@ import {
   SYSTEM_SHARE_SOURCE,
   type AgentConnectCard,
   type AgentSiteCard,
+  type AgentStepCard,
   type AuthPrompt,
   type DrmNotice,
   type FindState,
@@ -549,13 +550,49 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
     <div className={styles.card} role="alertdialog" aria-label={title}>
       <AgentCardBody
         title={title}
-        note={`It wants to ${card.action}.`}
+        note={
+          <>
+            It wants to {card.action}.
+            <br />
+            It still asks before it submits, pays, sends or deletes anything.
+          </>
+        }
         closeLabel="Close"
         onClose={() => respond('deny')}
         actions={[
           { label: 'Deny', look: 'link', onClick: () => respond('deny') },
           { label: 'Allow for now', look: card.always ? 'quiet' : 'primary', onClick: () => respond('once') },
           ...(card.always ? [{ label: 'Always on this site', look: 'primary' as const, onClick: () => respond('always') }] : []),
+        ]}
+      />
+    </div>
+  );
+}
+
+/**
+ * A risky step (S18 M2d; mocks/agents-s18-m2.html §3), every time: where the site card shows, never taking the
+ * keyboard. The title says what will happen, the note what Chord sees it about to do (never the agent's words), the
+ * list what goes with it by label. Show me leaves the card up; Don't (or ×) says no; Allow is red for paying and deleting.
+ */
+function AgentStepCardView({ card }: { card: AgentStepCard }) {
+  const respond = (answer: 'deny' | 'once' | 'show') => void api.agents.respond(card.id, answer);
+  const goes = card.fields.length ? `Goes with it: ${card.fields.join(', ')}${card.more ? ` and ${card.more} more` : ''}` : null;
+  return (
+    <div className={styles.card} role="alertdialog" aria-label={card.title}>
+      <AgentCardBody
+        title={card.title}
+        note={
+          <>
+            {card.name} is about to {card.action}.{goes && <br />}
+            {goes}
+          </>
+        }
+        closeLabel="Close"
+        onClose={() => respond('deny')}
+        actions={[
+          { label: 'Show me', look: 'link', left: true, onClick: () => respond('show') },
+          { label: 'Don’t', look: 'quiet', onClick: () => respond('deny') },
+          { label: 'Allow', look: card.danger ? 'danger' : 'primary', onClick: () => respond('once') },
         ]}
       />
     </div>
@@ -1256,7 +1293,14 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
         {announced}
       </p>
       {state.find && <FindBar find={state.find} />}
-      {state.agentCard && (state.agentCard.kind === 'site' ? <AgentSiteCardView key={state.agentCard.id} card={state.agentCard} /> : <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />)}
+      {state.agentCard &&
+        (state.agentCard.kind === 'site' ? (
+          <AgentSiteCardView key={state.agentCard.id} card={state.agentCard} />
+        ) : state.agentCard.kind === 'step' ? (
+          <AgentStepCardView key={state.agentCard.id} card={state.agentCard} />
+        ) : (
+          <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />
+        ))}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}

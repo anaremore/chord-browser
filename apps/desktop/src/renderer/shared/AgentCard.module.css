@@ -69,7 +69,8 @@
 
 .link,
 .quiet,
-.primary {
+.primary,
+.danger {
   block-size: var(--size-icon-button);
   padding-inline: var(--space-3);
   border: 0;
@@ -96,6 +97,17 @@
   color: var(--color-accent-fg);
 }
 
+/* A risky step's Allow when it pays or deletes (S18 M2d): the danger color, its text the surface's (light and dark). */
+.danger {
+  background: var(--color-danger);
+  color: var(--color-surface);
+}
+
+/* Show me: the quiet word, on the left of the card's buttons. */
+.left {
+  margin-inline-end: auto;
+}
+
 .quiet:hover {
   background: var(--color-item-hover);
 }
@@ -103,7 +115,8 @@
 .close:focus-visible,
 .link:focus-visible,
 .quiet:focus-visible,
-.primary:focus-visible {
+.primary:focus-visible,
+.danger:focus-visible {
   outline: var(--size-focus-ring) solid var(--color-focus-ring);
   outline-offset: var(--size-hairline);
 }

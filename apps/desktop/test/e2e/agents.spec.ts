@@ -399,6 +399,130 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
   }
 });
 
+const stepCardOf = (popover: Page, title: RegExp) => popover.getByRole('alertdialog', { name: title });
+
+test('risky steps: the step card every time, Show me, Don’t and Allow; the page’s tricks still ask; a search doesn’t (M2d)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/checkout` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const host = new URL(site.origin).host;
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const popover = await pageWhere(app, isPopover);
+    /** Calls a tool, then answers the step card that shows (title), and returns the call's result. */
+    const withStep = async (call: Promise<{ text: string; isError: unknown }>, title: RegExp, button: 'Allow' | 'Don’t') => {
+      const card = stepCardOf(popover, title);
+      await expect(card).toBeVisible({ timeout: 15_000 });
+      await popover.waitForTimeout(600);
+      await card.getByRole('button', { name: button, exact: true }).click();
+      return call;
+    };
+    const STEP_NO = 'The user said no to this step. Don’t try it another way; ask the user what to do.';
+    const WOULD_SEND = 'That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.';
+
+    // The first action on the site: the site card (it still asks before risky steps, it says), then the step card.
+    let outline = await snap();
+    const placing = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Place order · $48.20"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await expect(siteCard).toContainText('It still asks before it submits, pays, sends or deletes anything.');
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const order = stepCardOf(popover, new RegExp(`^Place the order on ${host.replace(/\./g, '\\.')}\\?$`));
+    await expect(order).toBeVisible({ timeout: 15_000 });
+    await expect(order).toContainText('Codex is about to click “Place order · $48.20”.');
+    await expect(order).toContainText('Goes with it: Shipping, Gift note, Card number');
+    // Show me: the agent's tab over your chord (its bar says it's waiting for you), the card still up.
+    await popover.waitForTimeout(600);
+    await order.getByRole('button', { name: 'Show me', exact: true }).click();
+    await expect(shell.getByRole('status').filter({ hasText: 'Codex is waiting for you' })).toBeVisible();
+    await expect(order).toBeVisible();
+    // Don't: nothing sent.
+    await order.getByRole('button', { name: 'Don’t', exact: true }).click();
+    expect((await placing).text).toBe(STEP_NO);
+    expect(reached).toEqual([]);
+    // Again: the card again (never remembered); Allow: placed once.
+    const placed = await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Place order · $48.20"') }), /^Place the order on /, 'Allow');
+    expect(JSON.parse(placed.text)).toMatchObject({ data: { done: 'Clicked “Place order · $48.20”', navigated: true } });
+    expect(reached).toEqual(['POST /order']);
+    await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/checkout` });
+    outline = await snap();
+
+    // The page's tricks: each asks, or is stopped before it sends, and nothing reaches the site.
+    // A misleading Continue (a form's submit, to /account/close): the card, by what it is.
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Continue"') }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
+    // A JS submit on click: stopped before it left; the next try asks.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Next"') })).text).toBe(WOULD_SEND);
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Next"') }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
+    // requestSubmit on a key (Space in a field): stopped before it left.
+    outline = await snap();
+    expect((await mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Notes"'), key: 'Space' })).text).toBe(WOULD_SEND);
+    // A link to a delete address, named innocently.
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "Item 7"') }), /^Delete this on /, 'Don’t')).text).toBe(STEP_NO);
+    // Enter in a one-field form that POSTs, and type with submit there.
+    outline = await snap();
+    expect((await withStep(mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Email"'), key: 'Enter' }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
+    expect((await withStep(mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Email"'), text: 'me@example.com', submit: true }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
+    expect(reached).toEqual(['POST /order']);
+
+    // A search: reading, no card; it goes.
+    const searched = await mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'searchbox "Search shop"'), text: 'wool', submit: true });
+    expect(JSON.parse(searched.text)).toMatchObject({ data: { navigated: true } });
+    await expect(stepCardOf(popover, /on /)).toHaveCount(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a step answered late: waiting, then the Allow counts for that same step once (M2d)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  // Cards answer within 3 s here, not 45, so a late answer is quick to show.
+  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_AGENT_WAIT_MS: '3000' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/checkout` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const popover = await pageWhere(app, isPopover);
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const item = refOf(outline, 'link "Item 7"');
+    const WAITING = /waiting/i;
+    // The site card, unanswered: waiting; answered late, the retry takes it.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: item })).text).toMatch(WAITING);
+    const siteCard = siteCardOf(popover, 'Codex');
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    // The step card, unanswered: waiting; nothing reached the site.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: item })).text).toMatch(WAITING);
+    expect(reached).toEqual([]);
+    const step = stepCardOf(popover, /^Delete this on /);
+    await step.getByRole('button', { name: 'Allow', exact: true }).click();
+    // Allowed late: the same step, called again, goes without a card; once.
+    const went = await mcp.call('click', { tab_id: 'a1', ref: item });
+    expect(JSON.parse(went.text)).toMatchObject({ data: { done: 'Clicked “Item 7”', navigated: true } });
+    expect(reached).toEqual(['GET /items/7/delete']);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -754,6 +878,8 @@ test('Agents off (the default): no endpoint, and the relay finds no Chord', asyn
 /* ---------- The Agent chord, its tools, the bar and Stop (S18 M1c) ---------- */
 
 let site: { server: Server; origin: string };
+/** What reached the test site that changes something (S18 M2d): each form posted, each delete address asked for. */
+const reached: string[] = [];
 test.beforeAll(async () => {
   const pages: Record<string, string> = {
     '/notes': '<title>Release notes</title><h1>Notes</h1><p>Electron 46 brings a faster start.</p>',
@@ -844,12 +970,37 @@ test.beforeAll(async () => {
       '</script>',
     // Review 5 of #110: keys that move the focus or go somewhere on their keydown.
     '/keys': '<title>Keys</title><main><input aria-label="First"> <input aria-label="Second"> <a href="/act">Onward</a></main>',
+    // M2d: a checkout, and the page tricks a risky step must still ask for.
+    '/checkout':
+      '<title>Checkout</title><main>' +
+      '<form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> ' +
+      '<label>Gift note <input name=note></label> <label>Card number <input name=card autocomplete=cc-number></label> <button>Place order · $48.20</button></form>' +
+      // A misleading button: a form's submit called Continue (to a delete address, for good measure).
+      '<form method=post action=/account/close><button>Continue</button></form>' +
+      // A JS submit on click: no submit button, the page's own form.submit().
+      '<form id=jsf method=post action=/subscribe-js></form><div role=button tabindex=0 onclick="document.getElementById(\'jsf\').submit()">Next</div>' +
+      // requestSubmit on a key: Space in a field sends its form.
+      '<form id=rsf method=post action=/notes><label>Notes <input onkeypress="if (event.key === \' \') document.getElementById(\'rsf\').requestSubmit()"></label></form>' +
+      // A link to a delete address, named innocently.
+      '<a href="/items/7/delete">Item 7</a>' +
+      // A one-field form that POSTs (Enter in it submits), and a search (Enter in it is reading).
+      '<form method=post action=/newsletter><label>Email <input name=email></label></form>' +
+      '<form method=get action=/search role=search><label>Search shop <input type=search name=q></label></form>' +
+      '</main>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
       'b.addEventListener("click", (e) => log("click", e)); i.addEventListener("keydown", (e) => log("keydown-" + e.key, e)); i.addEventListener("beforeinput", (e) => log("beforeinput-" + e.inputType, e));</script>',
   };
   const server = createServer((req, res) => {
+    // M2d: a form posted, or a delete address asked for, is recorded: the step card's journeys check what reached it.
+    if (req.method === 'POST' || /\/delete(\b|$)/.test(req.url ?? '')) {
+      reached.push(`${req.method} ${req.url}`);
+      req.resume();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`<title>Done</title><p>done ${req.method} ${req.url}</p>`);
+      return;
+    }
     if (req.url === '/file.zip') {
       res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="file.zip"' });
       res.end('PK');

@@ -533,7 +533,8 @@ function registerIpc(): void {
   // The connect card (S18 M1d): only the popover of the window it shows in answers it.
   handle('agents:card', ({ id, answer }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');
-    if (windowId && !siteCards?.answer(id, answer, windowId)) connectCards?.answer(id, answer, windowId);
+    if (!windowId || siteCards?.answer(id, answer, windowId) || answer === 'show') return;
+    connectCards?.answer(id, answer, windowId);
   });
   // Settings → Agents (S18 M1d): its view, Remove an allowed agent, let a stopped one continue.
   handle('settings:agents', async (request) => {
@@ -1159,6 +1160,8 @@ if (!app.requestSingleInstanceLock()) {
           browser: agentBrowser,
           ask: (who, signal) => cards.ask(who, signal),
           askSite: (question, signal) => sites.ask(question, signal),
+          askStep: (question, signal) => sites.askStep(question, signal),
+          showTab: (windowId, nodeId) => agentBrowser.store.dispatch({ t: 'tab.activate', nodeId, windowId }),
           allowances: { list: () => agentBrowser.store.state.settings.agentsAllowed, set: (agentsAllowed) => agentBrowser.store.dispatch({ t: 'settings.set', settings: { agentsAllowed } }) },
           changed: () => agentBrowser.agentsChanged(),
           helper: helper && existsSync(helper) ? helper : null,
@@ -1428,6 +1431,8 @@ if (!app.requestSingleInstanceLock()) {
             const scroll = (await contents.executeJavaScript('[scrollX, scrollY]')) as [number, number];
             const hit = await session.hit(answer.x! + scroll[0], answer.y! + scroll[1]);
             const open = await session.open();
+            // An act step's form guard (M2d): on, then off with the session.
+            await session.guardSubmits();
             await session.close();
             deep.push(performance.now() - opened);
             if (!hit.ok || !open.ok) return { times, deep, failed: `deep: ${JSON.stringify(hit.ok ? open : hit)}` };

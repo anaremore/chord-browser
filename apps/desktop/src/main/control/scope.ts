@@ -36,6 +36,8 @@ export interface ToolMemory {
   read: Set<NodeId>;
   /** Each tab's element refs (snapshot, M2b): only the latest snapshot's are good. Made with a tab's first snapshot. */
   elements?: Map<NodeId, ElementRefs>;
+  /** Steps that tried to send a form though classed `act` (S18 M2d): each asks from then on (its tab, page, element by role and name, action). */
+  sending?: Set<string>;
 }
 
 /**

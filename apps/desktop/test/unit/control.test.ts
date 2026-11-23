@@ -176,7 +176,7 @@ function fakePage(url: string, read: Answer) {
     history: { url: string; skippable?: boolean }[];
     active: number;
     /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
-    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean };
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean };
     debugging: string[];
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
@@ -236,6 +236,8 @@ function fakePage(url: string, read: Answer) {
         if (method === 'Runtime.evaluate') return params?.expression?.includes('instanceof Map') ? { result: { value: true } } : { result: { objectId: 'el' } };
         if (method === 'DOM.getNodeForLocation') return { backendNodeId: 1, frameId: 'F' };
         if (method === 'DOM.resolveNode') return { object: { objectId: 'hit' } };
+        // A page that sends a form as the agent clicks (S18 M2d): its POST, paused for the guard.
+        if (method === 'Fetch.enable' && at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/delete' }, resourceType: 'Document' }), 0);
         if (method === 'Runtime.callFunctionOn') {
           if (at.deep.picker) debugEvents.emit('message', {}, 'Page.fileChooserOpened', {});
           return { result: { value: at.deep.hit ?? { ok: true } } };
@@ -509,6 +511,36 @@ describe('Cards, review 1 of #76', () => {
     expect(shown).toHaveLength(2);
   });
 
+  it('a step’s late Allow counts for that same step only (tab, page, ref, action), for 2 minutes (S18 M2d)', async () => {
+    vi.useFakeTimers();
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const step = (subject: string) => card({ kind: 'step', tool: 'click', subject, tab: 'n1', target: ['https://shop.test/checkout'] });
+    const late = async (subject: string) => {
+      const asked = agent.ask(step(subject), new AbortController().signal, 20);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(asked).resolves.toBe('waiting');
+      shown.at(-1)!.answer('once');
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    await late('n1|p1|e4|click||false');
+    // Another step (another ref) asks its own card; then the same step, within 2 minutes, takes the late Allow.
+    void agent.ask(step('n1|p1|e5|click||false'), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(90_000);
+    await expect(agent.ask(step('n1|p1|e4|click||false'), new AbortController().signal, 20)).resolves.toBe('once');
+    expect(shown).toHaveLength(2);
+    // Past 2 minutes it's gone.
+    await late('n1|p2|e4|click||false');
+    await vi.advanceTimersByTimeAsync(120_001);
+    void agent.ask(step('n1|p2|e4|click||false'), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(4);
+    // Never remembered: the same step asks again after its Allow was taken.
+    void agent.ask(step('n1|p1|e4|click||false'), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(5);
+  });
+
   it('a late Always on this site is carried to the retry, not lost to a second card; kept only by the action (keep)', async () => {
     vi.useFakeTimers();
     const { shown, present } = presenter();
@@ -763,7 +795,10 @@ describe('snapshot, review 1 of #104', () => {
 describe('acting through the gate (S18 M2c)', () => {
   /** The page's elements, by key: what the snapshot says, and how each act step answers. */
   type Field = { type: string; autocomplete?: string; name?: string; id?: string; label?: string; placeholder?: string };
-  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field };
+  type Risk = { tag: string; type: string; href: string; multiline: boolean; submits: boolean; form: { method: string; search: boolean; action: string; fields: (Field & { text: boolean })[] } | null };
+  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field; risk?: Partial<Risk> };
+  /** What the page says the step is (S18 M2d): a link's address, a field's form; nothing risky unless a row says so. */
+  const riskOf = (el: El): Risk => ({ tag: el.role === 'link' ? 'a' : el.editable ? 'input' : 'div', type: '', href: el.role === 'link' ? '/home' : '', multiline: false, submits: false, form: null, ...el.risk });
   const field = (f: Field) => ({ autocomplete: '', name: '', id: '', label: '', placeholder: '', ...f });
   const ELEMENTS: El[] = [
     { role: 'link', name: 'Home' },
@@ -774,7 +809,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; unguard?: 'timeout' | 'gone' | 'expired' };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     if (code.includes('__chordAgentGuard')) {
@@ -804,7 +839,7 @@ describe('acting through the gate (S18 M2c)', () => {
           const found = el.options?.filter((o) => o === args.option).length ?? 0;
           if (found !== 1) return { ok: false, why: found ? 'two-choices' : 'no-choice' };
         }
-        return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : {}) };
+        return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : twist.noRisk ? {} : { risk: riskOf(el) }) };
       }
       if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
       if (args.op === 'hit' && twist.noMove) return { ok: false, why: 'no-move' };
@@ -824,7 +859,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -1006,7 +1041,9 @@ describe('acting through the gate (S18 M2c)', () => {
     if (!deep.unavailable) {
       expect(t.at.debugging.slice(0, 3)).toEqual(['Page.getFrameTree', 'Runtime.enable', 'Runtime.disable']);
       expect(t.at.debugging).not.toContain('Runtime.discardConsoleEntries');
-      expect(t.at.debugging.at(-1)).toBe('Runtime.releaseObjectGroup');
+      expect(t.at.debugging).toContain('Runtime.releaseObjectGroup');
+      // An act step's form guard (M2d) on, then off again.
+      if (t.at.debugging.includes('Fetch.enable')) expect(t.at.debugging.at(-1)).toBe('Fetch.disable');
     }
   });
 
@@ -1085,6 +1122,74 @@ describe('acting through the gate (S18 M2c)', () => {
     const t: Awaited<ReturnType<typeof acting>> = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
     expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' })).refused).toBe(CONTROL_REFUSALS.paused);
     expect(t.at.loads).toEqual([]);
+  });
+
+  // ---------- Risky steps (S18 M2d) ----------
+
+  it('a risky step asks every time (the step card, never remembered): Don’t sends nothing; Allow goes', async () => {
+    ELEMENTS.push({ role: 'button', name: 'Delete draft' });
+    try {
+      const ref = `e${ELEMENTS.length}`;
+      const t = await acting({ answer: 'deny', act: { siteAllowed: () => true } });
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
+      expect(t.at.input.filter((e) => (e as { type: string }).type === 'mouseDown')).toEqual([]);
+      const step = t.cards.find((c) => c.kind === 'step')!;
+      expect([step.description, step.step]).toEqual(['click “Delete draft”', { why: 'delete', site: 'news.test', fields: [], more: 0 }]);
+      // Allowed: it goes, and the next time asks again.
+      const u = await acting();
+      await u.call('click', { tab_id: u.tab, ref });
+      await u.call('click', { tab_id: u.tab, ref });
+      expect(u.cards.filter((c) => c.kind === 'step')).toHaveLength(2);
+      expect(u.at.input.filter((e) => (e as { type: string }).type === 'mouseDown')).toHaveLength(2);
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('a form’s submit asks, whatever the button says (a misleading Continue), with what goes with it by label', async () => {
+    const f = (label: string, type = 'text') => ({ ...field({ type, label }), text: true });
+    ELEMENTS.push({ role: 'button', name: 'Continue', risk: { tag: 'button', type: 'submit', submits: true, form: { method: 'post', search: false, action: '/account', fields: [f('Name'), f('Email'), f('Reason')] } } });
+    try {
+      const t = await acting({ answer: 'deny', act: { siteAllowed: () => true } });
+      await t.call('click', { tab_id: t.tab, ref: `e${ELEMENTS.length}` });
+      expect(t.cards.find((c) => c.kind === 'step')!.step).toEqual({ why: 'submit', site: 'news.test', fields: ['Name', 'Email', 'Reason'], more: 0 });
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('nothing said of the step by the page: asks, as a form’s submit (fails closed)', async () => {
+    ELEMENTS.push({ role: 'button', name: 'Next', risk: undefined });
+    const t = await acting({ answer: 'deny', twist: { noRisk: true }, act: { siteAllowed: () => true } });
+    try {
+      await t.call('click', { tab_id: t.tab, ref: `e${ELEMENTS.length}` });
+      expect(t.cards.find((c) => c.kind === 'step')!.step?.why).toBe('submit');
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('an act step whose page sends a form as it clicks (its own script): stopped before it left; the next try asks', async () => {
+    const t = await acting({ deep: { posts: true } });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.');
+    expect(t.at.debugging).toContain('Fetch.fulfillRequest');
+    expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+    t.at.deep = {};
+    await t.call('click', { tab_id: t.tab, ref: 'e1' });
+    expect(t.cards.filter((c) => c.kind === 'step').map((c) => c.step?.why)).toEqual(['submit']);
+  });
+
+  it('Show me outlines the element, the card still up', async () => {
+    ELEMENTS.push({ role: 'button', name: 'Delete draft' });
+    try {
+      let shown = () => undefined as void;
+      const t = await acting({ onCard: () => shown() });
+      shown = () => t.cards.at(-1)?.show?.();
+      await t.call('click', { tab_id: t.tab, ref: `e${ELEMENTS.length}` });
+      expect(t.steps.filter((x) => x === 'point').length).toBeGreaterThanOrEqual(2);
+    } finally {
+      ELEMENTS.pop();
+    }
   });
 
   // ---------- Review 1 of #110 ----------

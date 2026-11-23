@@ -44,8 +44,21 @@ export type ActOp =
   | { op: 'describe'; option?: string };
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
+/** A form's field, as risk needs it (never its value): its description for sensitiveField, and whether it takes text. */
+export type ActFormField = SnapshotField & { text: boolean };
+
+/** What the step is, from the page (S18 M2d): main builds core's RiskElement from it (control-risk.ts). */
+export interface ActRisk {
+  tag: string;
+  type: string;
+  href: string;
+  multiline: boolean;
+  submits: boolean;
+  form: { method: string; search: boolean; action: string; fields: ActFormField[] } | null;
+}
+
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number }
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk }
   | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
@@ -90,8 +103,41 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     return found.length === 1 ? found[0] : found.length ? -2 : -1;
   };
   const noChoice = (index) => ({ ok: false, why: index === -2 ? 'two-choices' : 'no-choice' });
+  // What the step is (S18 M2d), for core's classifyStep: the element, its link's address, its form and the form's fields
+  // (each described as the snapshot describes a field: never a value). Only the page's structure: its words for a
+  // button are the snapshot's name, already checked above.
+  const riskOf = () => {
+    const tag = el.localName;
+    const type = tag === 'input' || tag === 'button' ? String(el.getAttribute('type') || (tag === 'button' ? 'submit' : 'text')).toLowerCase() : '';
+    const formOf = el.form !== undefined ? el.form : el.closest('form');
+    // A submit button submits only in a form (a button outside one, the default type or not, is a page's own button).
+    const submits = Boolean(formOf) && ((tag === 'button' && type === 'submit') || (tag === 'input' && (type === 'submit' || type === 'image')));
+    const addressOf = (url) => { try { const u = new URL(url, location.href); return clip(decodeURIComponent(u.pathname + ' ' + u.search), 300); } catch { return ''; } };
+    const href = tag === 'a' && el.hasAttribute('href') ? addressOf(el.getAttribute('href')) : '';
+    const multiline = tag === 'textarea' || (el.isContentEditable && tag !== 'input');
+    let form = null;
+    if (formOf) {
+      const SKIPPED = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
+      const TEXTY = new Set(['text', 'email', 'search', 'url', 'tel', 'number', 'password', '']);
+      const fields = [];
+      for (const f of formOf.elements) {
+        if (fields.length >= 50) break;
+        if (!isField(f)) continue;
+        const t = typeOf(f);
+        if (SKIPPED.has(t)) continue;
+        fields.push({ ...fieldOf(f), text: f.localName === 'textarea' || (f.localName === 'input' && TEXTY.has(t)) });
+      }
+      form = {
+        method: String(formOf.getAttribute('method') || 'get').toLowerCase(),
+        search: Boolean(formOf.closest('[role=search]') || formOf.querySelector('input[type=search]') || formOf.getAttribute('role') === 'search'),
+        action: addressOf(formOf.getAttribute('action') || location.href),
+        fields,
+      };
+    }
+    return { tag, type, href, multiline, submits, form };
+  };
   if (args.op === 'describe') {
-    if (args.option === undefined) return { ok: true, ...said, disabled, editable, select };
+    if (args.option === undefined) return { ok: true, ...said, disabled, editable, select, risk: riskOf() };
     if (!select) return { ok: false, why: 'not-select' };
     const index = optionIndex(args.option);
     if (index < 0) return noChoice(index);

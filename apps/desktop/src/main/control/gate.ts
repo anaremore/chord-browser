@@ -16,11 +16,13 @@
 import {
   CONTROL_IDLE,
   CONTROL_WAIT_MS,
+  STEP_LATE_MS,
   controlAdmits,
   controlKind,
   controlStep,
   grantAfter,
   type ApprovalKind,
+  type RiskWhy,
   type ControlEvent,
   type ControlState,
   type ControlStateKind,
@@ -42,6 +44,10 @@ export interface ControlCard {
   tab: string | null;
   /** What an `always` covers, with the kind: the tool for a read, the site for an action. */
   subject: string;
+  /** A risky step (S18 M2d): why it asks, and what goes with it (a form's fields, by label). */
+  step?: { why: RiskWhy; site: string; fields: string[]; more: number };
+  /** Show me (a step card): the element outlined in its page, the card still up. */
+  show?: () => void;
 }
 
 /** Shows a card and resolves with the answer; resolves `deny` when its signal aborts (Stop, the turn ending). */
@@ -213,7 +219,8 @@ export class ControlAgent {
     if (late) {
       this.late.delete(key);
       // Only soon after, and only for the page it was given on: a once answers for one read of what the card named.
-      if (Date.now() - late.at <= CONTROL_WAIT_MS && late.url === (card.target[0] ?? '')) return late.grant;
+      // A step's late Allow counts for 2 minutes, and only for that same step (its key names the tab, page, ref and action).
+      if (Date.now() - late.at <= (card.kind === 'step' ? STEP_LATE_MS : CONTROL_WAIT_MS) && late.url === (card.target[0] ?? '')) return late.grant;
     }
     const open = this.open.get(key) ?? this.openCard(card);
     // Another tab waiting on a card up already (a site card is the site's): its bar says it's waiting too.

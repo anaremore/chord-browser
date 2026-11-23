@@ -8,6 +8,12 @@
 import { pickersUnsecured } from '../agents/pickers';
 import { randomBytes } from 'node:crypto';
 import {
+  classifyStep,
+  stepFields,
+  type RiskAction,
+  type RiskClass,
+  type RiskElement,
+  type RiskForm,
   ASSISTANT_PDF_MAX_PAGES,
   CONTROL_REFUSALS,
   controlTool,
@@ -524,6 +530,42 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (answer === 'always') host.keepSite(site);
   }
 
+  // The step (S18 M2d): what it is, from the page as it is now (core's classifyStep), never from the agent's words. A
+  // risky one asks every time (the step card); an `act` one goes, with any form it would send stopped (guardSubmits),
+  // and a step that tried to send one asks from then on. No description from the page: as a form's submit.
+  const stepKey = `${node.id}|${page.id}|${String(args['ref'])}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}`;
+  // A step that tried to send, by the element as the page names it (a new snapshot gives it a new ref).
+  const sendKey = `${node.id}|${page.id}|${element.role}|${element.name}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}`;
+  const sending = (scope.memory.sending ??= new Set());
+  const step: RiskClass = sending.has(sendKey) ? { class: 'risky', why: 'submit' } : stepOf(tool, args, element);
+  if (step.class === 'risky') {
+    const { fields, more } = stepFields(element.risk?.form?.fields.map((f) => f.label) ?? []);
+    const answer = await scope.agent.ask(
+      {
+        kind: 'step',
+        tool,
+        description: actPhrase(description),
+        target: [page.url()],
+        tab: node.id,
+        subject: stepKey,
+        step: { why: step.why, site, fields, more },
+        // Show me: the element outlined in its page, the card still up (the service shows the tab in the window).
+        show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
+      },
+      call.signal,
+      scope.cardWaitMs,
+    );
+    if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+    if (answer === 'deny') return refuse(ACT_REFUSALS.stepDenied);
+    // As after the site card: Stop, the user taking the tab, the page moving on or to another site, all stop it here.
+    const halted = halt();
+    if (halted) return refuse(halted);
+    const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+    if (after) return refuse(after);
+    if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
+  }
+
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
   let deep: DeepSession | null = null;
@@ -638,17 +680,19 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // The field as it is now, after any card's wait: never one the page made a password, code or card field.
       if (pointed.field && sensitiveField(pointed.field)) return void (refused = ACT_REFUSALS.sensitive);
       if ((refused = halt())) return;
+      if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
+      // From here input goes in: the debugger's checks (deep.ts), and for a step that isn't risky, any form it would
+      // send stopped before it leaves.
+      deep = await page.deep(owner, lookup.token, lookup.key);
+      if (!deep) return void (refused = ACT_REFUSALS.noCheck);
+      if (step.class === 'act' && !(await deep.guardSubmits())) return void (refused = ACT_REFUSALS.noCheck);
+      if ((refused = halt())) return;
       if (tool === 'select_option') {
         // By the page's whole label, as describe matched it (the card showed it clipped).
         const chosen = await page.act(owner, lookup.token, lookup.key, { op: 'choose', option: asked });
         if (!chosen.ok) refused = actRefusal(chosen);
         return;
       }
-      if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
-      // From here input goes in: the debugger's checks (deep.ts).
-      deep = await page.deep(owner, lookup.token, lookup.key);
-      if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      if ((refused = halt())) return;
       if (tool === 'press_key') {
         const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
         if (!focused.ok) return void (refused = actRefusal(focused));
@@ -692,6 +736,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (!typed || args['submit'] !== true) return;
       await guarded('keyup', pressKey('Enter'));
     });
+    // A form it tried to send (a page's own script on a click, requestSubmit on a key) was stopped: the agent hears so,
+    // and this step asks from now on.
+    if (!refused && deep && (deep as DeepSession).submitsBlocked()) {
+      sending.add(sendKey);
+      refused = ACT_REFUSALS.wouldSend;
+    }
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -708,6 +758,32 @@ function deepRefusal(answer: Extract<DeepAnswer, { ok: false }>): string {
   if (answer.why === 'no-check') return ACT_REFUSALS.noCheck;
   return actRefusal(answer as Extract<ActAnswer, { ok: false }>);
 }
+
+/** What a step is (core's classifyStep), from what the page said of the element; none said: as a form's submit. */
+function stepOf(tool: ActTool, args: Record<string, unknown>, element: Extract<ActAnswer, { ok: true }>): RiskClass {
+  const action: RiskAction =
+    tool === 'type' ? { tool, submit: args['submit'] === true } : tool === 'press_key' ? { tool, key: args['key'] as PressKey } : { tool: tool as 'click' | 'hover' | 'select_option' };
+  if (tool === 'select_option' || tool === 'hover') return classifyStep(action, emptyRisk);
+  const risk = element.risk;
+  if (!risk) return { class: 'risky', why: 'submit' };
+  const fields = risk.form?.fields ?? [];
+  const kinds = fields.map((f) => sensitiveField(f));
+  const form: RiskForm | null = risk.form
+    ? {
+        method: risk.form.method,
+        search: risk.form.search,
+        textFields: fields.filter((f) => f.text).length,
+        otherFields: fields.filter((f) => !f.text).length,
+        payment: kinds.includes('payment'),
+        password: kinds.includes('password') || fields.some((f) => f.type === 'password'),
+        labels: fields.map((f) => f.label),
+        action: risk.form.action,
+      }
+    : null;
+  return classifyStep(action, { tag: risk.tag, role: element.role, type: risk.type, name: element.name, href: risk.href, editable: element.editable === true, multiline: risk.multiline, submits: risk.submits, form });
+}
+
+const emptyRisk: RiskElement = { tag: '', role: '', type: '', name: '', href: '', editable: false, multiline: false, submits: false, form: null };
 
 /** The page's no, in words for the agent. */
 function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
