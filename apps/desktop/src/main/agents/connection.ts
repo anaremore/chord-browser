@@ -35,7 +35,7 @@ import {
 import { ControlAgent, type CardPresenter, type ControlCard } from '../control/gate';
 import { controlPage } from '../control/page';
 import type { ToolOutput } from '../control/scope';
-import { runControlTool, type ControlBrowser } from '../control/tools';
+import { runControlTool, type ControlBrowser, pageLoaded } from '../control/tools';
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
 import { siteOfUrl, type AgentShares } from './shares';
@@ -179,19 +179,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         const page = controlPage(contents);
         // Followed from the start, so page_id names the page it loads.
         void page.id;
-        if (contents.isLoading() || !contents.getURL()) {
-          await new Promise<void>((done) => {
-            const finish = () => {
-              clearTimeout(timer);
-              signal.removeEventListener('abort', finish);
-              contents.off('did-stop-loading', finish);
-              done();
-            };
-            const timer = setTimeout(finish, deps.loadMs ?? LOAD_MS);
-            signal.addEventListener('abort', finish, { once: true });
-            contents.once('did-stop-loading', finish);
-          });
-        }
+        // Past its blank first page too (tabs.ts: service workers bypassed in it), at most LOAD_MS.
+        await pageLoaded(contents, deps.loadMs ?? LOAD_MS, signal);
         if (signal.aborted) return refused('stopped');
         if (contents.isDestroyed()) return { text: 'That tab closed while it loaded.', isError: true };
         // Redirected to a site the user keeps private: the tab goes, and nothing of where it ended up is said.

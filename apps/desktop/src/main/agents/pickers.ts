@@ -33,8 +33,7 @@ export function pickersLost(contents: object): boolean {
 }
 
 /**
- * The frames of another process, and the workers (dedicated, shared, service), the hold attached in each tab (their
- * sessions): what an action's watch also watches (control/sends.ts; #112 review 2: a worker's requests are its own).
+ * The frames of another process, and the dedicated workers, the hold attached in each tab (their sessions).
  */
 const sessions = new WeakMap<object, Set<string>>();
 
@@ -42,9 +41,15 @@ export function frameSessions(contents: object): ReadonlySet<string> {
   return sessions.get(contents) ?? new Set();
 }
 
-/** The targets the hold attaches, each held at its start: frames of another process, and every kind of worker. */
-const ATTACHED = [{ type: 'iframe' }, { type: 'worker' }, { type: 'shared_worker' }, { type: 'service_worker' }];
-const WORKERS = new Set(['worker', 'shared_worker', 'service_worker']);
+/**
+ * The targets the hold attaches, each held at its start: frames of another process, and dedicated workers (made to
+ * read only: holdWorker). Never a service worker: it's the site's, shared with your
+ * own tabs there, and holding it would hold what they send (Claude's review 3 of #112). An agent's tab bypasses service
+ * workers instead (`Network.setBypassServiceWorker`), so what it sends is its own, and held as such; and it has no
+ * shared workers at all (preload/agent-hold.ts), which it would share with your tabs the same way.
+ */
+const ATTACHED = [{ type: 'iframe' }, { type: 'worker' }];
+const WORKERS = new Set(['worker']);
 
 /**
  * Agent tabs with a frame that couldn't be held (its interception never answered): it stays held at its start, a
@@ -56,6 +61,79 @@ const unsecured = new WeakSet<object>();
 export function pickersUnsecured(contents: object): boolean {
   return unsecured.has(contents);
 }
+
+/** Agent tabs whose first page hasn't come yet (tabs.ts: a blank page, service workers bypassed, then the address). */
+const firstLoad = new WeakSet<object>();
+
+/** Whether the tab's first page is still on its way: a read or open_tab waits for it rather than reading the blank one. */
+export function firstLoadPending(contents: object): boolean {
+  return firstLoad.has(contents);
+}
+
+/** tabs.ts: the tab's first page is on its way (true), or came, or never will (false). */
+export function setFirstLoadPending(contents: object, pending: boolean): void {
+  if (pending) firstLoad.add(contents);
+  else firstLoad.delete(contents);
+}
+
+/**
+ * A new agent tab's service workers bypassed (Claude's review 3 of #112): what it sends is its own, never a service
+ * worker's, which is the site's and shared with your tabs there. Asked once its page has a renderer (tabs.ts loads a
+ * blank page for it first); the real page loads only if this answered.
+ */
+export async function bypassServiceWorkers(contents: WebContents): Promise<boolean> {
+  if (contents.isDestroyed() || !contents.debugger.isAttached()) return false;
+  return Promise.race([
+    contents.debugger
+      .sendCommand('Network.enable', {})
+      .then(() => contents.debugger.sendCommand('Network.setBypassServiceWorker', { bypass: true }))
+      .then(
+        () => true,
+        () => false,
+      ),
+    new Promise<boolean>((done) => setTimeout(() => done(false), COMMAND_MS).unref?.()),
+  ]);
+}
+
+/**
+ * Run in a dedicated worker of an agent's tab before it starts: it can read (GET, HEAD), never send. Its `fetch` and
+ * XHR are replaced where they're defined, for good (not writable, not configurable: its own script can't put them
+ * back). `fetch` takes the method from a `Request` it makes first (fixed once made, so a tricky `init` can't change
+ * it after the check); XHR from `open`'s method, as a string made once. What it would send, it can hand its page,
+ * whose sends are held and asked about. Live connections (WebSocket, WebTransport) are a stated limit here too.
+ */
+const WORKER_READS_ONLY = String.raw`(() => {
+  const READS = new Set(['GET', 'HEAD']);
+  const no = () => new TypeError('A worker can’t send data from a tab an agent is using.');
+  let owner = self;
+  while (owner && !Object.prototype.hasOwnProperty.call(owner, 'fetch')) owner = Object.getPrototypeOf(owner);
+  const realFetch = owner && owner.fetch;
+  const RealRequest = self.Request;
+  if (realFetch) {
+    Object.defineProperty(owner, 'fetch', {
+      value: function fetch(input, init) {
+        let request;
+        try { request = new RealRequest(input, init); } catch (e) { return Promise.reject(e); }
+        if (!READS.has(String(request.method).toUpperCase())) return Promise.reject(no());
+        return realFetch.call(self, request);
+      },
+      writable: false, configurable: false, enumerable: true,
+    });
+  }
+  const X = self.XMLHttpRequest;
+  if (X) {
+    const open = X.prototype.open, send = X.prototype.send, methods = new WeakMap();
+    Object.defineProperty(X.prototype, 'open', {
+      value: function open_(method, ...rest) { const m = String(method).toUpperCase(); methods.set(this, m); return open.call(this, m, ...rest); },
+      writable: false, configurable: false,
+    });
+    Object.defineProperty(X.prototype, 'send', {
+      value: function send_(...args) { if (!READS.has(methods.get(this) || 'GET')) throw no(); return send.apply(this, args); },
+      writable: false, configurable: false,
+    });
+  }
+  return true;
+})()`;
 
 /** An action found the hold lost: one try now (never more than one per action), and whether it's on. */
 export async function retryPickers(contents: object): Promise<boolean> {
@@ -72,9 +150,11 @@ const REARM_TRIES = 8;
 const COMMAND_MS = 3000;
 
 /**
- * Starts holding pickers in `contents`; `held` hears each one held. Resolves once its first arming is done (on or not):
- * the tab's page is loaded only then (tabs.ts), since a frame whose navigation was under way when the frames' auto-attach
- * began is held at its start without the hold hearing of it, and its page never finishes loading (CI's arm64, #112).
+ * Starts holding pickers in `contents`; `held` hears each one held. Resolves once its page's hold is on (its frames'
+ * auto-attach, its sends held, service workers bypassed): the tab's page is loaded only then (tabs.ts), since a frame
+ * whose navigation was under way when the frames' auto-attach began is held at its start without the hold hearing of
+ * it (CI's arm64, #112), and a page loaded unheld would send unasked (Claude's review 3: fail closed). A hold that never
+ * comes on leaves the tab unloaded: blank, and open_tab says it couldn't load.
  */
 export function holdFilePickers(contents: WebContents, held: (detail: string) => void): Promise<void> {
   if (contents.isDestroyed()) return Promise.resolve();
@@ -84,7 +164,7 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
   /** The attachment armed now: a detach (or another arm) makes answers from before it count for nothing. */
   let generation = 0;
   let tries = 0;
-  /** The first arming's frames' auto-attach is on (or that arming is over): what tabs.ts waits on to load the page. */
+  /** The page's hold is on (its frames' auto-attach, its sends, service workers bypassed): what tabs.ts waits on to load the page. */
   let framesOn: () => void = () => undefined;
   const framesReady = new Promise<void>((done) => (framesOn = done));
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -110,29 +190,43 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     // the tab's page can load right after: tabs.ts waits on it). An auto-attach that failed (or never answered) leaves
     // them unheld, so the hold isn't on.
     const attached = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: ATTACHED }, sessionId);
+    // Its requests its own, never a service worker's (which would send them out of the hold's sight). Only where there's
+    // a renderer (the Network domain closes the session otherwise): a frame, or a page armed again; a new page's comes
+    // from tabs.ts, which loads a blank page for it first (bypassServiceWorkers).
+    const bypassed = sessionId || contents.getURL() ? (await send('Network.enable', {}, sessionId)) && (await send('Network.setBypassServiceWorker', { bypass: true }, sessionId)) : true;
     // The page's sends held before it loads too (control/sends.ts: a page that posts as it loads asks first).
     const sendingFirst = sessionId ? true : await sendsOn(contents);
-    if (!sessionId) framesOn();
+    if (!sessionId && attached && bypassed && sendingFirst) framesOn();
     await send('Page.enable', undefined, sessionId);
     const intercepted =
       (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
     // What it sends held from its start too (control/sends.ts): in the page, and in a frame before it runs.
     const sending = intercepted && attached && (sessionId ? await sendsOn(contents, sessionId) : sendingFirst);
-    const on = intercepted && attached && sending;
+    const on = intercepted && attached && bypassed && sending;
     if (sessionId && on) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
     if (sessionId && !on) unsecured.add(contents);
     return on;
   };
   /**
-   * A worker (dedicated, shared, service): its own workers held as they start too, what it sends held (sends.ts),
-   * then it runs. One whose sends couldn't be held stays held at its start (acting there is refused until the next
-   * document, as for a frame; #112 review 2: never a worker sending unheld).
+   * A dedicated worker: its own workers held as they start too, service workers bypassed, and made to read only
+   * (WORKER_READS_ONLY), then it runs. Chromium gives it no Fetch domain of its own, and its requests never pass through
+   * its page's (Claude's review 3 of #112 found it, end to end), so what it would send can't be held: it isn't sent.
+   * One that couldn't be made so stays held at its start (acting there is refused until the next document).
    */
-  const holdWorker = async (sessionId: string, type: string): Promise<void> => {
+  const holdWorker = async (sessionId: string): Promise<void> => {
     const nested = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: ATTACHED }, sessionId);
-    // A dedicated worker has no Fetch domain of its own: its requests are its page's (the page's hold has them).
-    const sending = type === 'worker' || (await sendsOn(contents, sessionId));
-    if (nested && sending) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
+    // Never through the site's service worker either (its requests would leave the page's hold).
+    const bypassed = (await send('Network.enable', {}, sessionId)) && (await send('Network.setBypassServiceWorker', { bypass: true }, sessionId));
+    // And it reads, never sends (WORKER_READS_ONLY): its own requests aren't the page's hold's to see.
+    // Only if the script ran through (a thrown one answers too, with its exception).
+    const readsOnly = await Promise.race([
+      debug.sendCommand('Runtime.evaluate', { expression: WORKER_READS_ONLY, returnByValue: true }, sessionId).then(
+        (r: { result?: { value?: unknown }; exceptionDetails?: unknown }) => !r.exceptionDetails && r.result?.value === true,
+        () => false,
+      ),
+      new Promise<boolean>((done) => setTimeout(() => done(false), COMMAND_MS).unref?.()),
+    ]);
+    if (nested && bypassed && readsOnly) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
     else unsecured.add(contents);
   };
   /**
@@ -201,7 +295,7 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
       if (type === 'iframe') {
         const held = hold(attached.sessionId);
         framesArming?.push(held);
-      } else if (WORKERS.has(type)) void holdWorker(attached.sessionId, type);
+      } else if (WORKERS.has(type)) void holdWorker(attached.sessionId);
       // Anything else the filter let through goes on as it was.
       else void send('Runtime.runIfWaitingForDebugger', undefined, attached.sessionId);
     }
@@ -227,6 +321,6 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
   });
   // The page loads once its frames are held from their start (or the first arming ended without that): the rest of the
   // arming (the page's own interception) goes on beside the load.
-  void arm().then(() => framesOn());
+  void arm();
   return framesReady;
 }

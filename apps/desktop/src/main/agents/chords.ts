@@ -36,7 +36,6 @@ import { isAgentInput } from '../control/input';
 import type { Change } from '../store';
 import type { AgentHeld } from '../tabs';
 import { onNeverSite } from './scope';
-import { siteOfUrl } from './shares';
 
 export interface AgentChordsDeps {
   store: { readonly state: State; dispatch(command: Command): void; subscribe(listener: (change: Change) => void): () => void };
@@ -284,7 +283,9 @@ export class AgentChords {
         if (!chord || chord.done) return 'deny';
         const takeDown = new AbortController();
         signal.addEventListener('abort', () => takeDown.abort(), { once: true });
-        const site = siteOfUrl(contents.getURL()) ?? sites[0] ?? '';
+        // The card names each origin by its host (the owner, 2026-11-23: exactly that origin), the page's own too.
+        const site = hostOf(contents.getURL()) || hostOf(sites[0] ?? '');
+        const hosts = sites.map(hostOf);
         const answer = await chord.agent.ask(
           {
             kind: 'step',
@@ -293,7 +294,7 @@ export class AgentChords {
             target: [contents.getURL()],
             tab: nodeId,
             subject: `${nodeId}|idle|${randomBytes(4).toString('hex')}`,
-            step: why ? { why, site: sites[0] ?? site, fields: [], more: 0, idle: true } : { why: 'send', site, fields: [], more: 0, sends: sites, idle: true },
+            step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
             takeDown: takeDown.signal,
           },
           signal,
@@ -304,7 +305,8 @@ export class AgentChords {
         // A send card's `always` is *Allow until done* (never remembered: a step card's answers aren't).
         return answer === 'always' && !why ? 'until' : answer === 'once' || answer === 'always' ? 'once' : 'deny';
       },
-      siteOf: (url) => siteOfUrl(url) ?? hostOf(url),
+      // Exactly an origin (the owner, 2026-11-23): another subdomain, port or scheme is another card.
+      siteOf: (url) => originOf(url),
     });
   }
 
@@ -453,6 +455,15 @@ export class AgentChords {
 function hostOf(url: string): string {
   try {
     return new URL(url).host;
+  } catch {
+    return '';
+  }
+}
+
+/** An address's origin (scheme, host and port), or empty. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
   } catch {
     return '';
   }

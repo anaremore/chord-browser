@@ -5,7 +5,7 @@
  * (page.ts), and asks the scope what this agent may see and when it must ask.
  * The refusals are one sentence each, as the assistant has always said them.
  */
-import { pickersUnsecured } from '../agents/pickers';
+import { firstLoadPending, pickersUnsecured } from '../agents/pickers';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   addressWhy,
@@ -61,7 +61,7 @@ import {
   type State,
   type TabNode,
 } from '@chord/core';
-import type { WebContentsView } from 'electron';
+import type { WebContents, WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import type { ActAnswer } from './act';
@@ -185,16 +185,31 @@ async function loadedPage(browser: ControlBrowser, nodeId: NodeId): Promise<Cont
   const contents = pageOf(browser.tabs.ensure(nodeId));
   if (!contents) return null;
   // A page with a frame held unsecured never finishes loading (agents/pickers.ts): no waiting on it.
-  if (contents.isLoading() && !pickersUnsecured(contents)) {
+  if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000);
+  return contents.isDestroyed() ? null : controlPage(contents);
+}
+
+/**
+ * Waits (at most `ms`) for the tab's page to have loaded: not loading, and past an agent's tab's blank first page
+ * (tabs.ts loads one first, to bypass service workers in, then the tab's address).
+ */
+export async function pageLoaded(contents: WebContents, ms: number, signal?: AbortSignal): Promise<void> {
+  const until = Date.now() + ms;
+  const waiting = () => !contents.isDestroyed() && (contents.isLoading() || firstLoadPending(contents));
+  while (waiting() && Date.now() < until && !signal?.aborted) {
     await new Promise<void>((done) => {
-      const timer = setTimeout(done, 15_000);
-      contents.once('did-stop-loading', () => {
+      const finish = () => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', finish);
+        contents.off('did-stop-loading', finish);
         done();
-      });
+      };
+      // An agent's tab between its blank page and its first: looked at again shortly (that load may not have started yet).
+      const timer = setTimeout(finish, contents.isLoading() ? until - Date.now() : 50);
+      signal?.addEventListener('abort', finish, { once: true });
+      contents.once('did-stop-loading', finish);
     });
   }
-  return contents.isDestroyed() ? null : controlPage(contents);
 }
 
 /** The tab's page as it is now, without waking it. */
@@ -496,7 +511,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       // What its load sends, or a redirect to an address that deletes or signs out, is held as an action's is: only what
       // the card named goes (the address itself, when it asked).
-      const w = page.watchSends(goingWhy ? { sites: new Set(), urls: new Set([goingTo]) } : null);
+      const w = page.watchSends(goingWhy ? { urls: new Set([goingTo]) } : null);
       if (!w) return refuse(ACT_REFUSALS.noCheck);
       let went: { loading: boolean } | null;
       let sent: string | null;
@@ -515,14 +530,14 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
                 target: [page.url()],
                 tab: node.id,
                 subject: `${node.id}|${tool}|sends|${randomBytes(4).toString('hex')}`,
-                step: why ? { why, site: sites[0] ?? goingSite, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: goingSite, fields: [], more: 0, sends: sites },
+                step: why ? { why, site: hostOf(sites[0] ?? '') || goingSite, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: hostOf(page.url()), fields: [], more: 0, sends: sites.map(hostOf) },
                 takeDown: w.cancelled,
               },
               AbortSignal.any([call.signal, w.cancelled]),
               scope.cardWaitMs,
             ),
           halt,
-          goingSite,
+          originOf(page.url()),
         );
         went = await going;
       } finally {
@@ -811,7 +826,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           tab: node.id,
           // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
           subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
-          step: why ? { why, site: sites[0] ?? site, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site, fields: [], more: 0, sends: sites },
+          // By host: the origins are exact (the owner, 2026-11-23), and the card names each one's host.
+          step: why ? { why, site: hostOf(sites[0] ?? '') || site, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: hostOf(page.url()), fields: [], more: 0, sends: sites.map(hostOf) },
           show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
           takeDown: w.cancelled,
         },
@@ -832,7 +848,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // (beacons, pings) are dropped either way.
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      watch = page.watchSends(step.class === 'risky' ? allowedBy(element, site, host.siteOf) : null);
+      watch = page.watchSends(step.class === 'risky' ? allowedBy(element) : null);
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
       watchOn();
       if ((refused = halt())) return;
@@ -918,7 +934,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     // for it, naming its sites, before the action is done (it waits on what's held): askHeld.
     if ((await Promise.race([acting.then(() => 'acted' as const), watching.then(() => 'on' as const)])) === 'on' && watch) {
       const w = watch as SendWatch;
-      const sent = await askHeld(w, acting, (held, sites, why) => askSendCard(held, sites, why, w), halt, site);
+      const sent = await askHeld(w, acting, (held, sites, why) => askSendCard(held, sites, why, w), halt, originOf(page.url()));
       refused ??= sent;
     }
     const { navigated, loading } = await acting;
@@ -1023,8 +1039,9 @@ async function askHeld(
         w.deny();
         return halted;
       }
-      // *Allow until done* (the send card's `always`): those sites, this tab, until the agent's done (sends.ts).
-      w.allow(new Set(sites), answer === 'always' && !step);
+      // A step card's yes: that address only. A send card's: those origins (*Allow until done*, its `always`: and after
+      // this action too, until the agent's done: sends.ts).
+      w.allow(step ? { url: step.url } : { origins: new Set(sites), until: answer === 'always' });
       continue;
     }
     w.deny();
@@ -1040,17 +1057,22 @@ function targetOf(element: Extract<ActAnswer, { ok: true }>, site: string, siteO
   return to && to !== site ? { to } : {};
 }
 
-/** What a risky step the user allowed lets go (its card named it): the page's site, its form's or link's, and its address. */
-function allowedBy(element: Extract<ActAnswer, { ok: true }>, site: string, siteOf: (url: string) => string | null): Allowed {
-  const sites = new Set([site]);
-  const urls = new Set<string>();
-  for (const url of [element.risk?.form?.url ?? '', element.risk?.hrefUrl ?? '']) {
-    if (!url) continue;
-    const to = siteOf(url) ?? hostOf(url);
-    if (to) sites.add(to);
-    urls.add(url);
+/**
+ * What a risky step the user allowed lets go (its card named it): its form's address and its link's, exactly. Never an
+ * origin: anything else its page sends meanwhile still asks (Claude's review 3 of #112: a POST next to the click's own
+ * `location = '/logout'`).
+ */
+function allowedBy(element: Extract<ActAnswer, { ok: true }>): Allowed {
+  return { urls: new Set([element.risk?.form?.url ?? '', element.risk?.hrefUrl ?? ''].filter(Boolean)) };
+}
+
+/** An address's origin (scheme, host and port), or empty. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
   }
-  return { sites, urls };
 }
 
 function stepShape(element: Extract<ActAnswer, { ok: true }>): string {

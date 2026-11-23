@@ -2,13 +2,16 @@
  * What an agent's tab sends (S18 M2d; the owner's default, 2026-11-23: "ask when it sends data", and #112 review 2:
  * all the time, not only while an action runs). The words, forms and addresses classify a step before it's sent
  * (core's control-risk.ts); this is the layer under them, by what the page does: every request an agent's tab makes,
- * in any frame or worker (dedicated, shared, service), its own process or another's, passes through Chromium's `Fetch`
- * domain on the tab's debugger (attached for the tab's life by agents/pickers.ts, which turns it on in each frame and
- * worker before it runs, and counts the tab's hold as on only once it's on in the page). A worker's requests are its
- * page's (a dedicated or shared worker has no Fetch domain of its own; a service worker's own are held in its target).
- * A redirect is paused at its response (documents, XHR and fetch only: a read's image or script never is): a 307 or
- * 308, which sends the body on, is held again for its new site (Neon's review 2 of #112), and one that takes a page to
- * an address that deletes or signs out asks as that step.
+ * in any frame or dedicated worker, its own process or another's, passes through Chromium's `Fetch` domain on the
+ * tab's debugger (attached for the tab's life by agents/pickers.ts, which turns it on in each frame before it runs, and
+ * counts the tab's hold as on only once it's on in the page). A dedicated worker's requests are its page's (Chromium
+ * gives it no Fetch domain of its own). Service workers are bypassed in an agent's tab, so its requests are its own;
+ * a service worker is never held, since it's the site's and your own tabs there send through it too (Claude's review
+ * 3 of #112). Shared workers don't exist in an agent's tab. Not held: what a service worker sends on its own when the
+ * agent's page asks it to (`postMessage`), a stated limit.
+ * A redirect's next request is paused again at its start (Chromium does that; Claude's review 3 of #112 had the
+ * response-stage pause dropped, checked end to end): a 307 or 308, which sends the body on, is held again for its
+ * new origin (Neon's review 2), and one that takes a page to an address that deletes or signs out asks as that step.
  *
  * - A request that only reads (GET, HEAD, a CORS preflight's OPTIONS) goes on, except a document (a page or a frame
  *   going somewhere) whose address deletes or signs out (core's addressWhy, as `navigate`'s): held, and asked about
@@ -17,14 +20,15 @@
  * - A report (a beacon, an `<a ping>`: `resourceType` Ping; a CSP violation report) is dropped, answered with nothing,
  *   and never asked about (the owner's option A). The rare page that saves data by beacon loses it in an agent's tab.
  * - Anything else that sends data (a form posted, a fetch or XHR with another method) is held and asked about:
- *   - **During an action**, the action's card asks (tools.ts, through `watchSends`), naming the sites; Allow lets go
- *     what goes to those sites, and what's sent to them from then on in that action; anything to another site waits
- *     for a card of its own. A step the user already allowed (a classified risky one) lets go only what its card named
- *     (its page's site, its form's target site, its link's address), never everything.
+ *   - **During an action**, the action's card asks (tools.ts, through `watchSends`), naming the origins (by host);
+ *     Allow lets go what goes to those exact origins, and what's sent to them from then on in that action; anything to
+ *     another origin (another subdomain, port or scheme too: the owner, 2026-11-23) waits for a card of its own. A step
+ *     the user already allowed (a classified risky one) lets go only its own addresses (its form's, its link's), never
+ *     an origin: anything else its page sends still asks (Claude's review 3).
  *   - **Between actions**, a card asks *Codex's tab wants to send data to its site* (`SendHoldDeps.ask`, the agent's
  *     own gate); what's sent to the same sites while it's up joins it, anything else waits for the next.
  *   Allow lets it go; Don't or no answer fails it, and the agent hears so with its next result. *Allow until done*
- *   (the owner, 2026-11-23) lets go what this tab sends to those sites from then on too, without a card, until the
+ *   (the owner, 2026-11-23) lets go what this tab sends to those origins from then on too, without a card, until the
  *   agent is done with it: its connection ends, it's stopped, the tab closes, or you take the tab over. Never
  *   remembered past that; a new site still asks, and so does a step that deletes or signs out.
  * - **Yours**: while you have the tab (a key or click of yours paused the agent there), what it sends is yours and
@@ -48,11 +52,8 @@ const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 type Paused = { requestId: string; sessionId: string | undefined; url: string; type: string; why: RiskWhy | null };
 
-/** Responses paused: only where a redirect can carry data on, or take a page somewhere. */
-const RESPONSES = ['Document', 'XHR', 'Fetch', 'Other'];
-/** What every request's hold pauses: its start, and those responses. */
-const PATTERNS = [{ requestStage: 'Request' }, ...RESPONSES.map((resourceType) => ({ resourceType, requestStage: 'Response' }))];
-const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+/** What the hold pauses: every request at its start (a redirect's next one too). */
+const PATTERNS = [{ requestStage: 'Request' }];
 
 /** A send card's answer: Don't (or none), Allow, or *Allow until done* (those sites, this tab, until the agent's done). */
 export type SendAnswer = 'deny' | 'once' | 'until';
@@ -63,7 +64,7 @@ export interface SendHoldDeps {
   whose(): 'agent' | 'user' | 'none';
   /** Between actions: the card, *Codex's tab wants to send data to …* (or the step an address is: `why`). */
   ask(sites: string[], why: RiskWhy | null, signal: AbortSignal): Promise<SendAnswer>;
-  /** A request's site, as the card names it. */
+  /** A request's origin: what a card covers (the owner, 2026-11-23: exactly that origin, never its whole site). */
   siteOf(url: string): string;
 }
 
@@ -77,25 +78,28 @@ export interface SendWatch {
   nextHeld(): Promise<'held'>;
   /** Cancelled: you took the tab over, or Stop (failHeld). The action's card comes down. */
   readonly cancelled: AbortSignal;
-  /** Allow: what's held for these sites goes, and what's sent to them from now on in this action (`until`: and after it, until the agent's done). */
-  allow(sites: ReadonlySet<string>, until?: boolean): void;
+  /**
+   * Allow. A send card's: what's held for these origins goes, and what's sent to them from now on in this action
+   * (`until`: and after it, until the agent's done). A step card's (a document going to an address that deletes or
+   * signs out): only that address, never its origin.
+   */
+  allow(grant: { origins: ReadonlySet<string>; until?: boolean } | { url: string }): void;
   /** Don't: all of it dropped, and anything sent from now on in this action. */
   deny(): void;
   /** The action's over: anything still held is asked about as the tab's (the card between actions). */
   end(): void;
 }
 
-/** What a step the user already allowed lets go (its card named it): sites data may go to, and addresses it may open. */
+/** What a step the user already allowed lets go (its card named it): its own addresses (its form's, its link's), nothing more. */
 export interface Allowed {
-  sites: ReadonlySet<string>;
   urls: ReadonlySet<string>;
 }
 
 interface Action {
   denied: boolean;
-  /** Sites Allow named (or the allowed step's card): their requests go. */
+  /** Origins a send card's Allow named: their requests go. */
   sites: Set<string>;
-  /** Addresses the allowed step's card named (a link to a delete address): a document going there goes. */
+  /** Addresses a step card named (its form's, its link's, a document's): a request to exactly one goes. */
   urls: Set<string>;
   held: Paused[];
   waiting: (() => void)[];
@@ -110,7 +114,7 @@ interface Hold {
   idle: Paused[];
   /** The card up between actions: its sites, and what's held for them. */
   card: { sites: Set<string>; held: Paused[]; cancel: AbortController } | null;
-  /** *Allow until done*: sites this tab's sends go to without a card, until the agent's done with it (failHeld, endUntil). */
+  /** *Allow until done*: origins this tab's sends go to without a card, until the agent's done with it (failHeld, endUntil). */
   until: Set<string>;
   go(p: Paused): void;
   drop(p: Paused): void;
@@ -131,8 +135,8 @@ const countDropped = (contents: object, n: number) => {
   if (n > 0) dropped.set(contents, (dropped.get(contents) ?? 0) + n);
 };
 
-/** A site as the card names it: by the chord's deps, or the address's host. */
-const siteBy = (hold: Hold, url: string) => hold.deps?.siteOf(url) ?? hostOf(url);
+/** What a card covers for an address: its origin (the chord's deps say how; until then, the address's own). */
+const siteBy = (hold: Hold, url: string) => hold.deps?.siteOf(url) ?? originOf(url);
 
 /**
  * Starts the tab's send hold (agents/pickers.ts, as it starts the tab's picker hold): every request it makes from now
@@ -162,28 +166,13 @@ export function holdSends(contents: WebContents): void {
   holds.set(contents, hold);
   debug.on('message', (_event, method: string, params: unknown, sessionId?: string) => {
     if (method !== 'Fetch.requestPaused') return;
-    const at = params as {
-      requestId?: string;
-      request?: { method?: string; url?: string };
-      resourceType?: string;
-      responseStatusCode?: number;
-      responseHeaders?: { name: string; value: string }[];
-    };
+    const at = params as { requestId?: string; request?: { method?: string; url?: string }; resourceType?: string };
     if (!at.requestId) return;
     // The page's own target comes with an empty session id: answered without one (an empty one reaches no session).
     const type = String(at.resourceType ?? '');
     const how = String(at.request?.method ?? 'GET').toUpperCase();
-    let url = String(at.request?.url ?? '');
-    let read = READS.has(how);
-    if (at.responseStatusCode !== undefined) {
-      // A response: only a redirect matters, and only where it goes is asked about.
-      const location = at.responseHeaders?.find((h) => h.name.toLowerCase() === 'location')?.value;
-      const next = REDIRECTS.has(at.responseStatusCode) && location ? resolved(location, url) : '';
-      if (!next) return hold.go({ requestId: at.requestId, sessionId: sessionId || undefined, url, type, why: null });
-      // A 307 or 308 sends the same request on, its body too; any other redirect goes on as a read.
-      if (!(at.responseStatusCode === 307 || at.responseStatusCode === 308)) read = true;
-      url = next;
-    }
+    const url = String(at.request?.url ?? '');
+    const read = READS.has(how);
     const p: Paused = { requestId: at.requestId, sessionId: sessionId || undefined, url, type, why: read && type === 'Document' ? addressWhy(url) : null };
     if (read && !p.why) return hold.go(p);
     // A report: dropped, never asked (the owner's option A).
@@ -195,7 +184,7 @@ export function holdSends(contents: WebContents): void {
     const action = hold.action;
     if (action) {
       if (action.denied) return hold.drop(p);
-      if (p.why ? action.urls.has(url) : action.sites.has(siteBy(hold, url))) return hold.go(p);
+      if (action.urls.has(url) || (!p.why && action.sites.has(siteBy(hold, url)))) return hold.go(p);
       action.held.push(p);
       for (const wake of action.waiting.splice(0)) wake();
       return;
@@ -290,27 +279,34 @@ export function failHeld(contents: object): void {
 export function watchSends(contents: WebContents, allowed: Allowed | null): SendWatch | null {
   const hold = holds.get(contents);
   if (!hold || hold.action || contents.isDestroyed() || !contents.debugger.isAttached()) return null;
-  const action: Action = { denied: false, sites: new Set(allowed?.sites ?? []), urls: new Set(allowed?.urls ?? []), held: [], waiting: [], cancel: new AbortController() };
+  const action: Action = { denied: false, sites: new Set(), urls: new Set(allowed?.urls ?? []), held: [], waiting: [], cancel: new AbortController() };
   hold.action = action;
   return {
     held: () => action.held.map((p) => ({ url: p.url, why: p.why })),
     sitesOf: (urls) => [...new Set(urls.map((u) => siteBy(hold, u)))],
     nextHeld: () => (action.held.length || action.denied ? Promise.resolve('held' as const) : new Promise<'held'>((done) => action.waiting.push(() => done('held')))),
     cancelled: action.cancel.signal,
-    allow: (sites, until) => {
+    allow: (grant) => {
       if (action.denied) return;
-      for (const site of sites) action.sites.add(site);
-      if (until) for (const site of sites) hold.until.add(site);
+      // A step card's yes: that one address, nothing else (Claude's review 3 of #112).
+      if ('url' in grant) {
+        action.urls.add(grant.url);
+        const still: Paused[] = [];
+        for (const p of action.held.splice(0)) {
+          if (p.url === grant.url) hold.go(p);
+          else still.push(p);
+        }
+        action.held.push(...still);
+        return;
+      }
+      for (const origin of grant.origins) {
+        action.sites.add(origin);
+        if (grant.until) hold.until.add(origin);
+      }
       const still: Paused[] = [];
       for (const p of action.held.splice(0)) {
-        // A document going somewhere risky is allowed by its own address only (its card named that step).
-        const named = p.why ? sites.has(siteBy(hold, p.url)) : action.sites.has(siteBy(hold, p.url));
-        if (!named) {
-          still.push(p);
-          continue;
-        }
-        if (p.why) action.urls.add(p.url);
-        hold.go(p);
+        if (!p.why && action.sites.has(siteBy(hold, p.url))) hold.go(p);
+        else still.push(p);
       }
       action.held.push(...still);
     },
@@ -345,19 +341,10 @@ export function sendsOn(contents: WebContents, sessionId?: string): Promise<bool
   ]);
 }
 
-/** A redirect's address, against the request's; empty when it can't be read. */
-function resolved(location: string, base: string): string {
+/** An address's origin (scheme, host and port), or empty. */
+function originOf(url: string): string {
   try {
-    return new URL(location, base).href;
-  } catch {
-    return '';
-  }
-}
-
-/** An address's host, or empty. */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
+    return new URL(url).origin;
   } catch {
     return '';
   }

@@ -14,7 +14,7 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
-import { holdFilePickers } from './agents/pickers';
+import { holdFilePickers, bypassServiceWorkers, setFirstLoadPending } from './agents/pickers';
 import { agentGuardUp } from './control/page';
 import { heldFromFrame } from './agents/held';
 
@@ -81,6 +81,8 @@ interface FloatingPage {
 }
 
 export class TabManager {
+  /** Agent tabs loading their blank first page (createView): its navigation is never the tab's. */
+  private readonly priming = new WeakSet<WebContents>();
   private readonly views = new Map<NodeId, WebContentsView>();
   private readonly crashReloads = new Map<NodeId, number>();
   /** Tabs playing audio or video right now (muted video counts). */
@@ -250,7 +252,29 @@ export class TabManager {
         });
       }
     };
-    this.whenProxied(contents, () => (armed ? void armed.then(load) : load()));
+    // An agent's tab: a blank page first, for a renderer to bypass service workers in (agents/pickers.ts), then its
+    // address, only if that answered (fail closed: a service worker would send out of the hold's sight). The blank
+    // page is never the tab's: not its address, nor in its back list.
+    const primed = async () => {
+      this.priming.add(contents);
+      await contents.loadURL('about:blank').catch(() => undefined);
+      const bypassed = await bypassServiceWorkers(contents);
+      this.priming.delete(contents);
+      // No bypass, no page (fail closed): what waits on it stops waiting, and finds the tab blank.
+      if (!bypassed || contents.isDestroyed()) return setFirstLoadPending(contents, false);
+      const arrived = () => {
+        setFirstLoadPending(contents, false);
+        contents.off('did-fail-load', arrived);
+        const history = contents.navigationHistory;
+        if (history.getActiveIndex() > 0 && history.getEntryAtIndex(0)?.url === 'about:blank') history.removeEntryAtIndex(0);
+      };
+      contents.once('did-navigate', arrived);
+      contents.once('did-fail-load', arrived);
+      load();
+    };
+    // Its first page is on its way from now (a read or open_tab waits for it, never the blank page before it).
+    if (armed) setFirstLoadPending(contents, true);
+    this.whenProxied(contents, () => (armed ? void armed.then(primed) : load()));
     return view;
   }
 
@@ -427,6 +451,8 @@ export class TabManager {
       this.deps.onVisit(url, '', nodeId);
     };
     contents.on('did-navigate', (_event, url, code) => {
+      // An agent's tab's blank first page (createView): never its address.
+      if (this.priming.has(contents)) return;
       // A new page: the last one's count goes with it.
       const had = this.badges.delete(nodeId);
       const shown = this.shownBadge(nodeId, url);
@@ -451,7 +477,7 @@ export class TabManager {
       visit(url);
     });
     contents.on('did-start-navigation', (details) => {
-      if (!details.isMainFrame || details.isSameDocument) return;
+      if (!details.isMainFrame || details.isSameDocument || this.priming.has(contents)) return;
       // The icon waits for the page to commit (did-navigate): a navigation can still be cancelled, or download.
       live({ error: null });
     });

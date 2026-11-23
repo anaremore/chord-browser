@@ -59,8 +59,10 @@
   content: '·';
 }
 
+/* The buttons wrap when they don't fit in one row (a Send data card's four: #112), as the mock draws them; never cut. */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
   justify-content: flex-end;

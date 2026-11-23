@@ -1339,6 +1339,45 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(asked.length).toBe(6);
   });
 
+  // The owner, 2026-11-23: a card covers exactly the origins it names (scheme, host, port), never their whole site;
+  // another subdomain is the user's question, on a card of its own.
+  it.each([
+    ['https://a.example.com', 'the same origin', 'https://a.example.com/save', 0],
+    ['https://a.example.com', 'another subdomain', 'https://b.example.com/save', 1],
+    ['https://a.example.com', 'the same host over http', 'http://a.example.com/save', 1],
+    ['https://a.example.com', 'another port', 'https://a.example.com:8443/save', 1],
+    ['https://www.example.com', 'api of an allowed www', 'https://api.example.com/save', 1],
+  ] as const)('Allow until done on %s, then a send to %s: %i more card(s)', async (first, _what, next, more) => {
+    const t = await acting();
+    const contents = t.pages.get('n1')!.contents;
+    const asked: string[][] = [];
+    sendHoldDeps(contents, { whose: () => 'agent', ask: async (sites) => (asked.push(sites), 'until' as const), siteOf: (u) => new URL(u).origin });
+    const paused = async (id: string, to: string) => {
+      t.at.emitDebug!('Fetch.requestPaused', { requestId: id, request: { method: 'POST', url: to }, resourceType: 'XHR' });
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    await paused('first', `${first}/save`);
+    expect(asked).toEqual([[first]]);
+    await paused('next', next);
+    expect(asked.length - 1).toBe(more);
+    if (more) expect(asked[1]).toEqual([new URL(next).origin]);
+  });
+
+  it('a risky step’s Allow lets go its own address only: a POST beside its location = /logout still asks (Claude’s review 3 of #112)', async () => {
+    const t = await acting({ act: { siteAllowed: () => true } });
+    const clicking = t.call('click', { tab_id: t.tab, ref: 'e1' });
+    await vi.waitFor(() => expect(t.at.input.length).toBeGreaterThan(0));
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'g1', request: { method: 'GET', url: 'https://news.test/account/logout' }, resourceType: 'Document' });
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'p1', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'XHR' });
+    await clicking;
+    const cards = t.cards.filter((c) => c.kind === 'step').map((c) => (c.step?.sends ? ['sends', c.step.sends] : [c.step?.why, c.step?.going]));
+    // The step's own card (allowed), then the POST's own send card.
+    expect(cards).toEqual([
+      ['sign-out', 'news.test/account/logout'],
+      ['sends', ['news.test']],
+    ]);
+  });
+
   it('a 307 to another site after Allow is held again, for its own card; a document going to a delete address asks as that step (Neon’s review 2 of #112)', async () => {
     const t = await acting({ deep: { posts: true } });
     const contents = t.pages.get('n1')!.contents;

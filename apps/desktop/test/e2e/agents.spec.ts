@@ -739,8 +739,21 @@ test('workers, redirects and scripts: what a worker sends asks too; a 307 to ano
     // The site card first, on a click that sends nothing.
     const first = mcp.call('snapshot', { tab_id: 'a1' });
     await first;
-    // Each worker's send: held in its own target, one card, Don't drops it.
-    for (const name of ['Worker', 'Shared worker', 'Through the service worker', 'Service worker']) {
+    // A dedicated worker reads, never sends, in an agent's tab (its requests aren't the page's hold's to see: #112
+    // review 3): its POST fails at once, no card, nothing reaches the site.
+    const working = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Worker"') });
+    {
+      const siteCard = siteCardOf(popover, 'Codex');
+      const early = await Promise.race([working.then((r) => r.text), siteCard.waitFor({ timeout: 15_000 }).then(() => null)]);
+      expect(early, 'the site card, not an answer').toBeNull();
+      await popover.waitForTimeout(600);
+      await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    }
+    expect(JSON.parse((await working).text)).toMatchObject({ data: { done: 'Clicked “Worker”' } });
+    await expect.poll(read).toContain('worker: A worker can’t send data from a tab an agent is using.');
+    // The page's own send through the site's service worker (an agent's tab bypasses it, so it's the page's): held,
+    // one card, Don't drops it. (#112 review 3: no service worker is held; it's the site's.)
+    for (const name of ['Through the service worker']) {
       const clicking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${name}"`) });
       if (name === 'Worker') {
         const siteCard = siteCardOf(popover, 'Codex');
@@ -750,11 +763,20 @@ test('workers, redirects and scripts: what a worker sends asks too; a 307 to ano
         await popover.waitForTimeout(600);
         await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
       }
+      await expect(card(ownSite), `${name}'s send card`).toBeVisible({ timeout: 15_000 });
       expect((await withCard(clicking, ownSite, 'Don’t')).text, name).toBe(STEP_NO);
     }
     await new Promise((r) => setTimeout(r, 500));
     expect(reached.filter((r) => r.startsWith('POST'))).toEqual([]);
-    // Through the service worker too: its own request, redirected by a 307 to another site, is held again.
+    // No shared workers in an agent's tab (one is the site's, shared with your tabs): the page finds none.
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Shared worker"') })).text)).toMatchObject({ data: { done: 'Clicked “Shared worker”' } });
+    expect(await read()).toContain('no shared worker');
+    // The stated limit: what the site's service worker sends on its own when the page asks it to (postMessage) isn't
+    // held (holding it would hold your own tabs' sends there too).
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Service worker"') })).text)).toMatchObject({ data: { done: 'Clicked “Service worker”' } });
+    await expect.poll(() => reached.includes('POST /sw-own')).toBe(true);
+    reached.length = 0;
+    // A 307 to another site, from the page (the worker bypassed), is held again.
     const otherSiteSw = new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`);
     const viaSw = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Redirected through the service worker"') });
     await withCard(Promise.resolve({ text: '' }), ownSite, 'Allow');
@@ -845,6 +867,39 @@ test('between actions: what the tab sends asks (“Codex’s tab wants to send d
   }
 });
 
+test('your own tab on a site whose service worker an agent’s tab shares: what you send never asks (Claude’s review 3 of #112)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    // The agent's tab registers the site's service worker.
+    const opening = mcp.call('open_tab', { url: `${site.origin}/workers` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    await expect.poll(async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content, { timeout: 15_000 }).toContain('controlled');
+    // Your own tab on that site, controlled by the same worker.
+    const { windowId } = await where(shell);
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/mailbox` });
+    const mailbox = await pageWhere(app, (url) => url.startsWith(`${site.origin}/mailbox`));
+    await expect.poll(() => mailbox.evaluate(() => Boolean(navigator.serviceWorker.controller)), { timeout: 15_000 }).toBe(true);
+    // You send mail: it goes, through the worker, and no card asks.
+    await mailbox.evaluate(() => fetch('/user-mail', { method: 'POST', body: 'hello' }).then((r) => r.status));
+    expect(reached).toContain('POST /user-mail');
+    const popover = await pageWhere(app, isPopover);
+    await expect(popover.getByRole('alertdialog', { name: /^Send data to / })).toHaveCount(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('Allow until done: no more cards for that site from this tab; a new site still asks; your taking the tab ends it; a new agent session asks again (the owner, 2026-11-23)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -865,6 +920,15 @@ test('Allow until done: no more cards for that site from this tab; a new site st
     const polls = () => reached.filter((r) => r === 'POST /poll').length;
     // The poll's card: Allow until done.
     await expect(ownSite).toBeVisible({ timeout: 15_000 });
+    // Its four buttons (Show me, Don't, Allow until done, Allow) all inside the card, none cut (the owner's demo, #112).
+    const box = (await ownSite.boundingBox())!;
+    const buttons = ownSite.getByRole('button').filter({ hasNotText: /^$/ });
+    expect(await buttons.allTextContents()).toEqual(expect.arrayContaining(['Show me', 'Don’t', 'Allow until done', 'Allow']));
+    for (const button of await buttons.all()) {
+      const b = (await button.boundingBox())!;
+      expect(b.x, await button.textContent() ?? '').toBeGreaterThanOrEqual(box.x - 0.5);
+      expect(b.x + b.width, await button.textContent() ?? '').toBeLessThanOrEqual(box.x + box.width + 0.5);
+    }
     await popover.waitForTimeout(600);
     await ownSite.getByRole('button', { name: 'Allow until done', exact: true }).click();
     await expect(ownSite).toHaveCount(0);
@@ -1458,14 +1522,16 @@ test.beforeAll(async () => {
     // address, and what a page sends between actions.
     '/workers':
       '<title>Workers</title><main>' +
-      '<button onclick="w.postMessage(1)">Worker</button> <button onclick="sh.port.postMessage(1)">Shared worker</button> ' +
+      '<button onclick="w.postMessage(1)">Worker</button> <button onclick="sh ? sh.port.postMessage(1) : (log.textContent += \' no shared worker\')">Shared worker</button> ' +
       '<button onclick="fetch(\'/sw-save\', { method: \'POST\', body: \'x\' }).catch(() => {})">Through the service worker</button> ' +
       '<button onclick="navigator.serviceWorker.controller.postMessage(1)">Service worker</button>' +
       '<button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected through the service worker</button>' +
       '<p id=log></p>' +
-      '<script>const w = new Worker("/w.js"); const sh = new SharedWorker("/shared.js"); sh.port.start();' +
+      '<script>const w = new Worker("/w.js"); w.onmessage = (e) => { log.textContent += " " + e.data; }; const sh = window.SharedWorker ? new SharedWorker("/shared.js") : null; if (sh) sh.port.start();' +
       'navigator.serviceWorker.register("/sw.js"); navigator.serviceWorker.addEventListener("controllerchange", () => { log.textContent = "controlled"; });' +
       'if (navigator.serviceWorker.controller) log.textContent = "controlled";</script></main>',
+    // A page of yours on the same site as an agent's tab: the site's service worker controls both (#112 review 3).
+    '/mailbox': '<title>Mailbox</title><main><h1>Mailbox</h1></main>',
     // No worker here: a page's own redirects and navigations.
     '/redirects':
       '<title>Redirects</title><main><button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected</button>' +
@@ -1501,7 +1567,7 @@ test.beforeAll(async () => {
     }
     // Workers' scripts (#112 review 2): a dedicated, a shared and a service worker, each sending when told.
     const scripts: Record<string, string> = {
-      '/w.js': 'onmessage = () => fetch("/worker-save", { method: "POST", body: "x" });',
+      '/w.js': 'onmessage = () => fetch("/worker-save", { method: "POST", body: "x" }).then(() => postMessage("worker sent"), (e) => postMessage("worker: " + e.message));',
       '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
       '/sw.js':
         'self.addEventListener("install", () => self.skipWaiting()); self.addEventListener("activate", (e) => e.waitUntil(clients.claim()));' +

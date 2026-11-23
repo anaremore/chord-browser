@@ -6,6 +6,13 @@
  */
 export function holdForAgent(held: (kind: 'dialog' | 'file', detail: string) => void): void {
   const page = globalThis as unknown as Record<string, unknown> & { HTMLInputElement?: { prototype: object }; DOMException: new (m: string, n: string) => unknown };
+  // No shared workers (#112 review 3): one is the site's, shared with your own tabs there, so what it sends couldn't
+  // be told apart from what they send. A page that checks for them finds none, as in a browser without them.
+  try {
+    delete page['SharedWorker'];
+  } catch {
+    // Not configurable here: left as it is (its requests would be the page's, held as such).
+  }
   const answers: Record<string, unknown> = { alert: undefined, confirm: false, prompt: null };
   for (const name of Object.keys(answers)) {
     const original = page[name];
