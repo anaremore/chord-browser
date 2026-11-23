@@ -14,6 +14,7 @@ describe('holdFilePickers', () => {
     const contents = {
       isDestroyed: () => false,
       on: (e: string, f: (...a: unknown[]) => void) => page.on(e, f),
+      once: (e: string, f: (...a: unknown[]) => void) => page.once(e, f),
       debugger: {
         isAttached: () => state.attached,
         attach: () => {
@@ -36,21 +37,44 @@ describe('holdFilePickers', () => {
   const names = (sent: [string, unknown, string | undefined][]) => sent.map(([m, , s]) => `${m}${s ? `@${s}` : ''}`);
   const settle = () => new Promise((r) => setTimeout(r, 0));
 
-  it('intercepts in the page, and in each frame before it runs; iframes only; says when a picker was held', async () => {
+  it('intercepts in the page, and in each frame before it runs; frames and workers only; says when a picker was held', async () => {
     const { contents, events, sent } = fake();
     const held: string[] = [];
     holdFilePickers(contents, (d) => void held.push(d));
     await settle();
-    expect(names(sent)).toEqual(['Target.setAutoAttach', 'Page.enable', 'Page.setInterceptFileChooserDialog']);
-    expect(sent[2]![1]).toEqual({ enabled: true });
-    expect(sent[0]![1]).toEqual({ autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] });
+    expect(names(sent)).toEqual(['Target.setAutoAttach', 'Fetch.enable', 'Page.enable', 'Page.setInterceptFileChooserDialog']);
+    expect(sent[3]![1]).toEqual({ enabled: true });
+    expect(sent[0]![1]).toEqual({ autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }, { type: 'worker' }, { type: 'shared_worker' }, { type: 'service_worker' }] });
     events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
     await settle();
     // Its interception on, and only then let go on.
-    expect(names(sent.slice(3))).toEqual(['Target.setAutoAttach@s1', 'Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Runtime.runIfWaitingForDebugger@s1']);
+    expect(names(sent.slice(4))).toEqual(['Target.setAutoAttach@s1', 'Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Fetch.enable@s1', 'Runtime.runIfWaitingForDebugger@s1']);
     events.emit('message', {}, 'Page.fileChooserOpened', { mode: 'selectSingle' }, 's1');
     expect(held).toEqual(['a file picker']);
     expect(pickersLost(contents)).toBe(false);
+  });
+
+  it('a worker (dedicated, shared, service): what it sends held before it runs; one whose sends can’t be held never runs (#112 review 2)', async () => {
+    const { contents, events, sent, state } = fake();
+    holdFilePickers(contents, () => undefined);
+    await settle();
+    sent.length = 0;
+    events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'w1', targetInfo: { type: 'worker' } });
+    await settle();
+    // A dedicated worker's requests are its page's (it has no Fetch domain of its own: the E2E checks they're held).
+    expect(names(sent)).toEqual(['Target.setAutoAttach@w1', 'Runtime.runIfWaitingForDebugger@w1']);
+    sent.length = 0;
+    state.fail.add('Fetch.enable@w2');
+    events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'w2', targetInfo: { type: 'service_worker' } });
+    await settle();
+    expect(names(sent)).toEqual(['Target.setAutoAttach@w2', 'Fetch.enable@w2']);
+    expect(pickersUnsecured(contents)).toBe(true);
+    // A frame whose sends can't be held stays held too.
+    sent.length = 0;
+    state.fail.add('Fetch.enable@f3');
+    events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f3', targetInfo: { type: 'iframe' } });
+    await settle();
+    expect(names(sent)).not.toContain('Runtime.runIfWaitingForDebugger@f3');
   });
 
   it('let go of: the hold is lost (acting refused) until it’s attached and armed again', async () => {
@@ -64,7 +88,7 @@ describe('holdFilePickers', () => {
     expect(pickersLost(contents)).toBe(true);
     await vi.advanceTimersByTimeAsync(300);
     expect(state.attaches).toBe(2);
-    expect(names(sent)).toEqual(['Target.setAutoAttach', 'Page.enable', 'Page.setInterceptFileChooserDialog']);
+    expect(names(sent)).toEqual(['Target.setAutoAttach', 'Fetch.enable', 'Page.enable', 'Page.setInterceptFileChooserDialog']);
     expect(pickersLost(contents)).toBe(false);
   });
 

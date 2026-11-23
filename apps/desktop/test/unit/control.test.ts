@@ -13,6 +13,7 @@ import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, type ControlBrowser } from '../../src/main/control/tools';
 import { focusToGiveBack } from '../../src/main/control/page';
+import { holdSends, sendHoldDeps, failHeld } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
 
@@ -180,6 +181,8 @@ function fakePage(url: string, read: Answer) {
     debugging: string[];
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
+    /** The page's requests went (deep.ping, deep.posts): once per page. */
+    sent?: boolean;
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
   let attached = false;
@@ -193,7 +196,15 @@ function fakePage(url: string, read: Answer) {
   const contents = {
     // Acting (S18 M2c): what an action sends, recorded.
     getZoomFactor: () => at.zoom,
-    sendInputEvent: (e: unknown) => void at.input.push(e),
+    sendInputEvent: (e: unknown) => {
+      at.input.push(e);
+      // A page that sends as the agent acts (S18 M2d): its requests, paused by the tab's send hold, once its first input came.
+      if (!at.sent && (at.deep.ping || at.deep.posts)) {
+        at.sent = true;
+        if (at.deep.ping) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'b1', request: { method: 'POST', url: 'https://stats.test/collect' }, resourceType: 'Ping' }), 0);
+        if (at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/delete' }, resourceType: 'Document' }), 0);
+      }
+    },
     setIgnoreMenuShortcuts: () => undefined,
     insertText: async (text: string) => void at.text.push(text),
     getTitle: () => 'Article',
@@ -239,9 +250,6 @@ function fakePage(url: string, read: Answer) {
         if (method === 'Runtime.evaluate') return params?.expression?.includes('instanceof Map') ? { result: { value: true } } : { result: { objectId: 'el' } };
         if (method === 'DOM.getNodeForLocation') return { backendNodeId: 1, frameId: 'F' };
         if (method === 'DOM.resolveNode') return { object: { objectId: 'hit' } };
-        // A page that sends a form as the agent clicks (S18 M2d): its POST, paused for the guard.
-        if (method === 'Fetch.enable' && at.deep.ping) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'b1', request: { method: 'POST', url: 'https://stats.test/collect' }, resourceType: 'Ping' }), 0);
-        if (method === 'Fetch.enable' && at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/delete' }, resourceType: 'Document' }), 0);
         if (method === 'Runtime.callFunctionOn') {
           if (at.deep.picker) debugEvents.emit('message', {}, 'Page.fileChooserOpened', {});
           return { result: { value: at.deep.hit ?? { ok: true } } };
@@ -831,7 +839,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; others?: number; unchanged?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; others?: number; unchanged?: boolean; has?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     if (code.includes('__chordAgentGuard')) {
@@ -875,7 +883,7 @@ describe('acting through the gate (S18 M2c)', () => {
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       // Where typing went (#112): this field changed, and others (a twist's count) did too.
-      if (args.op === 'values') return args.mode === 'compare' ? { ok: true, ...said, changed: !twist.unchanged, has: false, others: twist.others ?? 0 } : { ok: true, ...said };
+      if (args.op === 'values') return args.mode === 'compare' ? { ok: true, ...said, changed: !twist.unchanged, has: Boolean(twist.has), others: twist.others ?? 0 } : { ok: true, ...said };
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
@@ -899,8 +907,14 @@ describe('acting through the gate (S18 M2c)', () => {
     await t.call('snapshot', { tab_id: tab });
     const at = t.pages.get('n1')!.at;
     at.deep = opts.deep ?? {};
-    // An agent's tab: its debugger attached for its whole life (agents/pickers.ts), as the tail needs.
-    if (at.deep.persistent) (t.pages.get('n1')!.contents as unknown as { debugger: { attach(): void } }).debugger.attach();
+    // An agent's tab: its debugger attached for its whole life, and what it sends held (agents/pickers.ts, sends.ts).
+    const contents = t.pages.get('n1')!.contents;
+    try {
+      (contents as unknown as { debugger: { attach(): void } }).debugger.attach();
+    } catch {
+      // DevTools has it (deep.unavailable): no hold to watch with.
+    }
+    holdSends(contents);
     return { ...t, tab, steps, doings, kept, at };
   }
 
@@ -979,7 +993,8 @@ describe('acting through the gate (S18 M2c)', () => {
     // Enter's keydown first, then everything checked again before its character (a keydown handler can move the focus).
     // A text field in no form with submit is a send (M2d): the step card, then the element described again after it.
     // And every field's value remembered before the text, then compared after it (#112: where the text went).
-    expect(t.steps).toEqual(['describe', 'describe', 'point', 'hit', 'describe', 'select', 'guard', 'focused', 'values', 'unguard', 'values', 'guard', 'focused', 'focused', 'unguard']);
+    // And the step checked again right before Enter (Neon's review 2 of #112).
+    expect(t.steps).toEqual(['describe', 'describe', 'point', 'hit', 'describe', 'select', 'guard', 'focused', 'values', 'unguard', 'values', 'describe', 'guard', 'focused', 'focused', 'unguard']);
     expect(t.at.text).toEqual(['wool scarf']);
     expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
     // replace: false keeps what's there.
@@ -1231,15 +1246,75 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.debugging).toContain('Fetch.failRequest');
   });
 
-  it('what the page sends just after an action is dropped (the tail), and the next result says so', async () => {
-    const t = await acting({ deep: { persistent: true } });
+  it('what the page sends between actions is held and asked about (the owner, 2026-11-23); a no fails it, and the next result says so', async () => {
+    const t = await acting();
     await t.call('click', { tab_id: t.tab, ref: 'e1' });
+    const contents = t.pages.get('n1')!.contents;
+    // Held until the tab's chord can ask: nothing answered yet.
     t.at.emitDebug!('Fetch.requestPaused', { requestId: 'late1', request: { method: 'POST', url: 'https://news.test/autosave' }, resourceType: 'XHR' });
-    expect(t.at.debugging).toContain('Fetch.failRequest');
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'late2', request: { method: 'POST', url: 'https://news.test/autosave' }, resourceType: 'XHR' });
+    const answered = () => t.at.debugging.filter((m) => m === 'Fetch.failRequest' || m === 'Fetch.continueRequest').length;
+    const before = answered();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(answered()).toBe(before);
+    // One card for both (the same site), and a no fails them.
+    const asked: string[][] = [];
+    sendHoldDeps(contents, { whose: () => 'agent', ask: async (sites) => (asked.push(sites), false), siteOf: (u) => new URL(u).host });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(asked).toEqual([['news.test']]);
+    expect(answered()).toBe(before + 2);
     const next = result(await t.call('click', { tab_id: t.tab, ref: 'e1' }));
-    expect(next.data['dropped']).toBe('After your last action here, the page tried to send data on its own; Chord dropped it. If something didn’t save, do that step again.');
+    expect(next.data['dropped']).toBe('Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.');
     // Taken: the one after says nothing.
     expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data['dropped']).toBeUndefined();
+  });
+
+  it('between actions: Allow lets go only the sites its card named; a send to another site waits for its own card; yours go; taking the tab fails what’s held', async () => {
+    const t = await acting();
+    const contents = t.pages.get('n1')!.contents;
+    let whose: 'agent' | 'user' = 'agent';
+    const asked: string[][] = [];
+    let answer: (yes: boolean) => void = () => undefined;
+    sendHoldDeps(contents, { whose: () => whose, ask: (sites) => (asked.push(sites), new Promise<boolean>((done) => (answer = done))), siteOf: (u) => new URL(u).host });
+    const paused = (id: string, url: string) => t.at.emitDebug!('Fetch.requestPaused', { requestId: id, request: { method: 'POST', url }, resourceType: 'XHR' });
+    paused('a1', 'https://news.test/save');
+    paused('a2', 'https://news.test/save');
+    paused('b1', 'https://tracker.test/x');
+    expect(asked).toEqual([['news.test']]);
+    const continued = () => t.at.debugging.filter((m) => m === 'Fetch.continueRequest').length;
+    const before = continued();
+    answer(true);
+    await new Promise((r) => setTimeout(r, 0));
+    // The two for news.test went; tracker.test asks on its own card.
+    expect(continued()).toBe(before + 2);
+    expect(asked).toEqual([['news.test'], ['tracker.test']]);
+    // You take the tab: what's held fails, the card comes down, and what you send goes.
+    const failed = t.at.debugging.filter((m) => m === 'Fetch.failRequest').length;
+    whose = 'user';
+    failHeld(contents);
+    expect(t.at.debugging.filter((m) => m === 'Fetch.failRequest').length).toBe(failed + 1);
+    paused('u1', 'https://news.test/mine');
+    expect(continued()).toBe(before + 3);
+  });
+
+  it('a 307 to another site after Allow is held again, for its own card; a document going to a delete address asks as that step (Neon’s review 2 of #112)', async () => {
+    const t = await acting({ deep: { posts: true } });
+    const contents = t.pages.get('n1')!.contents;
+    void contents;
+    const out = t.call('click', { tab_id: t.tab, ref: 'e1' });
+    // After the first card's Allow, the same request comes back redirected to another site.
+    await vi.waitFor(() => expect(t.cards.filter((c) => c.step?.sends).length).toBe(1));
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://evil.test/take' }, resourceType: 'Document' });
+    await out;
+    const sends = t.cards.filter((c) => c.step?.sends).map((c) => c.step?.sends);
+    expect(sends).toEqual([['news.test'], ['evil.test']]);
+    // A document GET to a delete address, during an action: its own step card, not a send card.
+    const u = await acting({ act: { siteAllowed: () => true } });
+    const going = u.call('click', { tab_id: u.tab, ref: 'e1' });
+    await vi.waitFor(() => expect(u.at.input.length).toBeGreaterThan(0));
+    u.at.emitDebug!('Fetch.requestPaused', { requestId: 'g1', request: { method: 'GET', url: 'https://news.test/account/delete' }, resourceType: 'Document' });
+    await going;
+    expect(u.cards.filter((c) => c.kind === 'step').map((c) => [c.step?.why, c.step?.going])).toContainEqual(['delete', 'news.test/account/delete']);
   });
 
   it('Show me outlines the element, the card still up', async () => {
@@ -1285,7 +1360,7 @@ describe('acting through the gate (S18 M2c)', () => {
   it('hover goes with the watch too: what its page sends on the pointer is held and asked about', async () => {
     const t = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
     expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
-    expect(t.at.debugging).toContain('Fetch.enable');
+    expect(t.at.debugging).toContain('Fetch.fulfillRequest');
   });
 
   it('navigate to an address that signs out or deletes: the step card first; Don’t goes nowhere', async () => {
@@ -1300,6 +1375,13 @@ describe('acting through the gate (S18 M2c)', () => {
   });
 
   // ---------- The owner's hand test (#112) ----------
+
+  it('a field that already held the text: done when replacing; never when adding to it (replace: false), which must change it (#112 review 2)', async () => {
+    const t = await acting({ twist: { unchanged: true, has: true } });
+    expect(result(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”' });
+    const u = await acting({ twist: { unchanged: true, has: true } });
+    expect(refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool', replace: false })).refused).toBe('That field didn’t change, so the text didn’t go in. Call snapshot and check the field.');
+  });
 
   it('text that landed in another field is never done; nor is a field that didn’t change', async () => {
     const t = await acting({ twist: { others: 1 } });

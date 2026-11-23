@@ -1001,6 +1001,12 @@ export interface AgentStepCard {
    * whether any is another site. The action's done; `action` is what it did: `Clicked “Mark as read”`.
    */
   sends?: { sites: string[]; other: boolean };
+  /** Sent between actions: the tab's, not an action's (*Codex’s tab wants to send data to its site.*). */
+  idle?: boolean;
+  /** Where the page itself is going, when that's the step (a script sending it to an address that deletes). */
+  going?: string;
+  /** Where a form or link goes, when that's another site than the page's. */
+  to?: string;
   /** Allow in the danger color (paying, deleting). */
   danger: boolean;
 }

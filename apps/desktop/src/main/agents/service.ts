@@ -133,7 +133,7 @@ export class AgentService {
           // (logged, and tried twice) doesn't hold connections back: the token still gates every one.
           void Promise.all([import('./connection'), this.deps.chords && !this.chords ? import('./chords') : null, this.restricted?.catch(() => -1)]).then(([{ agentConnection }, chordsModule]) => {
             if (chordsModule && this.deps.chords && !this.chords) {
-              this.chords = new chordsModule.AgentChords(this.deps.chords);
+              this.chords = new chordsModule.AgentChords({ ...this.deps.chords, ...(this.deps.waitMs !== undefined ? { waitMs: this.deps.waitMs } : {}) });
               // A tab you took over (to a site you keep private) is closed, as far as any agent knows.
               this.chords.onHandedOver = (nodeId) => {
                 for (const h of this.connections) h.connection.forget(nodeId);
@@ -177,8 +177,12 @@ export class AgentService {
                       action: card.description,
                       fields: step.fields,
                       more: step.more,
-                      danger: sends ? sends.other : stepDanger(step.why),
+                      // A form or link to another site: red, as data going to another site is.
+                      danger: sends ? sends.other : stepDanger(step.why) || Boolean(step.to),
                       ...(sends ? { sends } : {}),
+                      ...(step.idle ? { idle: true } : {}),
+                      ...(step.going ? { going: step.going } : {}),
+                      ...(step.to ? { to: step.to } : {}),
                       ...(step.shows ? { shows: step.shows } : {}),
                       ...(step.typed !== undefined ? { typed: step.typed } : {}),
                       show: (windowId) => {

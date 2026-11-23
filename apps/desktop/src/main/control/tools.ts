@@ -15,6 +15,8 @@ import {
   stepFields,
   type RiskAction,
   type RiskClass,
+  type RiskWhy,
+  type Grant,
   type RiskElement,
   type RiskForm,
   ASSISTANT_PDF_MAX_PAGES,
@@ -64,7 +66,7 @@ import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import type { ActAnswer } from './act';
 import type { DeepAnswer, DeepSession } from './deep';
-import type { SendWatch } from './sends';
+import type { Allowed, SendWatch } from './sends';
 import type { PageRead } from './extract';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
@@ -425,8 +427,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         url: page.url(),
         title: page.title(),
         ...(navigated ? { note: 'The page changed: call snapshot again before using refs from before.' } : {}),
-        // What the page sent after the agent's last action here, dropped (sends.ts' tail).
-        ...(droppedBefore ? { dropped: 'After your last action here, the page tried to send data on its own; Chord dropped it. If something didn’t save, do that step again.' } : {}),
+        // What the page tried to send since the agent's last action here, dropped (the user said no, didn't answer, or
+        // took the tab: sends.ts).
+        ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
       }),
     };
   };
@@ -483,13 +486,49 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Back must still go to the entry the card named.
       if (tool === 'back' && page.backEntry()?.url !== goingTo) return refuse(ELEMENT_REFUSALS.stale);
     }
+    // The list may have gained its site while a card was up (Neon's review 2 of #112).
+    if (isNeverReadable(goingTo, scope.neverSites())) return refuse(NEVER);
     const before = page.id;
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
       // The tab's load can take a while: the user taking the tab, or Stop, meanwhile stops it here.
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
-      const went = tool === 'navigate' ? await page.navigate(target) : await page.back(back!);
+      // What its load sends, or a redirect to an address that deletes or signs out, is held as an action's is: only what
+      // the card named goes (the address itself, when it asked).
+      const w = page.watchSends(goingWhy ? { sites: new Set(), urls: new Set([goingTo]) } : null);
+      if (!w) return refuse(ACT_REFUSALS.noCheck);
+      let went: { loading: boolean } | null;
+      let sent: string | null;
+      try {
+        const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
+        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : null);
+        sent = await askHeld(
+          w,
+          going,
+          (held, sites, why) =>
+            scope.agent.ask(
+              {
+                kind: 'step',
+                tool,
+                description: tool === 'navigate' ? `go to ${barAddress(target)}` : 'go back',
+                target: [page.url()],
+                tab: node.id,
+                subject: `${node.id}|${tool}|sends|${randomBytes(4).toString('hex')}`,
+                step: why ? { why, site: sites[0] ?? goingSite, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: goingSite, fields: [], more: 0, sends: sites },
+                takeDown: w.cancelled,
+              },
+              AbortSignal.any([call.signal, w.cancelled]),
+              scope.cardWaitMs,
+            ),
+          halt,
+          goingSite,
+        );
+        went = await going;
+      } finally {
+        w.end();
+      }
+      if (sent) return refuse(sent);
       if (!went) return refuse(ACT_REFUSALS.noBack);
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -522,10 +561,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
   if (tool === 'type' && !element.editable) return refuse(ACT_REFUSALS.notEditable);
-  // A field that isn't text (a time, a date, a color, a range: #112, the owner's hand test) is set, never typed into,
-  // and only to a value in its format.
+  // A field that isn't text (a time, a date, a month, a week: #112, the owner's hand test) is set, never typed into,
+  // and only to a value in its format. (A color or a range field takes no text: refused above, as not editable.)
   const valueType = tool === 'type' && element.risk?.tag === 'input' && VALUE_TYPES.has(element.risk.type) ? element.risk.type : null;
   if (valueType && !valueFits(valueType, text as string)) return refuse(ACT_REFUSALS.badValue(valueType));
+  const value = valueType ? (text as string) : null;
   if (tool === 'select_option' && !element.select) return refuse(ACT_REFUSALS.notSelect);
   if (tool !== 'hover' && element.disabled) return refuse(ACT_REFUSALS.disabled);
   const choice = element.choice ?? '';
@@ -598,7 +638,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         target: [page.url()],
         tab: node.id,
         subject: stepKey,
-        step: { why: step.why, site, fields, more, ...(element.risk?.text ? { shows: element.risk.text } : {}), ...(tool === 'type' && typeof text === 'string' ? { typed: text } : {}) },
+        step: { why: step.why, site, fields, more, ...(element.risk?.text ? { shows: element.risk.text } : {}), ...(tool === 'type' && typeof text === 'string' ? { typed: text } : {}), ...targetOf(element, site, host.siteOf) },
         // Show me: the element outlined in its page, the card still up (the service shows the tab in the window).
         show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
       },
@@ -643,8 +683,6 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   let deep: DeepSession | null = null;
   /** What the action sends, held (sends.ts): watched from before its input until a moment after it. */
   let watch: SendWatch | null = null;
-  let heldNow: () => void = () => undefined;
-  const held = new Promise<'held'>((done) => (heldNow = () => done('held')));
   /** What the page sent after the agent's last action here, dropped: its result says so. */
   const droppedBefore = page.droppedAfter();
   try {
@@ -713,10 +751,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     };
     /** After text or a value went in: this field changed, or now holds the text; and no other field changed. */
     const typedWhere = async (): Promise<string | null> => {
-      const after = await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'compare', text: text as string });
+      const after = await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'compare', text: value ?? (text as string) });
       if (!after.ok) return after.why === 'no-values' ? ACT_REFUSALS.notTyped : actRefusal(after);
       if ((after.others ?? 0) > 0) return ACT_REFUSALS.typedElsewhere;
-      if (!after.changed && !after.has) return ACT_REFUSALS.notTyped;
+      // Text added to what's there (replace: false) must have changed the field: holding the text already proves nothing.
+      if (!after.changed && (args['replace'] === false || !after.has)) return ACT_REFUSALS.notTyped;
       return null;
     };
     /**
@@ -760,6 +799,28 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       page.keys(rest);
       return null;
     };
+    /** The card for what an action's page held: its sites, or the step a document's address is (askHeld). */
+    const askSendCard = (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, w: SendWatch) =>
+      scope.agent.ask(
+        {
+          kind: 'step',
+          tool,
+          // What it did (it's done: what it sent waits): `Clicked “Mark as read”`.
+          description: actDone(description),
+          target: [page.url()],
+          tab: node.id,
+          // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
+          subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
+          step: why ? { why, site: sites[0] ?? site, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site, fields: [], more: 0, sends: sites },
+          show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
+          takeDown: w.cancelled,
+        },
+        AbortSignal.any([call.signal, w.cancelled]),
+        scope.cardWaitMs,
+      );
+    /** Once the watch is on: what's held from then is asked about (below). */
+    let watchOn: () => void = () => undefined;
+    const watching = new Promise<void>((done) => (watchOn = done));
     const acting = page.afterActing(async () => {
       const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
@@ -771,9 +832,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // (beacons, pings) are dropped either way.
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      watch = await page.watchSends(step.class !== 'act');
+      watch = page.watchSends(step.class === 'risky' ? allowedBy(element, site, host.siteOf) : null);
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
-      void watch.heldNow.then(heldNow);
+      watchOn();
       if ((refused = halt())) return;
       if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
       if (tool === 'select_option') {
@@ -795,10 +856,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if ((refused = await sameStep())) return;
         if ((refused = halt())) return;
         await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'remember' });
-        const set = await page.act(owner, lookup.token, lookup.key, { op: 'setValue', value: text as string });
+        const set = await page.act(owner, lookup.token, lookup.key, { op: 'setValue', value: value as string });
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;
         if (args['submit'] !== true) return;
+        if ((refused = await sameStep())) return;
         const focused = await page.act(owner, lookup.token, lookup.key, { op: 'focus' });
         if (!focused.ok) return void (refused = actRefusal(focused));
         return void (await guarded('keyup', pressKey('Enter')));
@@ -848,34 +910,16 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // that had the focus before is never *done*).
       if ((refused = await typedWhere())) return;
       if (args['submit'] !== true) return;
+      // The step again right before Enter (Neon's review 2 of #112): what typing did to the page counts.
+      if ((refused = await sameStep())) return;
       await guarded('keyup', pressKey('Enter'));
     });
-    // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and the card
-    // asks once for all of it, before the action is done (it waits on what's held). Allow lets it go; Don't, no
-    // answer, or Stop drops it.
-    if ((await Promise.race([acting, held])) === 'held' && watch) {
+    // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and a card asks
+    // for it, naming its sites, before the action is done (it waits on what's held): askHeld.
+    if ((await Promise.race([acting.then(() => 'acted' as const), watching.then(() => 'on' as const)])) === 'on' && watch) {
       const w = watch as SendWatch;
-      // What came in while the card was up waits with the rest.
-      const sites = sitesOf(w.held(), site, host.siteOf);
-      const answer = await scope.agent.ask(
-        {
-          kind: 'step',
-          tool,
-          // What it did (it's done: what it sent waits): `Clicked “Mark as read”`.
-          description: actDone(description),
-          target: [page.url()],
-          tab: node.id,
-          // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
-          subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
-          step: { why: 'send', site, fields: [], more: 0, sends: sites },
-          show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
-        },
-        call.signal,
-        scope.cardWaitMs,
-      );
-      const allow = answer === 'once' || answer === 'always';
-      w.release(allow);
-      if (!allow) refused ??= answer === 'waiting' ? ACT_REFUSALS.sendsDropped : ACT_REFUSALS.stepDenied;
+      const sent = await askHeld(w, acting, (held, sites, why) => askSendCard(held, sites, why, w), halt, site);
+      refused ??= sent;
     }
     const { navigated, loading } = await acting;
     if (deep) await (deep as DeepSession).close();
@@ -883,17 +927,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     return await done(navigated, loading, actDone(description), droppedBefore);
   } finally {
-    // What it still sends for a moment is dropped (sends.ts' tail).
+    // What its page still sends from now is the tab's: held, and asked about between actions (sends.ts).
     (watch as SendWatch | null)?.end();
     if (deep) await (deep as DeepSession).close();
     host.doing(node.id, null);
   }
-}
-
-/** The sites a step's held requests go to, the page's own first, then each other once, in order. */
-function sitesOf(urls: readonly string[], own: string, siteOf: (url: string) => string | null): string[] {
-  const sites = urls.map((u) => siteOf(u) ?? hostOf(u)).filter(Boolean);
-  return [...new Set([...(sites.includes(own) ? [own] : []), ...sites])];
 }
 
 /** An address's host, or empty. */
@@ -940,11 +978,85 @@ function stepOf(tool: ActTool, args: Record<string, unknown>, element: Extract<A
 }
 
 /** What a step card showed of a form, to check it's still so after the answer: where it goes, how, its fields. */
+/** Send cards in one action at most (each for sites the ones before didn't name): a page that keeps finding more is stopped. */
+const SEND_CARDS = 3;
+
+/**
+ * What an action's page held (sends.ts), asked about until the action's done: a card for its sites, or the step a
+ * document's address is (a script going to a delete address). Allow lets go what goes to the sites the card named,
+ * and only after `halt` (Stop, the user taking the tab, the page gone on); something held for another site meanwhile
+ * asks again (#112 review 2: Allow never releases more than the card named), at most SEND_CARDS times. Don't, no
+ * answer, Stop or your taking the tab (the watch cancelled) drops it all. Returns why it refused, or null.
+ */
+async function askHeld(
+  w: SendWatch,
+  acting: Promise<unknown>,
+  ask: (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null) => Promise<Grant | 'waiting'>,
+  halt: () => string | null,
+  own: string,
+): Promise<string | null> {
+  const acted = acting.then(
+    () => 'acted' as const,
+    () => 'acted' as const,
+  );
+  let cards = 0;
+  for (;;) {
+    if (w.cancelled.aborted) return halt();
+    const next = await Promise.race([acted, w.nextHeld()]);
+    const held = w.held();
+    if (!held.length) {
+      if (next === 'acted' || w.cancelled.aborted) return w.cancelled.aborted ? halt() : null;
+      continue;
+    }
+    if (++cards > SEND_CARDS) {
+      w.deny();
+      return ACT_REFUSALS.sendsTooMany;
+    }
+    // A step an address is gets a card of its own; otherwise what's held now, by site (the page's own first).
+    const step = held.find((h) => h.why);
+    const found = w.sitesOf(step ? [step.url] : held.map((h) => h.url));
+    const sites = found.includes(own) ? [own, ...found.filter((s) => s !== own)] : found;
+    const answer = await ask(held, sites, step?.why ?? null);
+    if (answer === 'once' || answer === 'always') {
+      const halted = halt();
+      if (halted) {
+        w.deny();
+        return halted;
+      }
+      w.allow(new Set(sites));
+      continue;
+    }
+    w.deny();
+    if (w.cancelled.aborted) return halt();
+    return answer === 'waiting' ? ACT_REFUSALS.sendsDropped : ACT_REFUSALS.stepDenied;
+  }
+}
+
+/** Where a risky step's form or link goes, when that's another site than the page's: the card says so. */
+function targetOf(element: Extract<ActAnswer, { ok: true }>, site: string, siteOf: (url: string) => string | null): { to?: string } {
+  const url = element.risk?.form?.url || element.risk?.hrefUrl || '';
+  const to = url ? (siteOf(url) ?? hostOf(url)) : '';
+  return to && to !== site ? { to } : {};
+}
+
+/** What a risky step the user allowed lets go (its card named it): the page's site, its form's or link's, and its address. */
+function allowedBy(element: Extract<ActAnswer, { ok: true }>, site: string, siteOf: (url: string) => string | null): Allowed {
+  const sites = new Set([site]);
+  const urls = new Set<string>();
+  for (const url of [element.risk?.form?.url ?? '', element.risk?.hrefUrl ?? '']) {
+    if (!url) continue;
+    const to = siteOf(url) ?? hostOf(url);
+    if (to) sites.add(to);
+    urls.add(url);
+  }
+  return { sites, urls };
+}
+
 function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
   const risk = element.risk;
   if (!risk) return '';
   const form = risk.form;
-  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.text, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
+  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.text, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
 }
 
 

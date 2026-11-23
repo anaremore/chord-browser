@@ -709,6 +709,187 @@ test('dialogs while an agent acts: alert, confirm and prompt are held and report
   }
 });
 
+test('workers, redirects and scripts: what a worker sends asks too; a 307 to another site asks again; a form to another site says where; a script going to a delete address asks (#112 review 2)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/workers` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const host = new URL(site.origin).host;
+    const third = `localhost:${new URL(site.origin).port}`;
+    const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    await expect.poll(read, { timeout: 15_000 }).toContain('controlled');
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const STEP_NO = 'The user said no to this step. Don’t try it another way; ask the user what to do.';
+    const card = (title: RegExp) => popover.getByRole('alertdialog', { name: title });
+    const withCard = async (call: Promise<{ text: string }>, title: RegExp, button: 'Allow' | 'Don’t') => {
+      await expect(card(title)).toBeVisible({ timeout: 15_000 });
+      await popover.waitForTimeout(600);
+      await card(title).getByRole('button', { name: button, exact: true }).click();
+      return call;
+    };
+    const ownSite = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    // The site card first, on a click that sends nothing.
+    const first = mcp.call('snapshot', { tab_id: 'a1' });
+    await first;
+    // Each worker's send: held in its own target, one card, Don't drops it.
+    for (const name of ['Worker', 'Shared worker', 'Through the service worker', 'Service worker']) {
+      const clicking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${name}"`) });
+      if (name === 'Worker') {
+        const siteCard = siteCardOf(popover, 'Codex');
+        // The click's own answer, if it comes before the card (a refusal), says why.
+        const early = await Promise.race([clicking.then((r) => r.text), siteCard.waitFor({ timeout: 15_000 }).then(() => null)]);
+        expect(early, 'the site card, not an answer').toBeNull();
+        await popover.waitForTimeout(600);
+        await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+      }
+      expect((await withCard(clicking, ownSite, 'Don’t')).text, name).toBe(STEP_NO);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    expect(reached.filter((r) => r.startsWith('POST'))).toEqual([]);
+    // Through the service worker too: its own request, redirected by a 307 to another site, is held again.
+    const otherSiteSw = new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`);
+    const viaSw = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Redirected through the service worker"') });
+    await withCard(Promise.resolve({ text: '' }), ownSite, 'Allow');
+    await withCard(Promise.resolve({ text: '' }), otherSiteSw, 'Don’t');
+    await viaSw;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(reached.filter((r) => r.startsWith('POST'))).toEqual(['POST /redir307']);
+    reached.length = 0;
+    // An allowed POST that a 307 sends to another site: asked again, for that site; Don't keeps it from there.
+    expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/redirects` })).text)).toMatchObject({ data: { navigated: true } });
+    const redirected = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Redirected"') });
+    await withCard(Promise.resolve({ text: '' }), ownSite, 'Allow');
+    const otherSite = new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`);
+    // The redirect's response can come after the action settled: then the tab's card asks, not the action's. Either
+    // way it's held for its own site, and Don't keeps it from there.
+    const after = (await withCard(redirected, otherSite, 'Don’t')).text;
+    expect([STEP_NO, 'done']).toContain(after === STEP_NO ? STEP_NO : (JSON.parse(after) as { data: { done?: string } }).data.done ? 'done' : after);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(reached.filter((r) => r.startsWith('POST'))).toEqual(['POST /redir307']);
+    // A script sending the page to a delete address: asked as that step, and Don't keeps it where it was.
+    const going = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Open settings"') });
+    expect((await withCard(going, /^Delete this on /, 'Don’t')).text).toBe(STEP_NO);
+    expect(reached.filter((r) => r.includes('/account/delete'))).toEqual([]);
+    // A risky form to another site: its card says where it goes; Allow sends it there, and nothing else.
+    expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/elsewhere` })).text)).toMatchObject({ data: { navigated: true } });
+    const ordering = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Submit order"') });
+    const order = card(/^Place the order on |^Submit this form on /);
+    await expect(order).toBeVisible({ timeout: 15_000 });
+    await expect(order).toContainText(`It goes to ${third}.`);
+    await popover.waitForTimeout(600);
+    await order.getByRole('button', { name: 'Allow', exact: true }).click();
+    expect(JSON.parse((await ordering).text)).toMatchObject({ data: { done: 'Clicked “Submit order”' } });
+    await expect.poll(() => reached.includes('POST /collect')).toBe(true);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('between actions: what the tab sends asks (“Codex’s tab wants to send data”), Allow sends it, and your taking the tab fails it (the owner, 2026-11-23)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/later` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const host = new URL(site.origin).host;
+    const ownSite = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const clicking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Edit later"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    // The action's done before the page sends: no card then.
+    expect(JSON.parse((await clicking).text)).toMatchObject({ data: { done: 'Clicked “Edit later”' } });
+    // 2.5 s later the page sends: the tab's card, as drawn, with the subject the tab.
+    const later = popover.getByRole('alertdialog', { name: ownSite });
+    await expect(later).toBeVisible({ timeout: 15_000 });
+    await expect(later).toContainText('Codex’s tab wants to send data to its site.');
+    expect(reached).toEqual([]);
+    await popover.waitForTimeout(600);
+    await later.getByRole('button', { name: 'Allow', exact: true }).click();
+    await expect.poll(() => reached.includes('POST /autosave')).toBe(true);
+    // Again, and this time you take the tab (a key in it): the card comes down, and what was held never goes.
+    reached.length = 0;
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Edit later"') })).text)).toMatchObject({ data: { done: 'Clicked “Edit later”' } });
+    await expect(popover.getByRole('alertdialog', { name: ownSite })).toBeVisible({ timeout: 15_000 });
+    await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Later/ }).click();
+    await pressReal(app, `${site.origin}/later`, 'Down');
+    await expect(popover.getByRole('alertdialog', { name: ownSite })).toHaveCount(0);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(reached).toEqual([]);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('between actions, the noise: a poll that posts, a feed that only reads, an autosave (a report for the owner, 2026-11-23, not a budget)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/live` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const cards = popover.getByRole('alertdialog', { name: /^Send data to / });
+    // 10 s, no one answering: how many cards, and how many sends wait on them.
+    const started = Date.now();
+    await expect(cards).toHaveCount(1, { timeout: 15_000 });
+    const firstCardMs = Date.now() - started;
+    await popover.waitForTimeout(8000);
+    const unanswered = await cards.count();
+    const reachedUnanswered = reached.filter((r) => r.startsWith('POST')).length;
+    // Then 10 s answering Allow each time a card shows: how many cards that takes.
+    let allowed = 0;
+    const until = Date.now() + 10_000;
+    while (Date.now() < until) {
+      if ((await cards.count()) > 0) {
+        await popover.waitForTimeout(600);
+        if ((await cards.count()) === 0) continue;
+        await cards.first().getByRole('button', { name: 'Allow', exact: true }).click();
+        allowed++;
+      } else await popover.waitForTimeout(100);
+    }
+    const polls = reached.filter((r) => r === 'POST /poll').length;
+    const reads = reached.filter((r) => r.startsWith('GET /updates')).length;
+    console.log(`[sends noise] first card after ${firstCardMs} ms; unanswered 8 s: ${unanswered} card, ${reachedUnanswered} POSTs sent; answering 10 s: ${allowed} cards allowed, ${polls} polls sent, feed reads asked: ${reads === 0 ? 'none' : reads}`);
+    expect(unanswered).toBe(1);
+    expect(reachedUnanswered).toBe(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1207,6 +1388,28 @@ test.beforeAll(async () => {
       '<label>Day <input type=date id=d></label> <label>When <input type=datetime-local id=dt></label> ' +
       '<label>Month <input type=month id=m></label> <label>Week <input type=week id=w></label><p id=log></p>' +
       '<script>for (const el of document.querySelectorAll("input")) { el.addEventListener("input", () => { log.textContent += "input:" + el.id + " "; }); el.addEventListener("change", () => { log.textContent += "change:" + el.id + " "; }); }</script></main>',
+    // #112 review 2: workers that send, a 307 to another site, a risky form to another site, a script going to a delete
+    // address, and what a page sends between actions.
+    '/workers':
+      '<title>Workers</title><main>' +
+      '<button onclick="w.postMessage(1)">Worker</button> <button onclick="sh.port.postMessage(1)">Shared worker</button> ' +
+      '<button onclick="fetch(\'/sw-save\', { method: \'POST\', body: \'x\' }).catch(() => {})">Through the service worker</button> ' +
+      '<button onclick="navigator.serviceWorker.controller.postMessage(1)">Service worker</button>' +
+      '<button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected through the service worker</button>' +
+      '<p id=log></p>' +
+      '<script>const w = new Worker("/w.js"); const sh = new SharedWorker("/shared.js"); sh.port.start();' +
+      'navigator.serviceWorker.register("/sw.js"); navigator.serviceWorker.addEventListener("controllerchange", () => { log.textContent = "controlled"; });' +
+      'if (navigator.serviceWorker.controller) log.textContent = "controlled";</script></main>',
+    // No worker here: a page's own redirects and navigations.
+    '/redirects':
+      '<title>Redirects</title><main><button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected</button>' +
+      '<button onclick="location.href = \'/account/delete\'">Open settings</button></main>',
+    '/later':
+      '<title>Later</title><main><button onclick="setTimeout(() => fetch(\'/autosave\', { method: \'POST\', body: \'x\' }).catch(() => {}), 2500)">Edit later</button></main>',
+    // The noise between actions: a poll that posts every second, a live feed that only reads, and an autosave as you type.
+    '/live':
+      '<title>Live</title><main><label>Draft <input id=d oninput="clearTimeout(window.t); window.t = setTimeout(() => fetch(\'/autosave\', { method: \'POST\', body: this.value }), 500)"></label>' +
+      '<script>setInterval(() => fetch("/poll", { method: "POST", body: "x" }).catch(() => {}), 1000); setInterval(() => fetch("/updates").catch(() => {}), 1000);</script></main>',
     // Dialogs while an agent acts: held, answered as Cancel would be, the tab never frozen.
     '/dialogs':
       '<title>Dialogs</title><main>' +
@@ -1220,6 +1423,29 @@ test.beforeAll(async () => {
       'b.addEventListener("click", (e) => log("click", e)); i.addEventListener("keydown", (e) => log("keydown-" + e.key, e)); i.addEventListener("beforeinput", (e) => log("beforeinput-" + e.inputType, e));</script>',
   };
   const server = createServer((req, res) => {
+    const thirdOrigin = `http://localhost:${(server.address() as AddressInfo).port}`;
+    // #112 review 2: an allowed POST that a 307 sends on to another site, with its body.
+    if (req.method === 'POST' && req.url === '/redir307') {
+      reached.push('POST /redir307');
+      req.resume();
+      res.writeHead(307, { location: `${thirdOrigin}/landed` });
+      res.end();
+      return;
+    }
+    // Workers' scripts (#112 review 2): a dedicated, a shared and a service worker, each sending when told.
+    const scripts: Record<string, string> = {
+      '/w.js': 'onmessage = () => fetch("/worker-save", { method: "POST", body: "x" });',
+      '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
+      '/sw.js':
+        'self.addEventListener("install", () => self.skipWaiting()); self.addEventListener("activate", (e) => e.waitUntil(clients.claim()));' +
+        'self.addEventListener("fetch", (e) => { if (e.request.method === "POST") e.respondWith(fetch(e.request)); });' +
+        'self.addEventListener("message", () => fetch("/sw-own", { method: "POST", body: "x" }));',
+    };
+    if (req.url && scripts[req.url]) {
+      res.writeHead(200, { 'content-type': 'text/javascript' });
+      res.end(scripts[req.url]);
+      return;
+    }
     // M2d: a form posted, or a delete address asked for, is recorded: the step card's journeys check what reached it.
     if (req.method === 'POST' || /\/delete(\b|$)/.test(req.url ?? '')) {
       reached.push(`${req.method} ${req.url}`);
@@ -1265,6 +1491,9 @@ test.beforeAll(async () => {
       res.end('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>');
       return;
     }
+    if (req.url === '/elsewhere')
+      return void (res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }),
+      res.end(`<title>Elsewhere</title><main><form method=post action="${third}/collect"><label>Note <input name=n></label><button>Submit order</button></form></main>`));
     const body = req.url === '/heavy'
       ? heavy
       : req.url === '/noise'

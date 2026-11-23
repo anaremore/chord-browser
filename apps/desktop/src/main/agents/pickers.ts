@@ -18,6 +18,7 @@
  * find it attached and use it as it is, never detaching it.
  */
 import type { WebContents } from 'electron';
+import { holdSends, sendsOn } from '../control/sends';
 import { withDebugger } from '../debugger-queue';
 
 type Message = { method: string; params: unknown; sessionId?: string };
@@ -31,12 +32,19 @@ export function pickersLost(contents: object): boolean {
   return lost.has(contents);
 }
 
-/** The frames of another process the hold attached in each tab (their sessions): what an action's watch also watches (control/sends.ts). */
+/**
+ * The frames of another process, and the workers (dedicated, shared, service), the hold attached in each tab (their
+ * sessions): what an action's watch also watches (control/sends.ts; #112 review 2: a worker's requests are its own).
+ */
 const sessions = new WeakMap<object, Set<string>>();
 
 export function frameSessions(contents: object): ReadonlySet<string> {
   return sessions.get(contents) ?? new Set();
 }
+
+/** The targets the hold attaches, each held at its start: frames of another process, and every kind of worker. */
+const ATTACHED = [{ type: 'iframe' }, { type: 'worker' }, { type: 'shared_worker' }, { type: 'service_worker' }];
+const WORKERS = new Set(['worker', 'shared_worker', 'service_worker']);
 
 /**
  * Agent tabs with a frame that couldn't be held (its interception never answered): it stays held at its start, a
@@ -71,6 +79,8 @@ const COMMAND_MS = 3000;
 export function holdFilePickers(contents: WebContents, held: (detail: string) => void): Promise<void> {
   if (contents.isDestroyed()) return Promise.resolve();
   const debug = contents.debugger;
+  // What the tab sends, held for its life (control/sends.ts): answered from its first request.
+  holdSends(contents);
   /** The attachment armed now: a detach (or another arm) makes answers from before it count for nothing. */
   let generation = 0;
   let tries = 0;
@@ -99,15 +109,31 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     // Its frames first: held from their start once this is on (the browser answers it, with or without a page yet, so
     // the tab's page can load right after: tabs.ts waits on it). An auto-attach that failed (or never answered) leaves
     // them unheld, so the hold isn't on.
-    const attached = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
+    const attached = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: ATTACHED }, sessionId);
+    // The page's sends held before it loads too (control/sends.ts: a page that posts as it loads asks first).
+    const sendingFirst = sessionId ? true : await sendsOn(contents);
     if (!sessionId) framesOn();
     await send('Page.enable', undefined, sessionId);
     const intercepted =
       (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
-    const on = intercepted && attached;
+    // What it sends held from its start too (control/sends.ts): in the page, and in a frame before it runs.
+    const sending = intercepted && attached && (sessionId ? await sendsOn(contents, sessionId) : sendingFirst);
+    const on = intercepted && attached && sending;
     if (sessionId && on) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
     if (sessionId && !on) unsecured.add(contents);
     return on;
+  };
+  /**
+   * A worker (dedicated, shared, service): its own workers held as they start too, what it sends held (sends.ts),
+   * then it runs. One whose sends couldn't be held stays held at its start (acting there is refused until the next
+   * document, as for a frame; #112 review 2: never a worker sending unheld).
+   */
+  const holdWorker = async (sessionId: string, type: string): Promise<void> => {
+    const nested = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: ATTACHED }, sessionId);
+    // A dedicated worker has no Fetch domain of its own: its requests are its page's (the page's hold has them).
+    const sending = type === 'worker' || (await sendsOn(contents, sessionId));
+    if (nested && sending) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
+    else unsecured.add(contents);
   };
   /**
    * The frames attached during an arming (those already there when it asks: a re-arm after a detach finds them
@@ -166,13 +192,16 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     else if (method === 'Target.attachedToTarget') {
       const attached = params as { sessionId?: string; targetInfo?: { type?: string } };
       if (!attached.sessionId) return;
-      if (attached.targetInfo?.type === 'iframe') {
+      const type = attached.targetInfo?.type ?? '';
+      if (type === 'iframe' || WORKERS.has(type)) {
         let known = sessions.get(contents);
         if (!known) sessions.set(contents, (known = new Set()));
         known.add(attached.sessionId);
+      }
+      if (type === 'iframe') {
         const held = hold(attached.sessionId);
         framesArming?.push(held);
-      }
+      } else if (WORKERS.has(type)) void holdWorker(attached.sessionId, type);
       // Anything else the filter let through goes on as it was.
       else void send('Runtime.runIfWaitingForDebugger', undefined, attached.sessionId);
     }

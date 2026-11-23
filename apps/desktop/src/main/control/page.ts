@@ -18,7 +18,7 @@ import { ACT_LOAD_MS, type FillWrite, type SnapshotRead } from '@chord/core';
 import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
 import { openDeep, type DeepSession } from './deep';
 import { pickersUnsecured } from '../agents/pickers';
-import { takeDroppedAfter, watchSends, type SendWatch } from './sends';
+import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
 import { snapshotPage } from './snapshot';
@@ -69,7 +69,7 @@ export interface ControlPage {
   /** A frame of the page couldn't be held (agents/pickers.ts): no acting here, said at once. */
   unsecured(): boolean;
   /** Watches what one action sends (control/sends.ts): held, or let go for a step already allowed; null if it can't. */
-  watchSends(pass: boolean): Promise<SendWatch | null>;
+  watchSends(allowed: Allowed | null): SendWatch | null;
   /** What the page sent after the last action, dropped (taken: the count goes back to 0). */
   droppedAfter(): number;
   /** The debugger's checks for one action (control/deep.ts); null if it can't be had. */
@@ -245,7 +245,7 @@ export function controlPage(contents: WebContents): ControlPage {
     },
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
     unsecured: () => pickersUnsecured(contents),
-    watchSends: (pass) => watchSends(contents, pass),
+    watchSends: (allowed) => watchSends(contents, allowed),
     droppedAfter: () => takeDroppedAfter(contents),
     // Within a moment, as every step: a hung page doesn't hold the action (the guard comes down after it anyway).
     insertText: async (text) => {

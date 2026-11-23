@@ -1409,11 +1409,11 @@ if (!app.requestSingleInstanceLock()) {
          * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
          */
         /**
-         * The send watch's cost (control/sends.ts): the agent's tab at `url` loaded again `runs` times without the watch
-         * and with it (every request then passes through it), in turns. Milliseconds to the load's end.
+         * The send hold's cost (control/sends.ts): the agent's tab at `url` loaded again `runs` times with the Fetch domain
+         * off in its page and on (every request then passes through the hold), in turns. Milliseconds to the load's end.
          */
         agentWatchTimes: async (url: string, runs: number) => {
-          const { stopWatching, watchSends } = await import('./control/sends');
+          const { sendsOn } = await import('./control/sends');
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
           if (!contents) return null;
           // A fresh address each time (nothing cached, no reload's own work).
@@ -1427,13 +1427,10 @@ if (!app.requestSingleInstanceLock()) {
           const off: number[] = [];
           const on: number[] = [];
           for (let i = 0; i < runs; i++) {
+            await contents.debugger.sendCommand('Fetch.disable').catch(() => undefined);
             off.push(await load());
-            const watch = await watchSends(contents, false);
-            if (!watch) return { off, on, failed: 'no watch' };
+            if (!(await sendsOn(contents))) return { off, on, failed: 'no hold' };
             on.push(await load());
-            // Over at once (no tail), so the next load without it is.
-            watch.end();
-            stopWatching(contents);
           }
           return { off, on };
         },

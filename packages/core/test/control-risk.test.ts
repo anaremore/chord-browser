@@ -28,7 +28,11 @@ const rows: [string, RiskAction, RiskElement, string][] = [
   ['a form’s submit named Send return request (the mock: Submit this form)', click, submitIn(form(), 'Send return request'), 'risky submit'],
   ['a form’s submit named Delete my account', click, submitIn(form(), 'Delete my account'), 'risky delete'],
   ['a form posting to a delete address', click, submitIn(form({ action: 'account delete' })), 'risky delete'],
-  ['a search form (GET, role=search)', click, submitIn(form({ method: 'get', search: true, textFields: 1, otherFields: 2 }), 'Search'), 'act'],
+  ['a search form (GET, role=search)', click, submitIn(form({ method: 'get', search: true, textFields: 1, otherFields: 0 }), 'Search'), 'act'],
+  // Neon's review 2 of #112: role=search exempts one text field and nothing else, never more fields or hidden ones.
+  ['a role=search GET form with more fields', click, submitIn(form({ method: 'get', search: true, textFields: 1, otherFields: 2 }), 'Search'), 'risky submit'],
+  ['a role=search GET form with a hidden field', click, submitIn(form({ method: 'get', search: true, textFields: 1, otherFields: 0, hidden: 1 }), 'Search'), 'risky submit'],
+  ['a role=search GET form with two text fields', click, submitIn(form({ method: 'get', search: true, textFields: 2, otherFields: 0 }), 'Search'), 'risky submit'],
   ['a search form (GET, one visible search field and nothing else)', click, submitIn(form({ method: 'get', searchFields: 1, textFields: 1, otherFields: 0 }), 'Go'), 'act'],
   // #112 review 1: the search downgrade, narrowed.
   ['a GET form with one text field that isn’t a search field', click, submitIn(form({ method: 'get', textFields: 1, otherFields: 0 }), 'Go'), 'risky submit'],
@@ -47,7 +51,7 @@ const rows: [string, RiskAction, RiskElement, string][] = [
   ['a link to /post/12', click, link('Our news', 'post 12'), 'act'],
   // type with submit: as its form's submit; in no form, a send.
   ['type with submit in a form', { tool: 'type', submit: true }, field(form()), 'risky submit'],
-  ['type with submit in a search form', { tool: 'type', submit: true }, field(form({ method: 'get', search: true })), 'act'],
+  ['type with submit in a search form', { tool: 'type', submit: true }, field(form({ method: 'get', search: true, textFields: 1, otherFields: 0 })), 'act'],
   ['type with submit in no form', { tool: 'type', submit: true }, field(null), 'risky send'],
   ['type with submit in a text area', { tool: 'type', submit: true }, field(form(), true), 'risky send'],
   ['type without submit', { tool: 'type', submit: false }, field(form()), 'act'],
@@ -121,7 +125,8 @@ describe('addressWhy: an address an agent goes to (navigate, back)', () => {
     ['https://shop.test/x?action=delete', 'delete'],
     ['https://shop.test/checkout', null],
     ['https://shop.test/post/12', null],
-    ['not an address', null],
+    // Unreadable: unknown, so it asks (Neon's review 2 of #112).
+    ['not an address', 'confirm'],
     [`https://shop.test/${'x'.repeat(2100)}`, 'confirm'],
     ['https://shop.test/%E0%A4%A', 'confirm'],
   ] as const)('%s', (url, why) => expect(addressWhy(url)).toBe(why));

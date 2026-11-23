@@ -34,6 +34,9 @@ export interface StepQuestion {
   shows?: string;
   typed?: string;
   sends?: { sites: string[]; other: boolean };
+  idle?: boolean;
+  going?: string;
+  to?: string;
   /** Show me: the tab shown in that window, the element outlined; the card stays. */
   show(windowId: WindowId): void;
 }
@@ -104,6 +107,9 @@ export class SiteCards {
           ...(question.shows ? { shows: plain(question.shows).slice(0, 60) } : {}),
           ...(question.typed !== undefined ? { typed: cut(plain(question.typed), 120) } : {}),
           ...(question.sends ? { sends: { sites: question.sends.sites.map((s) => plain(s).slice(0, 253)).slice(0, 8), other: question.sends.other } } : {}),
+          ...(question.idle ? { idle: true } : {}),
+          ...(question.going ? { going: plain(question.going).slice(0, 200) } : {}),
+          ...(question.to ? { to: plain(question.to).slice(0, 253) } : {}),
         },
         windowId: this.deps.lastWindow(),
         answer: (answer) => {

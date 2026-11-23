@@ -590,7 +590,21 @@ function AgentStepCardView({ card }: { card: AgentStepCard }) {
         title={card.title}
         note={
           <>
-            {card.sends ? `${card.name} ${did}, and the page is sending something to ${where}.` : `${card.name} is about to ${card.action}.`}
+            {card.idle
+              ? card.sends
+                ? `${card.name}’s tab wants to send data to ${where}.`
+                : `${card.name}’s tab wants to go to ${card.going ?? 'another page'}.`
+              : card.sends
+                ? `${card.name} ${did}, and the page is sending something to ${where}.`
+                : card.going
+                  ? `${card.name} ${did}, and the page is going to ${card.going}.`
+                  : `${card.name} is about to ${card.action}.`}
+            {card.to && (
+              <>
+                <br />
+                It goes to {card.to}.
+              </>
+            )}
             {card.shows && (
               <>
                 <br />

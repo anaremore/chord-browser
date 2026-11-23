@@ -145,7 +145,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** open_tab: a tab in its Agent chord, signed in as the user, once its page has loaded (at most LOAD_MS). */
-  const openTab = async (args: Record<string, unknown>): Promise<ToolOutput> => {
+  const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal): Promise<ToolOutput> => {
     const url = typeof args['url'] === 'string' ? args['url'].trim() : '';
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
     if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
@@ -156,12 +156,15 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       const site = siteOfUrl(url) ?? barAddress(url);
       const answer = await agent.ask(
         { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: `open|${url}`, step: { why, site, fields: [], more: 0 } },
-        new AbortController().signal,
+        // The call's own signal (Neon's review 2 of #112): Stop or the agent cancelling takes the card down for it.
+        callSignal,
         waitMs,
       );
       if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
       if (answer === 'deny') return { text: ACT_REFUSALS.stepDenied, isError: true };
     }
+    // Stopped while the card was up: no tab.
+    if (callSignal.aborted || agent.isStopped) return refused('stopped');
     if (!deps.chords || !deps.dispatch) return { text: 'This Chord can’t open tabs for agents.', isError: true };
     const chord = deps.chords.chordFor(agent, name, profile);
     deps.shares?.()?.chordMade(agent.id, chord);
@@ -248,7 +251,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
-          if (tool === 'open_tab') return openTab(args);
+          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]));
           if (tool === 'close_tab') return closeTab(args);
           return toPlain(await runControlTool(scope, deps.browser, tool, args));
         },

@@ -26,8 +26,9 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { dropAgentGuard } from '../control/page';
+import { failHeld, sendHoldDeps } from '../control/sends';
 import { randomBytes } from 'node:crypto';
-import { ACT_BAR_MIN_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -35,6 +36,7 @@ import { isAgentInput } from '../control/input';
 import type { Change } from '../store';
 import type { AgentHeld } from '../tabs';
 import { onNeverSite } from './scope';
+import { siteOfUrl } from './shares';
 
 export interface AgentChordsDeps {
   store: { readonly state: State; dispatch(command: Command): void; subscribe(listener: (change: Change) => void): () => void };
@@ -45,6 +47,8 @@ export interface AgentChordsDeps {
   /** The *Never* list: an agent's tab that goes to one of its sites closes. */
   neverSites?(): readonly string[];
   now?(): number;
+  /** How long a card between actions waits (what an agent's tab sends: control/sends.ts); CONTROL_WAIT_MS unless a test says. */
+  waitMs?: number;
 }
 
 /** Something an agent's tab held or refused, for its next result. */
@@ -167,6 +171,11 @@ export class AgentChords {
   /** The agent's state changed: each of its tabs' bars, and whether each runs at full speed. */
   private update(chord: AgentChord): void {
     for (const tab of this.tabsOf(chord.chordId)) {
+      // Stop: what its tabs held to send fails, and their cards come down (control/sends.ts).
+      if (chord.agent.isStopped) {
+        const page = this.deps.page(tab.id);
+        if (page && !page.isDestroyed()) failHeld(page);
+      }
       const live = this.live(chord, tab.id);
       const key = live ? `${live.state}${live.waiting ? ':waiting' : ''}${live.doing ? `:${live.doing}` : ''}` : '';
       if ((this.shown.get(tab.id) ?? '') !== key) {
@@ -248,6 +257,8 @@ export class AgentChords {
       this.userActed(nodeId);
       const chord = this.chordOfTab(nodeId);
       if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
+      // What the page held to send for the agent fails, and its card comes down: what it sends now is yours.
+      failHeld(contents);
     };
     contents.on('before-mouse-event', (_event, mouse) => {
       if (mouse.type === 'mouseDown' && !isAgentInput(contents)) yours();
@@ -256,6 +267,42 @@ export class AgentChords {
       if (input.type === 'keyDown' && !isAgentInput(contents)) yours();
     });
     contents.on('will-prevent-unload', (event) => event.preventDefault());
+    // What it sends (control/sends.ts): the agent's (held, asked) unless you have the tab; once the agent is done, only
+    // what follows your own key or click goes, the rest no one is there to ask about.
+    sendHoldDeps(contents, {
+      whose: () => {
+        const chord = this.chordOfTab(nodeId);
+        if (!chord) return 'user';
+        if (chord.agent.state(nodeId).paused || this.yoursNow(nodeId) !== null) return 'user';
+        if (chord.done) return 'none';
+        return 'agent';
+      },
+      ask: async (sites, why, signal) => {
+        const chord = this.chordOfTab(nodeId);
+        if (!chord || chord.done) return false;
+        const takeDown = new AbortController();
+        signal.addEventListener('abort', () => takeDown.abort(), { once: true });
+        const site = siteOfUrl(contents.getURL()) ?? sites[0] ?? '';
+        const answer = await chord.agent.ask(
+          {
+            kind: 'step',
+            tool: 'tab',
+            description: '',
+            target: [contents.getURL()],
+            tab: nodeId,
+            subject: `${nodeId}|idle|${randomBytes(4).toString('hex')}`,
+            step: why ? { why, site: sites[0] ?? site, fields: [], more: 0, idle: true } : { why: 'send', site, fields: [], more: 0, sends: sites, idle: true },
+            takeDown: takeDown.signal,
+          },
+          signal,
+          this.deps.waitMs ?? CONTROL_WAIT_MS,
+        );
+        // No answer in time: the card comes down, and what it held fails.
+        if (answer === 'waiting') takeDown.abort();
+        return answer === 'once' || answer === 'always';
+      },
+      siteOf: (url) => siteOfUrl(url) ?? hostOf(url),
+    });
   }
 
   private chordOfTab(nodeId: NodeId): AgentChord | null {
@@ -388,5 +435,14 @@ export class AgentChords {
   dispose(): void {
     this.unsubscribe();
     for (const chord of [...this.chords.values()]) this.forget(chord);
+  }
+}
+
+/** An address's host, or empty. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
   }
 }

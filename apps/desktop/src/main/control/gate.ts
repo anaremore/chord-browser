@@ -45,9 +45,26 @@ export interface ControlCard {
   /** What an `always` covers, with the kind: the tool for a read, the site for an action. */
   subject: string;
   /** A risky step (S18 M2d): why it asks, and what goes with it (a form's fields, by label). */
-  step?: { why: RiskWhy; site: string; fields: string[]; more: number; shows?: string; typed?: string; sends?: string[] };
+  step?: {
+    why: RiskWhy;
+    site: string;
+    fields: string[];
+    more: number;
+    shows?: string;
+    typed?: string;
+    /** What the page is sending, by site (control/sends.ts). */
+    sends?: string[];
+    /** Sent between actions (the tab's, not an action's: sends.ts). */
+    idle?: boolean;
+    /** Where the page itself is going (a script sending it to an address that deletes or signs out). */
+    going?: string;
+    /** Where a form or link goes, when that's another site than the page's (Neon's review 2 of #112). */
+    to?: string;
+  };
   /** Show me (a step card): the element outlined in its page, the card still up. */
   show?: () => void;
+  /** Takes the card itself down (it answers no) when it aborts: what it asked about is gone (sends.ts: you took the tab). */
+  takeDown?: AbortSignal;
 }
 
 /** Shows a card and resolves with the answer; resolves `deny` when its signal aborts (Stop, the turn ending). */
@@ -262,6 +279,8 @@ export class ControlAgent {
     const key = cardKey(card);
     const lateKey = openKey(card);
     const cancel = new AbortController();
+    card.takeDown?.addEventListener('abort', () => cancel.abort(), { once: true });
+    if (card.takeDown?.aborted) cancel.abort();
     this.step(tab, { t: 'ask', card: id });
     const open: OpenCard = { id, tabs: new Set([tab]), cancel, askers: 0, answer: Promise.resolve<Grant>('deny') };
     open.answer = (async (): Promise<Grant> => {

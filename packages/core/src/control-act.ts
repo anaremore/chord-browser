@@ -134,19 +134,18 @@ export function barAddress(url: string): string {
 
 /** What an agent hears when an action can't be done, one sentence each, as the plan has them. */
 /**
- * Fields that aren't text (the owner's hand test, #112): a time, a date, a color, a range. Typed into, their parts are
+ * Fields that aren't text (the owner's hand test, #112): a time, a date, a month, a week. Typed into, their parts are
  * the browser's own (hour, minute) and text can land in the field that had the focus before; so `type` sets their value
- * in the page's own format (validated), as the fill does, and never types.
+ * in the page's own format (validated), as the fill does, and never types. (A color or a range field takes no text at
+ * all: the snapshot names them a button and a slider, and `type` refuses them, Neon's review 2 of #112.)
  */
-export const VALUE_TYPES: ReadonlySet<string> = new Set(['date', 'time', 'datetime-local', 'month', 'week', 'color', 'range']);
+export const VALUE_TYPES: ReadonlySet<string> = new Set(['date', 'time', 'datetime-local', 'month', 'week']);
 const VALUE_FORMAT: Record<string, RegExp> = {
   date: /^\d{4}-\d{2}-\d{2}$/,
   time: /^\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/,
   'datetime-local': /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/,
   month: /^\d{4}-\d{2}$/,
   week: /^\d{4}-W\d{2}$/,
-  color: /^#[0-9a-fA-F]{6}$/,
-  range: /^-?\d+(\.\d+)?$/,
 };
 const VALUE_EXAMPLE: Record<string, string> = {
   date: '2026-11-23',
@@ -154,8 +153,6 @@ const VALUE_EXAMPLE: Record<string, string> = {
   'datetime-local': '2026-11-23T18:30',
   month: '2026-11',
   week: '2026-W48',
-  color: '#3366cc',
-  range: 'a number in its range',
 };
 
 /** Whether `text` is a value a field of `type` takes (VALUE_TYPES), in its format. */
@@ -185,6 +182,7 @@ export const ACT_REFUSALS = {
   stepDenied: 'The user said no to this step. Don’t try it another way; ask the user what to do.',
   stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
   sendsDropped: 'The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.',
+  sendsTooMany: 'The page kept sending data to more sites, so Chord dropped the rest and stopped. Ask the user what to do.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',

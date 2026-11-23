@@ -54,6 +54,8 @@ export interface ActRisk {
   tag: string;
   type: string;
   href: string;
+  /** The link's whole address (its origin too), or empty. */
+  hrefUrl: string;
   /** What it shows, when that isn't its name (an aria-label over other words): both count, and the card shows both. */
   text: string;
   multiline: boolean;
@@ -120,7 +122,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const riskOf = () => {
     // What a click on it acts on (#112 review 1): a label's control (a label for a submit button submits), else a
     // submit button or link it's inside (a span in a link goes where the link does), else itself.
-    const control = el.localName === 'label' && el.control ? el.control : null;
+    const label = el.closest('label');
+    const control = label && label.control && label.control !== el ? label.control : null;
     const inButton = !control && el.localName !== 'button' ? el.closest('button') : null;
     const target = control || inButton || el;
     const tag = target.localName;
@@ -140,7 +143,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       }
     };
     // What it shows, when its name says otherwise (an aria-label over other words).
-    const shownText = clip(String(el.innerText || el.value || ''), NAME_MAX);
+    // A button's words (an input button's are its value); never a field's value, which is what's typed in it.
+    const buttonValue = target.localName === 'input' && ['submit', 'button', 'reset'].includes(String(target.type).toLowerCase()) ? target.value : '';
+    const shownText = clip(String(target.innerText || buttonValue || el.innerText || ''), NAME_MAX);
     const text = shownText && shownText.toLowerCase() !== String(entry.name).toLowerCase() ? shownText : '';
     // A link, or a link it's inside.
     const link = el.closest('a[href]');
@@ -183,7 +188,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
         fields,
       };
     }
-    return { tag: link && !control && !inButton ? 'a' : tag, type, href: linkWords || '', hrefUnknown: Boolean(link) && linkWords === null, text, multiline, submits, form };
+    // The link's whole address too (its origin: Neon's review 2 of #112), for the step's shape and what an allowed step lets go.
+    const hrefUrl = link ? clip(String(link.href || ''), 2048) : '';
+    return { tag: link && !control && !inButton ? 'a' : tag, type, href: linkWords || '', hrefUrl, hrefUnknown: Boolean(link) && linkWords === null, text, multiline, submits, form };
   };
   if (args.op === 'describe') {
     if (args.option === undefined) return { ok: true, ...said, disabled, editable, select, risk: riskOf() };
@@ -214,7 +221,24 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // changed (or now holds the text), and how many others did. The values never leave the page; only the counts do.
   if (args.op === 'values') {
     const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
-    const fields = [...document.querySelectorAll('input, textarea, select, [contenteditable=""], [contenteditable="true"]')].filter((f) => !(f.localName === 'input' && SKIP_TYPES.has(String(f.type).toLowerCase())));
+    // Every field the text could have gone to: in the document, in its open shadow roots and its same-origin frames
+    // (each walked as deepFocus walks the focus), and every editing host, plaintext-only ones too (#112 review 2).
+    const fields = [];
+    const walk = (root, depth) => {
+      if (depth > 8) return;
+      for (const f of root.querySelectorAll('*')) {
+        if (f.shadowRoot) walk(f.shadowRoot, depth + 1);
+        if (f.localName === 'iframe' || f.localName === 'frame') {
+          let inner = null;
+          try { inner = f.contentDocument; } catch { inner = null; }
+          if (inner) walk(inner, depth + 1);
+        }
+        if (f.localName === 'input') { if (!SKIP_TYPES.has(String(f.type).toLowerCase())) fields.push(f); }
+        else if (f.localName === 'textarea' || f.localName === 'select') fields.push(f);
+        else if (f.isContentEditable && !(f.parentElement && f.parentElement.isContentEditable)) fields.push(f);
+      }
+    };
+    walk(document, 0);
     const valueOf = (f) => (f.localName === 'input' || f.localName === 'textarea' || f.localName === 'select' ? String(f.value) : String(f.textContent));
     if (args.mode === 'remember') {
       globalThis.__chordValues = new Map(fields.map((f) => [f, valueOf(f)]));

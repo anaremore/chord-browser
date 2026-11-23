@@ -166,7 +166,9 @@ const CJK = /[\u3040-\u30ff\u3400-\u9fff]/u;
 function wordsOf(text: string): string[] {
   return text
     // Format and control characters first: `P\u200Bay` is pay (#112 review 1).
-    .replace(/[\p{Cc}\p{Cf}]/gu, '')
+    // Stray combining marks too (U+034F, Neon's review 2 of #112), after composing what composes.
+    .normalize('NFC')
+    .replace(/[\p{Cc}\p{Cf}\p{Mn}]/gu, '')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
@@ -183,7 +185,7 @@ function has(words: readonly string[], phrase: string): boolean {
 /** The costliest why the words of `text` name, or null. `only`: the whys to look for. */
 export function riskWordsWhy(text: string, only: readonly (keyof typeof RISK_WORDS)[] = ['pay', 'delete', 'sign-out', 'sign-up', 'send', 'confirm']): RiskWhy | null {
   const words = wordsOf(text);
-  const lower = text.replace(/[\p{Cc}\p{Cf}]/gu, '').toLowerCase();
+  const lower = text.normalize('NFC').replace(/[\p{Cc}\p{Cf}\p{Mn}]/gu, '').toLowerCase();
   for (const why of ORDER) {
     if (!(only as readonly string[]).includes(why)) continue;
     if (RISK_WORDS[why as keyof typeof RISK_WORDS].some((w) => (CJK.test(w) ? lower.includes(w) : has(words, w)))) return why;
@@ -192,13 +194,15 @@ export function riskWordsWhy(text: string, only: readonly (keyof typeof RISK_WOR
 }
 
 /**
- * A form that's a search: GET, and inside (or itself) `role=search`, or with one visible field, a search field, and
- * nothing else, hidden fields included (#112 review 1: a one-field GET form with a hidden `action=delete` is no search).
- * A form described only in part (past the page's cap) is never one.
+ * A form that's a search: GET, one visible text field and nothing else, hidden fields included (#112 review 1: a
+ * one-field GET form with a hidden `action=delete` is no search), and that field a search field or the form inside (or
+ * itself) `role=search`. `role=search` never exempts more than that (Neon's review 2: a multi-field GET form, or one
+ * with hidden fields, isn't a search for saying it is). A form described only in part (past the page's cap) is never one.
  */
 function isSearch(form: RiskForm): boolean {
   if (form.method !== 'get' || form.overflow) return false;
-  return form.search || (form.searchFields === 1 && form.textFields === 1 && form.otherFields === 0 && form.hidden === 0);
+  if (form.textFields !== 1 || form.otherFields !== 0 || form.hidden !== 0) return false;
+  return form.search || form.searchFields === 1;
 }
 
 /**
@@ -302,7 +306,8 @@ export function addressWhy(url: string): RiskWhy | null {
   try {
     u = new URL(url);
   } catch {
-    return null;
+    // One that can't be read is unknown: it asks (Neon's review 2 of #112).
+    return 'confirm';
   }
   // An address that can't be read (not decodable, or past what's read of it) is unknown: it asks (#112 review 1).
   if (url.length > 2048) return 'confirm';
