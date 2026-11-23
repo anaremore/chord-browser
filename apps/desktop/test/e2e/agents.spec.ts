@@ -274,9 +274,13 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     // Your focus, before the agent acts (it must stay where it is: the agent's tab is parked, off screen).
     const focused = () => app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? null);
     // Yours: the window's own page has it (as when you're in the address bar).
-    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.focus(), shell.url());
-    const yours = await focused();
-    expect(yours).toBe(shell.url());
+    const yours = shell.url();
+    await expect
+      .poll(async () => {
+        await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.focus(), yours);
+        return focused();
+      })
+      .toBe(yours);
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const outline = await snap();
 

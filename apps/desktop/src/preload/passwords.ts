@@ -186,17 +186,9 @@ function stopListening(): void {
   page.removeEventListener('input', onField, { capture: true });
 }
 
-// Web pages only: not an extension's pages, which share the session, nor a blank frame's. And the top frame only:
-// main takes only its messages, and an agent's tab runs its preloads in its frames too (Neon's review of #110).
+// Web pages only: not an extension's pages, which share the session, nor a blank frame's.
 const { protocol } = page.location;
-const isTop = (() => {
-  try {
-    return (globalThis as unknown as { top: unknown }).top === globalThis;
-  } catch {
-    return false;
-  }
-})();
-if ((protocol === 'https:' || protocol === 'http:') && isTop) {
+if (protocol === 'https:' || protocol === 'http:') {
   watcher.observe(page.document, { attributes: true, attributeFilter: ['sandbox'], subtree: true });
   page.addEventListener('focusin', onField, { capture: true, passive: true });
   page.addEventListener('input', onField, { capture: true, passive: true });

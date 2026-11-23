@@ -18,6 +18,7 @@
  * find it attached and use it as it is, never detaching it.
  */
 import type { WebContents } from 'electron';
+import { withDebugger } from '../debugger-queue';
 
 type Message = { method: string; params: unknown; sessionId?: string };
 
@@ -64,39 +65,48 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
       new Promise<boolean>((done) => setTimeout(() => done(false), COMMAND_MS).unref?.()),
     ]);
   };
-  /** Interception on in a target (the page, or a frame in another process), frames under it held as they start. */
+  /**
+   * Interception on in a target (the page, or a frame in another process), frames under it held as they start. A
+   * frame goes on only once its interception answered (tried twice): one that never got it stays held, a blank frame
+   * in the agent's tab rather than one that could show a picker (Neon's review 7 of #110).
+   */
   const hold = async (sessionId?: string): Promise<boolean> => {
-    try {
-      await send('Page.enable', undefined, sessionId);
-      const intercepted = await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId);
-      await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
-      return intercepted;
-    } finally {
-      // A frame held at its start goes on now, its interception on (or failed: never left waiting).
-      if (sessionId) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
-    }
+    await send('Page.enable', undefined, sessionId);
+    const intercepted =
+      (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
+    await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
+    if (sessionId && intercepted) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
+    return intercepted;
   };
-  /** Attaches (if need be) and arms; the hold is on only if this attachment's interception answered. */
-  const arm = async (): Promise<boolean> => {
+  /**
+   * Attaches (if need be) and arms; the hold is on only if this attachment's interception answered. One arming at a
+   * time (a load and a retry together share it), in Chord's debugger queue (withDebugger): never riding another
+   * client's attachment that it then lets go of (page_diagnostics' own, when the hold was down).
+   */
+  let arming: Promise<boolean> | null = null;
+  const arm = (): Promise<boolean> => {
     if (timer) clearTimeout(timer);
     timer = null;
-    if (contents.isDestroyed()) return false;
-    const mine = ++generation;
-    lost.add(contents);
-    try {
-      if (!debug.isAttached()) debug.attach('1.3');
-    } catch {
-      later();
+    if (contents.isDestroyed()) return Promise.resolve(false);
+    arming ??= withDebugger(contents, async () => {
+      const mine = ++generation;
+      lost.add(contents);
+      try {
+        if (!debug.isAttached()) debug.attach('1.3');
+      } catch {
+        later();
+        return false;
+      }
+      const on = await hold();
+      if (on && mine === generation && debug.isAttached()) {
+        lost.delete(contents);
+        tries = 0;
+        return true;
+      }
+      if (mine === generation) later();
       return false;
-    }
-    const on = await hold();
-    if (on && mine === generation && debug.isAttached()) {
-      lost.delete(contents);
-      tries = 0;
-      return true;
-    }
-    if (mine === generation) later();
-    return false;
+    }).finally(() => (arming = null));
+    return arming;
   };
   /** Tried again after a growing wait, at most REARM_TRIES times in a row. */
   const later = () => {

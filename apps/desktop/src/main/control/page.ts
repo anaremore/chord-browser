@@ -341,12 +341,15 @@ async function focusedPage(): Promise<Focus> {
 }
 
 /**
- * The page to give the focus back to after an agent's action, or null (Claude's review 7 of #110): only while the
- * same Chord window is in front as before (never bringing Chord forward over another app, nor into another window of
- * it), only to the page that had it, and only if the agent's page has it now or no page does.
+ * The page to give the focus back to after an agent's action, or null: only to the page that had it, and only if the
+ * agent's page has it now or no page does. Where focusing a page brings its window forward (Windows, Linux:
+ * `activates`), only while the same Chord window is in front as before, never over another app nor into another
+ * window of Chord (Claude's review 7 of #110). On macOS focusing a page only makes it its window's first responder,
+ * so it goes back whatever is in front: else the agent's page would have your keys once you came back to Chord.
  */
-export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P): P | null {
-  if (!before.page || before.page === agent || !before.window || now.window !== before.window) return null;
+export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P, activates = process.platform !== 'darwin'): P | null {
+  if (!before.page || before.page === agent) return null;
+  if (activates && (!before.window || now.window !== before.window)) return null;
   return now.page === null || now.page === agent ? before.page : null;
 }
 

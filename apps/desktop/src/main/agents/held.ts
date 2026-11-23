@@ -4,7 +4,8 @@
  * frame from that origin tried (Claude's review 5 of #110). `topOrigin` is null for the top frame itself.
  */
 export function heldDetail(kind: 'dialog' | 'file', detail: string, frameOrigin: string | null, topOrigin: string | null): string {
-  if (topOrigin === null || frameOrigin === topOrigin) return detail.slice(0, 500);
+  // Two opaque origins ('null': sandboxed, data:) are never the same site, whatever they say.
+  if (topOrigin === null || (frameOrigin === topOrigin && frameOrigin !== 'null')) return detail.slice(0, 500);
   const from = frameOrigin && frameOrigin !== 'null' ? frameOrigin.slice(0, 200) : 'another site';
   return kind === 'dialog' ? `a frame from ${from} tried to show a dialog` : `a frame from ${from} tried to open a file picker`;
 }

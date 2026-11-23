@@ -1028,9 +1028,14 @@ describe('acting through the gate (S18 M2c)', () => {
     // No guard in the same document (its own ran out, or the user took the tab): a no.
     const u = await acting({ twist: { unguard: 'expired' } });
     expect(refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
-    // Another document (a submit's Enter navigated): the guard went with it, and that's done.
-    const v = await acting({ twist: { unguard: 'gone' } });
+    // Another document (a submit's Enter navigated, committed): the guard went with it, and that's done.
+    const v = await acting({ twist: { unguard: 'gone' }, onAct: (events, op) => void (op === 'unguard' && events.emit('did-navigate')) });
     expect(result(await v.call('type', { tab_id: v.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”' });
+  });
+
+  it('no guard there, but no document committed either: a no', async () => {
+    const t = await acting({ twist: { unguard: 'gone' } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
   });
 
   it('a navigation that starts and never commits (a 204, a download, window.stop): not another document, so a no', async () => {
@@ -1049,7 +1054,10 @@ describe('acting through the gate (S18 M2c)', () => {
       ['Chord wasn’t in front to begin with', { page: 'yours', window: null }, { page: 'agent', window: win }, null],
       ['you went to another page meanwhile', { page: 'yours', window: win }, { page: 'another', window: win }, null],
     ];
-    for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent'), what).toBe(back);
+    for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent', true), what).toBe(back);
+    // macOS: focusing a page never brings Chord forward, so the agent's page never keeps it, whatever's in front.
+    expect(focusToGiveBack({ page: 'yours', window: null }, { page: 'agent', window: null }, 'agent', false)).toBe('yours');
+    expect(focusToGiveBack({ page: 'yours', window: null }, { page: 'another', window: null }, 'agent', false)).toBeNull();
   });
 
   it('the guard’s own script went with the old document (it never answers): another document, so done', async () => {

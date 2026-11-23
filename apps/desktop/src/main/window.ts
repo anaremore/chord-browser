@@ -618,10 +618,13 @@ export class AppWindow {
     // Now, and again once the page just parked is on screen (the OS can hand it the window's focus then): back to the
     // page that had it, if no page has it now.
     if (!focused || this.parked.some((v) => v.webContents === focused)) return;
-    // Only while this window is in front (never bringing Chord forward over another app).
+    // From no page, or a page just parked here (macOS makes a view just shown its window's first responder). Where
+    // focusing a page brings its window forward (Windows, Linux), only while this window is in front.
     const giveBack = () => {
-      if (this.window.isDestroyed() || focused.isDestroyed() || focused.isFocused() || BaseWindow.getFocusedWindow?.() !== this.window) return;
-      if (!(webContents?.getFocusedWebContents?.() ?? null)) focused.focus();
+      if (this.window.isDestroyed() || focused.isDestroyed() || focused.isFocused()) return;
+      if (process.platform !== 'darwin' && BaseWindow.getFocusedWindow?.() !== this.window) return;
+      const now = webContents?.getFocusedWebContents?.() ?? null;
+      if (!now || this.parked.some((v) => v.webContents === now)) focused.focus();
     };
     giveBack();
     for (const ms of [50, 200, 500]) setTimeout(giveBack, ms).unref?.();

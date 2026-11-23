@@ -96,7 +96,7 @@ describe('holdFilePickers', () => {
     expect(pickersLost(contents)).toBe(false);
   });
 
-  it('an interception that failed: lost, and a frame held at its start is let go on anyway', async () => {
+  it('an interception that failed: lost; a frame whose own failed (twice) stays held, never run without it', async () => {
     vi.useFakeTimers();
     const { contents, events, sent, state } = fake();
     state.fail.add('Page.setInterceptFileChooserDialog');
@@ -105,7 +105,7 @@ describe('holdFilePickers', () => {
     expect(pickersLost(contents)).toBe(true);
     events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(names(sent)).toContain('Runtime.runIfWaitingForDebugger@s1');
+    expect(names(sent).filter((n) => n.endsWith('@s1'))).toEqual(['Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Page.setInterceptFileChooserDialog@s1', 'Target.setAutoAttach@s1']);
     // An action tries once more, and it's on once the interception answers.
     state.fail.clear();
     await expect(retryPickers(contents)).resolves.toBe(true);

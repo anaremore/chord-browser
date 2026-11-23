@@ -460,7 +460,6 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (tool === 'select_option' && !asked) return refuse(ACT_REFUSALS.notSelect);
   // The page and its site, before anything is asked of it: everything after is for this page on this site only.
   const pageAtCheck = page.id;
-  const markAtCheck = page.mark;
   const site = host.siteOf(page.url());
   if (!site) return refuse(ACT_REFUSALS.noSite);
   // The element as it is now; for select_option, the choice matched against the page's own options before anything is
@@ -555,6 +554,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         refused = ACT_REFUSALS.changed;
         return false;
       }
+      // Where the page's documents are, right before this input (not before a card: a navigation started and dropped
+      // while the card was up never counts as this input's).
+      const markAtInput = page.mark;
       let failed: string | null;
       try {
         failed = (await stillOk()) ?? (await input());
@@ -571,8 +573,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
       // done (no guard there, or the script asked went with the old one). A guard that ran out in the same document,
       // or the same document not answering: a no.
-      if (down === 'gone' || ((down === 'timeout' || down === 'expired') && (await page.committedSince(markAtCheck, 2000)))) return true;
-      if (down === 'expired' || down === 'timeout') {
+      if (down === 'gone' || down === 'timeout' || down === 'expired') {
+        // Done only if the page committed another document since (no guard there, or the script asked went with the
+        // old one); else a no. A navigation that started and never committed (a 204, a download) doesn't count.
+        if (await page.committedSince(markAtInput, 2000)) return true;
         refused = ACT_REFUSALS.focusLost;
         return false;
       }
@@ -592,7 +596,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     const pressKey = (pressed: PressKey) => async (): Promise<string | null> => {
       const [down, ...rest] = pressKeyEvents(pressed) as AgentInputEvent[];
       if (!typesInto(pressed)) {
-        page.keys([down!, ...rest]);
+        // No character at all (Tab, an arrow): in at once.
+        if (!rest.some((e) => e.type === 'char')) {
+          page.keys([down!, ...rest]);
+          return null;
+        }
+        // A character, on something that isn't a field (Enter or Space on a button or a link): its keydown, then, if
+        // the focus is no longer the element's or a closed root came in (Neon's review 7 of #110), no character, only
+        // the key let go of. The keydown did what it does (a link went, a menu opened): that's done.
+        page.keys([down!]);
+        const again = await stillOk();
+        page.keys(again ? rest.filter((e) => e.type === 'keyUp') : rest);
         return null;
       }
       page.keys([down!]);
