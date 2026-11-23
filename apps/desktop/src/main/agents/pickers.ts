@@ -31,6 +31,13 @@ export function pickersLost(contents: object): boolean {
   return lost.has(contents);
 }
 
+/** The frames of another process the hold attached in each tab (their sessions): what an action's watch also watches (control/sends.ts). */
+const sessions = new WeakMap<object, Set<string>>();
+
+export function frameSessions(contents: object): ReadonlySet<string> {
+  return sessions.get(contents) ?? new Set();
+}
+
 /**
  * Agent tabs with a frame that couldn't be held (its interception never answered): it stays held at its start, a
  * blank frame that keeps the page from finishing its load, and acting there is refused at once, with that said,
@@ -145,10 +152,14 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
   retries.set(contents, () => (lost.has(contents) ? arm() : Promise.resolve(true)));
   debug.on('message', (_event, method: Message['method'], params: Message['params']) => {
     if (method === 'Page.fileChooserOpened') held('a file picker');
+    else if (method === 'Target.detachedFromTarget') sessions.get(contents)?.delete(String((params as { sessionId?: string }).sessionId));
     else if (method === 'Target.attachedToTarget') {
       const attached = params as { sessionId?: string; targetInfo?: { type?: string } };
       if (!attached.sessionId) return;
       if (attached.targetInfo?.type === 'iframe') {
+        let known = sessions.get(contents);
+        if (!known) sessions.set(contents, (known = new Set()));
+        known.add(attached.sessionId);
         const held = hold(attached.sessionId);
         framesArming?.push(held);
       }

@@ -1408,10 +1408,34 @@ if (!app.requestSingleInstanceLock()) {
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
          * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
          */
-        /** What agents' actions' pages sent while measuring (CHORD_MEASURE_SENDS; control/deep.ts), and how many actions. */
-        agentSends: async () => {
-          const { measuredSends } = await import('./control/deep');
-          return measuredSends;
+        /**
+         * The send watch's cost (control/sends.ts): the agent's tab at `url` loaded again `runs` times without the watch
+         * and with it (every request then passes through it), in turns. Milliseconds to the load's end.
+         */
+        agentWatchTimes: async (url: string, runs: number) => {
+          const { stopWatching, watchSends } = await import('./control/sends');
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return null;
+          // A fresh address each time (nothing cached, no reload's own work).
+          let n = 0;
+          const load = () =>
+            new Promise<number>((done) => {
+              const started = performance.now();
+              contents.once('did-stop-loading', () => done(performance.now() - started));
+              void contents.loadURL(`${url}?run=${++n}`).catch(() => undefined);
+            });
+          const off: number[] = [];
+          const on: number[] = [];
+          for (let i = 0; i < runs; i++) {
+            off.push(await load());
+            const watch = await watchSends(contents, false);
+            if (!watch) return { off, on, failed: 'no watch' };
+            on.push(await load());
+            // Over at once (no tail), so the next load without it is.
+            watch.end();
+            stopWatching(contents);
+          }
+          return { off, on };
         },
         agentActTimes: async (url: string, runs: number) => {
           const [{ snapshotPage }, { actOnPage }, { openDeep }] = await Promise.all([import('./control/snapshot'), import('./control/act'), import('./control/deep')]);
@@ -1436,8 +1460,6 @@ if (!app.requestSingleInstanceLock()) {
             const scroll = (await contents.executeJavaScript('[scrollX, scrollY]')) as [number, number];
             const hit = await session.hit(answer.x! + scroll[0], answer.y! + scroll[1]);
             const open = await session.open();
-            // An act step's form guard (M2d): on, then off with the session.
-            await session.guardSubmits();
             await session.close();
             deep.push(performance.now() - opened);
             if (!hit.ok || !open.ok) return { times, deep, failed: `deep: ${JSON.stringify(hit.ok ? open : hit)}` };

@@ -14,8 +14,11 @@
  * arrives.
  */
 import {
+  ACT_REFUSALS,
   CONTROL_REFUSALS,
   CONTROL_WAIT_MS,
+  addressWhy,
+  barAddress,
   agentToolList,
   agentTools,
   agentToolsVersion,
@@ -35,7 +38,7 @@ import type { ToolOutput } from '../control/scope';
 import { runControlTool, type ControlBrowser } from '../control/tools';
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
-import type { AgentShares } from './shares';
+import { siteOfUrl, type AgentShares } from './shares';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
 
@@ -144,9 +147,22 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   /** open_tab: a tab in its Agent chord, signed in as the user, once its page has loaded (at most LOAD_MS). */
   const openTab = async (args: Record<string, unknown>): Promise<ToolOutput> => {
     const url = typeof args['url'] === 'string' ? args['url'].trim() : '';
-    if (!deps.chords || !deps.dispatch) return { text: 'This Chord can’t open tabs for agents.', isError: true };
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
     if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
+    // Still a read (no site card), but an address that deletes or signs out asks first, as navigate's does (the owner,
+    // 2026-11-23): opening it would do it.
+    const why = actions ? addressWhy(url) : null;
+    if (why) {
+      const site = siteOfUrl(url) ?? barAddress(url);
+      const answer = await agent.ask(
+        { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: `open|${url}`, step: { why, site, fields: [], more: 0 } },
+        new AbortController().signal,
+        waitMs,
+      );
+      if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
+      if (answer === 'deny') return { text: ACT_REFUSALS.stepDenied, isError: true };
+    }
+    if (!deps.chords || !deps.dispatch) return { text: 'This Chord can’t open tabs for agents.', isError: true };
     const chord = deps.chords.chordFor(agent, name, profile);
     deps.shares?.()?.chordMade(agent.id, chord);
     const nodeId = uuidv7();

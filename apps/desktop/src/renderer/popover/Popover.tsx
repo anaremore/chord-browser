@@ -554,7 +554,7 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
           <>
             It wants to {card.action}.
             <br />
-            It still asks before it submits, pays, sends or deletes anything.
+            It asks before anything it does sends data, and before it submits, pays, sends or deletes.
           </>
         }
         closeLabel="Close"
@@ -576,14 +576,21 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
  */
 function AgentStepCardView({ card }: { card: AgentStepCard }) {
   const respond = (answer: 'deny' | 'once' | 'show') => void api.agents.respond(card.id, answer);
-  const goes = card.fields.length ? `Goes with it: ${card.fields.join(', ')}${card.more ? ` and ${card.more} more` : ''}` : null;
+  const goes = card.sends
+    ? `Goes to: ${card.sends.sites.join(', ')}`
+    : card.fields.length
+      ? `Goes with it: ${card.fields.join(', ')}${card.more ? ` and ${card.more} more` : ''}`
+      : null;
+  // An action that's sending data: what it did, and where it's going (mocks/agents-s18-m2.html §2b).
+  const where = card.sends ? (card.sends.sites.length > 1 ? `${card.sends.sites.length} sites` : card.sends.other ? 'another site' : 'its site') : '';
+  const did = card.action.charAt(0).toLowerCase() + card.action.slice(1);
   return (
     <div className={styles.card} role="alertdialog" aria-label={card.title}>
       <AgentCardBody
         title={card.title}
         note={
           <>
-            {card.name} is about to {card.action}.
+            {card.sends ? `${card.name} ${did}, and the page is sending something to ${where}.` : `${card.name} is about to ${card.action}.`}
             {card.shows && (
               <>
                 <br />

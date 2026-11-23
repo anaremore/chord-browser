@@ -62,6 +62,7 @@ import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import type { ActAnswer } from './act';
 import type { DeepAnswer, DeepSession } from './deep';
+import type { SendWatch } from './sends';
 import type { PageRead } from './extract';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
@@ -407,7 +408,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
   const ref = scope.refs.refFor(node.id);
-  const done = async (navigated: boolean, loading: boolean, what: string): Promise<ToolOutput> => {
+  const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
     if (after) return refuse(after);
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
@@ -422,6 +423,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         url: page.url(),
         title: page.title(),
         ...(navigated ? { note: 'The page changed: call snapshot again before using refs from before.' } : {}),
+        // What the page sent after the agent's last action here, dropped (sends.ts' tail).
+        ...(droppedBefore ? { dropped: 'After your last action here, the page tried to send data on its own; Chord dropped it. If something didn’t save, do that step again.' } : {}),
       }),
     };
   };
@@ -570,14 +573,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   }
 
   // The step (S18 M2d): what it is, from the page as it is now (core's classifyStep), never from the agent's words. A
-  // risky one asks every time (the step card); an `act` one goes, with any form it would send stopped (guardSubmits),
-  // and a step that tried to send one asks from then on. No description from the page: as a form's submit.
+  // risky one asks every time (the step card); an `act` one goes, and if it sends data after all (a page's own script),
+  // what it sends is held and the card asks then (control/sends.ts). No description from the page: as a form's submit.
   // A late Allow is for this very step: its tab, page, ref, action, and for type what it types (#112 review 1).
   const typed = tool === 'type' && typeof text === 'string' ? createHash('sha256').update(`${args['replace'] !== false}|${text}`).digest('hex').slice(0, 16) : '';
-  // A step that tried to send, by the element as the page names it (a new snapshot gives it a new ref).
-  const sendKey = `${node.id}|${page.id}|${element.role}|${element.name}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}`;
-  const sending = (scope.memory.sending ??= new Set());
-  const step: RiskClass = sending.has(sendKey) ? { class: 'risky', why: 'submit' } : stepOf(tool, args, element);
+  const step: RiskClass = stepOf(tool, args, element);
   // And what the card showed (Neon's review of #112): why it asks, and the element's shape (its link, its form's
   // address, method and fields). Any of it changed, it's another step: a late Allow never covers it.
   const shown = createHash('sha256').update(`${step.class === 'risky' ? step.why : 'act'}|${stepShape(element)}`).digest('hex').slice(0, 16);
@@ -635,6 +635,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
   let deep: DeepSession | null = null;
+  /** What the action sends, held (sends.ts): watched from before its input until a moment after it. */
+  let watch: SendWatch | null = null;
+  let heldNow: () => void = () => undefined;
+  const held = new Promise<'held'>((done) => (heldNow = () => done('held')));
+  /** What the page sent after the agent's last action here, dropped: its result says so. */
+  const droppedBefore = page.droppedAfter();
   try {
     let refused: string | null = null;
     /**
@@ -740,19 +746,20 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       page.keys(rest);
       return null;
     };
-    const { navigated, loading } = await page.afterActing(async () => {
+    const acting = page.afterActing(async () => {
       const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
       // The field as it is now, after any card's wait: never one the page made a password, code or card field.
       if (pointed.field && sensitiveField(pointed.field)) return void (refused = ACT_REFUSALS.sensitive);
       if ((refused = halt())) return;
-      // From here input goes in: the debugger's checks (deep.ts), and the form guard: for an `act` step, any form sent
-      // is stopped before it leaves; for an allowed risky one, only the form the card showed goes (or, with none shown,
-      // one to the page's own origin: a Delete button posting its own hidden form), anything else stopped (#112).
+      // From here input goes in: the debugger's checks (deep.ts), and the watch on what it sends (sends.ts): for an
+      // `act` step anything that sends data is held for the card; a step the user allowed sends as it does. Reports
+      // (beacons, pings) are dropped either way.
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      const allowed = step.class === 'act' ? null : (element.risk?.form?.url ?? { origin: originOf(page.url()) });
-      if (!(await deep.guardSubmits(allowed))) return void (refused = ACT_REFUSALS.noCheck);
+      watch = await page.watchSends(step.class !== 'act');
+      if (!watch) return void (refused = ACT_REFUSALS.noCheck);
+      void watch.heldNow.then(heldNow);
       if ((refused = halt())) return;
       if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
       if (tool === 'select_option') {
@@ -806,19 +813,58 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (!typed || args['submit'] !== true) return;
       await guarded('keyup', pressKey('Enter'));
     });
-    // A form it tried to send (a page's own script on a click, requestSubmit on a key) was stopped: the agent hears so,
-    // and this step asks from now on.
-    if (!refused && deep && (deep as DeepSession).submitsBlocked()) {
-      sending.add(sendKey);
-      refused = ACT_REFUSALS.wouldSend;
+    // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and the card
+    // asks once for all of it, before the action is done (it waits on what's held). Allow lets it go; Don't, no
+    // answer, or Stop drops it.
+    if ((await Promise.race([acting, held])) === 'held' && watch) {
+      const w = watch as SendWatch;
+      // What came in while the card was up waits with the rest.
+      const sites = sitesOf(w.held(), site, host.siteOf);
+      const answer = await scope.agent.ask(
+        {
+          kind: 'step',
+          tool,
+          // What it did (it's done: what it sent waits): `Clicked “Mark as read”`.
+          description: actDone(description),
+          target: [page.url()],
+          tab: node.id,
+          // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
+          subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
+          step: { why: 'send', site, fields: [], more: 0, sends: sites },
+          show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
+        },
+        call.signal,
+        scope.cardWaitMs,
+      );
+      const allow = answer === 'once' || answer === 'always';
+      w.release(allow);
+      if (!allow) refused ??= answer === 'waiting' ? ACT_REFUSALS.sendsDropped : ACT_REFUSALS.stepDenied;
     }
+    const { navigated, loading } = await acting;
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    return await done(navigated, loading, actDone(description));
+    return await done(navigated, loading, actDone(description), droppedBefore);
   } finally {
+    // What it still sends for a moment is dropped (sends.ts' tail).
+    (watch as SendWatch | null)?.end();
     if (deep) await (deep as DeepSession).close();
     host.doing(node.id, null);
+  }
+}
+
+/** The sites a step's held requests go to, the page's own first, then each other once, in order. */
+function sitesOf(urls: readonly string[], own: string, siteOf: (url: string) => string | null): string[] {
+  const sites = urls.map((u) => siteOf(u) ?? hostOf(u)).filter(Boolean);
+  return [...new Set([...(sites.includes(own) ? [own] : []), ...sites])];
+}
+
+/** An address's host, or empty. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
   }
 }
 
@@ -864,14 +910,6 @@ function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
   return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.text, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
 }
 
-/** An address's origin, or empty. */
-function originOf(url: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return '';
-  }
-}
 
 const emptyRisk: RiskElement = { tag: '', role: '', type: '', name: '', href: '', editable: false, multiline: false, submits: false, form: null };
 

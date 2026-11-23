@@ -996,6 +996,11 @@ export interface AgentStepCard {
   shows?: string;
   /** What type will put in (and send), cut: the user is allowing that text. */
   typed?: string;
+  /**
+   * An action that's sending data (the owner's default, 2026-11-23): the sites it goes to (the page's own first), and
+   * whether any is another site. The action's done; `action` is what it did: `Clicked “Mark as read”`.
+   */
+  sends?: { sites: string[]; other: boolean };
   /** Allow in the danger color (paying, deleting). */
   danger: boolean;
 }

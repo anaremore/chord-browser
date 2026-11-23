@@ -45,7 +45,7 @@ export interface ControlCard {
   /** What an `always` covers, with the kind: the tool for a read, the site for an action. */
   subject: string;
   /** A risky step (S18 M2d): why it asks, and what goes with it (a form's fields, by label). */
-  step?: { why: RiskWhy; site: string; fields: string[]; more: number; shows?: string; typed?: string };
+  step?: { why: RiskWhy; site: string; fields: string[]; more: number; shows?: string; typed?: string; sends?: string[] };
   /** Show me (a step card): the element outlined in its page, the card still up. */
   show?: () => void;
 }

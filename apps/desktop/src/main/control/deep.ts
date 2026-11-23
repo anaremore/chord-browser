@@ -31,16 +31,6 @@ import { SNAPSHOT_LIB } from './snapshot';
 
 /** At most this long for the whole session (a hung page): then it's let go, and whatever waited is refused. */
 const DEEP_SESSION_MS = 20_000;
-/**
- * Measuring (the owner's *ask when it sends data*, 2026-11-23): with CHORD_MEASURE_SENDS set (development and E2E
- * builds), an action's guard also watches every other request its page makes, holding none, and keeps those that
- * send data (any method but GET and HEAD, by resource type and host) for the agentSends test hook. How often a
- * harmless action would ask, before the effect layer is built.
- */
-const MEASURING = Boolean(process.env['CHORD_MEASURE_SENDS']);
-export const measuredSends: { action: number; type: string; method: string; host: string; page: string }[] = [];
-let measuredAction = 0;
-
 /** The group every object a session gets is in, released when it closes. */
 const OBJECT_GROUP = 'chord-acting';
 /** Each command's limit. */
@@ -55,14 +45,6 @@ export interface DeepSession {
   open(): Promise<DeepAnswer>;
   /** Whether the tab's file picker hold is still on (an agent's tab's: asked before every input). */
   held(): boolean;
-  /**
-   * From now until the session closes, a document request that isn't a GET (a form posted, by any script: a button's
-   * own `form.submit()`, `requestSubmit` on a key) is stopped before it leaves (S18 M2d): an action classed `act` never
-   * sends a form. Its page's requests otherwise (a fetch, a beacon) go on as they were.
-   */
-  guardSubmits(allowed?: string | { origin: string } | null): Promise<boolean>;
-  /** A form was stopped (guardSubmits). */
-  submitsBlocked(): boolean;
   /** Lets go of the debugger (detached if the session attached it). */
   close(): Promise<void>;
 }
@@ -132,57 +114,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     // An agent's tab: attached for its whole life (agents/pickers.ts), used as it is. Otherwise attached for this.
     const mine = !debug.isAttached();
     const contexts: { id: number; frameId?: string; type?: string }[] = [];
-    let fetching = false;
-    let blocked = false;
-    /** This session's action, for measuring. */
-    let thisAction = 0;
-    /** What a risky step's Allow lets through (once): the form the card showed, or a post to the page's own origin. */
-    let allowed: string | { origin: string } | null = null;
-    const sameForm = (url: string) => {
-      if (!allowed) return false;
-      try {
-        const u = new URL(url);
-        if (typeof allowed === 'string') {
-          const a = new URL(allowed);
-          return u.origin === a.origin && u.pathname === a.pathname && u.search === a.search;
-        }
-        return u.origin === allowed.origin;
-      } catch {
-        return false;
-      }
-    };
     const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
       if (sessionId) return;
-      if (method === 'Fetch.requestPaused') {
-        const paused = params as { requestId?: string; request?: { method?: string; url?: string }; resourceType?: string };
-        if (!paused.requestId) return;
-        const how = String(paused.request?.method ?? 'GET').toUpperCase();
-        // Measuring: anything but a document is noted (if it sends data) and goes on as it was.
-        if (MEASURING && paused.resourceType !== 'Document') {
-          if (how !== 'GET' && how !== 'HEAD') {
-            let host = '';
-            try {
-              host = new URL(String(paused.request?.url)).host;
-            } catch {
-              // An address that isn't one: noted without a host.
-            }
-            measuredSends.push({ action: thisAction, type: String(paused.resourceType ?? ''), method: how, host, page: contents.getURL() });
-          }
-          void debug.sendCommand('Fetch.continueRequest', { requestId: paused.requestId }).catch(() => undefined);
-          return;
-        }
-        const letThrough = how === 'GET' || how === 'HEAD' || sameForm(String(paused.request?.url ?? ''));
-        // A risky step's one form goes once: a second post meanwhile is stopped like any other.
-        if (how !== 'GET' && how !== 'HEAD' && letThrough) allowed = null;
-        if (letThrough) void debug.sendCommand('Fetch.continueRequest', { requestId: paused.requestId }).catch(() => undefined);
-        else {
-          blocked = true;
-          // Answered with nothing (a 204): the form goes nowhere and the page stays as it was (a failed request would
-          // put the browser's error page in the tab).
-          void debug.sendCommand('Fetch.fulfillRequest', { requestId: paused.requestId, responseCode: 204, responseHeaders: [] }).catch(() => undefined);
-        }
-        return;
-      }
       if (method !== 'Runtime.executionContextCreated') return;
       const c = (params as { context?: { id?: number; auxData?: { frameId?: string; type?: string } } }).context;
       if (typeof c?.id === 'number') contexts.push({ id: c.id, ...(c.auxData?.frameId ? { frameId: c.auxData.frameId } : {}), ...(c.auxData?.type ? { type: c.auxData.type } : {}) });
@@ -206,12 +139,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
       if (closed) return;
       closed = true;
       debug.off('message', onMessage);
-      // What the session held of the page goes (a node a page since removed would stay alive otherwise), and what it
-      // turned on goes off (a request paused meanwhile goes on: disabling lets it).
-      if (!contents.isDestroyed() && debug.isAttached()) {
-        debug.sendCommand('Runtime.releaseObjectGroup', { objectGroup: OBJECT_GROUP }).catch(() => undefined);
-        if (fetching) debug.sendCommand('Fetch.disable').catch(() => undefined);
-      }
+      // What the session held of the page goes (a node a page since removed would stay alive otherwise).
+      if (!contents.isDestroyed() && debug.isAttached()) debug.sendCommand('Runtime.releaseObjectGroup', { objectGroup: OBJECT_GROUP }).catch(() => undefined);
       // Only what the session attached; an agent's tab keeps its own attachment (nothing else was turned on: Runtime
       // was enabled and disabled within the session).
       if (mine && !contents.isDestroyed() && debug.isAttached()) debug.detach();
@@ -298,14 +227,6 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },
         held: () => !pickersLost(contents),
-        guardSubmits: async (letThrough) => {
-          allowed = letThrough ?? null;
-          if (fetching) return true;
-          thisAction = ++measuredAction;
-          fetching = Boolean(await send('Fetch.enable', { patterns: MEASURING ? [{ requestStage: 'Request' }] : [{ resourceType: 'Document', requestStage: 'Request' }] }));
-          return fetching;
-        },
-        submitsBlocked: () => blocked,
         close,
       });
       await released;

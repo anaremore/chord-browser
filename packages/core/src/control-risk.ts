@@ -274,6 +274,14 @@ export function stepTitle(why: RiskWhy, site: string): string {
   return `${what[why]} on ${site}?`;
 }
 
+/**
+ * The card when an action sends data (the owner's default, 2026-11-23; mocks/agents-s18-m2.html §2b): *Send data to
+ * mail.example?*, or *Send data to 3 sites?*.
+ */
+export function sendTitle(sites: readonly string[]): string {
+  return sites.length === 1 ? `Send data to ${sites[0]}?` : `Send data to ${sites.length} sites?`;
+}
+
 /** Allow in the danger color: paying and deleting. */
 export function stepDanger(why: RiskWhy): boolean {
   return why === 'pay' || why === 'delete';

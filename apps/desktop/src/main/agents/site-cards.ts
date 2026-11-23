@@ -33,6 +33,7 @@ export interface StepQuestion {
   danger: boolean;
   shows?: string;
   typed?: string;
+  sends?: { sites: string[]; other: boolean };
   /** Show me: the tab shown in that window, the element outlined; the card stays. */
   show(windowId: WindowId): void;
 }
@@ -102,6 +103,7 @@ export class SiteCards {
           danger: question.danger,
           ...(question.shows ? { shows: plain(question.shows).slice(0, 60) } : {}),
           ...(question.typed !== undefined ? { typed: cut(plain(question.typed), 120) } : {}),
+          ...(question.sends ? { sends: { sites: question.sends.sites.map((s) => plain(s).slice(0, 253)).slice(0, 8), other: question.sends.other } } : {}),
         },
         windowId: this.deps.lastWindow(),
         answer: (answer) => {

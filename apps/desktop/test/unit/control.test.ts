@@ -176,11 +176,14 @@ function fakePage(url: string, read: Answer) {
     history: { url: string; skippable?: boolean }[];
     active: number;
     /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
-    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean };
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean };
     debugging: string[];
+    /** A debugger event, as Chromium would send it (a request the page makes, paused). */
+    emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
   let attached = false;
+  at.emitDebug = (method, params, sessionId) => void debugEvents.emit('message', {}, method, params, sessionId);
   const go = (index: number) => {
     at.active = index;
     at.url = at.history[index]!.url;
@@ -237,6 +240,7 @@ function fakePage(url: string, read: Answer) {
         if (method === 'DOM.getNodeForLocation') return { backendNodeId: 1, frameId: 'F' };
         if (method === 'DOM.resolveNode') return { object: { objectId: 'hit' } };
         // A page that sends a form as the agent clicks (S18 M2d): its POST, paused for the guard.
+        if (method === 'Fetch.enable' && at.deep.ping) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'b1', request: { method: 'POST', url: 'https://stats.test/collect' }, resourceType: 'Ping' }), 0);
         if (method === 'Fetch.enable' && at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/delete' }, resourceType: 'Document' }), 0);
         if (method === 'Runtime.callFunctionOn') {
           if (at.deep.picker) debugEvents.emit('message', {}, 'Page.fileChooserOpened', {});
@@ -877,7 +881,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -892,6 +896,8 @@ describe('acting through the gate (S18 M2c)', () => {
     await t.call('snapshot', { tab_id: tab });
     const at = t.pages.get('n1')!.at;
     at.deep = opts.deep ?? {};
+    // An agent's tab: its debugger attached for its whole life (agents/pickers.ts), as the tail needs.
+    if (at.deep.persistent) (t.pages.get('n1')!.contents as unknown as { debugger: { attach(): void } }).debugger.attach();
     return { ...t, tab, steps, doings, kept, at };
   }
 
@@ -1063,8 +1069,8 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(t.at.debugging.slice(0, 3)).toEqual(['Page.getFrameTree', 'Runtime.enable', 'Runtime.disable']);
       expect(t.at.debugging).not.toContain('Runtime.discardConsoleEntries');
       expect(t.at.debugging).toContain('Runtime.releaseObjectGroup');
-      // An act step's form guard (M2d) on, then off again.
-      if (t.at.debugging.includes('Fetch.enable')) expect(t.at.debugging.at(-1)).toBe('Fetch.disable');
+      // Nothing was held: no card about sending.
+      expect(t.cards.filter((c) => c.step?.sends)).toEqual([]);
     }
   });
 
@@ -1190,14 +1196,36 @@ describe('acting through the gate (S18 M2c)', () => {
     }
   });
 
-  it('an act step whose page sends a form as it clicks (its own script): stopped before it left; the next try asks', async () => {
+  it('an act step whose page sends data as it clicks (its own script): held, and one card asks where it goes (the owner’s default)', async () => {
+    // Allowed: what was held goes.
     const t = await acting({ deep: { posts: true } });
-    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.');
-    expect(t.at.debugging).toContain('Fetch.fulfillRequest');
-    expect(t.at.debugging).not.toContain('Fetch.continueRequest');
-    t.at.deep = {};
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+    const sent = t.cards.filter((c) => c.step?.sends);
+    expect(sent.map((c) => [c.description, c.step?.sends])).toEqual([['Clicked “Home”', ['news.test']]]);
+    expect(t.at.debugging).toContain('Fetch.continueRequest');
+    // Don't: dropped (a document answered with nothing: the page stays), and the agent hears the step was declined.
+    const u = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
+    expect(u.at.debugging).toContain('Fetch.fulfillRequest');
+    expect(u.at.debugging).not.toContain('Fetch.continueRequest');
+  });
+
+  it('a report (a beacon, a ping) is dropped, never asked about', async () => {
+    const t = await acting({ deep: { ping: true } });
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+    expect(t.cards.filter((c) => c.step?.sends)).toEqual([]);
+    expect(t.at.debugging).toContain('Fetch.failRequest');
+  });
+
+  it('what the page sends just after an action is dropped (the tail), and the next result says so', async () => {
+    const t = await acting({ deep: { persistent: true } });
     await t.call('click', { tab_id: t.tab, ref: 'e1' });
-    expect(t.cards.filter((c) => c.kind === 'step').map((c) => c.step?.why)).toEqual(['submit']);
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'late1', request: { method: 'POST', url: 'https://news.test/autosave' }, resourceType: 'XHR' });
+    expect(t.at.debugging).toContain('Fetch.failRequest');
+    const next = result(await t.call('click', { tab_id: t.tab, ref: 'e1' }));
+    expect(next.data['dropped']).toBe('After your last action here, the page tried to send data on its own; Chord dropped it. If something didn’t save, do that step again.');
+    // Taken: the one after says nothing.
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data['dropped']).toBeUndefined();
   });
 
   it('Show me outlines the element, the card still up', async () => {
@@ -1240,9 +1268,9 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(steps[0]!.subject).not.toBe(steps[1]!.subject);
   });
 
-  it('hover goes with the form guard too: a form its page sends on the pointer is stopped', async () => {
-    const t = await acting({ deep: { posts: true } });
-    expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.');
+  it('hover goes with the watch too: what its page sends on the pointer is held and asked about', async () => {
+    const t = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
+    expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
     expect(t.at.debugging).toContain('Fetch.enable');
   });
 

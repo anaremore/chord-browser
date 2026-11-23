@@ -150,7 +150,7 @@ export const ACT_REFUSALS = {
   // S18 M2d: risky steps.
   stepDenied: 'The user said no to this step. Don’t try it another way; ask the user what to do.',
   stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
-  wouldSend: 'That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.',
+  sendsDropped: 'The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',

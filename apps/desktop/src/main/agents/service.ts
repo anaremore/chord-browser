@@ -9,7 +9,7 @@
  * Agents' switch (off by default) is the only way here.
  */
 import { execFile } from 'node:child_process';
-import { AGENT_ACT_SITES_MAX, stepDanger, stepTitle, type AgentAllowance, type AgentHello, type Command, type Grant, type NodeId, type ProfileId, type WindowId } from '@chord/core';
+import { AGENT_ACT_SITES_MAX, sendTitle, stepDanger, stepTitle, type AgentAllowance, type AgentHello, type Command, type Grant, type NodeId, type ProfileId, type WindowId } from '@chord/core';
 import type { ControlBrowser } from '../control/tools';
 import { startEndpoint, type Endpoint } from './endpoint';
 import type { AgentChords, AgentChordsDeps } from './chords';
@@ -168,14 +168,17 @@ export class AgentService {
                 // A risky step (M2d): every time, never remembered; Show me shows its tab and outlines the element.
                 if (card.kind === 'step' && card.step && held && this.deps.askStep) {
                   const step = card.step;
+                  // What an action is sending (sends.ts): its own card, its sites; red when any is another site.
+                  const sends = step.sends ? { sites: step.sends, other: step.sends.some((s) => s !== step.site) } : null;
                   return this.deps.askStep(
                     {
                       name: held.connection.name,
-                      title: stepTitle(step.why, step.site),
+                      title: sends ? sendTitle(sends.sites) : stepTitle(step.why, step.site),
                       action: card.description,
                       fields: step.fields,
                       more: step.more,
-                      danger: stepDanger(step.why),
+                      danger: sends ? sends.other : stepDanger(step.why),
+                      ...(sends ? { sends } : {}),
                       ...(step.shows ? { shows: step.shows } : {}),
                       ...(step.typed !== undefined ? { typed: step.typed } : {}),
                       show: (windowId) => {

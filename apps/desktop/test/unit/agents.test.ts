@@ -152,6 +152,8 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
       ['read_form', { tab_id: 'a1' }, 'No such tab. Use the tab id from "Attached:".'],
       // This service has no chords (no browser to open tabs in): the E2E opens real ones.
       ['open_tab', { url: 'https://example.com/' }, 'This Chord can’t open tabs for agents.'],
+      // M2d (the owner, 2026-11-23): an address that signs out or deletes asks first, even to open a tab (no card here: a no).
+      ['open_tab', { url: 'https://example.com/account/logout' }, 'The user said no to this step. Don’t try it another way; ask the user what to do.'],
       ['close_tab', { tab_id: 'a1' }, 'No such tab. Use list_tabs.'],
       ['search_history', { query: 'x' }, 'There’s no tool called search_history. Call tools/list.'],
     ];

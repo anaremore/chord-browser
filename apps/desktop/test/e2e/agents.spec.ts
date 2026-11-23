@@ -428,14 +428,14 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
       return call;
     };
     const STEP_NO = 'The user said no to this step. Don’t try it another way; ask the user what to do.';
-    const WOULD_SEND = 'That step would have sent a form to the site, so Chord stopped it before it went. Call it again: this time the user is asked first.';
+    const sendsTo = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
 
     // The first action on the site: the site card (it still asks before risky steps, it says), then the step card.
     let outline = await snap();
     const placing = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Place order · $48.20"') });
     const siteCard = siteCardOf(popover, 'Codex');
     await expect(siteCard).toBeVisible({ timeout: 15_000 });
-    await expect(siteCard).toContainText('It still asks before it submits, pays, sends or deletes anything.');
+    await expect(siteCard).toContainText('It asks before anything it does sends data, and before it submits, pays, sends or deletes.');
     await popover.waitForTimeout(600);
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
     const order = stepCardOf(popover, new RegExp(`^Place the order on ${host.replace(/\./g, '\\.')}\\?$`));
@@ -461,12 +461,11 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
     // The page's tricks: each asks, or is stopped before it sends, and nothing reaches the site.
     // A misleading Continue (a form's submit, to /account/close): the card, by what it is.
     expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Continue"') }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
-    // A JS submit on click: stopped before it left; the next try asks.
-    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Next"') })).text).toBe(WOULD_SEND);
-    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Next"') }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
-    // requestSubmit on a key (Space in a field): stopped before it left.
+    // A JS submit on click: what it sends is held, and the card asks where it goes (the owner's default).
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Next"') }), sendsTo, 'Don’t')).text).toBe(STEP_NO);
+    // requestSubmit on a key (Space in a field): the same.
     outline = await snap();
-    expect((await mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Notes"'), key: 'Space' })).text).toBe(WOULD_SEND);
+    expect((await withStep(mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Notes"'), key: 'Space' }), sendsTo, 'Don’t')).text).toBe(STEP_NO);
     // A link to a delete address, named innocently.
     expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "Item 7"') }), /^Delete this on /, 'Don’t')).text).toBe(STEP_NO);
     // Enter in a one-field form that POSTs, and type with submit there.
@@ -534,10 +533,11 @@ test('a step answered late: waiting, then the Allow counts for that same step on
   }
 });
 
-test('how often a harmless action sends data: the measure behind the owner’s default (M2d; a report, not a budget)', async () => {
+test('what an action sends asks first: held, one card, Allow sends and Don’t drops; reports never leave; another site’s frame too (M2d)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_MEASURE_SENDS: '1' });
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
   try {
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const mcp = relay(profile);
@@ -546,46 +546,44 @@ test('how often a harmless action sends data: the measure behind the owner’s d
     await answer(app, 'Codex', 'Allow once');
     await opening;
     const popover = await pageWhere(app, isPopover);
+    const host = new URL(site.origin).host;
+    const third = `localhost:${new URL(site.origin).port}`;
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
-    type Sent = { action: number; type: string; method: string; host: string; page: string };
-    const sends = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { agentSends(): Promise<Sent[]> } }).chordTestHooks.agentSends());
-    const rows: string[] = [];
-    let counted = 0;
-    /** One action: what its page sent (beyond its own document), by type and host. */
-    const act = async (what: string, run: () => Promise<{ text: string }>) => {
-      const before = (await sends()).length;
-      const out = await run();
-      await popover.waitForTimeout(400);
-      const sent = (await sends()).slice(before);
-      counted++;
-      const self = new URL(site.origin).host;
-      const kinds = sent.map((x) => `${x.method} ${x.type}${x.host === self ? '' : ` → ${x.host}`}`);
-      rows.push(`${what.padEnd(28)} ${sent.length ? kinds.join(', ') : '—'}${/"done"/.test(out.text) ? '' : ` [${out.text.slice(0, 40)}]`}`);
+    const STEP_NO = 'The user said no to this step. Don’t try it another way; ask the user what to do.';
+    const sendCard = (title: RegExp) => popover.getByRole('alertdialog', { name: title });
+    const withCard = async (call: Promise<{ text: string }>, title: RegExp, button: 'Allow' | 'Don’t') => {
+      const card = sendCard(title);
+      await expect(card).toBeVisible({ timeout: 15_000 });
+      await popover.waitForTimeout(600);
+      await card.getByRole('button', { name: button, exact: true }).click();
+      return call;
     };
-    // The site card, once.
+    // The site card, once: a tab that sends nothing but the page's click beacon (dropped, no card).
     const first = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'tab "Details"') });
     const siteCard = siteCardOf(popover, 'Codex');
     await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await expect(siteCard).toContainText('It asks before anything it does sends data, and before it submits, pays, sends or deletes.');
     await popover.waitForTimeout(600);
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
-    await first;
-    for (const [what, line] of [
-      ['a tab (Reviews)', 'tab "Reviews"'],
-      ['a toggle (Dark mode)', 'checkbox "Dark mode"'],
-      ['Mark as read', 'button "Mark as read"'],
-      ['Like', 'button "Like"'],
-      ['Show more (a GET)', 'button "Show more"'],
-      ['a disclosure (Shipping info)', 'button "Shipping info"'],
-    ] as const) {
-      const ref = refOf(await snap(), line).toString();
-      await act(what, () => mcp.call('click', { tab_id: 'a1', ref }));
-    }
-    await act('a link with ping (Next page)', async () => mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "Next page"') }));
-    // The shop's everyday steps too: typing in its search, choosing an option, its links.
-    await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/shop` });
-    await act('type in a search box', async () => mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'searchbox "Search orders"'), text: 'wool' }));
-    console.log(`[send noise] ${counted} actions:\n${rows.join('\n')}`);
-    test.info().annotations.push({ type: 'send noise', description: rows.join(' | ') });
+    expect(JSON.parse((await first).text)).toMatchObject({ data: { done: 'Clicked “Details”' } });
+    // A toggle that saves (a same-site POST): held, one card; Allow sends it.
+    const ownSite = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    const toggled = await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'checkbox "Dark mode"') }), ownSite, 'Allow');
+    expect(JSON.parse(toggled.text)).toMatchObject({ data: { done: 'Clicked “Dark mode”' } });
+    await expect.poll(() => reached.includes('POST /prefs')).toBe(true);
+    // Like: Don't drops it.
+    expect((await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Like"') }), ownSite, 'Don’t')).text).toBe(STEP_NO);
+    // A frame of another site that sends on the page's word: held from its own process, and the card says where.
+    const frameSends = await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Sync"') }), /^Send data to 2 sites\?$|^Send data to localhost/, 'Don’t');
+    expect(frameSends.text).toBe(STEP_NO);
+    await expect(sendCard(/^Send data to /)).toHaveCount(0);
+    // Show more (a GET) and a link with ping: no card.
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Show more"') })).text)).toMatchObject({ data: { done: 'Clicked “Show more”' } });
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "Next page"') })).text)).toMatchObject({ data: { done: 'Clicked “Next page”' } });
+    // Nothing but the toggle reached the site: no Like, no frame's save, and never a report (beacons, pings).
+    await new Promise((r) => setTimeout(r, 500));
+    expect(reached.filter((r) => r.startsWith('POST'))).toEqual(['POST /prefs']);
+    void third;
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -698,6 +696,18 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         expect(first!, deepSeen).toBeLessThan(ACT_DEEP_MS.first);
         expect(deepMedian, deepSeen).toBeLessThan(ACT_DEEP_MS.median);
         expect(deepP95, deepSeen).toBeLessThan(ACT_DEEP_MS.p95);
+        if (path === '/rows-300') {
+          // M2d: the send watch (sends.ts), every request of a 60-image page through it, against without it.
+          await mcp.call('open_tab', { url: `${site.origin}/heavy` });
+          type WatchTimes = { off: number[]; on: number[]; failed?: string } | null;
+          const watched = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentWatchTimes(u: string, r: number): Promise<WatchTimes> } }).chordTestHooks.agentWatchTimes(u, r), [`${site.origin}/heavy`, 10] as const))!;
+          expect(watched.failed).toBeUndefined();
+          const mid = (xs: number[]) => sorted(xs)[Math.floor(xs.length / 2)]!;
+          const extra = mid(watched.on) - mid(watched.off);
+          const watchSeen = `/heavy: the send watch, loaded with it median ${mid(watched.on).toFixed(1)} ms, without ${mid(watched.off).toFixed(1)} ms, extra ${extra.toFixed(1)} ms (on ${watched.on.map((t) => t.toFixed(0)).join(' ')}; off ${watched.off.map((t) => t.toFixed(0)).join(' ')})`;
+          console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${watchSeen}`);
+          expect(extra, watchSeen).toBeLessThan(SEND_WATCH_EXTRA_MS);
+        }
       } else {
         // The median of five: one pause in five (a garbage collection on a page of 2,000,000 text nodes) took 777 ms once
         // on main itself, its other runs 35 to 43 ms. The worst is in the message.
@@ -740,6 +750,8 @@ const SNAPSHOT_HUGE_MS = 300;
 const ACT_POINT_MS = { median: 15, p95: 40 };
 /** The debugger's session for a press or typing (Neon's review of #110): a document's first, then the rest. */
 const ACT_DEEP_MS = { first: 200, median: 25, p95: 60 };
+/** The send watch's cost: a page of 60 requests loaded with it, against without it (median ms more). */
+const SEND_WATCH_EXTRA_MS = 25;
 
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1104,9 +1116,23 @@ test.beforeAll(async () => {
       '<div role=tablist><button role=tab onclick="0">Details</button><button role=tab onclick="0">Reviews</button></div>' +
       '<details><summary>Shipping info</summary>Free over $50.</details>' +
       '<a href="/noise" ping="' + third + '/ping">Next page</a>' +
+      // A frame of another site (localhost: another process), which saves when the page tells it to.
+      '<iframe id=fr src="' + third + '/frame" title="Sync"></iframe><button onclick="document.getElementById(\'fr\').contentWindow.postMessage(\'save\', \'*\')">Sync</button>' +
       '</main>';
-    const body = req.url === '/noise'
+    const frame = '<title>Sync</title><script>addEventListener("message", () => fetch("/frame-save", { method: "POST", body: "x" }));</script>';
+    // The send watch's cost: a page of 60 images (each a request through it).
+    const heavy = '<title>Heavy</title>' + Array.from({ length: 60 }, (_, i) => `<img src="/img/${i}.svg" width=8 height=8>`).join('');
+    if (/^\/img\/\d+\.svg$/.test(req.url ?? '')) {
+      res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'no-store' });
+      res.end('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>');
+      return;
+    }
+    const body = req.url === '/heavy'
+      ? heavy
+      : req.url === '/noise'
       ? noise
+      : req.url === '/frame'
+        ? frame
       : rows
       ? rowsPage(Number(rows[1]))
       : shop
