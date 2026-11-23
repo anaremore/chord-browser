@@ -147,6 +147,7 @@ export const ACT_REFUSALS = {
   // The focus went where Chord can't see (into a frame) while text or a key went in: some of it may have gone there.
   focusLost: 'The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.',
   closed: 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.',
+  unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',
   noMove: 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.',

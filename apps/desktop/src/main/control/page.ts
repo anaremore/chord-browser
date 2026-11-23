@@ -17,6 +17,7 @@ import { fetchPdf } from './pdf';
 import { ACT_LOAD_MS, type FillWrite, type SnapshotRead } from '@chord/core';
 import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
 import { openDeep, type DeepSession } from './deep';
+import { pickersUnsecured } from '../agents/pickers';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
 import { snapshotPage } from './snapshot';
@@ -64,6 +65,8 @@ export interface ControlPage {
    * dropped (the user took the tab); `timeout`: the page didn't answer.
    */
   unguard(): Promise<{ moved: boolean; lost: boolean } | 'gone' | 'expired' | 'timeout'>;
+  /** A frame of the page couldn't be held (agents/pickers.ts): no acting here, said at once. */
+  unsecured(): boolean;
   /** The debugger's checks for one action (control/deep.ts); null if it can't be had. */
   deep(owner: string, token: string, key: number): Promise<DeepSession | null>;
   /** Text put in where the focus is, as one insertion (never as keys). */
@@ -236,6 +239,7 @@ export function controlPage(contents: WebContents): ControlPage {
       return { moved: moved === true || frameStopped, lost: lost === true };
     },
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
+    unsecured: () => pickersUnsecured(contents),
     // Within a moment, as every step: a hung page doesn't hold the action (the guard comes down after it anyway).
     insertText: async (text) => {
       if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
@@ -341,15 +345,13 @@ async function focusedPage(): Promise<Focus> {
 }
 
 /**
- * The page to give the focus back to after an agent's action, or null: only to the page that had it, and only if the
- * agent's page has it now or no page does. Where focusing a page brings its window forward (Windows, Linux:
- * `activates`), only while the same Chord window is in front as before, never over another app nor into another
- * window of Chord (Claude's review 7 of #110). On macOS focusing a page only makes it its window's first responder,
- * so it goes back whatever is in front: else the agent's page would have your keys once you came back to Chord.
+ * The page to give the focus back to after an agent's action, or null: only to the page that had it, only if the
+ * agent's page has it now or no page does, and only while the same Chord window is in front as before (focusing a
+ * page brings its window forward, on macOS too: Claude's reviews 7 and 8 of #110). When it isn't in front, coming
+ * back to it gives the focus to the page you see (window.ts' keepFocusOffParked), never the agent's.
  */
-export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P, activates = process.platform !== 'darwin'): P | null {
-  if (!before.page || before.page === agent) return null;
-  if (activates && (!before.window || now.window !== before.window)) return null;
+export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P): P | null {
+  if (!before.page || before.page === agent || !before.window || now.window !== before.window) return null;
   return now.page === null || now.page === agent ? before.page : null;
 }
 

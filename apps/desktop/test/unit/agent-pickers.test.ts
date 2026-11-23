@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { holdFilePickers, pickersLost, retryPickers } from '../../src/main/agents/pickers';
+import { holdFilePickers, pickersLost, pickersUnsecured, retryPickers } from '../../src/main/agents/pickers';
 
 // Neon's review of #110: an agent's tab holds file pickers for its whole life, in its page and its frames' targets.
 describe('holdFilePickers', () => {
@@ -10,7 +10,7 @@ describe('holdFilePickers', () => {
     const events = new EventEmitter();
     const page = new EventEmitter();
     const sent: [string, unknown, string | undefined][] = [];
-    const state = { attached: false, attachThrows, attaches: 0, fail: new Set<string>(), hold: null as null | Promise<void> };
+    const state = { attached: false, attachThrows, attaches: 0, fail: new Set<string>(), hold: null as null | Promise<void>, existing: [] as string[] };
     const contents = {
       isDestroyed: () => false,
       on: (e: string, f: (...a: unknown[]) => void) => page.on(e, f),
@@ -25,7 +25,9 @@ describe('holdFilePickers', () => {
         sendCommand: async (method: string, params?: unknown, sessionId?: string) => {
           sent.push([method, params, sessionId]);
           if (state.hold && method === 'Page.setInterceptFileChooserDialog') await state.hold;
-          if (state.fail.has(method)) throw new Error(`${method} failed`);
+          // Frames already there when the page's auto-attach is asked: attached before it answers, running.
+          if (method === 'Target.setAutoAttach' && !sessionId) for (const id of state.existing) events.emit('message', {}, 'Target.attachedToTarget', { sessionId: id, targetInfo: { type: 'iframe' }, waitingForDebugger: false });
+          if (state.fail.has(method) || state.fail.has(`${method}@${sessionId ?? ''}`)) throw new Error(`${method} failed`);
         },
       },
     };
@@ -122,6 +124,24 @@ describe('holdFilePickers', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(state.attaches).toBe(tried);
     state.attachThrows = false;
+    page.emit('did-finish-load');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pickersLost(contents)).toBe(false);
+  });
+
+  it('frames already there when it arms: on only once every one is held; one that can’t be: lost, and the page unsecured', async () => {
+    vi.useFakeTimers();
+    const { contents, page, state } = fake();
+    state.existing = ['f1', 'f2'];
+    state.fail.add('Page.setInterceptFileChooserDialog@f2');
+    holdFilePickers(contents, () => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pickersLost(contents)).toBe(true);
+    expect(pickersUnsecured(contents)).toBe(true);
+    // The page's next document (its frames its own): armed again, all held.
+    state.fail.clear();
+    page.emit('did-navigate');
+    expect(pickersUnsecured(contents)).toBe(false);
     page.emit('did-finish-load');
     await vi.advanceTimersByTimeAsync(0);
     expect(pickersLost(contents)).toBe(false);

@@ -31,6 +31,17 @@ export function pickersLost(contents: object): boolean {
   return lost.has(contents);
 }
 
+/**
+ * Agent tabs with a frame that couldn't be held (its interception never answered): it stays held at its start, a
+ * blank frame that keeps the page from finishing its load, and acting there is refused at once, with that said,
+ * rather than waiting on a load that won't come (Claude's review 8 of #110). Cleared by the page's next document.
+ */
+const unsecured = new WeakSet<object>();
+
+export function pickersUnsecured(contents: object): boolean {
+  return unsecured.has(contents);
+}
+
 /** An action found the hold lost: one try now (never more than one per action), and whether it's on. */
 export async function retryPickers(contents: object): Promise<boolean> {
   const retry = retries.get(contents);
@@ -76,8 +87,14 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
       (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
     await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
     if (sessionId && intercepted) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
+    if (sessionId && !intercepted) unsecured.add(contents);
     return intercepted;
   };
+  /**
+   * The frames attached during an arming (those already there when it asks: a re-arm after a detach finds them
+   * running, not held at their start): the tab's hold is on only once every one of theirs is (Claude's review 8).
+   */
+  let framesArming: Promise<boolean>[] | null = null;
   /**
    * Attaches (if need be) and arms; the hold is on only if this attachment's interception answered. One arming at a
    * time (a load and a retry together share it), in Chord's debugger queue (withDebugger): never riding another
@@ -97,7 +114,12 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
         later();
         return false;
       }
-      const on = await hold();
+      framesArming = [];
+      const top = await hold();
+      // Every frame attached meanwhile (the existing ones are attached before setAutoAttach answers).
+      const frames = framesArming;
+      framesArming = null;
+      const on = top && (await Promise.all(frames)).every(Boolean);
       if (on && mine === generation && debug.isAttached()) {
         lost.delete(contents);
         tries = 0;
@@ -105,7 +127,11 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
       }
       if (mine === generation) later();
       return false;
-    }).finally(() => (arming = null));
+    }).finally(() => {
+      arming = null;
+      // A detach while it armed asked for a retry that this arming swallowed: one is always set when it ends lost.
+      if (lost.has(contents)) later();
+    });
     return arming;
   };
   /** Tried again after a growing wait, at most REARM_TRIES times in a row. */
@@ -120,7 +146,10 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     else if (method === 'Target.attachedToTarget') {
       const attached = params as { sessionId?: string; targetInfo?: { type?: string } };
       if (!attached.sessionId) return;
-      if (attached.targetInfo?.type === 'iframe') void hold(attached.sessionId);
+      if (attached.targetInfo?.type === 'iframe') {
+        const held = hold(attached.sessionId);
+        framesArming?.push(held);
+      }
       // Anything else the filter let through goes on as it was.
       else void send('Runtime.runIfWaitingForDebugger', undefined, attached.sessionId);
     }
@@ -132,6 +161,8 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     lost.add(contents);
     later();
   });
+  // Another document: its frames are its own (one that couldn't be held went with the old one).
+  contents.on('did-navigate', () => unsecured.delete(contents));
   contents.on('render-process-gone', () => {
     generation++;
     lost.add(contents);

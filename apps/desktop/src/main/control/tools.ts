@@ -5,6 +5,7 @@
  * (page.ts), and asks the scope what this agent may see and when it must ask.
  * The refusals are one sentence each, as the assistant has always said them.
  */
+import { pickersUnsecured } from '../agents/pickers';
 import { randomBytes } from 'node:crypto';
 import {
   ASSISTANT_PDF_MAX_PAGES,
@@ -171,7 +172,8 @@ async function loadedPage(browser: ControlBrowser, nodeId: NodeId): Promise<Cont
   // A view whose page is gone (its renderer died) has none to wait on.
   const contents = pageOf(browser.tabs.ensure(nodeId));
   if (!contents) return null;
-  if (contents.isLoading()) {
+  // A page with a frame held unsecured never finishes loading (agents/pickers.ts): no waiting on it.
+  if (contents.isLoading() && !pickersUnsecured(contents)) {
     await new Promise<void>((done) => {
       const timer = setTimeout(done, 15_000);
       contents.once('did-stop-loading', () => {
@@ -393,6 +395,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
   const page = await loadedPage(browser, node.id);
   if (!page) return refuse('That tab could not be loaded.');
+  if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
@@ -575,7 +578,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // or the same document not answering: a no.
       if (down === 'gone' || down === 'timeout' || down === 'expired') {
         // Done only if the page committed another document since (no guard there, or the script asked went with the
-        // old one); else a no. A navigation that started and never committed (a 204, a download) doesn't count.
+        // old one); else a no. A navigation that started and never committed (a 204, a download) doesn't count, nor
+        // does one to an error page (an unreachable server fires no did-navigate): a submit that lands there reads as
+        // the focus moved. That fails closed, and the agent's snapshot shows the error page.
         if (await page.committedSince(markAtInput, 2000)) return true;
         refused = ACT_REFUSALS.focusLost;
         return false;
@@ -606,6 +611,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // the key let go of. The keydown did what it does (a link went, a menu opened): that's done.
         page.keys([down!]);
         const again = await stillOk();
+        // A menu that moves the focus on its keydown loses Enter's click (the character): harmless, the agent sees the
+        // menu open and goes on from there.
         page.keys(again ? rest.filter((e) => e.type === 'keyUp') : rest);
         return null;
       }

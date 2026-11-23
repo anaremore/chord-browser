@@ -1054,10 +1054,7 @@ describe('acting through the gate (S18 M2c)', () => {
       ['Chord wasn’t in front to begin with', { page: 'yours', window: null }, { page: 'agent', window: win }, null],
       ['you went to another page meanwhile', { page: 'yours', window: win }, { page: 'another', window: win }, null],
     ];
-    for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent', true), what).toBe(back);
-    // macOS: focusing a page never brings Chord forward, so the agent's page never keeps it, whatever's in front.
-    expect(focusToGiveBack({ page: 'yours', window: null }, { page: 'agent', window: null }, 'agent', false)).toBe('yours');
-    expect(focusToGiveBack({ page: 'yours', window: null }, { page: 'another', window: null }, 'agent', false)).toBeNull();
+    for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent'), what).toBe(back);
   });
 
   it('the guard’s own script went with the old document (it never answers): another document, so done', async () => {

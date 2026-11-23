@@ -365,6 +365,14 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     // Your focus never moved to the agent's tab.
     expect.soft(await focused()).toBe(yours);
 
+    // Chord not in front while the agent acts: nothing is focused for you then (that would bring Chord forward), and
+    // coming back to Chord, your page has the focus, never the agent's (window.ts' keepFocusOffParked).
+    const inFront = (front: boolean) => app.evaluate(({ BaseWindow }, f) => { const w = BaseWindow.getAllWindows()[0]!; if (f) w.focus(); else w.blur(); }, front);
+    await inFront(false);
+    await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') });
+    await inFront(true);
+    await expect.soft.poll(focused, { message: 'coming back to Chord', timeout: 3000 }).toBe(yours);
+
     // Your click in its tab pauses it there, as a key does (shown over your chord, so its bar shows).
     await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Neon/ }).click();
     await app.evaluate(({ webContents }, url) => {
