@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, type ControlBrowser } from '../../src/main/control/tools';
+import { focusToGiveBack } from '../../src/main/control/page';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
 
@@ -1030,6 +1031,25 @@ describe('acting through the gate (S18 M2c)', () => {
     // Another document (a submit's Enter navigated): the guard went with it, and that's done.
     const v = await acting({ twist: { unguard: 'gone' } });
     expect(result(await v.call('type', { tab_id: v.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”' });
+  });
+
+  it('a navigation that starts and never commits (a 204, a download, window.stop): not another document, so a no', async () => {
+    const t = await acting({ twist: { unguard: 'expired' }, onAct: (events, op) => void (op === 'unguard' && events.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })) });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+  });
+
+  it('focus goes back only while the same Chord window is in front, only to the page that had it', () => {
+    const win = {};
+    const other = {};
+    const rows: [string, { page: string | null; window: object | null }, { page: string | null; window: object | null }, string | null][] = [
+      ['the agent’s page took it', { page: 'yours', window: win }, { page: 'agent', window: win }, 'yours'],
+      ['no page has it', { page: 'yours', window: win }, { page: null, window: win }, 'yours'],
+      ['Chord isn’t in front any more (another app)', { page: 'yours', window: win }, { page: null, window: null }, null],
+      ['another Chord window is in front', { page: 'yours', window: win }, { page: null, window: other }, null],
+      ['Chord wasn’t in front to begin with', { page: 'yours', window: null }, { page: 'agent', window: win }, null],
+      ['you went to another page meanwhile', { page: 'yours', window: win }, { page: 'another', window: win }, null],
+    ];
+    for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent'), what).toBe(back);
   });
 
   it('the guard’s own script went with the old document (it never answers): another document, so done', async () => {

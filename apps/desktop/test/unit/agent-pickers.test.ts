@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { holdFilePickers, pickersLost } from '../../src/main/agents/pickers';
+import { holdFilePickers, pickersLost, retryPickers } from '../../src/main/agents/pickers';
 
 // Neon's review of #110: an agent's tab holds file pickers for its whole life, in its page and its frames' targets.
 describe('holdFilePickers', () => {
@@ -10,7 +10,7 @@ describe('holdFilePickers', () => {
     const events = new EventEmitter();
     const page = new EventEmitter();
     const sent: [string, unknown, string | undefined][] = [];
-    const state = { attached: false, attachThrows, attaches: 0 };
+    const state = { attached: false, attachThrows, attaches: 0, fail: new Set<string>(), hold: null as null | Promise<void> };
     const contents = {
       isDestroyed: () => false,
       on: (e: string, f: (...a: unknown[]) => void) => page.on(e, f),
@@ -22,7 +22,11 @@ describe('holdFilePickers', () => {
           state.attached = true;
         },
         on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
-        sendCommand: async (method: string, params?: unknown, sessionId?: string) => void sent.push([method, params, sessionId]),
+        sendCommand: async (method: string, params?: unknown, sessionId?: string) => {
+          sent.push([method, params, sessionId]);
+          if (state.hold && method === 'Page.setInterceptFileChooserDialog') await state.hold;
+          if (state.fail.has(method)) throw new Error(`${method} failed`);
+        },
       },
     };
     return { contents: contents as unknown as WebContents, events, page, sent, state };
@@ -70,6 +74,56 @@ describe('holdFilePickers', () => {
     expect(sent).toEqual([]);
     state.attachThrows = false;
     await vi.advanceTimersByTimeAsync(300);
+    expect(pickersLost(contents)).toBe(false);
+  });
+
+  it('a hold that answered after a detach counts for nothing: still lost, armed again on the new attachment', async () => {
+    vi.useFakeTimers();
+    const { contents, events, state } = fake();
+    let answer = () => undefined as void;
+    state.hold = new Promise<void>((r) => (answer = r));
+    holdFilePickers(contents, () => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    // Let go of while its interception is in flight.
+    state.attached = false;
+    events.emit('detach', {}, 'target closed');
+    state.hold = null;
+    answer();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pickersLost(contents)).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(state.attaches).toBe(2);
+    expect(pickersLost(contents)).toBe(false);
+  });
+
+  it('an interception that failed: lost, and a frame held at its start is let go on anyway', async () => {
+    vi.useFakeTimers();
+    const { contents, events, sent, state } = fake();
+    state.fail.add('Page.setInterceptFileChooserDialog');
+    holdFilePickers(contents, () => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pickersLost(contents)).toBe(true);
+    events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(names(sent)).toContain('Runtime.runIfWaitingForDebugger@s1');
+    // An action tries once more, and it's on once the interception answers.
+    state.fail.clear();
+    await expect(retryPickers(contents)).resolves.toBe(true);
+    expect(pickersLost(contents)).toBe(false);
+  });
+
+  it('a debugger that keeps letting go: tried with a growing wait, then only by an action or a load', async () => {
+    vi.useFakeTimers();
+    const { contents, page, state } = fake(true);
+    holdFilePickers(contents, () => undefined);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const tried = state.attaches;
+    expect(tried).toBe(9);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(state.attaches).toBe(tried);
+    state.attachThrows = false;
+    page.emit('did-finish-load');
+    await vi.advanceTimersByTimeAsync(0);
     expect(pickersLost(contents)).toBe(false);
   });
 });

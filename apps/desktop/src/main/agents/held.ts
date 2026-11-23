@@ -8,3 +8,13 @@ export function heldDetail(kind: 'dialog' | 'file', detail: string, frameOrigin:
   const from = frameOrigin && frameOrigin !== 'null' ? frameOrigin.slice(0, 200) : 'another site';
   return kind === 'dialog' ? `a frame from ${from} tried to show a dialog` : `a frame from ${from} tried to open a file picker`;
 }
+
+/**
+ * The same, from the frame that sent it, as Electron gives it: the top frame's own words; any other frame's, or one
+ * Electron can no longer name (it went, or navigated away, between its message and now: `senderFrame` is null), as
+ * a frame from another site (Claude's review 7 of #110: never fails open).
+ */
+export function heldFromFrame(kind: 'dialog' | 'file', detail: string, frame: { origin: string; parent: unknown } | null | undefined, topOrigin: string): string {
+  if (frame && !frame.parent) return heldDetail(kind, detail, frame.origin, null);
+  return heldDetail(kind, detail, frame?.origin ?? null, topOrigin || 'unknown');
+}

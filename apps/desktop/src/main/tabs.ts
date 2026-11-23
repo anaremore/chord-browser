@@ -16,7 +16,7 @@ import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
 import { holdFilePickers } from './agents/pickers';
 import { agentGuardUp } from './control/page';
-import { heldDetail } from './agents/held';
+import { heldFromFrame } from './agents/held';
 
 const MAX_FAVICON_BYTES = 64 * 1024;
 /** Sites whose icon each session keeps (TabManager.siteIcons). */
@@ -466,7 +466,7 @@ export class TabManager {
       if (!this.deps.agentTab?.(nodeId) || !raw || typeof raw !== 'object') return;
       const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
       if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
-      this.deps.onAgentRefused?.(nodeId, kind, heldDetail(kind, detail, event.senderFrame?.origin ?? null, event.senderFrame?.parent ? (contents.mainFrame?.origin ?? null) : null));
+      this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame?.origin ?? ''));
     });
     // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
     contents.ipc.on('page:agentGuardState', (event) => {

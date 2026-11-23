@@ -460,7 +460,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (tool === 'select_option' && !asked) return refuse(ACT_REFUSALS.notSelect);
   // The page and its site, before anything is asked of it: everything after is for this page on this site only.
   const pageAtCheck = page.id;
-  const documentAtCheck = page.document;
+  const markAtCheck = page.mark;
   const site = host.siteOf(page.url());
   if (!site) return refuse(ACT_REFUSALS.noSite);
   // The element as it is now; for select_option, the choice matched against the page's own options before anything is
@@ -535,6 +535,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      */
     /** Under the guard, before each input: the focus the element's, its insides all to be seen, Stop and a pause. */
     const stillOk = async (): Promise<string | null> => {
+      // The tab's file picker hold, still on (it can be lost between steps: the debugger let go).
+      if (!deep!.held()) return ACT_REFUSALS.noCheck;
       const focus = await focusOk();
       if (focus) return focus;
       const open = await deep!.open();
@@ -569,7 +571,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
       // done (no guard there, or the script asked went with the old one). A guard that ran out in the same document,
       // or the same document not answering: a no.
-      if (down === 'gone' || ((down === 'timeout' || down === 'expired') && page.document !== documentAtCheck)) return true;
+      if (down === 'gone' || ((down === 'timeout' || down === 'expired') && (await page.committedSince(markAtCheck, 2000)))) return true;
       if (down === 'expired' || down === 'timeout') {
         refused = ACT_REFUSALS.focusLost;
         return false;
@@ -649,6 +651,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if (!open.ok) return void (refused = deepRefusal(open));
       }
       if ((refused = halt())) return;
+      if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
       page.press(pointed.x, pointed.y);
       if (tool !== 'type') return;
       if (args['replace'] !== false) {

@@ -9,7 +9,7 @@
  * It goes in every read's result as `page_id`. A page starts being followed
  * the first time a tool reads it, so pages no agent reads cost nothing.
  */
-import { webContents as allContents, type WebContents } from 'electron';
+import { BaseWindow, webContents as allContents, type WebContents } from 'electron';
 import { readDiagnostics, type DiagnosticsRead } from './diagnostics';
 import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillHighlight, type FillOutcome, type FormPage } from './forms';
@@ -24,8 +24,10 @@ import { snapshotPage } from './snapshot';
 export interface ControlPage {
   /** The page id now (see above). */
   readonly id: string;
-  /** Its document's number: changes with another document only, from when it starts (a pushState changes the page id, not this). */
-  readonly document: number;
+  /** Where its documents are now (another document only, not a pushState), for committedSince. */
+  readonly mark: DocumentMark;
+  /** Whether it went to another document since `mark`, committed (one on its way is waited for, at most `ms`). */
+  committedSince(mark: DocumentMark, ms: number): Promise<boolean>;
   /** Where the page is now, which can be ahead of its tab's saved address. */
   url(): string;
   /** The page went (its tab closed, slept or crashed). */
@@ -110,15 +112,42 @@ export function pageIdOf(contents: WebContents): string {
   return entry.id;
 }
 
-/**
- * How many documents the page has had, or started to go to, since Chord followed it: another only with another
- * document (not a pushState), counted from the moment it starts (a page whose script went with its old document
- * answers no more before the new one arrives).
- */
-export function documentOf(contents: WebContents): number {
+/** Where the page's documents are: how many it committed, and how many it started to go to (since Chord followed it). */
+export type DocumentMark = { document: number; starts: number };
+
+export function documentMark(contents: WebContents): DocumentMark {
   pageIdOf(contents);
-  const entry = followed.get(contents)!;
-  return entry.document + entry.starts;
+  const { document, starts } = followed.get(contents)!;
+  return { document, starts };
+}
+
+/**
+ * Whether the page went to another document since `mark`, committed (a navigation that never commits, a 204, a
+ * download, one stopped, doesn't count: Neon's and Claude's review 7 of #110). One started since and not committed
+ * yet is waited for, at most `ms`.
+ */
+export function committedSince(contents: WebContents, mark: DocumentMark, ms: number): Promise<boolean> {
+  if (contents.isDestroyed()) return Promise.resolve(true);
+  const now = documentMark(contents);
+  if (now.document !== mark.document) return Promise.resolve(true);
+  if (now.starts === mark.starts) return Promise.resolve(false);
+  return new Promise((done) => {
+    const check = () => {
+      if (contents.isDestroyed() || documentMark(contents).document !== mark.document) finish(true);
+    };
+    const stopped = () => setTimeout(() => finish(!contents.isDestroyed() && documentMark(contents).document !== mark.document), 0);
+    const timer = setTimeout(() => finish(false), ms);
+    function finish(went: boolean) {
+      clearTimeout(timer);
+      if (!contents.isDestroyed()) {
+        contents.off('did-navigate', check);
+        contents.off('did-stop-loading', stopped);
+      }
+      done(went);
+    }
+    contents.on('did-navigate', check);
+    contents.on('did-stop-loading', stopped);
+  });
 }
 
 /** Pages whose guard is up now: what a frame's preload is told as it starts (agentGuardUp). */
@@ -165,9 +194,10 @@ export function controlPage(contents: WebContents): ControlPage {
     get id() {
       return contents.isDestroyed() ? '' : pageIdOf(contents);
     },
-    get document() {
-      return contents.isDestroyed() ? -1 : documentOf(contents);
+    get mark() {
+      return contents.isDestroyed() ? { document: -1, starts: -1 } : documentMark(contents);
     },
+    committedSince: (mark, ms) => committedSince(contents, mark, ms),
     url: () => (contents.isDestroyed() ? '' : contents.getURL()),
     gone: () => contents.isDestroyed(),
     read: () => readPage(contents),
@@ -299,13 +329,25 @@ async function afterActing(contents: WebContents, act: () => void | Promise<void
   }
 }
 
-/** The page with the focus now (Electron's), or null; none where there's no Electron (the unit tests). */
-async function focusedPage(): Promise<WebContents | null> {
+/** Which page has the focus, in which window (Electron's): none where there's no Electron (the unit tests). */
+type Focus = { page: WebContents | null; window: object | null };
+
+async function focusedPage(): Promise<Focus> {
   try {
-    return allContents?.getFocusedWebContents?.() ?? null;
+    return { page: allContents?.getFocusedWebContents?.() ?? null, window: BaseWindow?.getFocusedWindow?.() ?? null };
   } catch {
-    return null;
+    return { page: null, window: null };
   }
+}
+
+/**
+ * The page to give the focus back to after an agent's action, or null (Claude's review 7 of #110): only while the
+ * same Chord window is in front as before (never bringing Chord forward over another app, nor into another window of
+ * it), only to the page that had it, and only if the agent's page has it now or no page does.
+ */
+export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P): P | null {
+  if (!before.page || before.page === agent || !before.window || now.window !== before.window) return null;
+  return now.page === null || now.page === agent ? before.page : null;
 }
 
 /**
@@ -314,8 +356,7 @@ async function focusedPage(): Promise<WebContents | null> {
  * back to the page that had it, never left with the agent's tab, or with nothing, while you use another. A page of
  * yours you went to meanwhile keeps it.
  */
-async function giveBackFocus(contents: WebContents, yours: WebContents | null): Promise<void> {
-  if (!yours || yours === contents || yours.isDestroyed()) return;
-  const now = await focusedPage();
-  if (now === null || now === contents) yours.focus();
+async function giveBackFocus(contents: WebContents, yours: Focus): Promise<void> {
+  const back = focusToGiveBack(yours, await focusedPage(), contents);
+  if (back && !back.isDestroyed()) back.focus();
 }

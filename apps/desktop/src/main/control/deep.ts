@@ -24,7 +24,7 @@
  * debugger can't be had, nothing is pressed or typed.
  */
 import type { WebContents } from 'electron';
-import { pickersLost } from '../agents/pickers';
+import { pickersLost, retryPickers } from '../agents/pickers';
 import { withDebugger } from '../debugger-queue';
 import { pageCall } from '../page-call';
 import { SNAPSHOT_LIB } from './snapshot';
@@ -43,6 +43,8 @@ export interface DeepSession {
   hit(x: number, y: number): Promise<DeepAnswer>;
   /** The element holds no closed shadow root (what takes text and keys is all to be seen). */
   open(): Promise<DeepAnswer>;
+  /** Whether the tab's file picker hold is still on (an agent's tab's: asked before every input). */
+  held(): boolean;
   /** Lets go of the debugger (detached if the session attached it). */
   close(): Promise<void>;
 }
@@ -97,8 +99,10 @@ const hasClosedRoot = (node: Node | undefined): boolean => {
  * (or, if someone's DevTools have it, used as it is), Chord's world found, the element in hand. Null if it can't be.
  */
 export async function openDeep(contents: WebContents, owner: string, token: string, key: number): Promise<DeepSession | null> {
-  // An agent's tab whose file picker hold is down (agents/pickers.ts): nothing is pressed or typed until it's back.
-  if (contents.isDestroyed() || pickersLost(contents)) return null;
+  if (contents.isDestroyed()) return null;
+  // An agent's tab whose file picker hold is down (agents/pickers.ts): tried once more for this action; nothing is
+  // pressed or typed until it's back.
+  if (pickersLost(contents) && !(await retryPickers(contents))) return null;
   let release: (value: void) => void = () => undefined;
   const released = new Promise<void>((done) => (release = done));
   let ready: (session: DeepSession | null) => void = () => undefined;
@@ -219,6 +223,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           if (!described) return { ok: false, why: 'no-check' };
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },
+        held: () => !pickersLost(contents),
         close,
       });
       await released;
