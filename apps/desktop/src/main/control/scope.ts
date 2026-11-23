@@ -5,7 +5,7 @@
  * readNeedsApproval); outside agents' comes in M1's later slices (their Agent
  * chord and the tabs shared with them).
  */
-import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, ElementRefs, NodeId, TabNode, TabRefs } from '@chord/core';
+import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, BarDoing, ElementRefs, NodeId, TabNode, TabRefs } from '@chord/core';
 import type { ControlAgent } from './gate';
 
 /** A tool's answer to the model. */
@@ -36,6 +36,23 @@ export interface ToolMemory {
   read: Set<NodeId>;
   /** Each tab's element refs (snapshot, M2b): only the latest snapshot's are good. Made with a tab's first snapshot. */
   elements?: Map<NodeId, ElementRefs>;
+}
+
+/**
+ * Acting on pages (S18 M2c): what a front door that lets its agent act gives the tools. Outside agents' scope has it;
+ * the assistant's gets it in M2e. Absent, the acting tools are unknown.
+ */
+export interface ActHost {
+  /** Why this tab can't be acted on (a tab shared with it is read-only), or null. */
+  mayAct(node: TabNode): string | null;
+  /** The site an address is on (its registrable domain, as sharing's), or null for what isn't a web page. */
+  siteOf(url: string): string | null;
+  /** The user said *Always on this site* for good (the agent's allowance), so it acts there without asking. */
+  siteAllowed(site: string): boolean;
+  /** *Always on this site* was answered: keep it with the agent's allowance. */
+  keepSite(site: string): void;
+  /** What the bar says the agent is doing on the tab (core's barDoing), or null when it's done. */
+  doing(nodeId: NodeId, doing: BarDoing | null): void;
 }
 
 /** propose_fill's card, which only a front door with a place to show it offers. */
@@ -87,4 +104,6 @@ export interface ControlScope {
   search?(tool: 'search_history' | 'search_archive', query: string): Promise<Record<string, string>[]>;
   /** propose_fill; absent, it's not offered. */
   fills?: FillProposals;
+  /** Acting on pages (M2c); absent, the acting tools aren't offered. */
+  act?: ActHost;
 }

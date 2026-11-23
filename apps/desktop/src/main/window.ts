@@ -15,7 +15,7 @@ import { AGENT_BAR_HEIGHT, clampPeekCard, DEFAULT_DEVTOOLS, devtoolsLayout, devt
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
-import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
+import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, webContents, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
 import { FrameSnapshots, offscreen } from './frame-snapshot';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
@@ -378,6 +378,10 @@ export class AppWindow {
       reportBounds();
     });
     this.window.on('move', reportBounds);
+    // Back in front: the OS gives the focus back to the view that had it last, which can be an agent's page parked
+    // here (it took it, or a view just shown became first responder). Never a parked page: the page you see, or this
+    // window's own (Claude's review 8 of #110). Within a window in front, focusing a page activates nothing.
+    this.window.on('focus', () => setTimeout(() => this.keepFocusOffParked(), 0));
     if (platform === 'darwin') this.window.on('leave-full-screen', () => this.refreshPageFullScreen());
     for (const event of ['move', 'minimize', 'restore', 'show', 'hide', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'focus'] as const) {
       this.window.on(event as 'move', () => this.placementChanged());
@@ -600,8 +604,21 @@ export class AppWindow {
    * shared doesn't change shape. Ones not listed any more are let go, unless
    * they're on screen here.
    */
+  /** This window in front, with the focus on a page parked here (an agent's): to the page you see, or this window's own. */
+  keepFocusOffParked(): void {
+    if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
+    const now = webContents?.getFocusedWebContents?.() ?? null;
+    if (!now || !this.parked.some((v) => v.webContents === now && !this.panes.includes(v))) return;
+    const page = this.activeTabContents;
+    (page && !page.isDestroyed() && page !== now ? page : this.shell.webContents).focus();
+  }
+
   park(views: readonly WebContentsView[]): void {
     if (this.window.isDestroyed()) return;
+    // Your focus stays where it is: adding or taking away a parked page (an agent's tab) mustn't leave it nowhere
+    // (Neon's review of #110, seen in agents.spec when an agent opened a tab).
+    // Only a page of this window's, while it's in front (one in another window is that window's business).
+    const focused = BaseWindow.getFocusedWindow?.() === this.window ? (webContents?.getFocusedWebContents?.() ?? null) : null;
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
     this.parked = views.filter((view) => Boolean(pageOf(view)));
@@ -612,6 +629,20 @@ export class AppWindow {
       view.setVisible(true);
     }
     this.layout();
+    // Now, and again once the page just parked is on screen (the OS can hand it the window's focus then): back to the
+    // page that had it, if no page has it now.
+    if (!focused || this.parked.some((v) => v.webContents === focused)) return;
+    // From no page, or a page just parked here (macOS makes a view just shown its window's first responder). Only
+    // while this window is in front: focusing a page brings its window forward on every platform (Electron's Focus
+    // activates the app); when it isn't, coming back to it does (keepFocusOffParked).
+    const giveBack = () => {
+      if (this.window.isDestroyed() || focused.isDestroyed() || focused.isFocused()) return;
+      if (BaseWindow.getFocusedWindow?.() !== this.window) return;
+      const now = webContents?.getFocusedWebContents?.() ?? null;
+      if (!now || this.parked.some((v) => v.webContents === now)) focused.focus();
+    };
+    giveBack();
+    for (const ms of [50, 200, 500]) setTimeout(giveBack, ms).unref?.();
   }
 
   /**

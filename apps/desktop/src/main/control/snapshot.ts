@@ -6,7 +6,7 @@
  * It walks the main frame (open shadow roots too; a frame is listed by its title, never entered) and gives back the
  * outline as nodes: a role, a name, a depth (only nodes with a role nest), states, and a key on each element an agent
  * can act on. Each keyed element is kept by a WeakRef under the read's token, here in the page's renderer, for M2c's
- * actions to find and check again: the latest snapshot of each owner (an agent's gate: an outside agent, a chat), so
+ * actions to find and check again (with the role and name it had): the latest snapshot of each owner (an agent's gate: an outside agent, a chat), so
  * one agent's snapshot never takes away another's (SNAPSHOT_OWNERS of them at most). An owner that went (an agent
  * disconnecting, a chat closed) leaves its entry until it's the oldest past that bound or the page goes: harmless, as
  * its refs live only in its own scope, which went with it, and the entry holds elements only by WeakRef.
@@ -38,17 +38,15 @@ import { FORM_LIB } from './forms';
 /** How long a snapshot may take to come back: a busy page answers within it, a hung one is a refusal. */
 const SNAPSHOT_MS = 5000;
 
-/** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
-export function snapshotScript(owner: string, token: string): string {
-  const args = { owner, token, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS };
-  return String.raw`((args) => {
+/**
+ * What a snapshot and an action (control/act.ts) both need to know of an element: its role (editability first), its
+ * name, its states, whether it shows, and forms' labels and visibility. One copy, so an action checks an element
+ * exactly as the snapshot described it. Plain JavaScript, as the scripts are.
+ */
+export const SNAPSHOT_LIB = String.raw`
   const MAX_OPTIONS = ${ASSISTANT_FORM_MAX_OPTIONS};
+  const NAME_MAX = ${SNAPSHOT_NAME_MAX};
   ${FORM_LIB}
-  const started = performance.now();
-  const nodes = [];
-  const keep = [];
-  const cut = {};
-  let looked = 0;
   // Roles an agent can act on: each gets a key (an element, kept by a WeakRef for M2c).
   const ACTED = new Set(['link', 'button', 'textbox', 'searchbox', 'spinbutton', 'combobox', 'listbox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem']);
   // Roles shown for orientation, without a key.
@@ -113,26 +111,26 @@ export function snapshotScript(owner: string, token: string): string {
   // A name: what assistive tech would read first, then the element's own words; never a field's value.
   const nameOf = (el, role) => {
     // A text field of any kind: its labels and placeholder only. Its words are what's typed in it.
-    if (TYPED.has(role) && !isField(el)) return labelOf(el) || clip(el.getAttribute('aria-placeholder') || el.getAttribute('placeholder'), args.nameMax);
+    if (TYPED.has(role) && !isField(el)) return labelOf(el) || clip(el.getAttribute('aria-placeholder') || el.getAttribute('placeholder'), NAME_MAX);
     const ids = String(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).slice(0, 4);
-    const by = clip(ids.map((id) => byId(el, id)).filter(Boolean).map(words).join(' '), args.nameMax);
+    const by = clip(ids.map((id) => byId(el, id)).filter(Boolean).map(words).join(' '), NAME_MAX);
     if (by) return by;
-    const aria = clip(el.getAttribute('aria-label'), args.nameMax);
+    const aria = clip(el.getAttribute('aria-label'), NAME_MAX);
     if (aria) return aria;
     if (isField(el)) {
       const type = typeOf(el);
-      if (type === 'submit' || type === 'button' || type === 'reset') return clip(el.value || (type === 'submit' ? 'Submit' : ''), args.nameMax);
-      if (type === 'image') return clip(el.getAttribute('alt') || 'Submit', args.nameMax);
-      return labelOf(el) || clip(el.getAttribute('placeholder'), args.nameMax);
+      if (type === 'submit' || type === 'button' || type === 'reset') return clip(el.value || (type === 'submit' ? 'Submit' : ''), NAME_MAX);
+      if (type === 'image') return clip(el.getAttribute('alt') || 'Submit', NAME_MAX);
+      return labelOf(el) || clip(el.getAttribute('placeholder'), NAME_MAX);
     }
-    if (el.localName === 'img') return clip(el.getAttribute('alt'), args.nameMax);
-    if (role === 'iframe') return clip(el.getAttribute('title') || el.getAttribute('name'), args.nameMax);
+    if (el.localName === 'img') return clip(el.getAttribute('alt'), NAME_MAX);
+    if (role === 'iframe') return clip(el.getAttribute('title') || el.getAttribute('name'), NAME_MAX);
     // Containers are named only by what's said of them; acted-on elements and headings by their words too.
     if (ACTED.has(role) || role === 'heading' || role === 'generic') {
-      const own = words(el) || clip([...el.querySelectorAll('img[alt]')].slice(0, 3).map((i) => i.getAttribute('alt')).join(' '), args.nameMax);
-      if (own) return clip(own, args.nameMax);
+      const own = words(el) || clip([...el.querySelectorAll('img[alt]')].slice(0, 3).map((i) => i.getAttribute('alt')).join(' '), NAME_MAX);
+      if (own) return clip(own, NAME_MAX);
     }
-    return clip(el.getAttribute('title'), args.nameMax);
+    return clip(el.getAttribute('title'), NAME_MAX);
   };
   const statesOf = (el, role) => {
     const s = [];
@@ -160,6 +158,28 @@ export function snapshotScript(owner: string, token: string): string {
     return true;
   };
   const SKIP = new Set(['script', 'style', 'template', 'noscript', 'head', 'link', 'meta', 'option', 'optgroup', 'datalist', 'svg', 'canvas', 'video', 'audio', 'object', 'embed', 'br']);
+  // A field's description, for core's sensitiveField: an input's type, a text area's, a select's, or text for any other
+  // field (an editor). The snapshot gives it with each field, and an action checks it again before text or a key goes in.
+  // What opens a file picker: a file input, or a label for one (Neon's review of #110). Agents never choose files: no ref.
+  const opensFiles = (el) => (el.localName === 'input' && String(el.type).toLowerCase() === 'file') || (el.localName === 'label' && Boolean(el.control) && String(el.control.type).toLowerCase() === 'file');
+  const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
+  // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
+  const roleNow = (el) => {
+    const own = String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
+    return el.isContentEditable ? (TYPED.has(own) ? own : 'textbox') : roleOf(el);
+  };
+`;
+
+/** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
+export function snapshotScript(owner: string, token: string): string {
+  const args = { owner, token, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS };
+  return String.raw`((args) => {
+  ${SNAPSHOT_LIB}
+  const started = performance.now();
+  const nodes = [];
+  const keep = [];
+  const cut = {};
+  let looked = 0;
   const stop = () => {
     if (looked > args.scan) { cut.elements = true; return true; }
     if (looked % 100 === 0 && performance.now() - started > args.ms) { cut.time = true; return true; }
@@ -185,8 +205,7 @@ export function snapshotScript(owner: string, token: string): string {
       if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
       // Editability first, whatever the tag or role (a td, an li, an h1, role=none): an editor is a typed field, named by
       // its labels alone, described as a field for sensitiveField, and never walked into (its inside is what's typed).
-      const own = String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
-      let role = el.isContentEditable ? (TYPED.has(own) ? own : 'textbox') : roleOf(el);
+      let role = roleNow(el);
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
       if (!role && !keyed && getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer')) role = 'generic';
       if (!role) {
@@ -196,7 +215,7 @@ export function snapshotScript(owner: string, token: string): string {
       }
       const acted = ACTED.has(role) || role === 'generic';
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
-      const actable = acted && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
+      const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const node = { depth, role, name: nameOf(el, role) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
@@ -204,10 +223,10 @@ export function snapshotScript(owner: string, token: string): string {
       if (el.localName === 'select' && !el.multiple) { const o = el.options[el.selectedIndex]; if (o) node.choice = clip(o.label || o.text, args.nameMax); }
       // Described as a field, for core's sensitiveField: inputs, text areas, selects (a card's expiry month), and any
       // other text field (a contenteditable, a role=textbox), whose type is text.
-      if (isField(el) || TYPED.has(role)) node.field = { type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) };
+      if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push(new WeakRef(el)); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name }); }
       }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
@@ -225,8 +244,8 @@ export function snapshotScript(owner: string, token: string): string {
     const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox') };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
-    node.field = { type: 'text', autocomplete: clip(start.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(start.getAttribute('name'), 60), id: clip(start.id, 60), label: labelOf(start), placeholder: clip(start.getAttribute('aria-placeholder'), 100) };
-    if (shown(start)) { node.key = keep.length; keep.push(new WeakRef(start)); }
+    node.field = fieldOf(start);
+    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name }); }
     nodes.push(node);
   } else walk(start, 0, false, false);
   // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.

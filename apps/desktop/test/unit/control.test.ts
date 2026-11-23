@@ -10,8 +10,9 @@ import { bucketOf, CONTROL_REFUSALS, TabRefs, type Grant, type NodeId, type Stat
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
-import type { ControlScope, ToolMemory } from '../../src/main/control/scope';
+import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, type ControlBrowser } from '../../src/main/control/tools';
+import { focusToGiveBack } from '../../src/main/control/page';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
 
@@ -110,6 +111,27 @@ describe('ControlAgent', () => {
     }
   });
 
+  it('a site card is the agent’s for the site: two tabs’ asks wait on one card, and one answer settles both (M2c)', async () => {
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const signal = new AbortController().signal;
+    const first = agent.ask(card({ kind: 'site', tool: 'click', subject: 'shop.example', tab: 'n1' }), signal);
+    const second = agent.ask(card({ kind: 'site', tool: 'type', subject: 'shop.example', tab: 'n2' }), signal);
+    await tick();
+    expect(shown).toHaveLength(1);
+    // The card names the first tab's action; both tabs' bars say they're waiting.
+    expect(shown[0]!.card.tool).toBe('click');
+    expect([agent.state('n1').cards.length, agent.state('n2').cards.length]).toEqual([1, 1]);
+    shown[0]!.answer('once');
+    await expect(first).resolves.toBe('once');
+    expect([agent.state('n1').cards.length, agent.state('n2').cards.length]).toEqual([0, 0]);
+    await expect(second).resolves.toBe('once');
+    // Another site is its own card.
+    void agent.ask(card({ kind: 'site', tool: 'click', subject: 'other.example', tab: 'n1' }), signal);
+    await tick();
+    expect(shown).toHaveLength(2);
+  });
+
   it('holds a paused tab’s calls until the user leaves it, or answers paused after 45 s', async () => {
     vi.useFakeTimers();
     const agent = new ControlAgent('a', presenter().present);
@@ -142,14 +164,84 @@ type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) 
 /** A page that answers the extractor with `read`, never (`hang`), or as a test's function does. */
 function fakePage(url: string, read: Answer) {
   const events = new EventEmitter();
-  const at: { url: string; onCapture?: () => void; pdfLandsAt?: string } = { url };
+  // history: the tab's entries as Chromium keeps them (skippable: added by the page without a gesture, which goBack skips).
+  const at: {
+    url: string;
+    onCapture?: () => void;
+    pdfLandsAt?: string;
+    zoom: number;
+    input: unknown[];
+    text: string[];
+    loads: string[];
+    history: { url: string; skippable?: boolean }[];
+    active: number;
+    /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean };
+    debugging: string[];
+  } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
+  const debugEvents = new EventEmitter();
+  let attached = false;
+  const go = (index: number) => {
+    at.active = index;
+    at.url = at.history[index]!.url;
+    events.emit('did-navigate');
+    events.emit('did-stop-loading');
+  };
   const contents = {
+    // Acting (S18 M2c): what an action sends, recorded.
+    getZoomFactor: () => at.zoom,
+    sendInputEvent: (e: unknown) => void at.input.push(e),
+    setIgnoreMenuShortcuts: () => undefined,
+    insertText: async (text: string) => void at.text.push(text),
+    getTitle: () => 'Article',
+    loadURL: async (to: string) => {
+      at.loads.push(to);
+      at.history = [...at.history.slice(0, at.active + 1), { url: to }];
+      go(at.history.length - 1);
+    },
+    navigationHistory: {
+      canGoBack: () => at.active > 0,
+      getActiveIndex: () => at.active,
+      getEntryAtIndex: (i: number) => at.history[i],
+      goToIndex: (i: number) => go(i),
+      // Chromium's: past the entries the page added without a gesture.
+      goBack: () => {
+        let i = at.active - 1;
+        while (i > 0 && at.history[i]!.skippable) i--;
+        go(i);
+      },
+    },
     // A PDF's bytes, fetched through the tab's session: it ends up at `pdfLandsAt` (a redirect), else where it was asked.
     session: {
       fetch: async (asked: string) => {
         const response = new Response('%PDF-1.4');
         Object.defineProperty(response, 'url', { value: at.pdfLandsAt ?? asked });
         return response;
+      },
+    },
+    // The debugger, as Chromium's DevTools protocol answers deep.ts.
+    debugger: {
+      isAttached: () => attached,
+      attach: () => {
+        if (at.deep.unavailable) throw new Error('Another debugger is already attached');
+        attached = true;
+      },
+      detach: () => void (attached = false),
+      on: (e: string, f: (...a: unknown[]) => void) => debugEvents.on(e, f),
+      off: (e: string, f: (...a: unknown[]) => void) => debugEvents.off(e, f),
+      sendCommand: async (method: string, params?: { expression?: string }) => {
+        at.debugging.push(method);
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } };
+        if (method === 'Runtime.enable') debugEvents.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, auxData: { frameId: 'F', type: 'isolated' } } });
+        if (method === 'Runtime.evaluate') return params?.expression?.includes('instanceof Map') ? { result: { value: true } } : { result: { objectId: 'el' } };
+        if (method === 'DOM.getNodeForLocation') return { backendNodeId: 1, frameId: 'F' };
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'hit' } };
+        if (method === 'Runtime.callFunctionOn') {
+          if (at.deep.picker) debugEvents.emit('message', {}, 'Page.fileChooserOpened', {});
+          return { result: { value: at.deep.hit ?? { ok: true } } };
+        }
+        if (method === 'DOM.describeNode') return { node: at.deep.closed ? { children: [{ shadowRoots: [{ shadowRootType: 'closed' }] }] } : { shadowRoots: [{ shadowRootType: 'open' }] } };
+        return {};
       },
     },
     isDestroyed: () => false,
@@ -190,6 +282,8 @@ function setup(
     sharedOn?: string;
     /** A scope that offers M2's tools (S18 M2b). */
     actions?: boolean;
+    /** A scope that lets its agent act (S18 M2c), and what it says. */
+    act?: Partial<ActHost>;
     /** Where a PDF's download ends up. */
     pdfLandsAt?: string;
   } = {},
@@ -232,6 +326,7 @@ function setup(
   const scope: ControlScope = {
     agent,
     ...(opts.actions ? { actions: true } : {}),
+    ...(opts.act ? { act: { mayAct: () => null, siteOf: (url: string) => siteOfUrl(url), siteAllowed: () => false, keepSite: () => undefined, doing: () => undefined, ...opts.act } } : {}),
     refs: new TabRefs<NodeId>('t'),
     memory,
     off: () => null,
@@ -412,6 +507,22 @@ describe('Cards, review 1 of #76', () => {
     void agent.ask(card(), new AbortController().signal, 20);
     await tick();
     expect(shown).toHaveLength(2);
+  });
+
+  it('a late Always on this site is carried to the retry, not lost to a second card; kept only by the action (keep)', async () => {
+    vi.useFakeTimers();
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const site = { kind: 'site' as const, tool: 'click', subject: 'shop.test', tab: 'n1', target: ['https://shop.test/'] };
+    const asked = agent.ask(card(site), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(asked).resolves.toBe('waiting');
+    shown.at(-1)!.answer('always');
+    await vi.advanceTimersByTimeAsync(0);
+    // Not kept yet: the action it was for hasn't run.
+    expect(agent.granted('site', 'shop.test')).toBeUndefined();
+    await expect(agent.ask(card(site), new AbortController().signal, 20)).resolves.toBe('always');
+    expect(shown).toHaveLength(1);
   });
 
   it('a late once answers only for the tab and address its card named, and only soon after', async () => {
@@ -644,5 +755,434 @@ describe('snapshot, review 1 of #104', () => {
     close('n1');
     await call('snapshot', { tab_id: scope.refs.refFor('n3') });
     expect([...scope.memory.elements!.keys()]).toEqual(['n3']);
+  });
+});
+
+/* ---------- Acting (S18 M2c) ---------- */
+
+describe('acting through the gate (S18 M2c)', () => {
+  /** The page's elements, by key: what the snapshot says, and how each act step answers. */
+  type Field = { type: string; autocomplete?: string; name?: string; id?: string; label?: string; placeholder?: string };
+  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field };
+  const field = (f: Field) => ({ autocomplete: '', name: '', id: '', label: '', placeholder: '', ...f });
+  const ELEMENTS: El[] = [
+    { role: 'link', name: 'Home' },
+    { role: 'searchbox', name: 'Search', editable: true, field: field({ type: 'search' }) },
+    { role: 'combobox', name: 'Shipping', select: true, options: ['Standard', 'Express', 'Pickup', 'Pickup'] },
+    { role: 'button', name: 'Cancel', disabled: true },
+    { role: 'button', name: 'Buy', cover: { role: 'dialog', name: 'Cookie settings' } },
+  ];
+  /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
+  /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; unguard?: 'timeout' | 'gone' | 'expired' };
+  const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
+    // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
+    if (code.includes('__chordAgentGuard')) {
+      const op = code.includes('.arm(') ? 'guard' : 'unguard';
+      steps.push(op);
+      onAct?.(events, op);
+      if (op === 'guard') return true;
+      if (twist.unguard === 'gone') return null;
+      if (twist.unguard === 'expired') return { expired: true };
+      if (twist.unguard === 'timeout') return new Promise(() => undefined);
+      return { moved: Boolean(twist.moved), lost: Boolean(twist.lost) };
+    }
+    if (code.includes('new MutationObserver(() =>')) {
+      onAct?.(events, 'settle');
+      return true;
+    }
+    const args = JSON.parse(code.slice(code.lastIndexOf('})(') + 3, -1)) as { op?: string; key?: number; option?: string; token?: string };
+    if (args.op) {
+      steps.push(args.op);
+      onAct?.(events, args.op);
+      const el = ELEMENTS[args.key!]!;
+      const f = twist.field ?? el.field;
+      const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}) };
+      if (args.op === 'describe') {
+        if (args.option !== undefined) {
+          if (!el.select) return { ok: false, why: 'not-select' };
+          const found = el.options?.filter((o) => o === args.option).length ?? 0;
+          if (found !== 1) return { ok: false, why: found ? 'two-choices' : 'no-choice' };
+        }
+        return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : {}) };
+      }
+      if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
+      if (args.op === 'hit' && twist.noMove) return { ok: false, why: 'no-move' };
+      // The pointer at the point already: no move the first time; then the move off (seen, unless the page swallows it).
+      if (args.op === 'hit' && twist.there) {
+        const hits = steps.filter((x) => x === 'hit').length;
+        if (hits === 1) return { ok: false, why: 'no-move', there: true };
+        if (hits === 2) return twist.noMoveOff ? { ok: false, why: 'no-move' } : { ok: true, ...said };
+      }
+      if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
+      if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
+      if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
+      return { ok: true, ...said };
+    }
+    if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key })), cut: {} };
+    return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
+  };
+  const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
+
+  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean } } = {}) {
+    const steps: string[] = [];
+    const doings: unknown[] = [];
+    const kept: string[] = [];
+    const t = setup({
+      read: page(steps, opts.onAct, opts.twist),
+      actions: true,
+      answer: opts.answer ?? 'once',
+      ...(opts.onCard ? { onCard: opts.onCard } : {}),
+      act: { doing: (_n, d) => void doings.push(d), keepSite: (site) => void kept.push(site), ...opts.act },
+    });
+    const tab = t.scope.refs.refFor('n1');
+    await t.call('snapshot', { tab_id: tab });
+    const at = t.pages.get('n1')!.at;
+    at.deep = opts.deep ?? {};
+    return { ...t, tab, steps, doings, kept, at };
+  }
+
+  it('is unknown where the scope doesn’t let its agent act (the assistant, until M2e)', async () => {
+    const { scope, call } = setup({ read: page([]), actions: true });
+    expect(refusal(await call('click', { tab_id: scope.refs.refFor('n1'), ref: 'e1' })).error).toBe('Unknown tool click');
+  });
+
+  it('a click: the site card first, the element checked and pointed at, a click at its middle scaled by the zoom, the bar and the activity line', async () => {
+    const t = await acting();
+    t.at.zoom = 1.5;
+    const out = await t.call('click', { tab_id: t.tab, ref: 'e1' });
+    expect(out.isError).toBeFalsy();
+    expect(result(out).data).toMatchObject({ tab_id: t.tab, done: 'Clicked “Home”', navigated: false, url: 'https://news.test/a' });
+    expect(t.cards.map((c) => [c.kind, c.subject, c.description, c.tab])).toEqual([['site', 'news.test', 'click “Home”', 'n1']]);
+    expect(t.steps).toEqual(['describe', 'point', 'hit']);
+    expect(t.at.input).toEqual([
+      { type: 'mouseMove', x: 15, y: 30 },
+      { type: 'mouseDown', x: 15, y: 30, button: 'left', clickCount: 1 },
+      { type: 'mouseUp', x: 15, y: 30, button: 'left', clickCount: 1 },
+    ]);
+    expect(t.doings).toEqual([{ tool: 'click', name: 'Home', role: 'link' }, null]);
+    expect(t.activity.at(-1)).toBe('Clicked “Home”');
+    // Allow for now lasts as long as the agent: no second card on the site.
+    expect((await t.call('hover', { tab_id: t.tab, ref: 'e1' })).isError).toBeFalsy();
+    expect(t.cards).toHaveLength(1);
+    expect(t.kept).toEqual([]);
+  });
+
+  it('a no on the site lasts as long as the agent: no card again, the same refusal', async () => {
+    const t = await acting({ answer: 'deny' });
+    const site = 'The user didn’t let you act on news.test. Don’t act there again unless the user asks you to.';
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(site);
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(site);
+    expect(t.cards).toHaveLength(1);
+    expect(t.at.input).toEqual([]);
+  });
+
+  it('Always on this site is kept with the agent; a site kept before asks nothing', async () => {
+    const always = await acting({ answer: 'always' });
+    await always.call('click', { tab_id: always.tab, ref: 'e1' });
+    expect(always.kept).toEqual(['news.test']);
+    const known = await acting({ act: { siteAllowed: (site) => site === 'news.test' } });
+    expect((await known.call('click', { tab_id: known.tab, ref: 'e1' })).isError).toBeFalsy();
+    expect(known.cards).toEqual([]);
+  });
+
+  it('refuses, before anything is sent: a ref never made, a stale one, a shared tab, a covered or disabled element, text where none goes', async () => {
+    const t = await acting({ act: { mayAct: (node) => (node.id === 'n3' ? 'shared' : null) } });
+    // [tool call, what it says]
+    const table: [string, Record<string, unknown>, string][] = [
+      ['click', { ref: 'e99' }, 'There’s no element e99 in that tab. Call snapshot for the page’s elements.'],
+      ['click', { ref: 'e4' }, 'That element is disabled.'],
+      ['click', { ref: 'e5' }, 'Something is covering that element: dialog “Cookie settings”. Deal with it first, or call snapshot again.'],
+      ['type', { ref: 'e1', text: 'hi' }, 'That element doesn’t take text.'],
+      ['type', { ref: 'e2', text: 'x'.repeat(5001) }, 'type takes text of at most 5000 characters.'],
+      ['press_key', { ref: 'e2', key: 'Ctrl+W' }, 'press_key takes one of: Enter, Tab, Shift+Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown. Put text in with type.'],
+      ['select_option', { ref: 'e1', option: 'x' }, 'That element isn’t a list of choices. Use click for it.'],
+      // Never the agent's words back: a choice not on the page isn't quoted (and asks no card).
+      ['select_option', { ref: 'e3', option: 'Overnight' }, 'That list has no such choice. Call snapshot for its choices.'],
+    ];
+    for (const [tool, args, says] of table) expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused, `${tool} ${JSON.stringify(args)}`).toBe(says);
+    expect(t.at.input).toEqual([]);
+    expect(refusal(await t.call('click', { tab_id: t.scope.refs.refFor('n3'), ref: 'e1' })).refused).toBe('shared');
+    // A new snapshot: the earlier refs are stale.
+    await t.call('snapshot', { tab_id: t.tab });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+  });
+
+  it('type: a click into the field, its contents selected, the text put in as text, and Enter to submit', async () => {
+    const t = await acting();
+    const out = await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool scarf', submit: true });
+    expect(result(out).data['done']).toBe('Typed in “Search”');
+    // Each input with the page preload's guard up (guard, the focus checked, the input, unguard).
+    // Enter's keydown first, then everything checked again before its character (a keydown handler can move the focus).
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'select', 'guard', 'focused', 'unguard', 'guard', 'focused', 'focused', 'unguard']);
+    expect(t.at.text).toEqual(['wool scarf']);
+    expect((t.at.input as { type: string; keyCode?: string }[]).map((e) => `${e.type}${e.keyCode ? `:${e.keyCode}` : ''}`)).toEqual(['mouseMove', 'mouseDown', 'mouseUp', 'keyDown:Return', 'char:\r', 'keyUp:Return']);
+    // replace: false keeps what's there.
+    t.steps.length = 0;
+    await t.call('type', { tab_id: t.tab, ref: 'e2', text: ' red', replace: false });
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'guard', 'focused', 'unguard']);
+  });
+
+  it('press_key focuses the element and sends the key; select_option chooses by label', async () => {
+    const t = await acting();
+    await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Escape' });
+    // Focused, then the guard up and the focus checked under it (the guard takes what has the focus as the element).
+    // A key that types nothing goes in at once (its keydown may move the focus: that's it working).
+    expect(t.steps).toEqual(['describe', 'point', 'focus', 'guard', 'focused', 'unguard']);
+    expect(t.at.input).toEqual([
+      { type: 'keyDown', keyCode: 'Escape' },
+      { type: 'keyUp', keyCode: 'Escape' },
+    ]);
+    const chose = await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Express' });
+    expect(result(chose).data['done']).toBe('Chose “Express” in “Shipping”');
+  });
+
+  it('an action that took the page somewhere else says so, and the tab’s refs go stale', async () => {
+    // The click takes the page somewhere: it has navigated by the time the page settles.
+    const t = await acting({ onAct: (events, op) => void (op === 'settle' && events.emit('did-navigate')) });
+    const out = result(await t.call('click', { tab_id: t.tab, ref: 'e1' }));
+    expect(out.data).toMatchObject({ navigated: true, note: 'The page changed: call snapshot again before using refs from before.' });
+    expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+  });
+
+  it('a page that moved on between the check and the input: nothing is sent', async () => {
+    const t = await acting({ onAct: (events, op) => void (op === 'point' && events.emit('did-navigate')) });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    expect(t.at.input).toEqual([]);
+  });
+
+  // ---------- Neon's review of #110 ----------
+
+  it('the page went to another site while the element was described: no card for that site, nothing kept, nothing sent', async () => {
+    const t: Awaited<ReturnType<typeof acting>> = await acting({
+      onAct: (events, op) => {
+        if (op !== 'describe' || !t || t.at.url.includes('bank.test')) return;
+        t.at.url = 'https://bank.test/login';
+        events.emit('did-navigate');
+      },
+    });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    expect(t.cards).toEqual([]);
+    expect([t.agent.granted('site', 'bank.test'), t.agent.granted('site', 'news.test')]).toEqual([undefined, undefined]);
+    expect(t.at.input).toEqual([]);
+  });
+
+  it('a yes on the card is kept only once the action runs on that page: the page moving on meanwhile keeps nothing (a no is kept)', async () => {
+    const held: { t?: Awaited<ReturnType<typeof acting>> } = {};
+    const move = () => {
+      held.t!.at.url = 'https://news.test/other';
+      held.t!.pages.get('n1')!.events.emit('did-navigate');
+    };
+    const t = (held.t = await acting({ onCard: () => move() }));
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    expect(t.agent.granted('site', 'news.test')).toBeUndefined();
+    expect(t.at.input).toEqual([]);
+    // It runs: kept for the agent's life.
+    const u = await acting();
+    await u.call('click', { tab_id: u.tab, ref: 'e1' });
+    expect(u.agent.granted('site', 'news.test')).toBe('always');
+    // A no is kept whatever became of the page.
+    const v = await acting({ answer: 'deny' });
+    await v.call('click', { tab_id: v.tab, ref: 'e1' });
+    expect(v.agent.granted('site', 'news.test')).toBe('deny');
+  });
+
+  // [what the debugger sees, what the agent hears]: nothing is pressed or typed.
+  const deepRows: [string, string, { hit?: unknown; closed?: boolean; unavailable?: boolean }, string][] = [
+    ['click', 'a frame in a closed shadow root under the point', { hit: { ok: false, why: 'covered', cover: { role: 'frame', name: 'Inner ad' } } }, 'Something is covering that element: frame “Inner ad”. Deal with it first, or call snapshot again.'],
+    ['click', 'a file input in a closed shadow root under the point', { hit: { ok: false, why: 'file' } }, 'That opens a file picker: agents never choose files. Ask the user to.'],
+    ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
+    ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.'],
+    ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
+  ];
+  it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
+    const t = await acting({ deep });
+    const args = tool === 'type' ? { ref: 'e2', text: 'secret' } : tool === 'press_key' ? { ref: 'e2', key: 'Space' } : { ref: 'e1' };
+    expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused).toBe(says);
+    expect(t.at.text).toEqual([]);
+    expect((t.at.input as { type: string }[]).filter((e) => e.type !== 'mouseMove')).toEqual([]);
+    // Chord's world found (Runtime enabled and disabled at once, the page's console kept), and what the session held of
+    // the page let go of after.
+    if (!deep.unavailable) {
+      expect(t.at.debugging.slice(0, 3)).toEqual(['Page.getFrameTree', 'Runtime.enable', 'Runtime.disable']);
+      expect(t.at.debugging).not.toContain('Runtime.discardConsoleEntries');
+      expect(t.at.debugging.at(-1)).toBe('Runtime.releaseObjectGroup');
+    }
+  });
+
+  it('a second click at the point: the pointer moves off and back, and the page must see both moves before the press', async () => {
+    const t = await acting({ twist: { there: true } });
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+    expect((t.at.input as { type: string; x: number }[]).map((e) => `${e.type} ${e.x}`)).toEqual(['mouseMove 10', 'mouseMove 13', 'mouseMove 10', 'mouseDown 10', 'mouseUp 10']);
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'hit', 'hit']);
+    // Not seen off the point (a page swallowing moves there): no press.
+    const u = await acting({ twist: { there: true, noMoveOff: true } });
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect((u.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove', 'mouseMove']);
+  });
+
+  it('the guard always comes down, even when the input fails; a guard that doesn’t answer is a no', async () => {
+    const t = await acting({ twist: { unguard: 'timeout' } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+    // No guard in the same document (its own ran out, or the user took the tab): a no.
+    const u = await acting({ twist: { unguard: 'expired' } });
+    expect(refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+    // Another document (a submit's Enter navigated, committed): the guard went with it, and that's done.
+    const v = await acting({ twist: { unguard: 'gone' }, onAct: (events, op) => void (op === 'unguard' && events.emit('did-navigate')) });
+    expect(result(await v.call('type', { tab_id: v.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”' });
+  });
+
+  it('Enter on what isn’t a field: you take the tab after its keydown, so a no, and no character', async () => {
+    const held: { t?: Awaited<ReturnType<typeof acting>> } = {};
+    const t = (held.t = await acting({
+      onAct: (_events, op) => {
+        const sent = (held.t?.at.input ?? []) as { type: string }[];
+        if (op === 'focused' && sent.some((e) => e.type === 'keyDown')) held.t!.agent.pause('n1', true);
+      },
+    }));
+    expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+  });
+
+  it('no guard there, but no document committed either: a no', async () => {
+    const t = await acting({ twist: { unguard: 'gone' } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+  });
+
+  it('a navigation that starts and never commits (a 204, a download, window.stop): not another document, so a no', async () => {
+    const t = await acting({ twist: { unguard: 'expired' }, onAct: (events, op) => void (op === 'unguard' && events.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })) });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+  });
+
+  it('focus goes back only while the same Chord window is in front, only to the page that had it', () => {
+    const win = {};
+    const other = {};
+    const rows: [string, { page: string | null; window: object | null }, { page: string | null; window: object | null }, string | null][] = [
+      ['the agent’s page took it', { page: 'yours', window: win }, { page: 'agent', window: win }, 'yours'],
+      ['no page has it', { page: 'yours', window: win }, { page: null, window: win }, 'yours'],
+      ['Chord isn’t in front any more (another app)', { page: 'yours', window: win }, { page: null, window: null }, null],
+      ['another Chord window is in front', { page: 'yours', window: win }, { page: null, window: other }, null],
+      ['Chord wasn’t in front to begin with', { page: 'yours', window: null }, { page: 'agent', window: win }, null],
+      ['you went to another page meanwhile', { page: 'yours', window: win }, { page: 'another', window: win }, null],
+    ];
+    for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent'), what).toBe(back);
+  });
+
+  it('the guard’s own script went with the old document (it never answers): another document, so done', async () => {
+    const w = await acting({ twist: { unguard: 'timeout' }, onAct: (events, op) => void (op === 'unguard' && events.emit('did-navigate')) });
+    expect(result(await w.call('type', { tab_id: w.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”', navigated: true });
+  });
+
+  it('a field the page made a password field while the card was up: select_option and click refuse it at the point', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist, onCard: () => void (twist.field = field({ type: 'password' })) });
+    expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Express' })).refused).toBe('That field is now a password, code or card field: the user fills it. Ask them to.');
+    expect(t.steps).not.toContain('choose');
+  });
+
+  it('navigate and back: a pause that comes after the tab was loaded sends nothing', async () => {
+    const t: Awaited<ReturnType<typeof acting>> = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
+    expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect(t.at.loads).toEqual([]);
+  });
+
+  // ---------- Review 1 of #110 ----------
+
+  it('Stop during an action: nothing more goes in (the text, the Enter), though the action had started', async () => {
+    let stop = () => undefined as void;
+    const t = await acting({ onAct: (_events, op) => void (op === 'select' && stop()) });
+    stop = () => t.agent.stop();
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe(CONTROL_REFUSALS.stopped);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(t.at.text).toEqual([]);
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove', 'mouseDown', 'mouseUp']);
+  });
+
+  it('the user taking the tab while the site card waits: nothing is sent after it', async () => {
+    let pause = () => undefined as void;
+    const t = await acting({ onCard: () => pause() });
+    pause = () => t.agent.pause('n1', true);
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect(t.at.input).toEqual([]);
+  });
+
+  const ACT_REFUSALS_FOCUS = 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.';
+  // [what changed in the page, what the agent hears]: nothing goes in, before any card when it's known then.
+  const twists: [string, Twist, string][] = [
+    ['the field turned into a password field', { field: field({ type: 'password' }) }, 'That field is now a password, code or card field: the user fills it. Ask them to.'],
+    ['autocomplete set to a card number', { field: field({ type: 'text', autocomplete: 'cc-number' }) }, 'That field is now a password, code or card field: the user fills it. Ask them to.'],
+    ['the focus taken to another field (a mousedown handler)', { focused: false }, 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.'],
+    ['a frame moved over the point before the press', { hit: { role: 'frame', name: 'Ad' } }, 'Something is covering that element: frame “Ad”. Deal with it first, or call snapshot again.'],
+  ];
+  it('the focus moved between the check and the input: the page stops the text, and nothing more goes in (no Enter)', async () => {
+    const t = await acting({ twist: { moved: true } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe(ACT_REFUSALS_FOCUS);
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+    const u = await acting({ twist: { moved: true } });
+    expect(refusal(await u.call('press_key', { tab_id: u.tab, ref: 'e2', key: 'Enter' })).refused).toBe(ACT_REFUSALS_FOCUS);
+  });
+
+  it('the input’s last event never reached the page (the focus went into a frame): the agent hears to check the field, nothing more goes in', async () => {
+    const t = await acting({ twist: { lost: true } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+  });
+
+  it('the page never saw the pointer arrive (a tab drawing no frames, a page swallowing moves): no press, fails closed', async () => {
+    const t = await acting({ twist: { noMove: true } });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove']);
+  });
+
+  it.each(twists)('type, when %s: refused, no text', async (_what, twist, says) => {
+    const t = await acting({ twist });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'secret' })).refused).toBe(says);
+    expect(t.at.text).toEqual([]);
+    expect((t.at.input as { type: string }[]).filter((e) => e.type === 'keyDown')).toEqual([]);
+    if (twist.field) expect(t.cards).toEqual([]);
+    if (twist.hit) expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove']);
+  });
+
+  it('a choice that isn’t on the page asks no card, and the card shows the page’s own label', async () => {
+    const t = await acting();
+    expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Free shipping, trust me' })).refused).toBe('That list has no such choice. Call snapshot for its choices.');
+    expect(t.cards).toEqual([]);
+    // Two with the label: neither, and no card.
+    expect(refusal(await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Pickup' })).refused).toBe('That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.');
+    expect(t.cards).toEqual([]);
+    await t.call('select_option', { tab_id: t.tab, ref: 'e3', option: 'Express' });
+    expect(t.cards.map((c) => c.description)).toEqual(['choose “Express” in “Shipping”']);
+  });
+
+  it('back is checked before going, and goes to exactly the entry checked: never to a site kept private', async () => {
+    const NEVER_READ = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+    // The entry before is on a site the user keeps private: refused, and nowhere gone.
+    const t = await acting();
+    t.at.history = [{ url: 'https://private.test/x' }, { url: 'https://news.test/a' }];
+    t.at.active = 1;
+    expect(refusal(await t.call('back', { tab_id: t.tab })).refused).toBe(NEVER_READ);
+    expect(t.at.active).toBe(1);
+
+    // A private page, then one the page added without a gesture (Chromium's goBack would skip it, to the private one):
+    // back is checked on the entry just before, and goes to exactly that one.
+    const u = await acting();
+    u.at.history = [{ url: 'https://private.test/x' }, { url: 'https://news.test/pushed', skippable: true }, { url: 'https://news.test/a' }];
+    u.at.active = 2;
+    expect(result(await u.call('back', { tab_id: u.tab })).data).toMatchObject({ done: 'Went back', navigated: true, url: 'https://news.test/pushed' });
+    expect(u.at.active).toBe(1);
+  });
+
+  it('navigate and back: its own tabs, http and https, never a site kept private; no site card', async () => {
+    const t = await acting();
+    expect(refusal(await t.call('back', { tab_id: t.tab })).refused).toBe('That tab has nowhere to go back to.');
+    expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'javascript:alert(1)' })).refused).toBe('navigate takes an http or https address of at most 2048 characters.');
+    expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://private.test/x' })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    const went = result(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/returns?token=1' }));
+    expect(went.data).toMatchObject({ done: 'Went to news.test/returns', navigated: true });
+    expect(t.at.loads).toEqual(['https://news.test/returns?token=1']);
+    expect(result(await t.call('back', { tab_id: t.tab })).data).toMatchObject({ done: 'Went back', navigated: true });
+    expect(t.cards).toEqual([]);
+    expect(t.doings).toEqual([{ tool: 'navigate', to: 'news.test/returns' }, null, { tool: 'back' }, null]);
   });
 });

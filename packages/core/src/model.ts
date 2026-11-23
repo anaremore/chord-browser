@@ -232,6 +232,10 @@ export interface AgentLive {
    * yours you shared with the agent (M1e; `chordId` is then its chord's, or '' while it has none).
    */
   state: 'working' | 'paused' | 'stopped' | 'shared';
+  /** Working (M2c): what it's doing now, after its name (core's barDoing: `is clicking “Start a return”`). */
+  doing?: string;
+  /** Working, with a card of its up (a site's, M2c): the bar says it's waiting for you. */
+  waiting?: boolean;
 }
 
 export interface LiveTab {
@@ -528,12 +532,29 @@ export interface AgentAllowance {
   profileId: ProfileId;
   allowedAt: number;
   lastUsedAt: number;
+  /**
+   * Sites it may act on without asking (S18 M2c, the site card's *Always on this site*): registrable domains, newest
+   * last, at most AGENT_ACT_SITES_MAX (the oldest go). Settings → Agents lists them, each with Remove.
+   */
+  actSites?: string[];
 }
+
+/** At most this many sites an agent may act on without asking. */
+export const AGENT_ACT_SITES_MAX = 100;
 
 /** At most this many agents allowed for good. */
 export const AGENTS_ALLOWED_MAX = 50;
 
 /** A list as saved or sent, kept to what an allowance can be. */
+/** An allowance's sites, kept to what a site can be: a host-like name (a registrable domain, or an address with its port), once each, the newest kept. */
+function actSitesOf(value: unknown): { actSites?: string[] } {
+  if (!Array.isArray(value)) return {};
+  // As a site is written now (core's normalHost, loginSite): lowercase, without a fully qualified name's trailing dot
+  // (an older one kept with it would never match again).
+  const sites = [...new Set(value.filter((s): s is string => typeof s === 'string' && /^[a-z0-9.:[\]-]{1,253}$/i.test(s)).map((s) => s.toLowerCase().replace(/\.+(?=$|:)/, '')).filter(Boolean))];
+  return sites.length ? { actSites: sites.slice(-AGENT_ACT_SITES_MAX) } : {};
+}
+
 export function cleanAgentsAllowed(value: unknown): AgentAllowance[] {
   if (!Array.isArray(value)) return [];
   const out: AgentAllowance[] = [];
@@ -550,6 +571,7 @@ export function cleanAgentsAllowed(value: unknown): AgentAllowance[] {
       profileId: a['profileId'].slice(0, 100),
       allowedAt: time(a['allowedAt']),
       lastUsedAt: time(a['lastUsedAt']),
+      ...actSitesOf(a['actSites']),
     });
   }
   if (out.length <= AGENTS_ALLOWED_MAX) return out;

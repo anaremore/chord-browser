@@ -61,7 +61,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
-import type { AgentConnectCard, ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
+import type { AgentConnectCard, AgentSiteCard, ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
 import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
 import { createChordTheme, durations, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
@@ -270,7 +270,7 @@ export class Browser {
   /** Some window shows an agent's bar (S18): syncAgentBars has bars to take down even once no agent is left. */
   private agentBars = false;
   /** An outside agent's connect card for a window (S18 M1d). Set by main once there's an agent service. */
-  agentCardFor: ((windowId: WindowId) => AgentConnectCard | null) | null = null;
+  agentCardFor: ((windowId: WindowId) => AgentConnectCard | AgentSiteCard | null) | null = null;
 
   /** Settings → Agents asks for its view again (an agent connected, went, stopped or continued). */
   agentsChanged(): void {

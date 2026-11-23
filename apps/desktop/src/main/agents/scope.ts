@@ -7,7 +7,7 @@
  * one, it hears so. Never-readable pages (Chord's own, a site on your *Never*
  * list) stay refused, and a tab on a *Never* site isn't even listed.
  */
-import { CONTROL_WAIT_MS, isNeverReadable, nodeOf, nodesOfChord, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, CONTROL_WAIT_MS, isNeverReadable, nodeOf, nodesOfChord, TabRefs, type BarDoing, type NodeId, type State, type TabNode } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
 import type { ControlScope } from '../control/scope';
 import { siteOfUrl } from './shares';
@@ -24,6 +24,8 @@ export interface AgentScopeDeps {
   shared?(): readonly NodeId[];
   /** The site a shared tab was shared on: it's never read anywhere else. */
   sharedSite?(nodeId: NodeId): string | null;
+  /** Acting on pages (M2c): the sites it may act on for good, keeping one, and the bar's wording. Absent, no acting. */
+  act?: { siteAllowed(site: string): boolean; keepSite(site: string): void; doing(nodeId: NodeId, doing: BarDoing | null): void };
 }
 
 /** A web address on the *Never* list (a blank or unloaded page is none). */
@@ -52,6 +54,18 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     agent,
     refs,
     actions: deps.actions ?? false,
+    // Acting (M2c): its own tabs only; a tab you share stays read-only (M2's answer).
+    ...(deps.actions && deps.act
+      ? {
+          act: {
+            mayAct: (node: TabNode) => (own(node) ? null : sharedNow(node.id) || everShared.has(node.id) ? ACT_REFUSALS.sharedReadOnly : NOT_YOURS),
+            siteOf: siteOfUrl,
+            siteAllowed: deps.act.siteAllowed,
+            keepSite: deps.act.keepSite,
+            doing: deps.act.doing,
+          },
+        }
+      : {}),
     memory: { pdfs: new Map(), form: null, nextField: 1, read: new Set() },
     off: () => null,
     tabs: () => {

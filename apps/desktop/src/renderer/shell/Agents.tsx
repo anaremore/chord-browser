@@ -72,7 +72,9 @@ export function AgentBar({ agent, nodeId }: { agent: AgentLive; nodeId: string }
       </div>
     );
   }
-  const text = working ? `${agent.name} is reading this tab` : agent.state === 'paused' ? 'Paused while you use this tab' : `${agent.name} is stopped`;
+  // Working: what it's doing (M2c: `is clicking “Start a return”`), waiting on a card of yours, or reading.
+  const doing = agent.waiting ? 'is waiting for you' : (agent.doing ?? 'is reading this tab');
+  const text = working ? `${agent.name} ${doing}` : agent.state === 'paused' ? 'Paused while you use this tab' : `${agent.name} is stopped`;
   return (
     <div className={styles.bar} data-working={working || undefined} role="status">
       {working && <span aria-hidden>✳</span>}

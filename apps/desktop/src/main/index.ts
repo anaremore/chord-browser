@@ -38,6 +38,7 @@ import { AssistantService } from './assistant/service';
 import { watchAgents, type AgentSwitch } from './agents/switch';
 import type { AntigravityUndos } from './agents/antigravity';
 import type { ConnectCards } from './agents/connect';
+import type { SiteCards } from './agents/site-cards';
 import type { SetupWhere } from './agents/settings';
 import type { AgentInputEvent } from './control/input';
 import { pageOf } from './view-page';
@@ -114,6 +115,7 @@ let assistant: AssistantService | undefined;
 let agents: AgentSwitch | null = null;
 /** The connect card (S18 M1d), made with the agents' service. */
 let connectCards: ConnectCards | null = null;
+let siteCards: SiteCards | null = null;
 let importer: Importer | undefined;
 let exporter: Exporter | undefined;
 let fileImporter: FileImporter | undefined;
@@ -531,7 +533,7 @@ function registerIpc(): void {
   // The connect card (S18 M1d): only the popover of the window it shows in answers it.
   handle('agents:card', ({ id, answer }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');
-    if (windowId) connectCards?.answer(id, answer, windowId);
+    if (windowId && !siteCards?.answer(id, answer, windowId)) connectCards?.answer(id, answer, windowId);
   });
   // Settings → Agents (S18 M1d): its view, Remove an allowed agent, let a stopped one continue.
   handle('settings:agents', async (request) => {
@@ -541,6 +543,13 @@ function registerIpc(): void {
     if (request.do === 'remove') {
       browser!.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: state.settings.agentsAllowed.filter((a) => !(a.name === request.name && a.parent === request.parent)) } });
       service?.disconnect(request.name, request.parent);
+    } else if (request.do === 'removeSite') {
+      // It asks again there, from its next action on.
+      browser!.store.dispatch({
+        t: 'settings.set',
+        settings: { agentsAllowed: state.settings.agentsAllowed.map((a) => (a.name === request.name && a.parent === request.parent ? { ...a, actSites: (a.actSites ?? []).filter((s) => s !== request.site) } : a)) },
+      });
+      service?.forgetSite(request.name, request.parent, request.site);
     } else if (request.do === 'continue') service?.continue(request.id);
     const connected = [...(service?.connections ?? [])].map((held) => ({
       id: held.connection.agent.id,
@@ -549,7 +558,7 @@ function registerIpc(): void {
       stopped: held.connection.agent.isStopped,
       chordId: service?.chords?.chordOf(held.connection.agent) ?? null,
     }));
-    return agentsView(browser!.store.state, connected, setupLines(setupWhere()));
+    return { ...agentsView(browser!.store.state, connected, setupLines(setupWhere())), acting: agentActions({ packaged: app.isPackaged }) };
   });
   // Settings → Agents' *Add to Antigravity* (S18): Chord's own entry in its MCP config, and its Undo (the last few kept).
   let antigravity: AntigravityUndos | null = null;
@@ -1115,7 +1124,7 @@ if (!app.requestSingleInstanceLock()) {
       store: browser.store,
       devSwitch: devEnv('CHORD_AGENTS'),
       make: async () => {
-        const [{ AgentService }, { ConnectCards }] = await Promise.all([import('./agents/service'), import('./agents/connect')]);
+        const [{ AgentService }, { ConnectCards }, { SiteCards }] = await Promise.all([import('./agents/service'), import('./agents/connect'), import('./agents/site-cards')]);
         const helper = process.platform === 'win32' ? join(app.getAppPath(), 'out/window-owner/window-owner.exe') : null;
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
         // The window used last (never a private one): where the connect card and an agent's toasts go.
@@ -1125,9 +1134,18 @@ if (!app.requestSingleInstanceLock()) {
         };
         const cards = new ConnectCards({ store: agentBrowser.store, lastWindow: () => lastWindow()?.id ?? null, changed: () => agentBrowser.refreshPopovers() });
         connectCards = cards;
-        agentBrowser.agentCardFor = (windowId) => cards.cardFor(windowId);
-        agentBrowser.agentWindowClosed = (windowId) => cards.windowClosed(windowId);
-        agentBrowser.agentWindowFocused = (windowId) => cards.windowFocused(windowId);
+        // The site card (M2c) shows where the connect card does, after it: one card at a time in a window.
+        const sites = new SiteCards({ lastWindow: () => lastWindow()?.id ?? null, changed: () => agentBrowser.refreshPopovers() });
+        siteCards = sites;
+        agentBrowser.agentCardFor = (windowId) => cards.cardFor(windowId) ?? sites.cardFor(windowId);
+        agentBrowser.agentWindowClosed = (windowId) => {
+          cards.windowClosed(windowId);
+          sites.windowClosed(windowId);
+        };
+        agentBrowser.agentWindowFocused = (windowId) => {
+          cards.windowFocused(windowId);
+          sites.windowFocused(windowId);
+        };
         // Sharing a tab (M1e): the tab menu and the command bar, which offer it only when it can be done. Never in a
         // private window.
         agentBrowser.agentShare = (windowId, nodeId, agentId) => {
@@ -1140,6 +1158,8 @@ if (!app.requestSingleInstanceLock()) {
           userData: app.getPath('userData'),
           browser: agentBrowser,
           ask: (who, signal) => cards.ask(who, signal),
+          askSite: (question, signal) => sites.ask(question, signal),
+          allowances: { list: () => agentBrowser.store.state.settings.agentsAllowed, set: (agentsAllowed) => agentBrowser.store.dispatch({ t: 'settings.set', settings: { agentsAllowed } }) },
           changed: () => agentBrowser.agentsChanged(),
           helper: helper && existsSync(helper) ? helper : null,
           actions: agentActions({ packaged: app.isPackaged }),
@@ -1380,6 +1400,39 @@ if (!app.requestSingleInstanceLock()) {
             times.push(performance.now() - started);
           }
           return { times, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
+        },
+        /**
+         * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
+         * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
+         */
+        agentActTimes: async (url: string, runs: number) => {
+          const [{ snapshotPage }, { actOnPage }, { openDeep }] = await Promise.all([import('./control/snapshot'), import('./control/act'), import('./control/deep')]);
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return null;
+          const read = await snapshotPage(contents, 'timing', 'timing-act');
+          const keys = read?.nodes.flatMap((n) => (n.key === undefined ? [] : [n.key])) ?? [];
+          const key = keys[Math.floor(keys.length / 2)];
+          if (key === undefined) return null;
+          const times: number[] = [];
+          // Neon's review of #110: the debugger's session for a press or typing (attach, find Chord's world, the hit
+          // test, the closed-root check, let go), on the same element.
+          const deep: number[] = [];
+          for (let i = 0; i < runs; i++) {
+            const started = performance.now();
+            const answer = await actOnPage(contents, 'timing', 'timing-act', key, { op: 'point', highlight: false });
+            times.push(performance.now() - started);
+            if (!answer.ok) return { times, deep, failed: answer.why };
+            const opened = performance.now();
+            const session = await openDeep(contents, 'timing', 'timing-act', key);
+            if (!session) return { times, deep, failed: 'no session' };
+            const scroll = (await contents.executeJavaScript('[scrollX, scrollY]')) as [number, number];
+            const hit = await session.hit(answer.x! + scroll[0], answer.y! + scroll[1]);
+            const open = await session.open();
+            await session.close();
+            deep.push(performance.now() - opened);
+            if (!hit.ok || !open.ok) return { times, deep, failed: `deep: ${JSON.stringify(hit.ok ? open : hit)}` };
+          }
+          return { times, deep };
         },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),

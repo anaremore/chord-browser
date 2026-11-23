@@ -31,7 +31,9 @@ export function loginOrigin(url: string): string | null {
 export function loginSite(origin: string): string | null {
   const clean = loginOrigin(origin);
   if (!clean) return null;
-  const { hostname, port } = new URL(clean);
+  const { port } = new URL(clean);
+  // One site however it's written: a fully qualified name's trailing dot goes (`bank.example.`, `localhost.`).
+  const hostname = new URL(clean).hostname.replace(/\.+$/, '');
   const host = hostname.startsWith('[') ? hostname.slice(1, -1) : hostname;
   const result = parse(host, { allowPrivateDomains: true });
   if (result.domain && !result.isIp) return result.domain;

@@ -108,6 +108,8 @@ function AntigravityRow() {
 
 export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
   const [view, setView] = useState<AgentsView | null>(null);
+  // The sites each agent may act on (M2c): only in a build where agents act on pages.
+  const sitesShown = Boolean(view?.acting);
   const enabled = snapshot.settings.agentsEnabled;
   useEffect(() => {
     const refresh = () => void api.settings.agents({ do: 'view' }).then(setView);
@@ -160,15 +162,32 @@ export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
           ) : (
             <div className={styles.group}>
               {view.allowed.map((a) => (
-                <div key={`${a.name}\u0000${a.parent}`} className={local.agent}>
-                  <Tile name={a.name} />
-                  <div className={styles.rowText}>
-                    <span className={styles.rowLabel}>{a.name}</span>
-                    <span className={styles.rowDescription}>{allowedLine(a)}</span>
+                <div key={`${a.name}\u0000${a.parent}`}>
+                  <div className={local.agent}>
+                    <Tile name={a.name} />
+                    <div className={styles.rowText}>
+                      <span className={styles.rowLabel}>{a.name}</span>
+                      <span className={styles.rowDescription}>{allowedLine(a)}</span>
+                    </div>
+                    <button type="button" className={styles.linkButton} aria-label={`Remove ${a.name}`} onClick={() => void api.settings.agents({ do: 'remove', name: a.name, parent: a.parent }).then(setView)}>
+                      Remove
+                    </button>
                   </div>
-                  <button type="button" className={styles.linkButton} aria-label={`Remove ${a.name}`} onClick={() => void api.settings.agents({ do: 'remove', name: a.name, parent: a.parent }).then(setView)}>
-                    Remove
-                  </button>
+                  {/* The sites it may act on without asking (M2c, the site card's Always on this site), each with Remove. */}
+                  {sitesShown && (
+                    <div className={local.sites} role="group" aria-label={`Sites ${a.name} can click and type on`}>
+                      {a.sites.length > 0 && <p className={local.sitesCaption}>Can click and type on</p>}
+                      {a.sites.map((site) => (
+                        <div key={site} className={local.site}>
+                          <span className={local.siteName}>{site}</span>
+                          <button type="button" className={styles.linkButton} aria-label={`Remove ${site} for ${a.name}`} onClick={() => void api.settings.agents({ do: 'removeSite', name: a.name, parent: a.parent, site }).then(setView)}>
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      <p className={local.sitesCaption}>{a.sites.length > 0 ? 'It asks before acting on any other site.' : 'Asks before acting on any site.'}</p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -330,6 +330,11 @@ describe('Always allow', () => {
     expect((await borrowed).grant).toBe('deny');
   });
 
+  it('sites kept for good are as a site is written now: lowercase, no trailing dot (an older one would never match)', () => {
+    const [kept] = cleanAgentsAllowed([{ name: 'Codex', parent: '/bin/codex', profileId: 'default', allowedAt: 1, lastUsedAt: 1, actSites: ['Shop.Example.', 'shop.example', 'localhost.:8080', '.'] }]);
+    expect(kept!.actSites).toEqual(['shop.example', 'localhost:8080']);
+  });
+
   it('over the cap, the ones used longest ago go', () => {
     const rows = Array.from({ length: AGENTS_ALLOWED_MAX + 2 }, (_, i) => ({ name: `Agent ${i}`, parent: `/bin/a${i}`, profileId: 'default', allowedAt: i, lastUsedAt: i === 0 ? 10_000 : i }));
     const kept = cleanAgentsAllowed(rows);
@@ -417,8 +422,8 @@ describe('Settings → Agents', () => {
       setup: { claude: 'c', codex: 'x' },
       stopped: [{ id: 'agent:2', name: 'Codex', tabs: 0 }],
       allowed: [
-        { name: 'Claude Code', parent: CLAUDE_PATH, signIns: 'Work’s sign-ins', connected: true, tabs: 0, lastUsedAt: 5 },
-        { name: 'Codex', parent: '/opt/codex', signIns: '', connected: false, tabs: 0, lastUsedAt: 6 },
+        { name: 'Claude Code', parent: CLAUDE_PATH, signIns: 'Work’s sign-ins', connected: true, tabs: 0, lastUsedAt: 5, sites: [] },
+        { name: 'Codex', parent: '/opt/codex', signIns: '', connected: false, tabs: 0, lastUsedAt: 6, sites: [] },
       ],
     });
   });

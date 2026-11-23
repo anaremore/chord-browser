@@ -240,7 +240,7 @@ export class ConnectCards {
     const list = this.deps.store.state.settings.agentsAllowed;
     const before = list.find(same);
     const others = list.filter((a) => !same(a));
-    this.deps.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [...others, { name, parent, profileId, allowedAt: before?.allowedAt ?? now, lastUsedAt: now }] } });
+    this.deps.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [...others, { name, parent, profileId, allowedAt: before?.allowedAt ?? now, lastUsedAt: now, ...(before?.actSites ? { actSites: before.actSites } : {}) }] } });
     return parent;
   }
 

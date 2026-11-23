@@ -82,6 +82,17 @@ describe('Assistant: what can be read', () => {
     expect(isNeverReadable('https://example.com/', [])).toBe(false);
   });
 
+  // Neon's review of #110: one host, however it's written.
+  it.each([
+    ['a trailing dot', 'https://bank.example./login', ['bank.example']],
+    ['a trailing dot, a subdomain', 'https://www.sub.bank.example./', ['bank.example']],
+    ['a trailing dot in the entry', 'https://bank.example/', ['bank.example.']],
+    ['capitals in the entry', 'https://bank.example/', ['Bank.EXAMPLE']],
+    ['an IDN entry, the page in punycode', 'https://xn--bcher-kva.example/', ['bücher.example']],
+    ['an IDN page, a punycode entry', 'https://bücher.example/', ['xn--bcher-kva.example']],
+    ['an origin entry with a trailing dot page', 'https://bank.example./', ['https://bank.example']],
+  ])('never reads a site marked Never written with %s', (_what, url, never) => expect(isNeverReadable(url, never)).toBe(true));
+
   it('asks before reading beyond what’s attached, unless the scope or a grant allows it', () => {
     const base = { attached: false, sameChord: true, tool: 'read_tab' as const, granted: false };
     expect(readNeedsApproval({ ...base, scope: 'ask' })).toBe(true);

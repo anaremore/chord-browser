@@ -61,6 +61,8 @@ export interface ConnectionDeps {
   allowedProfile?(): ProfileId | null;
   /** How long open_tab waits for its page to load (LOAD_MS). */
   loadMs?: number;
+  /** Acting (M2c): the sites it may act on for good (its allowance's), and keeping one (*Always on this site*). */
+  sites?: { allowed(site: string): boolean; keep(site: string): void };
 }
 
 /** What open_tab waits for its page: at most this long (S18 §5). */
@@ -96,7 +98,19 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   const agent = new ControlAgent(`agent:${++lastAgent}`, deps.present);
   const neverSites = () => deps.neverSites?.() ?? [];
   const chordId = () => deps.chords?.chordOf(agent) ?? null;
-  const scope = agentScope(agent, { actions: deps.actions ?? true, state: () => deps.browser.store.state, chordId, neverSites, shared: () => deps.shares?.()?.tabsOf(agent.id) ?? [], sharedSite: (id) => deps.shares?.()?.siteOf(id) ?? null });
+  const scope = agentScope(agent, {
+    actions: deps.actions ?? true,
+    state: () => deps.browser.store.state,
+    chordId,
+    neverSites,
+    shared: () => deps.shares?.()?.tabsOf(agent.id) ?? [],
+    sharedSite: (id) => deps.shares?.()?.siteOf(id) ?? null,
+    act: {
+      siteAllowed: (site) => deps.sites?.allowed(site) ?? false,
+      keepSite: (site) => deps.sites?.keep(site),
+      doing: (nodeId, doing) => deps.chords?.doing(nodeId, doing),
+    },
+  });
   /** When it last called a tool: the share key shares with the agent that called last. */
   let lastCallAt = 0;
   const waitMs = deps.waitMs ?? CONTROL_WAIT_MS;

@@ -89,9 +89,315 @@ async function answer(app: ElectronApplication, name: string, button: 'Deny' | '
   await expect(card).toHaveCount(0);
 }
 
+/** The shop's results (M2c): a button that says it worked, one under a banner, a list of choices. */
+const shopResults = (q: string) =>
+  `<title>Results</title><main><h1>Results for ${q}</h1>` +
+  '<button onclick="document.getElementById(\'log\').textContent = \'return started\'">Start a return</button><p id=log></p>' +
+  '<div style="position:relative;inline-size:200px"><button>Under the banner</button><div role=dialog aria-label="Cookie settings" style="position:absolute;inset:-4px;background:white">Cookies</div></div>' +
+  '<label>Shipping <select onchange="document.getElementById(\'log\').textContent = \'shipping \' + this.value"><option>Standard</option><option>Express</option><option>Pickup</option><option>Pickup</option><optgroup label="Later" disabled><option>Overnight</option></optgroup></select></label>' +
+  // Review 1 of #110: a field that sends the focus to a password field; one the page turns into a password field; a
+  // clickable element under its own frame.
+  '<input aria-label="Gift message" onfocus="document.getElementById(\'pw\').focus()"> <input type=password id=pw aria-label="Password">' +
+  '<input aria-label="Nickname" id=nick> <button onclick="document.getElementById(\'nick\').type = \'password\'">Lock nickname</button>' +
+  '<div role=button tabindex=0 style="position:relative;inline-size:160px;block-size:40px">Framed offer<iframe title="Ad" srcdoc="ad" style="position:absolute;inset:0;inline-size:100%;block-size:100%;border:0"></iframe></div>' +
+  // Review 2 of #110: a button that, when the pointer comes over it, puts a frame over itself (the frame would get the
+  // click: the last hit test must wait for the pointer's move to have reached the page).
+  '<div role=button tabindex=0 style="inline-size:160px;block-size:40px" onclick="document.getElementById(\'log\').textContent = \'hover deal clicked\'" ' +
+  'onmouseenter="const r = this.getBoundingClientRect(), f = document.createElement(\'iframe\'); f.title = \'Popup\'; f.srcdoc = \'x\'; ' +
+  'f.style.cssText = \'position:absolute;border:0;left:\' + (r.left + scrollX) + \'px;top:\' + (r.top + scrollY) + \'px;width:\' + r.width + \'px;height:\' + r.height + \'px\'; document.body.append(f)">Hover deal</div>' +
+  // Review 3 of #110: a button the page swallows pointer moves over (its own capture listener, put first): the move is
+  // never seen, so the click fails closed.
+  '<button id=sticky onclick="document.getElementById(\'log\').textContent = \'sticky deal clicked\'">Sticky deal</button>' +
+  // Review 4: one button clicked twice at one point; one that, clicked, puts another in its place, over which the page
+  // swallows moves too (so the move to it is never seen: only the last one, over the button gone, was).
+  '<button style="inline-size:160px;block-size:40px" onclick="this.dataset.n = Number(this.dataset.n || 0) + 1; document.getElementById(\'log\').textContent = \'counted \' + this.dataset.n">Count</button>' +
+  '<button style="inline-size:160px;block-size:40px" onclick="swapDeal(this)">Swap</button>' +
+  '<script>addEventListener(\'mousemove\', (e) => { if (String(e.target.id).startsWith(\'sticky\')) e.stopImmediatePropagation(); }, true);' +
+  'function swapDeal(old) { const b = document.createElement(\'button\'); b.id = \'sticky-b\'; b.textContent = \'Swapped deal\'; b.style.cssText = old.style.cssText; ' +
+  'b.onclick = () => { document.getElementById(\'log\').textContent = \'swapped deal clicked\'; }; old.replaceWith(b); }</script></main>';
+
+/** A ref from a snapshot's outline, by its line's start (`button "Start a return"`). */
+const refOf = (outline: string, line: string) => {
+  const found = outline.split('\n').find((l) => l.trim().startsWith(`- ${line} [ref=`));
+  if (!found) throw new Error(`No "${line}" in\n${outline}`);
+  return /\[ref=(e\d+)\]/.exec(found)![1]!;
+};
+
+/* ---------- Acting (S18 M2c) ---------- */
+
+const siteCardOf = (popover: Page, name: string) => popover.getByRole('alertdialog', { name: new RegExp(`^Let ${name} click and type on `) });
+
+test('acting: an agent types, clicks and chooses in its own tab; the first action on the site asks; refs go stale; a covered element is named (M2c)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/shop` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    // Its tab on screen, so its bar shows.
+    await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Shop/ }).click();
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const front = await snap();
+    const search = refOf(front, 'searchbox "Search orders"');
+
+    // The first action on the site asks: what it wants to do, in Chord's words; Codex was let in once, so no Always.
+    const typing = mcp.call('type', { tab_id: 'a1', ref: search, text: 'wool', submit: true });
+    const popover = await pageWhere(app, isPopover);
+    const card = siteCardOf(popover, 'Codex');
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card).toContainText(`Let Codex click and type on 127.0.0.1:${new URL(site.origin).port}?`);
+    await expect(card).toContainText('It wants to type in “Search orders”.');
+    await expect(card.getByRole('button', { name: 'Always on this site' })).toHaveCount(0);
+    await popover.waitForTimeout(600);
+    await card.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const typed = JSON.parse((await typing).text) as { data: { done: string; navigated: boolean; url: string } };
+    expect(typed.data).toMatchObject({ done: 'Typed in “Search orders”', navigated: true });
+    expect(typed.data.url).toBe(`${site.origin}/shop/results?q=wool`);
+
+    // The page changed: the front page's refs are stale.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: search })).text).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    const results = await snap();
+    // On the same site, no card again; the bar says what it's doing.
+    const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Start a return"') });
+    expect(JSON.parse(clicked.text)).toMatchObject({ data: { done: 'Clicked “Start a return”', navigated: false } });
+    await expect(shell.getByRole('status').filter({ hasText: 'Codex is clicking “Start a return”' })).toBeVisible();
+    await expect(siteCardOf(popover, 'Codex')).toHaveCount(0);
+    expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).toContain('return started');
+    // Covered: nothing is sent, and the agent hears what covers it.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Under the banner"') })).text).toBe('Something is covering that element: dialog “Cookie settings”. Deal with it first, or call snapshot again.');
+    // Review 1 of #110. The focus sent to a password field: nothing typed. A field turned into a password field after
+    // the snapshot: nothing typed. A click that would land on a frame: refused, by the frame's title. A choice the page
+    // doesn't have: refused, never quoted back.
+    expect((await mcp.call('type', { tab_id: 'a1', ref: refOf(results, 'textbox "Gift message"'), text: 'typed-into-the-wrong-field' })).text).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Lock nickname"') })).text)).toMatchObject({ data: { done: 'Clicked “Lock nickname”' } });
+    expect((await mcp.call('type', { tab_id: 'a1', ref: refOf(results, 'textbox "Nickname"'), text: 'typed-into-a-password' })).text).toBe('That field is now a password, code or card field: the user fills it. Ask them to.');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Framed offer"') })).text).toBe('Something is covering that element: frame “Ad”. Deal with it first, or call snapshot again.');
+    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(results, 'combobox "Shipping"'), option: 'Free, trust me' })).text).toBe('That list has no such choice. Call snapshot for its choices.');
+    // Review 2 of #110: a frame put over the button by its mouseenter handler, when the pointer came: refused, nothing
+    // clicked. A choice in a disabled group isn't one; two choices by one name, neither.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Hover deal"') })).text).toBe('Something is covering that element: frame “Popup”. Deal with it first, or call snapshot again.');
+    expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).not.toContain('hover deal clicked');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Sticky deal"') })).text).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).not.toContain('sticky deal clicked');
+    // Review 4: twice at one point, both clicks go in; a button that took another's place at the point, with the move
+    // to it never seen, is refused (the last move seen there was over the one gone).
+    const content = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Count"') })).text)).toMatchObject({ data: { done: 'Clicked “Count”' } });
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Count"') })).text)).toMatchObject({ data: { done: 'Clicked “Count”' } });
+    expect(await content()).toContain('counted 2');
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(results, 'button "Swap"') })).text)).toMatchObject({ data: { done: 'Clicked “Swap”' } });
+    const swapped = await snap();
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(swapped, 'button "Swapped deal"') })).text).toBe('The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.');
+    expect(await content()).not.toContain('swapped deal clicked');
+    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(swapped, 'combobox "Shipping"'), option: 'Overnight' })).text).toBe('That list has no such choice. Call snapshot for its choices.');
+    expect((await mcp.call('select_option', { tab_id: 'a1', ref: refOf(swapped, 'combobox "Shipping"'), option: 'Pickup' })).text).toBe('That list has more than one choice by that name, so nothing was chosen. Ask the user to choose.');
+    // A choice by its label.
+    const chose = await mcp.call('select_option', { tab_id: 'a1', ref: refOf(swapped, 'combobox "Shipping"'), option: 'Express' });
+    expect(JSON.parse(chose.text)).toMatchObject({ data: { done: 'Chose “Express” in “Shipping”' } });
+    expect((JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content).toContain('shipping Express');
+    // Somewhere else, and back.
+    expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/shop` })).text)).toMatchObject({ data: { done: `Went to 127.0.0.1:${new URL(site.origin).port}/shop`, navigated: true } });
+    expect(JSON.parse((await mcp.call('back', { tab_id: 'a1' })).text)).toMatchObject({ data: { done: 'Went back', navigated: true, url: `${site.origin}/shop/results?q=wool` } });
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('Always on this site: offered to an agent you always allow, kept, listed in Settings; Remove there makes it ask again (M2c)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CLAUDE);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/shop` });
+    await answer(app, 'Claude Code', 'Always allow');
+    await opening;
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const host = `127.0.0.1:${new URL(site.origin).port}`;
+    const clicking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "All orders"') });
+    const popover = await pageWhere(app, isPopover);
+    const card = siteCardOf(popover, 'Claude Code');
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await card.getByRole('button', { name: 'Always on this site' }).click();
+    expect(JSON.parse((await clicking).text)).toMatchObject({ data: { done: 'Clicked “All orders”', navigated: true } });
+    // Settings → Agents lists it under the agent, with Remove.
+    const settings = await agentsSettings(app, shell);
+    const sites = settings.getByRole('group', { name: 'Sites Claude Code can click and type on' });
+    await expect(sites).toContainText('Can click and type on');
+    await expect(sites).toContainText(host);
+    await sites.getByRole('button', { name: `Remove ${host} for Claude Code` }).click();
+    await expect(sites).toContainText('Asks before acting on any site.');
+    // It asks again there, mid-task too: a no this time, which lasts.
+    const again = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Start a return"') });
+    await expect(siteCardOf(popover, 'Claude Code')).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCardOf(popover, 'Claude Code').getByRole('button', { name: 'Deny', exact: true }).click();
+    expect((await again).text).toBe(`The user didn’t let you act on ${host}. Don’t act there again unless the user asks you to.`);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 /** A list of rows of links, buttons and text: `rows` of 5 elements each. */
 const rowsPage = (rows: number) =>
   `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
+
+test('acting: what a page hides from scripts, its own capture listeners, file inputs, and your click (Neon’s review of #110)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/neon` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const inPage = (code: string) =>
+      app.evaluate(({ webContents }, [url, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(url))!.executeJavaScript(js), [`${site.origin}/neon`, code] as const);
+    // Your focus, before the agent acts (it must stay where it is: the agent's tab is parked, off screen).
+    const focused = () => app.evaluate(({ webContents }) => webContents.getFocusedWebContents()?.getURL() ?? null);
+    // Yours: the window's own page has it (as when you're in the address bar).
+    const yours = shell.url();
+    await expect
+      .poll(async () => {
+        await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.focus(), yours);
+        return focused();
+      })
+      .toBe(yours);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const outline = await snap();
+
+    // File inputs, and a label that opens one, get no ref.
+    expect.soft(outline).not.toMatch(/button "Upload" \[ref=/);
+    expect.soft(outline).not.toMatch(/"Choose a photo" \[ref=/);
+
+    // The first action asks the site card.
+    const first = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Closed deal"') });
+    const popover = await pageWhere(app, isPopover);
+    const card = siteCardOf(popover, 'Codex');
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await card.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    // A closed root's frame, under the point once the pointer moved there: refused, nothing clicked.
+    expect.soft((await first).text).toBe('Something is covering that element: frame “Inner ad”. Deal with it first, or call snapshot again.');
+
+    // A text box whose closed root sends the focus to a password field: nothing typed.
+    const notes = await mcp.call('type', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Notes box"'), text: 'typed-into-a-closed-password' });
+    expect.soft(notes.text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.');
+    expect.soft(await inPage('window.__secret.value')).toBe('');
+
+    // A key whose own capture listener (put first) sends it to a password field, unseen after: nothing goes in.
+    const coupon = await mcp.call('press_key', { tab_id: 'a1', ref: refOf(await snap(), 'textbox "Coupon"'), key: 'Space' });
+    expect.soft(coupon.text).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect.soft(await inPage('document.getElementById("pw2").value')).toBe('');
+
+    // A button that opens a file input, the input's click kept from Chord's own listener: the picker is held.
+    const attach = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Open attachments"') });
+    // Held by the preload's listener, now the window's first (reported with a result, as a dialog is), or by the
+    // debugger's interception (in the action's own result): either way no picker, and the agent hears of it.
+    const heard = [attach.text, ...attach.held, ...(await mcp.call('list_tabs')).held].join(' ');
+    expect.soft(heard).toMatch(/a file input|a file picker/);
+    // Held, wherever the picker comes from, for the tab's whole life (agents/pickers.ts' interception, the preload's
+    // holds in every frame): one in a closed root; one a page opens 1.5 s after the click (on the activation it gave);
+    // a srcdoc frame's input and its File System Access picker. Each is heard by the agent.
+    const heldSoFar: string[] = [];
+    const heardOf = async (what: RegExp) => {
+      await expect
+        .poll(async () => {
+          heldSoFar.push(...(await mcp.call('list_tabs')).held);
+          return heldSoFar.join(' | ');
+        }, { timeout: 10_000 })
+        .toMatch(what);
+      heldSoFar.length = 0;
+    };
+    for (const button of ['Closed upload', 'Late upload', 'Late closed upload', 'Frame upload']) {
+      const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${button}"`) });
+      expect.soft(clicked.isError, button).toBe(false);
+      heldSoFar.push(...clicked.held);
+      await heardOf(/a file (picker|input)/);
+    }
+    const framePicker = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Frame picker"') });
+    heldSoFar.push(...framePicker.held);
+    await heardOf(/showOpenFilePicker/);
+
+    // A button in a closed root, clicked twice at one point: both clicks go in (the second's pointer moved off and back).
+    for (let i = 0; i < 2; i++) expect.soft(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') })).text)).toMatchObject({ data: { done: 'Clicked “Step up”' } });
+    expect.soft(await inPage('document.getElementById("log").textContent')).toContain('stepped 2');
+
+    // A fresh frame with no address, its File System Access picker asked for right after it's put in: refused, never
+    // shown (the promise settles; a picker on screen would leave it waiting).
+    await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Fresh frame picker"') });
+    await expect.soft.poll(() => inPage('document.getElementById("log").textContent'), { timeout: 10_000 }).toMatch(/refused \w+/);
+
+    expect.soft(await focused(), 'after the pickers and the stepper').toBe(yours);
+    // Keys whose keydown moves the focus (Tab) or goes somewhere (Enter on a link): done, as they are.
+    await mcp.call('open_tab', { url: `${site.origin}/keys` });
+    // The agent's new tab, parked behind your page, leaves your focus where it was, or gives it back within a moment
+    // (window.ts' park: the OS can hand a view just shown the window's focus).
+    await expect.soft.poll(focused, { message: 'after open_tab', timeout: 2000 }).toBe(yours);
+    const keys = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a2' })).text) as { content: string }).content;
+    const tabbed = await mcp.call('press_key', { tab_id: 'a2', ref: refOf(keys, 'textbox "First"'), key: 'Tab' });
+    expect.soft(tabbed.isError, tabbed.text).toBe(false);
+    expect.soft(await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.activeElement.getAttribute("aria-label")'), `${site.origin}/keys`)).toBe('Second');
+    expect.soft(await focused(), 'after Tab').toBe(yours);
+    const entered = await mcp.call('press_key', { tab_id: 'a2', ref: refOf(keys, 'link "Onward"'), key: 'Enter' });
+    expect.soft(entered.isError, entered.text).toBe(false);
+    expect.soft(JSON.parse(entered.text)).toMatchObject({ data: { navigated: true, url: `${site.origin}/act` } });
+    expect.soft(await focused(), 'after Enter on a link').toBe(yours);
+
+    // Your focus never moved to the agent's tab.
+    expect.soft(await focused()).toBe(yours);
+
+    // Chord not in front while the agent acts: nothing is focused for you then (that would bring Chord forward), and
+    // coming back to Chord, your page has the focus, never the agent's (window.ts' keepFocusOffParked).
+    const inFront = (front: boolean) => app.evaluate(({ BaseWindow }, f) => { const w = BaseWindow.getAllWindows()[0]!; if (f) w.focus(); else w.blur(); }, front);
+    await inFront(false);
+    await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') });
+    await inFront(true);
+    await expect.soft.poll(focused, { message: 'coming back to Chord', timeout: 3000 }).toBe(yours);
+
+    // Your click in its tab pauses it there, as a key does (shown over your chord, so its bar shows).
+    await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Neon/ }).click();
+    await app.evaluate(({ webContents }, url) => {
+      const c = webContents.getAllWebContents().find((x) => x.getURL().startsWith(url))!;
+      c.sendInputEvent({ type: 'mouseDown', x: 5, y: 5, button: 'left', clickCount: 1 });
+      c.sendInputEvent({ type: 'mouseUp', x: 5, y: 5, button: 'left', clickCount: 1 });
+    }, `${site.origin}/neon`);
+    await expect.soft(shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' })).toBeVisible();
+    mcp.child.stdin!.end();
+    await mcp.exited;
+    // Kept: its page is made again as a tab of yours (core's keepAgentTab), with none of the agent's settings: no held
+    // dialogs (alert shows Chord's own, not answered at once), the preload's agent guard gone, no debugger.
+    await shell.getByRole('button', { name: 'Keep', exact: true }).click();
+    const settingsOf = () =>
+      app.evaluate(async ({ webContents }, url) => {
+        const c = webContents.getAllWebContents().find((x) => x.getURL().startsWith(url) && !x.isDestroyed());
+        if (!c) return null;
+        return { guard: await c.executeJavaScriptInIsolatedWorld(999, [{ code: 'typeof globalThis.__chordAgentGuard' }]), debugger: c.debugger.isAttached() };
+      }, `${site.origin}/neon`);
+    await expect.poll(settingsOf, { timeout: 15_000 }).toEqual({ guard: 'undefined', debugger: false });
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
 
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
@@ -160,7 +466,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     type Times = { times: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
     const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
     const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
-    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
+    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/noisy', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
       await mcp.call('open_tab', { url: `${site.origin}${path}` });
       const measured = (await timesOf(`${site.origin}${path}`, runs))!;
       const ms = sorted(measured.times);
@@ -174,8 +480,33 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         const typical = SNAPSHOT_TYPICAL_MS[`${process.platform}/${process.arch}`] ?? SNAPSHOT_TYPICAL_MS['default']!;
         expect(median, seen).toBeLessThan(typical.median);
         expect(worst, seen).toBeLessThan(typical.worst);
+        // M2c: an action's own work before its input goes (the element checked, scrolled to, hit-tested), on this page.
+        type ActTimes = { times: number[]; deep: number[]; failed?: string } | null;
+        const act = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentActTimes(u: string, r: number): Promise<ActTimes> } }).chordTestHooks.agentActTimes(u, r), [`${site.origin}${path}`, 30] as const))!;
+        expect(act.failed).toBeUndefined();
+        const at = sorted(act.times);
+        const actMedian = at[Math.floor(at.length / 2)]!;
+        const actP95 = at[Math.floor(at.length * 0.95)]!;
+        const actSeen = `${path}: an action's point step, median ${actMedian.toFixed(1)} ms, p95 ${actP95.toFixed(1)} ms (${at.map((t) => t.toFixed(0)).join(' ')})`;
+        console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${actSeen}`);
+        expect(actMedian, actSeen).toBeLessThan(ACT_POINT_MS.median);
+        expect(actP95, actSeen).toBeLessThan(ACT_POINT_MS.p95);
+        // Neon's review of #110: the debugger's session a press or typing opens, on this page. The document's first
+        // finds Chord's world (Runtime enabled once: the page's stored console replayed, ~1,000 entries at most on
+        // /noisy); the rest don't.
+        const [first, ...later] = act.deep;
+        const dt = sorted(later);
+        const deepMedian = dt[Math.floor(dt.length / 2)]!;
+        const deepP95 = dt[Math.floor(dt.length * 0.95)]!;
+        const deepSeen = `${path}: the debugger's session, first ${first!.toFixed(1)} ms, then median ${deepMedian.toFixed(1)} ms, p95 ${deepP95.toFixed(1)} ms (${dt.map((t) => t.toFixed(0)).join(' ')})`;
+        console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${deepSeen}`);
+        expect(first!, deepSeen).toBeLessThan(ACT_DEEP_MS.first);
+        expect(deepMedian, deepSeen).toBeLessThan(ACT_DEEP_MS.median);
+        expect(deepP95, deepSeen).toBeLessThan(ACT_DEEP_MS.p95);
       } else {
-        expect(worst, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
+        // The median of five: one pause in five (a garbage collection on a page of 2,000,000 text nodes) took 777 ms once
+        // on main itself, its other runs 35 to 43 ms. The worst is in the message.
+        expect(median, seen).toBeLessThan(SNAPSHOT_HUGE_MS);
         // A page of 2,000,000 text nodes is cut at the scan's bound like any other (review 1 of #104).
         expect(measured.nodes, seen).toBeLessThanOrEqual(20_000);
       }
@@ -204,7 +535,16 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
  * worst on any runner.
  */
 const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = { default: { median: 25, worst: 60 }, 'darwin/x64': { median: 45, worst: 90 } };
+/** The huge pages' budget, on the median of five runs (a single pause can take one run far past it). */
 const SNAPSHOT_HUGE_MS = 300;
+/**
+ * An action's own work in the page before its input goes (M2c: the element checked against its snapshot, scrolled to and
+ * hit-tested), round trip from main, on the typical page: the plan's budget. Measured: the decision record's
+ * "M2c: as built".
+ */
+const ACT_POINT_MS = { median: 15, p95: 40 };
+/** The debugger's session for a press or typing (Neon's review of #110): a document's first, then the rest. */
+const ACT_DEEP_MS = { first: 200, median: 25, p95: 60 };
 
 test('Chord can’t tell which program started it: the card says so and offers no Always allow (M2a)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -426,6 +766,10 @@ test.beforeAll(async () => {
     '/edit-body': '<title>Notepad</title><body contenteditable>typed-in-the-body <b>and bold</b></body>',
     '/edit-html': '<html contenteditable><title>Notepad</title><body>typed-in-html</body></html>',
     '/design-mode': '<title>Notepad</title><body>typed-in-design-mode</body><script>document.designMode = "on";</script>',
+    // M2c: a shop's front page, to act on.
+    '/shop':
+      '<title>Shop</title><main><h1>Orders</h1><form role="search" action="/shop/results"><label>Search orders <input name=q type=search></label> <button>Search</button></form>' +
+      '<a href="/shop/results?q=all">All orders</a></main>',
     // M2b: a page for the snapshot, every kind of thing an outline says (and doesn't).
     '/snap':
       '<title>Orders</title><header><nav aria-label="Site"><a href="/">Home</a> <a href="/help">Help</a></nav></header>' +
@@ -458,6 +802,48 @@ test.beforeAll(async () => {
       '<textarea id=ta aria-label="Draft text">initial-textarea-content</textarea><button aria-labelledby=ta>Keep</button>' +
       '<select id=sl aria-label="Size"><option selected>Small</option><option>option-label-x</option></select><button aria-labelledby=sl>Pick</button></main>' +
       '<script>host.attachShadow({ mode: "open" }).innerHTML = "<button>In the shadow</button>";</script>',
+    // Neon's review of #110: closed shadow roots, a page's own capture listeners, file inputs.
+    '/neon':
+      '<title>Neon</title><style>body{margin:0;padding:20px}.row{display:block;margin:12px 0}</style><main>' +
+      '<x-deal class=row role=button tabindex=0 aria-label="Closed deal" id=deal></x-deal>' +
+      '<div class=row contenteditable aria-label="Notes box" id=notes style="width:200px;height:40px"></div>' +
+      '<label class=row>Coupon <input id=coupon></label><input type=password id=pw2 aria-label="Account password">' +
+      '<label class=row>Upload <input type=file id=up></label>' +
+      '<label class=row for=up2 style="cursor:pointer">Choose a photo</label><input type=file id=up2 style="display:none">' +
+      '<button class=row id=attach onclick="document.getElementById(\'up3\').click()">Open attachments</button><input type=file id=up3 style="display:none">' +
+      '<x-up class=row role=button tabindex=0 aria-label="Closed upload" id=cup></x-up>' +
+      // Round 5: pickers a page opens after the action, on the activation the click gave it; a frame's; a stepper in a
+      // closed root, clicked twice.
+      '<button class=row id=late onclick="setTimeout(() => { const i = document.createElement(\'input\'); i.type = \'file\'; i.click(); }, 1500)">Late upload</button>' +
+      '<button class=row id=lateClosed onclick="setTimeout(() => cupRoot.querySelector(\'input\').click(), 1500)">Late closed upload</button>' +
+      '<iframe id=fr title="Uploads" srcdoc="<input type=file id=fi>" style="width:200px;height:40px"></iframe>' +
+      '<button class=row onclick="document.getElementById(\'fr\').contentDocument.getElementById(\'fi\').click()">Frame upload</button>' +
+      '<button class=row onclick="document.getElementById(\'fr\').contentWindow.showOpenFilePicker().catch(() => {})">Frame picker</button>' +
+      '<x-step class=row role=button tabindex=0 aria-label="Step up" id=step></x-step>' +
+      '<button class=row onclick="const f = document.createElement(\'iframe\'); document.body.append(f); f.contentWindow.showOpenFilePicker().then(() => { log.textContent += \' picked\'; }, (e) => { log.textContent += \' refused \' + e.name; })">Fresh frame picker</button>' +
+      '<p id=log></p></main><script>' +
+      // A button whose closed root holds a frame, which takes the pointer once it moves over the button.
+      'const dealRoot = deal.attachShadow({ mode: "closed" });' +
+      'dealRoot.innerHTML = "<style>:host{display:inline-block;position:relative;width:160px;height:40px}</style><span>Closed deal</span><iframe title=\\"Inner ad\\" srcdoc=\\"ad\\" style=\\"position:absolute;left:0;top:0;width:100%;height:100%;border:0;pointer-events:none\\"></iframe>";' +
+      'const innerFrame = dealRoot.querySelector("iframe");' +
+      'deal.addEventListener("mousemove", () => { innerFrame.style.pointerEvents = "auto"; });' +
+      'deal.addEventListener("click", () => { log.textContent += "deal clicked "; });' +
+      // A text box whose closed root sends its focus to a password field.
+      'const notesRoot = notes.attachShadow({ mode: "closed", delegatesFocus: true });' +
+      'notesRoot.innerHTML = "<input type=password style=\\"width:180px\\">";' +
+      'window.__secret = notesRoot.querySelector("input");' +
+      // The page's own capture listeners, put first: a key in the coupon field goes to the password field, unseen.
+      'for (const type of ["keydown", "keypress", "beforeinput", "input", "keyup"]) addEventListener(type, (e) => { if (e.target.id === "coupon") pw2.focus(); if (e.target.id === "coupon" || e.target.id === "pw2") e.stopImmediatePropagation(); }, true);' +
+      // A button whose closed root holds the file input it clicks (the preload's listener sees only the button).
+      'const cupRoot = cup.attachShadow({ mode: "closed" }); cupRoot.innerHTML = "<span>Closed upload</span><input type=file style=\\"display:none\\">";' +
+      'cup.addEventListener("click", () => cupRoot.querySelector("input").click());' +
+      'const stepRoot = step.attachShadow({ mode: "closed" }); stepRoot.innerHTML = "<style>:host{display:inline-block;width:160px;height:40px}</style><span style=\\"display:block;width:100%;height:100%\\">+</span>";' +
+      'step.addEventListener("click", () => { step.dataset.n = Number(step.dataset.n || 0) + 1; log.textContent = "stepped " + step.dataset.n; });' +
+      // And the file input its button clicks, its click kept from anything after.
+      'addEventListener("click", (e) => { if (e.target.id === "up3") e.stopImmediatePropagation(); }, true);' +
+      '</script>',
+    // Review 5 of #110: keys that move the focus or go somewhere on their keydown.
+    '/keys': '<title>Keys</title><main><input aria-label="First"> <input aria-label="Second"> <a href="/act">Onward</a></main>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
@@ -472,7 +858,19 @@ test.beforeAll(async () => {
     const rows = /^\/rows-(\d+)$/.exec(req.url ?? '');
     // A hostile page: 2,000,000 text nodes in one div (the parser would join them, so a script makes them).
     const texts = '<title>Texts</title><div id=d></div><script>const d = document.getElementById("d"); for (let i = 0; i < 2000000; i++) d.appendChild(document.createTextNode("x "));</script>';
-    const body = rows ? rowsPage(Number(rows[1])) : req.url === '/texts' ? texts : pages[req.url ?? '/'];
+    // Round 5 of #110: a typical page that logged 1,000 large objects (acting's debugger session must not replay them).
+    const noisy = rowsPage(300) + '<script>for (let i = 0; i < 1000; i++) console.log({ i, big: "x".repeat(10000), list: Array.from({ length: 200 }, (_, j) => ({ j })) });</script>';
+    // M2c: a shop to act on. Its search (a GET form) lands on its results, which echo what was searched.
+    const shop = /^\/shop\/results\?q=([a-z0-9]*)$/.exec(req.url ?? '');
+    const body = rows
+      ? rowsPage(Number(rows[1]))
+      : shop
+        ? shopResults(shop[1]!)
+        : req.url === '/texts'
+          ? texts
+          : req.url === '/noisy'
+            ? noisy
+            : pages[req.url ?? '/'];
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body ?? 'not found');
   });

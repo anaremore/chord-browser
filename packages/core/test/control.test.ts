@@ -75,9 +75,10 @@ describe('The gate: what a grant leaves behind', () => {
     ['read', 'once', null],
     ['read', 'always', 'always'],
     ['read', 'deny', null],
-    ['site', 'once', null],
+    // A site's Allow for now and its no both last as long as the agent (M2c).
+    ['site', 'once', 'always'],
     ['site', 'always', 'always'],
-    ['site', 'deny', null],
+    ['site', 'deny', 'deny'],
     ['step', 'once', null],
     ['step', 'always', null],
     ['step', 'deny', null],
@@ -149,9 +150,9 @@ describe('Tab refs', () => {
 });
 
 describe('The tools both front doors offer', () => {
-  it('are the assistant’s tools and M2’s (snapshot so far), every one a read for now', () => {
-    expect(CONTROL_TOOLS.map((t) => t.name)).toEqual([...ASSISTANT_TOOLS.map((t) => t.name), 'snapshot']);
-    for (const tool of CONTROL_TOOLS) expect(tool).toMatchObject({ tier: 0, level: 'read' });
+  it('are the assistant’s tools and M2’s: reads, and acting (M2c) at the act level', () => {
+    expect(CONTROL_TOOLS.map((t) => t.name)).toEqual([...ASSISTANT_TOOLS.map((t) => t.name), 'snapshot', 'click', 'hover', 'type', 'press_key', 'select_option', 'navigate', 'back']);
+    for (const tool of CONTROL_TOOLS) expect(tool).toMatchObject({ tier: 0, level: ['click', 'hover', 'type', 'press_key', 'select_option', 'navigate', 'back'].includes(tool.name) ? 'act' : 'read' });
   });
 
   it('never offer what’s on the never-offered list', () => {

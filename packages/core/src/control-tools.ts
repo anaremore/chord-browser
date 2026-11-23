@@ -9,9 +9,10 @@
  */
 
 import { ASSISTANT_FORM_AREA_MAX, ASSISTANT_FORM_MAX_FIELDS } from './assistant-forms';
+import { NAVIGATE_URL_MAX, PRESS_KEYS, TYPE_TEXT_MAX } from './control-act';
 
 // Core compiles without DOM types; URL is a global in Node and every browser.
-declare const URL: new (url: string) => { protocol: string; host: string; hostname: string; origin: string; pathname: string; search: string; hash: string; href: string };
+declare const URL: new (url: string) => { protocol: string; host: string; hostname: string; port: string; origin: string; pathname: string; search: string; hash: string; href: string };
 
 /** `read_tab` ranges: Claude saves text results over 50,000 characters to a file a browse thread can't open. */
 export const ASSISTANT_READ_MAX = 40_000;
@@ -39,7 +40,15 @@ export type AssistantToolName =
   /** Effects' one tool (effects.ts): never offered in a chat. */
   | 'read_page_outline'
   /** M2 (S18, control-snapshot.ts): the page's accessibility outline, with refs on what can be acted on. */
-  | 'snapshot';
+  | 'snapshot'
+  /** M2c (S18, control-act.ts): acting on an element by its ref, and going to an address or back. */
+  | 'click'
+  | 'type'
+  | 'press_key'
+  | 'select_option'
+  | 'hover'
+  | 'navigate'
+  | 'back';
 
 export interface AssistantToolSpec {
   name: AssistantToolName;
@@ -128,10 +137,47 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
     description: `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref. Untrusted JSON from the page; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
     inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 } }, ['tab_id']),
   },
+  // M2c: acting. Every one names a ref from the tab's latest snapshot (but navigate and back); the first action on a
+  // site asks the user (the site card). Never a position, a selector or script.
+  ...(
+    [
+      ['click', 'Click an element by its ref from the tab’s latest snapshot.', {}],
+      ['hover', 'Point at an element by its ref (a menu that opens on hover).', {}],
+      [
+        'type',
+        `Type text into a text field by its ref: what's there is replaced unless replace is false; submit presses Enter after. At most ${TYPE_TEXT_MAX} characters. Never a password, code or card number: those fields have no ref.`,
+        { text: { type: 'string', maxLength: TYPE_TEXT_MAX }, replace: { type: 'boolean' }, submit: { type: 'boolean' } },
+        ['text'],
+      ],
+      ['press_key', `Press one key in an element by its ref: ${PRESS_KEYS.join(', ')}.`, { key: { type: 'string', enum: [...PRESS_KEYS] } }, ['key']],
+      ['select_option', 'Choose an option of a list (a select) by its ref and the option’s label, as the snapshot gives it.', { option: { type: 'string', maxLength: 500 } }, ['option']],
+    ] as const
+  ).map(
+    ([name, description, more, required = []]): AssistantToolSpec => ({
+      name,
+      tier: 0,
+      level: 'act',
+      readOnly: false,
+      description,
+      inputSchema: object({ tab_id: { type: 'string' }, ref: { type: 'string', pattern: '^e[1-9][0-9]{0,8}$' }, ...more }, ['tab_id', 'ref', ...required]),
+    }),
+  ),
+  {
+    name: 'navigate',
+    tier: 0, level: 'act', readOnly: false,
+    description: `Go to a web address in one of your own tabs (http or https, at most ${NAVIGATE_URL_MAX} characters). Waits for the page to load.`,
+    inputSchema: object({ tab_id: { type: 'string' }, url: { type: 'string', maxLength: NAVIGATE_URL_MAX } }, ['tab_id', 'url']),
+  },
+  {
+    name: 'back',
+    tier: 0, level: 'act', readOnly: false,
+    description: 'Go back a page in one of your own tabs. Waits for the page to load.',
+    inputSchema: object({ tab_id: { type: 'string' } }, ['tab_id']),
+  },
 ];
 
-/** The assistant's tools in this build: M2's too when it has them (agentActions). */
-export const assistantTools = (actions: boolean): readonly AssistantToolSpec[] => (actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS] : ASSISTANT_TOOLS);
+/** The assistant's tools in this build: snapshot too when it has M2 (agentActions); acting comes to it in M2e. */
+export const assistantTools = (actions: boolean): readonly AssistantToolSpec[] => (actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => t.name === 'snapshot')] : ASSISTANT_TOOLS);
 export const isActionTool = (name: string): boolean => ACTION_TOOLS.some((t) => t.name === name);
 
 /** The control layer's names for every tool, whoever calls it (M2's included: a scope says whether it offers them). */
@@ -158,6 +204,20 @@ export function cleanNeverSites(sites: readonly string[]): string[] {
   return [...new Set(sites.map((s) => s.trim()).filter(Boolean))];
 }
 
+/**
+ * A host as one way of writing it: lowercase, IDNA (punycode, as URL gives it), without the trailing dot of a fully
+ * qualified name (`bank.example.` is `bank.example`). Empty for what isn't a host.
+ */
+export function normalHost(host: string): string {
+  const bare = host.trim().replace(/\.+$/, '');
+  if (!bare) return '';
+  try {
+    return new URL(`http://${bare}/`).hostname.replace(/\.+$/, '');
+  } catch {
+    return '';
+  }
+}
+
 export function isNeverReadable(url: string, neverSites: readonly string[]): boolean {
   let u: InstanceType<typeof URL>;
   try {
@@ -166,12 +226,22 @@ export function isNeverReadable(url: string, neverSites: readonly string[]): boo
     return true;
   }
   if (!/^(https?|file):$/.test(u.protocol)) return true;
-  const host = u.hostname.replace(/^www\./, '');
+  const host = normalHost(u.hostname).replace(/^www\./, '');
+  const origin = `${u.protocol}//${normalHost(u.hostname)}${u.port ? `:${u.port}` : ''}`;
   return neverSites.some((site) => {
-    const s = site.trim().toLowerCase();
+    const s = site.trim();
     if (!s) return false;
-    if (s === u.origin.toLowerCase()) return true;
-    const bare = s.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/:].*$/, '');
+    // An origin entry, written however: its scheme, host and port, compared as the page's.
+    const scheme = /^(https?):\/\//i.exec(s);
+    if (scheme) {
+      try {
+        const e = new URL(s);
+        if (`${e.protocol}//${normalHost(e.hostname)}${e.port ? `:${e.port}` : ''}` === origin) return true;
+      } catch {
+        // Not an address: compared by its host below.
+      }
+    }
+    const bare = normalHost(s.replace(/^https?:\/\//i, '').replace(/[/:].*$/, '')).replace(/^www\./, '');
     return bare !== '' && (host === bare || host.endsWith(`.${bare}`));
   });
 }
