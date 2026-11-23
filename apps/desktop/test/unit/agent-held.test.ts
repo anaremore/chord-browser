@@ -14,11 +14,14 @@ describe('heldDetail', () => {
 });
 
 describe('heldFromFrame', () => {
+  const main = { origin: 'https://shop.test' };
   it.each([
-    ['the top frame: its words', { origin: 'https://shop.test', parent: null }, 'alert: Hi'],
-    ['a frame of the page’s origin: its words', { origin: 'https://shop.test', parent: {} }, 'alert: Hi'],
-    ['another origin’s frame: only that it tried', { origin: 'https://ads.test', parent: {} }, 'a frame from https://ads.test tried to show a dialog'],
+    ['the main frame itself: its words', main, 'alert: Hi'],
+    ['a frame of the page’s origin: its words', { origin: 'https://shop.test' }, 'alert: Hi'],
+    ['another origin’s frame: only that it tried', { origin: 'https://ads.test' }, 'a frame from https://ads.test tried to show a dialog'],
     // An ad frame that alerted, then went to about:blank at once: Electron can't name it any more. Never its words.
     ['a frame Electron can’t name (it went)', null, 'a frame from another site tried to show a dialog'],
-  ] as const)('%s', (_what, frame, heard) => expect(heldFromFrame('dialog', 'alert: Hi', frame, 'https://shop.test')).toBe(heard));
+    // Neon's review 4: a frame with no parent that isn't the page's main frame (another document's) isn't the top.
+    ['a parentless frame that isn’t the main frame', { origin: 'https://ads.test' }, 'a frame from https://ads.test tried to show a dialog'],
+  ] as const)('%s', (_what, frame, heard) => expect(heldFromFrame('dialog', 'alert: Hi', frame, main)).toBe(heard));
 });

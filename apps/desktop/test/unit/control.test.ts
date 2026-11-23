@@ -1033,6 +1033,18 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(result(await v.call('type', { tab_id: v.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”' });
   });
 
+  it('Enter on what isn’t a field: you take the tab after its keydown, so a no, and no character', async () => {
+    const held: { t?: Awaited<ReturnType<typeof acting>> } = {};
+    const t = (held.t = await acting({
+      onAct: (_events, op) => {
+        const sent = (held.t?.at.input ?? []) as { type: string }[];
+        if (op === 'focused' && sent.some((e) => e.type === 'keyDown')) held.t!.agent.pause('n1', true);
+      },
+    }));
+    expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+  });
+
   it('no guard there, but no document committed either: a no', async () => {
     const t = await acting({ twist: { unguard: 'gone' } });
     expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool' })).refused).toBe('The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.');

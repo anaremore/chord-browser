@@ -146,4 +146,16 @@ describe('holdFilePickers', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(pickersLost(contents)).toBe(false);
   });
+
+  it('an auto-attach that fails: the hold isn’t on (its frames would run unheld)', async () => {
+    vi.useFakeTimers();
+    const { contents, state } = fake();
+    state.fail.add('Target.setAutoAttach@');
+    holdFilePickers(contents, () => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pickersLost(contents)).toBe(true);
+    state.fail.clear();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(pickersLost(contents)).toBe(false);
+  });
 });

@@ -466,7 +466,7 @@ export class TabManager {
       if (!this.deps.agentTab?.(nodeId) || !raw || typeof raw !== 'object') return;
       const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
       if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
-      this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame?.origin ?? ''));
+      this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame));
     });
     // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
     contents.ipc.on('page:agentGuardState', (event) => {

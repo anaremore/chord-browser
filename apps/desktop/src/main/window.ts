@@ -617,7 +617,8 @@ export class AppWindow {
     if (this.window.isDestroyed()) return;
     // Your focus stays where it is: adding or taking away a parked page (an agent's tab) mustn't leave it nowhere
     // (Neon's review of #110, seen in agents.spec when an agent opened a tab).
-    const focused = webContents?.getFocusedWebContents?.() ?? null;
+    // Only a page of this window's, while it's in front (one in another window is that window's business).
+    const focused = BaseWindow.getFocusedWindow?.() === this.window ? (webContents?.getFocusedWebContents?.() ?? null) : null;
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
     this.parked = views.filter((view) => Boolean(pageOf(view)));

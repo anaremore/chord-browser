@@ -614,6 +614,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // A menu that moves the focus on its keydown loses Enter's click (the character): harmless, the agent sees the
         // menu open and goes on from there.
         page.keys(again ? rest.filter((e) => e.type === 'keyUp') : rest);
+        // The hold lost, Stop, or the user taking the tab meanwhile: a no, not done (Neon's review 4), asked of each
+        // directly. The focus gone elsewhere, or the page gone on (Enter on a link: its element's checks fail as its
+        // document goes): the keydown did its work.
+        if (!deep!.held()) return ACT_REFUSALS.noCheck;
+        if (call.stopped()) return CONTROL_REFUSALS.stopped;
+        if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
         return null;
       }
       page.keys([down!]);

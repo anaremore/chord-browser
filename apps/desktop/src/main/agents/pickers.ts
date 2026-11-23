@@ -85,10 +85,12 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     await send('Page.enable', undefined, sessionId);
     const intercepted =
       (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
-    await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
-    if (sessionId && intercepted) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
-    if (sessionId && !intercepted) unsecured.add(contents);
-    return intercepted;
+    // Its frames held too: an auto-attach that failed (or never answered) leaves them unheld, so the hold isn't on.
+    const attached = await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe' }] }, sessionId);
+    const on = intercepted && attached;
+    if (sessionId && on) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
+    if (sessionId && !on) unsecured.add(contents);
+    return on;
   };
   /**
    * The frames attached during an arming (those already there when it asks: a re-arm after a detach finds them
