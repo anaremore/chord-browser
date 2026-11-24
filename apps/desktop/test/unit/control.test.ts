@@ -6,7 +6,7 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { ACT_REFUSALS, bucketOf, CONTROL_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
@@ -1432,6 +1432,15 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.');
       await new Promise((r) => setTimeout(r, 0));
       expect(t.agent.state('n1').cards).toEqual([]);
+    });
+
+    it('a send card in an action holds live requests, so it waits CONTROL_WAIT_MS even where site and step cards wait as long as it takes (the assistant: D2, the reviews of #147)', async () => {
+      const t = await acting({ deep: { posts: true }, answer: 'hold', act: { siteAllowed: () => true } });
+      vi.useFakeTimers();
+      const done = t.call('click', { tab_id: t.tab, ref: 'e1' });
+      await vi.advanceTimersByTimeAsync(CONTROL_WAIT_MS + 50);
+      expect(refusal(await done).refused).toBe(ACT_REFUSALS.sendsDropped);
+      expect(t.at.debugging).not.toContain('Fetch.continueRequest');
     });
 
     it('a document’s response gets one clean policy: the page’s own (malformed or not) is dropped, deferred sends, passkeys, payments and sign-in dialogs off (the final pass)', async () => {

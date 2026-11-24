@@ -89,6 +89,12 @@ export interface SendHoldDeps {
   ask(sites: string[], why: RiskWhy | null, signal: AbortSignal, going?: string): Promise<SendAnswer>;
   /** A request's origin: what a card covers (the owner, 2026-11-23: exactly that origin, never its whole site). */
   siteOf(url: string): string;
+  /**
+   * Where *Allow for this chat* is kept (the assistant: control/user-watch.ts): the chat's own origins for this tab, so
+   * a grant outlives the lease (the reviews of #147). The hold covers them and adds to them; failHeld lets go of them
+   * for this hold, never empties them (the chat does, as it ends or you take the tab).
+   */
+  kept?: Set<string>;
 }
 
 /** What one action sent, held, so far. */
@@ -291,6 +297,7 @@ export function sendHoldDeps(contents: object, deps: SendHoldDeps): void {
   const hold = holds.get(contents);
   if (!hold) return;
   hold.deps = deps;
+  if (deps.kept) hold.until = deps.kept;
   askNext(hold);
 }
 
@@ -345,8 +352,10 @@ function settleCard(hold: Hold, card: NonNullable<Hold['card']>, answer: SendAns
 export function failHeld(contents: object): void {
   const hold = holds.get(contents);
   if (!hold) return;
-  // Allow until done ends too: you took the tab, or the agent was stopped.
-  hold.until.clear();
+  // Allow until done ends too: you took the tab, or the agent was stopped. A chat's own set (kept) is let go of, never
+  // emptied here: the chat ends it.
+  if (hold.deps?.kept === hold.until) hold.until = new Set();
+  else hold.until.clear();
   const failed = [...hold.idle.splice(0), ...(hold.card ? hold.card.held.splice(0) : []), ...(hold.action ? hold.action.held.splice(0) : [])];
   if (hold.card) {
     const card = hold.card;

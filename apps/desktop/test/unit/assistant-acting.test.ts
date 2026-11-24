@@ -230,6 +230,29 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     expect(userTabActing(t.contents)).toBe(false);
   });
 
+  it('Allow for this chat outlives the lease: the next action’s sends to that origin go without a card; your taking the tab ends it (Claude’s S1 and Neon’s S5 on #147)', async () => {
+    vi.useFakeTimers();
+    const t = yourTab();
+    const kept = new Set<string>();
+    let asked = 0;
+    const ask: SendHoldDeps['ask'] = async () => (asked++, 'until');
+    await beginUserAction(t.contents, 'chat:1', { ...deps(ask), kept });
+    endUserAction(t.contents);
+    t.post('r1');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.how('r1')).toBe('Fetch.continueRequest');
+    expect([...kept]).toEqual(['https://game.example']);
+    // Past the moment after: the lease ends; the chat's grant doesn't.
+    await vi.advanceTimersByTimeAsync(TAIL_MS + 100);
+    expect(userTabActing(t.contents)).toBe(false);
+    await beginUserAction(t.contents, 'chat:1', { ...deps(ask), kept });
+    t.post('r2');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.how('r2')).toBe('Fetch.continueRequest');
+    expect(asked).toBe(1);
+    endUserLease(t.contents);
+  });
+
   it('a debugger it can’t have (your DevTools): no lease, nothing pressed or typed', async () => {
     const t = yourTab();
     (t.contents.debugger as unknown as { attach: () => void }).attach = () => {
@@ -249,6 +272,7 @@ describe('The acting cards in the chat (S18 M2e-2a)', () => {
       note: 'It wants to click “Raise”.',
       lines: ['It asks before anything it does sends data, and before it submits, pays, sends or deletes.'],
       danger: false,
+      showable: false,
     });
     expect(actCard({ ...base, kind: 'step', subject: 's', description: 'click “Place order”', step: { why: 'pay', site: 'shop.example', fields: ['Shipping', 'Card'], more: 0 } })).toEqual({
       kind: 'step',
@@ -256,13 +280,16 @@ describe('The acting cards in the chat (S18 M2e-2a)', () => {
       note: 'The assistant is about to click “Place order”.',
       lines: ['Goes with it: Shipping, Card'],
       danger: true,
+      showable: false,
     });
-    expect(actCard({ ...base, kind: 'step', subject: 's', description: 'Clicked “Raise”', step: { why: 'send', site: 'https://game.example', fields: [], more: 0, sends: ['https://game.example'] } })).toEqual({
+    expect(actCard({ ...base, kind: 'step', subject: 's', description: 'Clicked “Raise”', step: { why: 'send', site: 'https://game.example', fields: [], more: 0, sends: ['https://game.example'] }, show: () => undefined })).toEqual({
       kind: 'send',
       title: 'Send data to https://game.example?',
       note: 'The assistant clicked “Raise”, and the page is sending something to its site.',
       lines: ['Goes to: https://game.example'],
       danger: false,
+      // Show me only where the card has something to point at (never a tail card's, nor a load's: the reviews of #147).
+      showable: true,
     });
     expect(actCard({ ...base, kind: 'read', subject: 'read_tab', description: 'Read “Article”' })).toBeNull();
   });

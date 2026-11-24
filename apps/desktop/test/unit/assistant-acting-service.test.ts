@@ -18,6 +18,7 @@ vi.mock('../../src/main/control/user-watch', () => ({
 }));
 const { AssistantService } = await import('../../src/main/assistant/service');
 const { USER_TAB_REFUSALS } = await import('../../src/main/assistant/scope');
+const { actCard } = await import('../../src/main/assistant/service');
 const { Store } = await import('../../src/main/store');
 
 const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
@@ -28,9 +29,10 @@ afterEach(() => {
 });
 
 interface Inner {
-  stateFor(chordId: string): Promise<{ streaming: unknown; actTab: { nodeId: string; windowId: string } | null; actEnded: string | null; leased: Set<string>; queue: string[] }>;
+  stateFor(chordId: string): Promise<{ streaming: unknown; actTab: { nodeId: string; windowId: string } | null; actEnded: string | null; leased: Set<string>; queue: string[]; sendGrants: Map<string, Set<string>> }>;
   send(windowId: string, state: unknown, text: string): Promise<void>;
   barFor(nodeId: string, text: string | null): void;
+  tailCard(s: unknown, nodeId: string, contents: unknown): (sites: string[], why: string | null, signal: AbortSignal, going?: string) => Promise<string>;
 }
 
 function setup(acting = true) {
@@ -53,7 +55,8 @@ function setup(acting = true) {
   dirs.push(dir);
   const browser = {
     store,
-    allWindows: [{ id: 'w1', window: { isMinimized: () => false } }],
+    // No shell here: the panel's pushes skip the window (isDestroyed); what acting asks (isMinimized) answers.
+    allWindows: [{ id: 'w1', window: { isMinimized: () => false, isDestroyed: () => true } }],
     peeks: { isOpen: () => false },
     tabs: { get: (id: string) => ({ webContents: page(id) }) },
     assistantBars: false,
@@ -123,5 +126,63 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       else t.store.dispatch({ t: 'settings.set', settings: { assistant: { offChords: ['c1'] } } });
       expect(leases.ended, end).toContain(t.page(t.mine));
     }
+  });
+
+  it('a tail card: each origin as cards show it (its own site is “its site”), where the page goes, a closed tab denied, and no answer in time takes it down (the reviews of #147)', async () => {
+    const t = setup();
+    const s = (await t.inner.stateFor('c1')) as unknown as { control: { ask: (card: unknown, signal: AbortSignal, waitMs: number) => Promise<string> } };
+    const cards: { step: { site: string; sends?: string[]; going?: string }; takeDown?: AbortSignal; description: string; kind: string }[] = [];
+    let answer = 'waiting';
+    s.control.ask = async (card, _signal, waitMs) => {
+      expect(waitMs).toBeLessThan(Infinity);
+      cards.push(card as never);
+      return answer;
+    };
+    let gone = false;
+    const contents = { isDestroyed: () => gone, getURL: () => 'https://game.example/table' };
+    const ask = t.inner.tailCard(s, t.mine, contents);
+    expect(await ask(['https://game.example'], null, new AbortController().signal)).toBe('deny');
+    expect(cards[0]!.step).toMatchObject({ site: 'game.example', sends: ['game.example'] });
+    expect(actCard(cards[0] as never)?.note).toContain('its site');
+    expect(cards[0]!.takeDown?.aborted).toBe(true);
+    answer = 'always';
+    expect(await ask(['https://shop.example'], 'leave', new AbortController().signal, 'https://shop.example/checkout')).toBe('once');
+    expect(cards[1]!.step).toMatchObject({ site: 'shop.example', going: expect.stringContaining('shop.example') });
+    expect(await ask(['https://shop.example'], null, new AbortController().signal)).toBe('until');
+    gone = true;
+    expect(await ask(['https://shop.example'], null, new AbortController().signal)).toBe('deny');
+    expect(cards).toHaveLength(3);
+  });
+
+  it('Allow for this chat is the chat’s, per tab: your using the tab, the chat ending, or Settings’ Remove ends it (the reviews of #147)', async () => {
+    for (const end of ['used', 'new', 'remove'] as const) {
+      const t = setup();
+      t.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: ['game.example'] } } });
+      const s = await t.inner.stateFor('c1');
+      s.sendGrants.set(t.mine, new Set(['https://game.example']));
+      s.sendGrants.set(t.other, new Set(['https://shop.example']));
+      if (end === 'used') t.service.userUsedTab(t.mine);
+      else if (end === 'new') await t.service.act('w1', { do: 'new' } as never);
+      else t.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [] } } });
+      expect(s.sendGrants.get(t.mine)?.size ?? 0, end).toBe(0);
+      expect(s.sendGrants.get(t.other)?.size ?? 0, end).toBe(end === 'used' ? 1 : 0);
+    }
+  });
+
+  it('a queued message acts where it was sent: its tab dequeued with it, and one sent with no tab on screen stays with none (Claude’s S7 on #147)', async () => {
+    const t = setup();
+    const s = (await t.inner.stateFor('c1')) as unknown as { streaming: unknown; windowId: string; queue: string[]; queuedWith: unknown[][]; queuedTab: unknown[] };
+    const inner = t.service as unknown as { send: (...args: unknown[]) => Promise<void>; finishTurn(state: unknown, outcome: { status: 'done' }): Promise<void> };
+    const sent: unknown[] = [];
+    inner.send = async (...args) => void sent.push(args[5]);
+    s.windowId = 'w1';
+    for (const tab of [{ nodeId: t.mine, windowId: 'w1' }, null]) {
+      s.streaming = { id: 'reply', body: { role: 'assistant', text: '' } };
+      s.queue = ['and raise'];
+      s.queuedWith = [[]];
+      s.queuedTab = [tab];
+      await inner.finishTurn(s, { status: 'done' });
+    }
+    expect(sent).toEqual([{ nodeId: t.mine, windowId: 'w1' }, null]);
   });
 });

@@ -11,6 +11,7 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   agentChords,
+  barAddress,
   barDoing,
   CONTROL_WAIT_MS,
   sendTitle,
@@ -88,6 +89,7 @@ import { AssistantImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
 import { duetScope, USER_TAB_REFUSALS, type DuetChat } from './scope';
 import { siteOfUrl } from '../agents/shares';
+import { shownOrigin, type SendHoldDeps } from '../control/sends';
 import { buildActs } from './preview';
 import { dropAgentGuard } from '../control/page';
 import { beginUserAction, endUserAction, endUserLease } from '../control/user-watch';
@@ -129,6 +131,8 @@ interface ThreadState extends DuetChat {
   leased: Set<NodeId>;
   /** Each user message's tab on screen as it was sent: Retry and Make with Codex act there, never where you are now. */
   sentTabs: Map<string, DuetChat['actTab']>;
+  /** *Allow for this chat* on a send card, per tab: origins its sends go to without a card until the chat ends (sends.ts' kept). */
+  sendGrants: Map<NodeId, Set<string>>;
   startedAt: number | null;
   /** Approval cards in the chat, by message id: the gate's card, answered from the panel. */
   pending: Map<string, (decision: Decision) => void>;
@@ -274,7 +278,10 @@ export class AssistantService {
         }
       }
       if (before.actSites !== now.actSites) {
-        for (const site of before.actSites.filter((x) => !now.actSites.includes(x))) for (const state of this.threads.values()) state.control.forget('site', site);
+        const removed = before.actSites.filter((x) => !now.actSites.includes(x));
+        for (const site of removed) for (const state of this.threads.values()) state.control.forget('site', site);
+        // A site removed in Settings: what any chat was allowed to send (Allow for this chat) ends with it.
+        if (removed.length) for (const state of this.threads.values()) this.endGrants(state);
       }
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'assistant' && p.path[2] === 'readsNothing')) {
         for (const threadId of [...this.live.keys()]) this.drop(threadId);
@@ -388,6 +395,7 @@ export class AssistantService {
       shows: new Map(),
       leased: new Set(),
       sentTabs: new Map(),
+      sendGrants: new Map(),
       queuedTab: [],
       // The chat is the agent; its cards are approval messages in the chat.
       control: new ControlAgent(`duet:${randomUUID()}`, (card, signal) => this.showCard(state, card, signal)),
@@ -489,6 +497,8 @@ export class AssistantService {
     }
     for (const state of this.threads.values()) {
       state.leased.delete(nodeId);
+      // You took the tab: *Allow for this chat* there ends (F1).
+      state.sendGrants.get(nodeId)?.clear();
       if (!state.streaming || state.actTab?.nodeId !== nodeId || state.actEnded) continue;
       this.endActing(state, USER_TAB_REFUSALS.tookOver);
       if (this.acted.has(state)) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
@@ -506,6 +516,51 @@ export class AssistantService {
         if (this.browser.tabs.get(nodeId)?.webContents === contents) this.userUsedTab(nodeId);
       }
     }
+  }
+
+  /**
+   * What the page still sends a moment after the assistant's last action there (control/user-watch.ts): the chat's
+   * card, as the action's own (the reviews of #147). Each origin as cards show it, where the page is going, and the
+   * card down when nobody answers in time (what it held fails).
+   */
+  private tailCard(s: ThreadState, nodeId: NodeId, contents: WebContents): SendHoldDeps['ask'] {
+    return async (sites, why, signal, going) => {
+      if (contents.isDestroyed()) return 'deny';
+      const takeDown = new AbortController();
+      signal.addEventListener('abort', () => takeDown.abort(), { once: true });
+      const page = contents.getURL();
+      const site = shownOrigin(originOf(page), page);
+      const hosts = sites.map((o) => shownOrigin(o, page));
+      const answer = await s.control.ask(
+        {
+          kind: 'step',
+          tool: 'act',
+          description: 'After the assistant’s last step here',
+          target: [page],
+          tab: nodeId,
+          subject: `${nodeId}|tail|${randomBytes(4).toString('hex')}`,
+          step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
+          takeDown: takeDown.signal,
+        },
+        signal,
+        CONTROL_WAIT_MS,
+      );
+      if (answer === 'waiting') takeDown.abort();
+      // A send card's `always` is *Allow for this chat*; a risky step's answers are never kept.
+      return answer === 'always' && !why ? 'until' : answer === 'once' || answer === 'always' ? 'once' : 'deny';
+    };
+  }
+
+  /** The chat's *Allow for this chat* for a tab (sends.ts' kept): made on first use, the same set after. */
+  private sendGrantsFor(state: ThreadState, nodeId: NodeId): Set<string> {
+    let kept = state.sendGrants.get(nodeId);
+    if (!kept) state.sendGrants.set(nodeId, (kept = new Set()));
+    return kept;
+  }
+
+  /** The chat ends (or Settings removed a site): every *Allow for this chat* it had ends, in place (a hold may share it). */
+  private endGrants(state: ThreadState): void {
+    for (const kept of state.sendGrants.values()) kept.clear();
   }
 
   /** Chats that acted this turn: your using the tab says it stopped them. */
@@ -974,16 +1029,19 @@ export class AssistantService {
       }
       case 'new':
         this.endActing(state, null);
+        this.endGrants(state);
         this.close(state);
         this.continueFrom.set(chordId, state.thread ? { id: state.thread.id, title: state.thread.title } : (this.continueFrom.get(chordId) ?? null));
         this.fresh(chordId);
         return;
       case 'open':
         this.endActing(state, null);
+        this.endGrants(state);
         await this.load(action.threadId, chordId);
         return;
       case 'continue': {
         this.endActing(state, null);
+        this.endGrants(state);
         const from = this.continueFrom.get(chordId);
         if (from) await this.load(from.id, chordId);
         return;
@@ -1302,6 +1360,7 @@ export class AssistantService {
 
   private close(state: ThreadState): void {
     this.endActing(state, null);
+    this.endGrants(state);
     if (state.thread) this.drop(state.thread.id);
   }
 
@@ -1414,26 +1473,7 @@ export class AssistantService {
             begin: async (node) => {
               const contents = this.browser.tabs.get(node.id)?.webContents;
               if (!contents || contents.isDestroyed()) return 'That tab could not be loaded.';
-              const begun = await beginUserAction(contents, s.control.id, {
-                siteOf: (url) => new URL(url).origin,
-                // What the page still sends a moment after the action: the chat's card, as the action's own.
-                ask: async (sites, why, signal) => {
-                  const answer = await s.control.ask(
-                    {
-                      kind: 'step',
-                      tool: 'act',
-                      description: 'After the assistant’s last step here',
-                      target: [contents.getURL()],
-                      tab: node.id,
-                      subject: `${node.id}|tail|${randomBytes(4).toString('hex')}`,
-                      step: why ? { why, site: sites[0] ?? '', fields: [], more: 0, idle: true } : { why: 'send', site: siteOfUrl(contents.getURL()) ?? '', fields: [], more: 0, sends: sites, idle: true },
-                    },
-                    signal,
-                    CONTROL_WAIT_MS,
-                  );
-                  return answer === 'once' ? 'once' : answer === 'always' ? 'until' : 'deny';
-                },
-              });
+              const begun = await beginUserAction(contents, s.control.id, { siteOf: originOf, ask: this.tailCard(s, node.id, contents), kept: this.sendGrantsFor(s, node.id) });
               if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
               if (begun === 'no') return 'Chord can’t check this page now (its developer tools may have it). Ask the user to close them, then to ask again.';
               s.leased.add(node.id);
@@ -1710,7 +1750,10 @@ export class AssistantService {
   }
 
   async clearAll(): Promise<void> {
-    for (const state of this.threads.values()) this.endActing(state, null);
+    for (const state of this.threads.values()) {
+      this.endActing(state, null);
+      this.endGrants(state);
+    }
     for (const id of [...this.live.keys()]) this.drop(id);
     this.threads.clear();
     this.showing.clear();
@@ -1915,6 +1958,7 @@ export function actCard(card: ControlCard): AssistantActCard | null {
       note: `It wants to ${card.description}.`,
       lines: ['It asks before anything it does sends data, and before it submits, pays, sends or deletes.'],
       danger: false,
+      showable: false,
     };
   }
   const step = card.step;
@@ -1929,6 +1973,7 @@ export function actCard(card: ControlCard): AssistantActCard | null {
       note: step.idle ? `After the assistant’s last step, the page is sending something to ${where}.` : `The assistant ${did}, and the page is sending something to ${where}.`,
       lines: [`Goes to: ${step.sends.join(', ')}`],
       danger: other,
+      showable: Boolean(card.show),
     };
   }
   const lines: string[] = [];
@@ -1942,5 +1987,15 @@ export function actCard(card: ControlCard): AssistantActCard | null {
     note: step.going ? `The assistant ${did}, and the page is going to ${step.going}.` : `The assistant is about to ${card.description}.`,
     lines,
     danger: stepDanger(step.why) || Boolean(step.to),
+    showable: Boolean(card.show),
   };
+}
+
+/** An address's origin (scheme, host and port), or empty when it has none. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
 }

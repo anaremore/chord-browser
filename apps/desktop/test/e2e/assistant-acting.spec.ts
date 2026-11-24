@@ -127,7 +127,9 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     await expect.poll(() => actingTurns(config), { timeout: 15_000 }).toBe(1);
     expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('Clicked “Raise”');
 
-    // Call, in the next message: no card (the site, and what it sends there, allowed for this chat).
+    // Call, in the next message, after Raise's lease is over (past TAIL_MS): no card (the site, and what it sends
+    // there, allowed for this chat: the chat keeps it, not the lease).
+    await shell.waitForTimeout(2_500);
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Call' }]));
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
     await expect.poll(() => reached).toEqual(['POST /move?Raise', 'POST /move?Call']);

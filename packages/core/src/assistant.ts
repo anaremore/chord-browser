@@ -134,7 +134,8 @@ export interface AssistantActCard {
   /** More lines: what goes with it (by label), where it goes, what it reads or types. */
   lines: string[];
   /** Allow in the danger color (paying, deleting, data to another site). */
-  danger: boolean;
+  danger: boolean;  /** Show me: the card has an element to point at in its page (an action's step, not a load's or a tail's). */
+  showable: boolean;
 }
 
 export type AssistantMessageBody =

@@ -37,6 +37,7 @@ import {
   isActionTool,
   sensitiveField,
   isPressKey,
+  CONTROL_WAIT_MS,
   NAVIGATE_URL_MAX,
   pressKeyEvents,
   quotedName,
@@ -581,7 +582,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
                 takeDown,
               },
               AbortSignal.any([call.signal, w.cancelled]),
-              scope.cardWaitMs,
+              // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks.
+              scope.cardWaitMs ?? CONTROL_WAIT_MS,
             ),
           halt,
           originOf(page.url()),
@@ -883,7 +885,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           takeDown,
         },
         AbortSignal.any([call.signal, w.cancelled]),
-        scope.cardWaitMs,
+        // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks.
+        scope.cardWaitMs ?? CONTROL_WAIT_MS,
       );
     /** Once the watch is on: what's held from then is asked about (below). */
     let watchOn: () => void = () => undefined;
