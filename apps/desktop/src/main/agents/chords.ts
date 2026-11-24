@@ -28,7 +28,7 @@
 import { dropAgentGuard } from '../control/page';
 import { endUntil, failHeld, sendHoldDeps, shownOrigin } from '../control/sends';
 import { randomBytes } from 'node:crypto';
-import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { ACT_BAR_MIN_MS, AGENT_STEADY_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -83,6 +83,13 @@ export class AgentChords {
   private readonly undos = new Map<string, { chord: Chord; tabs: TabNode[]; record: AgentChord | null }>();
   /** When you last pressed a key, clicked or typed an address in each agent tab. */
   private readonly userActs = new Map<NodeId, number>();
+  /**
+   * Agent tabs worked on until a moment ago (no call and no wording now), since when, and the timer that ends it:
+   * still shown as worked on for AGENT_STEADY_MS, so the frame stays on between actions (the owner, 2026-11-24).
+   */
+  private readonly steady = new Map<NodeId, { since: number; end: ReturnType<typeof setTimeout> }>();
+  /** Agent tabs with a call or a wording now (busy), to see when one goes quiet. */
+  private readonly busy = new Set<NodeId>();
   /** What the agent is doing on each tab (M2c), and since when: a wording stays at least ACT_BAR_MIN_MS. */
   private readonly doings = new Map<NodeId, { text: string; since: number; clear?: ReturnType<typeof setTimeout> }>();
   private readonly unsubscribe: () => void;
@@ -136,7 +143,45 @@ export class AgentChords {
     if (state.cards.length > 0) return { name: chord.name, chordId: chord.chordId, state: 'working', waiting: true };
     const doing = this.doings.get(nodeId)?.text;
     if (state.calls > 0 || doing) return { name: chord.name, chordId: chord.chordId, state: 'working', ...(doing ? { doing } : {}) };
+    // Quiet a moment: still worked on, steady (no wording: the bar says it's working).
+    if (this.steady.has(nodeId)) return { name: chord.name, chordId: chord.chordId, state: 'working' };
     return null;
+  }
+
+  /**
+   * Busy (a call, a wording) or not, for the steady frame: a tab that goes quiet stays shown as worked on for
+   * AGENT_STEADY_MS, then it's updated once more; busy again, that ends. Stop, a pause or the agent letting go show as
+   * they do at once (live: they come first).
+   */
+  private keepSteady(chord: AgentChord, nodeId: NodeId): void {
+    // Ended at once by the agent letting go, Stop, or your taking the tab (a pause).
+    const ended = chord.done || chord.agent.isStopped || chord.agent.state(nodeId).paused;
+    const busy = !ended && (chord.agent.state(nodeId).calls > 0 || this.doings.has(nodeId));
+    const steady = this.steady.get(nodeId);
+    if (busy) {
+      this.busy.add(nodeId);
+      if (steady) {
+        clearTimeout(steady.end);
+        this.steady.delete(nodeId);
+      }
+      return;
+    }
+    if (!this.busy.delete(nodeId) || ended) {
+      if (steady && ended) {
+        clearTimeout(steady.end);
+        this.steady.delete(nodeId);
+      }
+      return;
+    }
+    const since = this.deps.now?.() ?? Date.now();
+    const end = setTimeout(() => {
+      if (this.steady.get(nodeId)?.since !== since) return;
+      this.steady.delete(nodeId);
+      const still = this.chordOfTab(nodeId);
+      if (still) this.update(still);
+    }, AGENT_STEADY_MS);
+    end.unref?.();
+    this.steady.set(nodeId, { since, end });
   }
 
   /**
@@ -175,6 +220,7 @@ export class AgentChords {
         const page = this.deps.page(tab.id);
         if (page && !page.isDestroyed()) failHeld(page);
       }
+      this.keepSteady(chord, tab.id);
       const live = this.live(chord, tab.id);
       const key = live ? `${live.state}${live.waiting ? ':waiting' : ''}${live.doing ? `:${live.doing}` : ''}` : '';
       if ((this.shown.get(tab.id) ?? '') !== key) {

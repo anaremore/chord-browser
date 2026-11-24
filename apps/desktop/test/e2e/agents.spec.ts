@@ -1187,8 +1187,12 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
     // A key on a redrawn button, from the same (older) snapshot. A redraw between its check and its keydown on a slow
     // machine (the full tier's Windows arm64) is tried again by Chord itself: nothing reached the page (round 6).
     await new Promise((r) => setTimeout(r, 700));
-    expect(JSON.parse((await mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'button "Call"'), key: 'Enter' })).text)).toMatchObject({ data: { done: 'Pressed Enter in “Call”' } });
-    await expect.poll(tableLog).toBe(' Fold Call');
+    // Done (and the page saw it), or the page redrew it between its keydown and the rest: then said so, never done.
+    const keyed = (await mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'button "Call"'), key: 'Enter' })).text;
+    if (keyed.startsWith('{')) {
+      expect(JSON.parse(keyed)).toMatchObject({ data: { done: 'Pressed Enter in “Call”' } });
+      await expect.poll(tableLog).toBe(' Fold Call');
+    } else expect(keyed).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
     // A risky step on a redrawn button: its card names the element found, the page redraws it while the card is up,
     // and the step's checked again before the click (stepShape): it goes, once.
     const deleting = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Delete row"') });
@@ -2284,9 +2288,10 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
     await mcp.call('open_tab', { url: `${site.origin}/download` });
     await expect.poll(async () => (await mcp.call('list_tabs')).held.join(' '), { timeout: 10_000 }).toContain('file.zip');
 
-    // Shown over your chord: no bar while it's idle.
+    // Shown over your chord: its bar stays on, steady, while it has been at work there in the last 45 s (the owner,
+    // 2026-11-24: never off and on between its actions); never paused.
     await section.getByRole('button', { name: /Release notes/ }).click();
-    await expect(shell.getByRole('status').filter({ hasText: /Codex|Paused/ })).toHaveCount(0);
+    await expect(shell.getByRole('status').filter({ hasText: /Paused/ })).toHaveCount(0);
 
     // Stop (Ctrl+. here): every later call is refused, and the bar says so, until you let it continue.
     // As the OS delivers it, so main's shortcuts see it (a key sent over DevTools' protocol skips them).

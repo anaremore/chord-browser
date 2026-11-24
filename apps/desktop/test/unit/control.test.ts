@@ -847,7 +847,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -899,6 +899,7 @@ describe('acting through the gate (S18 M2c)', () => {
         if (hits === 2) return twist.noMoveOff ? { ok: false, why: 'no-move' } : { ok: true, ...said };
       }
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
+      if (args.op === 'focused' && twist.goneAfterKey && (twist.sent?.() ?? []).some((e) => e.type === 'keyDown')) return { ok: false, why: 'changed' };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       // Where typing went (#112): this field changed, and others (a twist's count) did too.
       if (args.op === 'values') return args.mode === 'compare' ? { ok: true, ...said, changed: !twist.unchanged, has: Boolean(twist.has), others: twist.others ?? 0 } : { ok: true, ...said };
@@ -1225,6 +1226,15 @@ describe('acting through the gate (S18 M2c)', () => {
     const w = await acting({ twist: { moved: true } });
     expect(refusal(await w.call('press_key', { tab_id: w.tab, ref: 'e2', key: 'Tab' })).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
     expect(w.steps.filter((x) => x === 'guard')).toHaveLength(5);
+  });
+
+  it('Enter on a button the page redrew between its keydown and the rest: said it may not have worked, never done, never pressed again (#117)', async () => {
+    const twist: Twist = { goneAfterKey: true };
+    const t = await acting({ twist });
+    twist.sent = () => t.at.input as { type: string }[];
+    expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
+    // Its keydown, then only the key let go of; once.
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
   });
 
   it('the guard is armed with a mark only main knows, and the focus check fires it at the element', async () => {

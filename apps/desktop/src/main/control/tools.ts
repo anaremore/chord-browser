@@ -896,6 +896,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // A character, on something that isn't a field (Enter or Space on a button or a link): its keydown, then, if
         // the focus is no longer the element's or a closed root came in (Neon's review 7 of #110), no character, only
         // the key let go of. The keydown did what it does (a link went, a menu opened): that's done.
+        const documentAtKey = page.mark.document;
         page.keys([down!]);
         // Its keydown handled first (its handlers have run), then the check: never the check before it.
         if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
@@ -903,6 +904,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // A menu that moves the focus on its keydown loses Enter's click (the character): harmless, the agent sees the
         // menu open and goes on from there.
         page.keys(again ? rest.filter((e) => e.type === 'keyUp') : rest);
+        // The element itself gone, in the same document (a page that redraws it: the table on a slow runner, #117): a
+        // button's click comes with the character, so the key may have done nothing. Never said done; never tried again
+        // either (its keydown reached the page).
+        if (again === ACT_REFUSALS.changed && page.mark.document === documentAtKey) return KEY_REDRAWN;
         // The hold lost, Stop, or the user taking the tab meanwhile: a no, not done (Neon's review 4), asked of each
         // directly. The focus gone elsewhere, or the page gone on (Enter on a link: its element's checks fail as its
         // document goes): the keydown did its work.
@@ -1181,6 +1186,9 @@ const PRESS_TRIES = 5;
 
 /** How long a key's check waits for its keydown to have been handled in the page (the guard's count), at most. */
 const KEY_SEEN_MS = 500;
+
+/** A key whose element the page redrew between its keydown and the rest: maybe nothing happened. */
+const KEY_REDRAWN = 'The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.';
 
 /** How long typing waits for the page to have seen its click, at most. */
 const PRESS_SEEN_MS = 500;
