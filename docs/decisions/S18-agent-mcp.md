@@ -648,6 +648,7 @@ The owner answered every open question, each as recommended. Settled:
 - **`window.print()`** blocks the page's renderer (the spike): the action's page calls time out, the action says so, and nothing prints without you.
 - **A renderer crash mid-action:** the lease is lost (B3), what was held fails, and the action says so; what the crashed page had already sent is gone with it.
 - **A debugger detaching mid-lease** (your DevTools taking the tab): Chromium lets go of the requests it had paused, so they go on. The lease is lost at once, nothing more is pressed or typed, and the action says so.
+- **A slow cancelled action can hold a newer lease's tail** (Neon, the final pass on #147): each action's end is its own, and a chat's are ended oldest first, so a newer action's end can wait behind an older, cancelled one still unwinding. It fails closed (the lease stays on, what the page sends stays held and asked about), and your key, click or page move still lets go of it at once.
 
 ## Antigravity (2026-11-21, before 0.14.0)
 
