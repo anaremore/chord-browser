@@ -352,7 +352,7 @@ export class AssistantService {
   }
 
   forgetWindow(windowId: WindowId): void {
-    for (const state of this.threads.values()) if (state.actTab?.windowId === windowId) this.endActing(state, USER_TAB_REFUSALS.switched);
+    for (const state of this.threads.values()) if (state.actTab?.windowId === windowId) this.endActing(state, USER_TAB_REFUSALS.switched('its window closed'));
     this.panels.delete(windowId);
     this.toggled.delete(windowId);
     this.pending.delete(windowId);
@@ -514,8 +514,10 @@ export class AssistantService {
       // between turns is yours, and leaves it (the record's *Allow for this chat*).
       if (acting) state.sendGrants.get(nodeId)?.clear();
       if (!state.streaming || state.actTab?.nodeId !== nodeId || state.actEnded) continue;
+      // Your key or click there ends this message's acting (the owner's answer 5), and the chat always says so: never a
+      // silent refusal of its next action.
       this.endActing(state, USER_TAB_REFUSALS.tookOver);
-      if (this.acted.has(state)) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
+      if (state.thread) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
     }
   }
 
@@ -590,7 +592,7 @@ export class AssistantService {
       const at = state.actTab;
       if (!state.streaming || !at || state.actEnded || this.actShown(at)) continue;
       if (splitOf(this.browser.store.state, at.nodeId) && shownTabs(this.browser.store.state, at.windowId).includes(at.nodeId) && this.windowShown(at.windowId)) continue;
-      this.endActing(state, USER_TAB_REFUSALS.switched);
+      this.endActing(state, USER_TAB_REFUSALS.switched(this.offScreen(at) ?? 'it is in a split'));
     }
   }
 
@@ -611,8 +613,19 @@ export class AssistantService {
    * window that isn't minimized (A1; Neon's B6 on #147).
    */
   private actShown(at: NonNullable<DuetChat['actTab']>): boolean {
+    return this.offScreen(at) === null && !splitOf(this.browser.store.state, at.nodeId);
+  }
+
+  /** What's on screen instead of the message's tab, in a few words (the refusal says it), or null while it's there. */
+  private offScreen(at: NonNullable<DuetChat['actTab']>): string | null {
     const w = this.browser.allWindows.find((x) => x.id === at.windowId);
-    return Boolean(w && !w.window.isMinimized() && !this.browser.peeks.isOpen(w) && this.activeTab(at.windowId)?.id === at.nodeId && !splitOf(this.browser.store.state, at.nodeId));
+    if (!w) return 'its window closed';
+    if (nodeOf(this.browser.store.state, at.nodeId)?.kind !== 'tab') return 'it was closed';
+    if (w.window.isMinimized()) return 'its window was minimized';
+    if (this.browser.peeks.isOpen(w)) return 'Peek is open over it';
+    const shown = this.activeTab(at.windowId);
+    if (shown?.id !== at.nodeId) return shown ? 'another tab is on screen in its window' : 'no tab is on screen in its window';
+    return null;
   }
 
   /** The bar over a tab of yours while the assistant acts there (M2c's words: *The assistant is clicking “Raise”*). */
@@ -1491,7 +1504,7 @@ export class AssistantService {
   private actingHost(s: ThreadState): ReturnType<NonNullable<DuetHost['acting']>> {
     return {
       on: () => this.acting(),
-      shownAlone: (node, windowId) => this.actShown({ nodeId: node.id, windowId }),
+      offScreen: (node, windowId) => this.offScreen({ nodeId: node.id, windowId }),
       siteOf: siteOfUrl,
       siteAllowed: (site) => this.settings.actSites.includes(site),
       keepSite: (site) => this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [...this.settings.actSites, site] } } }),

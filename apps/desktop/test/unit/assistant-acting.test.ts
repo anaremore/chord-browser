@@ -59,7 +59,7 @@ function setup() {
     fills: () => ({ refuse: () => null, show: async () => undefined }),
     acting: () => ({
       on: () => looks.on,
-      shownAlone: (node: TabNode) => looks.alone && store.state.windows['w1']!.activeTab['c1'] === node.id,
+      offScreen: (node: TabNode) => (!looks.alone ? 'its window was minimized' : store.state.windows['w1']!.activeTab['c1'] === node.id ? null : 'another tab is on screen in its window'),
       siteOf: (url: string) => new URL(url).hostname,
       siteAllowed: () => false,
       keepSite: () => undefined,
@@ -80,8 +80,8 @@ describe('Where the assistant may act (S18 M2e-2a, A1)', () => {
       ['an agent’s tab', () => undefined, () => 'a1', () => AGENT_TAB_REFUSALS.act('Claude Code')],
       ['no message (between turns)', (t) => void (t.chat.actTab = null), (t) => t.mine, () => USER_TAB_REFUSALS.noMessage],
       ['acting turned off', (t) => void (t.looks.on = false), (t) => t.mine, () => USER_TAB_REFUSALS.off],
-      ['the window minimized, or Peek over it: over for the message', (t) => void (t.looks.alone = false), (t) => t.mine, () => USER_TAB_REFUSALS.switched],
-      ['you switched to another tab', (t) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other }), (t) => t.mine, () => USER_TAB_REFUSALS.switched],
+      ['the window minimized, or Peek over it: over for the message, saying which', (t) => void (t.looks.alone = false), (t) => t.mine, () => USER_TAB_REFUSALS.switched('its window was minimized')],
+      ['you switched to another tab', (t) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other }), (t) => t.mine, () => USER_TAB_REFUSALS.switched('another tab is on screen in its window')],
       ['you used the tab', (t) => void (t.chat.actEnded = USER_TAB_REFUSALS.tookOver), (t) => t.mine, () => USER_TAB_REFUSALS.tookOver],
     ];
     for (const [what, arrange, which, expected] of rows) {
@@ -95,9 +95,10 @@ describe('Where the assistant may act (S18 M2e-2a, A1)', () => {
   it('once off screen, not back for the rest of the message: switching back doesn’t let it act again', () => {
     const t = setup();
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other });
-    expect(t.scope.act!.mayAct(t.tab(t.mine))).toBe(USER_TAB_REFUSALS.switched);
+    const gone = USER_TAB_REFUSALS.switched('another tab is on screen in its window');
+    expect(t.scope.act!.mayAct(t.tab(t.mine))).toBe(gone);
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.mine });
-    expect(t.scope.act!.mayAct(t.tab(t.mine))).toBe(USER_TAB_REFUSALS.switched);
+    expect(t.scope.act!.mayAct(t.tab(t.mine))).toBe(gone);
   });
 });
 

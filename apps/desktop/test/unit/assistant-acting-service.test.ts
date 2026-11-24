@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emptyState, splitOf, type State } from '@chord/core';
+import { emptyState, nodeOf, splitOf, type State } from '@chord/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
@@ -129,9 +129,9 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     const t = setup();
     const s = await t.turn();
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other });
-    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched);
+    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched('another tab is on screen in its window'));
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.mine });
-    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched);
+    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched('another tab is on screen in its window'));
   });
 
   it('every way a chat ends lets its leases go: a new chat, Settings’ Nothing, the chord turned off (E6)', async () => {
@@ -242,6 +242,8 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> } } }).actingHost(s);
     let go: (v: string) => void = () => undefined;
     leases.begin = () => new Promise((done) => (go = done));
+    // Its bar is up before the lease is had (tools.ts: doing, then the lease): it has acted in this message.
+    (t.service as unknown as { acted: WeakSet<object> }).acted.add(s);
     const begun = host.lease.begin({ id: t.mine });
     t.service.userUsedTab(t.mine);
     go('on');
@@ -269,7 +271,7 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     (t.browser as unknown as { peeks: { isOpen: () => boolean } }).peeks.isOpen = () => peek;
     peek = true;
     t.service.screenChanged();
-    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched);
+    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched('Peek is open over it'));
     const u = setup();
     const v = await u.turn();
     u.store.dispatch({ t: 'split.add', windowId: 'w1', withId: u.mine, nodeId: u.other });
@@ -306,5 +308,69 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     (t.service as unknown as { send: (...args: unknown[]) => Promise<void> }).send = async (...args) => void sent.push(args[5]);
     await t.service.act('w1', { do: 'retry' } as never);
     expect(sent).toEqual([{ nodeId: t.mine, windowId: 'w1' }]);
+  });
+
+  it('a read-only turn (its card answered), then an acting message in the same chat and tab with no switch: it may act there (the owner’s preview, 2026-11-24)', async () => {
+    const t = setup();
+    t.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } });
+    const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown; actEnded: string | null; streaming: unknown; messages: unknown[] };
+    const inner = t.service as unknown as {
+      sessionFor(state: unknown): Promise<unknown>;
+      finishTurn(state: unknown, outcome: { status: 'done' }): Promise<void>;
+      scopeOf(state: unknown): { act?: { mayAct(node: unknown): string | null } };
+    };
+    inner.sessionFor = async () => ({ send: () => undefined, alive: true, busy: false, provider: 'claude' });
+    const node = () => nodeOf(t.store.state, t.mine);
+    // The read-only turn: the fill card up and answered, the page writing to itself, its title and icon changing.
+    await t.inner.send('w1', s, 'fill this form for me');
+    t.store.dispatch({ t: 'tab.updated', nodeId: t.mine, title: 'Sign up (filled)', favicon: null });
+    t.store.dispatch({ t: 'tab.live', nodeId: t.mine, live: { loading: false } } as never);
+    await inner.finishTurn(s, { status: 'done' });
+    // Its tab, never touched since: the next message acts there.
+    await t.inner.send('w1', s, 'click reset');
+    t.store.dispatch({ t: 'tab.updated', nodeId: t.mine, title: 'Sign up' });
+    t.service.screenChanged();
+    expect(s.actEnded).toBeNull();
+    expect(inner.scopeOf(s).act!.mayAct(node())).toBeNull();
+  });
+
+  it('your key or click in the tab during a reply ends its acting there, and the chat always says so (the owner’s answer 5; never a silent refusal)', async () => {
+    const t = setup();
+    const s = (await t.inner.stateFor('c1')) as unknown as { actEnded: string | null; streaming: unknown; actTab: unknown; thread: unknown; messages: { body: { role: string; summary?: string } }[] };
+    s.thread = { id: 'th1', chordId: 'c1', title: 't', provider: 'claude', model: null, scope: 'ask', createdAt: 0, updatedAt: 0, lastUsedAt: 0, providerSessionId: null };
+    s.streaming = { id: 'reply' };
+    s.actTab = { nodeId: t.mine, windowId: 'w1' };
+    t.service.userUsedTab(t.mine);
+    expect(s.actEnded).toBe(USER_TAB_REFUSALS.tookOver);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.messages.some((m) => m.body.role === 'tool' && /Stopped: you used the tab/.test(m.body.summary ?? ''))).toBe(true);
+  });
+
+  it('you switch away and back between turns, then send: the new message acts in the tab on screen (the owner’s preview, 2026-11-24); a switch during a turn still ends that turn’s acting', async () => {
+    const t = setup();
+    t.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } });
+    const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown; actEnded: string | null; streaming: unknown };
+    const inner = t.service as unknown as {
+      sessionFor(state: unknown): Promise<unknown>;
+      finishTurn(state: unknown, outcome: { status: 'done' }): Promise<void>;
+      scopeOf(state: unknown): { act?: { mayAct(node: unknown): string | null } };
+    };
+    inner.sessionFor = async () => ({ send: () => undefined, alive: true, busy: false, provider: 'claude' });
+    const node = () => nodeOf(t.store.state, t.mine);
+    const away = () => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other });
+    const back = () => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.mine });
+    await t.inner.send('w1', s, 'fill this form for me');
+    // The turn reads the page (its scope made, as a tool call makes it), then ends.
+    expect(inner.scopeOf(s).act!.mayAct(node())).toBeNull();
+    await inner.finishTurn(s, { status: 'done' });
+    away();
+    expect(inner.scopeOf(s).act!.mayAct(node())).toBe(USER_TAB_REFUSALS.noMessage);
+    back();
+    await t.inner.send('w1', s, 'click reset');
+    expect(inner.scopeOf(s).act!.mayAct(node())).toBeNull();
+    // During the turn: switching away ends it for this message, as before.
+    away();
+    back();
+    expect(inner.scopeOf(s).act!.mayAct(node())).toBe(USER_TAB_REFUSALS.switched('another tab is on screen in its window'));
   });
 });
