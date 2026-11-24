@@ -11,7 +11,6 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   agentChords,
-  assistantActing,
   barDoing,
   CONTROL_WAIT_MS,
   sendTitle,
@@ -89,6 +88,7 @@ import { AssistantImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
 import { duetScope, USER_TAB_REFUSALS, type DuetChat } from './scope';
 import { siteOfUrl } from '../agents/shares';
+import { buildActs } from './preview';
 import { dropAgentGuard } from '../control/page';
 import { beginUserAction, endUserAction, endUserLease, type UserTabNote } from '../control/user-watch';
 
@@ -429,7 +429,7 @@ export class AssistantService {
 
   /** Whether the assistant clicks and types (S18 M2e): a build with M2, Settings → Assistant's switch on, and not *Nothing*. */
   private acting(): boolean {
-    return assistantActing({ packaged: app.isPackaged }) && this.settings.acting && !this.settings.readsNothing;
+    return buildActs() && this.settings.acting && !this.settings.readsNothing;
   }
 
   /** The tab on screen as a message is sent: the one it may act in (S18 M2e-2a, A1). */

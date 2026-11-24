@@ -20,7 +20,6 @@ import {
   effectsHost,
   isInternalUrl,
   agentChords,
-  assistantActing,
   isAgentChord,
   isPrivateChord,
   passwordsOnIn,
@@ -70,6 +69,7 @@ import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, webFrameMain, type Session, type WebContents, type WebContentsView } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
+import { buildActs } from './assistant/preview';
 import { attachContextMenu } from './context-menu';
 import { isAgentInput } from './control/input';
 import { DevTools } from './devtools';
@@ -2080,7 +2080,7 @@ export class Browser {
       spellcheckLanguages: spellcheckLanguages(),
       linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),
       effects: this.effects.sites(),
-      assistantActing: assistantActing({ packaged: app.isPackaged }),
+      assistantActing: buildActs(),
     };
   }
 
