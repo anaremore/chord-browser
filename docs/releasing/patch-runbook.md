@@ -82,7 +82,7 @@ git push -u origin HEAD                           # then open a PR
 
 ## 4. The suites that must pass
 
-Every one, on the bump's commit. CI runs the first two on every PR and every push to `main`.
+Every one, on the bump's commit. CI runs the first two on every push to `main`, each night, and on PRs: every platform's E2E only on a platform-sensitive or `ready`-labeled PR (Renovate's always get every platform), Linux x64 X11 alone on the rest.
 
 | Suite | Where | Command |
 |---|---|---|
@@ -109,6 +109,7 @@ Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/d
 - [ ] Refresh the ad-blocking lists every build bundles: `pnpm --filter @chord/desktop lists` (ARCHITECTURE.md §9). Installed copies refresh their own, so a security release can skip it.
 - [ ] If the release adds or changes a major feature, update chordbrowser.com in this commit: its copy, and the README's and the site's screenshots ([site/README.md](../../site/README.md#with-each-release)). The download links update themselves when the release is published.
 - [ ] Commit to `main` (through a PR if `main` is protected): `chore(release): vA.B.C`.
+- [ ] **Every platform green on that commit.** A PR that isn't platform-sensitive merges on Linux x64 X11 alone, so the last full CI run on the commit you tag (the push to `main`, the nightly run, or `gh workflow run ci.yml --ref main`) must have passed every E2E platform and Chord Player, with no open *Nightly full tier failed on main* issue. Check with `gh run list --workflow ci.yml --branch main --commit <sha>`. Not green: fix it, or rerun to rule out a flake, before tagging. release.yml's builds and smoke tests don't run E2E.
 - [ ] Tag that commit and push only the tag:
   ```sh
   git switch main && git pull --ff-only
