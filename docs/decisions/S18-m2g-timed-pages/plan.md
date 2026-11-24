@@ -49,4 +49,4 @@ The owner, on a real-time online table (main plus #117): the agent played a full
 | `wait_for`: one at a time, 30 s, Stop and navigation | |
 | `wait_for`: throttled checks on a page mutating every frame | |
 | Snapshot with a result: caps, untrusted, refs replaced, none after navigating | |
-| #143: answered before the client's timeout, the retry runs once, nothing twice | |
+| #143: answered before the client's timeout, the retry runs once, nothing twice | Progress while a card waits: agent-chords.test, *a call that asked for progress hears it…* (beats with the token, counting up, saying a card waits; none after the answer; none without a token). The short-timeout client and the retry: to come. |

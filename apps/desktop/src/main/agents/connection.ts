@@ -68,7 +68,19 @@ export interface ConnectionDeps {
   loadMs?: number;
   /** Acting (M2c): the sites it may act on for good (its allowance's), and keeping one (*Always on this site*). */
   sites?: { allowed(site: string): boolean; keep(site: string): void };
+  /** How often a call that asked for progress hears it (PROGRESS_MS; tests shorten it). */
+  progressMs?: number;
 }
+
+/**
+ * A call that carries a progressToken hears this often that it's still under way (#143): what a client counts as
+ * activity (Claude Code's idle limit), and how its user sees that Chord waits on them, not that it hung.
+ */
+const PROGRESS_MS = 5_000;
+export const AGENT_PROGRESS = {
+  card: 'Waiting for the user to answer Chord’s card.',
+  working: 'Still working in Chord.',
+} as const;
 
 /** What open_tab waits for its page: at most this long (S18 §5). */
 const LOAD_MS = 30_000;
@@ -246,6 +258,17 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const cancel = new AbortController();
     calls.set(m.id, cancel);
     lastCallAt = Date.now();
+    // Progress, when the client asked for it (MCP's progressToken): every PROGRESS_MS until the answer, saying whether a
+    // card waits on the user (#143: a client must never take a call waiting on a card for one that hung).
+    const token = (m.params?.['_meta'] as { progressToken?: unknown } | undefined)?.progressToken;
+    let beats = 0;
+    const beat =
+      typeof token === 'string' || typeof token === 'number'
+        ? setInterval(() => {
+            const card = [...agent.states().values()].some((s) => s.cards.length > 0);
+            send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: card ? AGENT_PROGRESS.card : AGENT_PROGRESS.working } });
+          }, deps.progressMs ?? PROGRESS_MS)
+        : null;
     try {
       const out = await agent.call(
         null,
@@ -261,8 +284,10 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         refused,
       );
       const answer = output(out);
+      if (beat) clearInterval(beat);
       reply(m.id, { ...answer, content: [...answer.content, ...held()] });
     } finally {
+      if (beat) clearInterval(beat);
       calls.delete(m.id);
     }
   };

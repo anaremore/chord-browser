@@ -12,7 +12,7 @@ import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentChords, type Going } from '../../src/main/agents/chords';
-import { agentConnection } from '../../src/main/agents/connection';
+import { AGENT_PROGRESS, agentConnection } from '../../src/main/agents/connection';
 import { AuthBroker } from '../../src/main/http-auth';
 import { agentScope, NOT_YOURS } from '../../src/main/agents/scope';
 import { ControlAgent, type CardPresenter } from '../../src/main/control/gate';
@@ -525,6 +525,38 @@ describe('Review 1 of #77', () => {
     expect(refused).toEqual(['The site https://intranet.test asked for a sign-in; Chord doesn’t sign agents in.']);
     // Your tab still gets its box.
     expect(broker.login(pageAt('https://intranet.test/', 'mine'), details, info, vi.fn())).toBe(true);
+  });
+
+  it('a call that asked for progress hears it while a card waits on the user, and none after its answer (#143)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    type Sent = { id?: number; method?: string; params?: { progressToken?: unknown; progress?: number; message?: string } };
+    const sent: Sent[] = [];
+    let allow: (grant: 'once') => void = () => undefined;
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+      present: () => new Promise((done) => (allow = done)),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+      progressMs: 1000,
+    });
+    const progress = () => sent.filter((m) => m.method === 'notifications/progress');
+    // The connection card is up: each beat says so, with the client's token, counting up.
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'list_tabs', arguments: {}, _meta: { progressToken: 'p1' } } });
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(progress().map((m) => m.params)).toEqual([1, 2, 3].map((progress) => ({ progressToken: 'p1', progress, message: AGENT_PROGRESS.card })));
+    // Allowed: the answer, and no beat after it.
+    allow('once');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.find((m) => m.id === 1)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(progress()).toHaveLength(3);
+    // A call without a token hears none.
+    connection.message({ id: 2, method: 'tools/call', params: { name: 'list_tabs', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sent.find((m) => m.id === 2)).toBeDefined();
+    expect(progress()).toHaveLength(3);
+    vi.useRealTimers();
   });
 
   it('close_tab waits while you use the tab: it answers paused, and the tab stays', async () => {
