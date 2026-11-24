@@ -565,7 +565,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       let sent: string | null;
       try {
         const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
-        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? notHereNow()));
+        // The hold lost meanwhile (a detach, the renderer gone) is never a success (Neon's B5, round 2 of #147).
+        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : page.lost() ? ACT_REFUSALS.noCheck : (takenOver() ?? notHereNow()));
         sent = await askHeld(
           w,
           going,
@@ -593,6 +594,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         w.end();
       }
       if (sent) return refuse(sent);
+      // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
+      if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
       if (!went) return refuse(ACT_REFUSALS.noBack);
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -644,6 +647,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
     const taken = takenOver() ?? notHereNow();
     if (taken) return taken;
+    // The hold lost (a detach, the renderer gone): nothing more goes, and nothing is done (Neon's B5, round 2 of #147).
+    if (page.lost()) return ACT_REFUSALS.noCheck;
     // The page went somewhere: input now would land on another page's element.
     if (page.id !== pageAtCheck) return ELEMENT_REFUSALS.stale;
     return null;
@@ -912,6 +917,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
       if (tool === 'select_option') {
         if ((refused = await sameStep())) return;
+        if ((refused = halt())) return;
+        if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         // By the page's whole label, as describe matched it (the card showed it clipped).
         const chosen = await page.act(owner, lookup.token, lookup.key, { op: 'choose', option: asked });
         if (!chosen.ok) refused = actRefusal(chosen);
@@ -928,6 +935,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (valueType) {
         if ((refused = await sameStep())) return;
         if ((refused = halt())) return;
+        if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         await page.act(owner, lookup.token, lookup.key, { op: 'values', mode: 'remember' });
         const set = await page.act(owner, lookup.token, lookup.key, { op: 'setValue', value: value as string });
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
@@ -996,10 +1004,19 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // Its document as it was when the card opened, not when the action began (Claude's final pass: a page the action
       // went to that posts as it loads gets its Allow).
       const sendHalt = (opened: unknown) =>
-        call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? (page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
+        call.stopped()
+          ? CONTROL_REFUSALS.stopped
+          : scope.agent.state(node.id).paused
+            ? CONTROL_REFUSALS.paused
+            : page.lost()
+              ? ACT_REFUSALS.noCheck
+              : (takenOver() ?? notHereNow() ?? (page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
       const sent = await askHeld(w, acting, (held, sites, why, takeDown) => askSendCard(held, sites, why, w, takeDown), sendHalt, originOf(page.url()), () => page.mark);
       refused ??= sent;
     }
+    // The hold lost during the action (a detach, the renderer gone): what it sent wasn't asked about, so never done
+    // (Neon's B5, round 2 of #147).
+    if (!refused && page.lost()) refused = ACT_REFUSALS.noCheck;
     const { navigated, loading } = await acting;
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);

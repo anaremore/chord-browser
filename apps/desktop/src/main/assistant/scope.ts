@@ -45,11 +45,12 @@ export interface DuetHost {
   activity(chat: DuetChat, tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
   /**
    * Acting in the tab on screen (S18 M2e-2a): absent where the build or Settings → Assistant's *Click and type on pages*
-   * says no. `shownAlone`: the tab is on screen in that window, alone (not in a split), the window not minimized.
+   * says no. `offScreen`: null while the tab is on screen in that window (no Peek over it, the window not minimized),
+   * else what was seen instead, in a few words (*another tab is on screen*).
    */
   acting?(chat: DuetChat): {
     on(): boolean;
-    shownAlone(node: TabNode, windowId: WindowId): boolean;
+    offScreen(node: TabNode, windowId: WindowId): string | null;
     siteOf(url: string): string | null;
     siteAllowed(site: string): boolean;
     keepSite(site: string): void;
@@ -74,9 +75,12 @@ export const USER_TAB_REFUSALS = {
   off: 'The user turned off clicking and typing on pages, in Settings → Assistant. Tell them what to do instead.',
   noMessage: 'Act only for a message of the user’s that asks you to.',
   notThatTab: (title: string) => `You can act only in the tab that was on screen when the user wrote (“${title}”). Ask them to switch to the tab they mean, then to ask again.`,
-  switched: 'The user switched away from that tab. Stop, and tell them what you did and what’s left.',
+  /** What was seen (the owner's preview: a refusal must say which, so a real switch is told from anything else). */
+  switched: (seen: string) =>
+    `That tab left the screen while you were working on this message (${seen}), so acting stopped for it. Stop, and tell the user that: they switched away while you were working, what you did and what’s left, and that if they ask again with the tab on screen you’ll pick up from there.`,
   split: 'Acting works on a tab shown alone, not in a split. Ask the user to show the tab on its own.',
   tookOver: 'The user took over the tab. Stop, and tell them what you did and what’s left.',
+  left: 'The user left this chat or closed the assistant, so acting stopped. Stop, and tell them what you did and what’s left.',
 } as const;
 
 export function duetScope(chat: DuetChat, host: DuetHost, actions = false): ControlScope {
@@ -142,8 +146,9 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
               // In a split: said, not latched (you may close the split). Anything else off screen (another tab, Peek,
               // minimized, another window): over for this message (Neon's B6 on #147).
               if (splitOf(state(), node.id)) return USER_TAB_REFUSALS.split;
-              if (!acting.shownAlone(node, at.windowId)) {
-                chat.actEnded = USER_TAB_REFUSALS.switched;
+              const seen = acting.offScreen(node, at.windowId);
+              if (seen) {
+                chat.actEnded = USER_TAB_REFUSALS.switched(seen);
                 return chat.actEnded;
               }
               return null;

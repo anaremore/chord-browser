@@ -1207,6 +1207,7 @@ if (!app.requestSingleInstanceLock()) {
       assistant?.userMovedPage(contents);
     };
     browser.userInput = (nodeId) => assistant?.userUsedTab(nodeId);
+    browser.screenChanged = () => assistant?.screenChanged();
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {
       agents?.service?.stopAll();

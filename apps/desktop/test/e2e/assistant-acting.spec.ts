@@ -26,7 +26,8 @@ test.beforeAll(async () => {
     '/table':
       '<title>Table 7</title><h1>Hand 12</h1><p id=log></p>' +
       ['Fold', 'Call', 'Raise'].map((m) => `<button onclick="fetch('/move?${m}', { method: 'POST', body: '${m}' }).then(() => (log.textContent += '${m} '))">${m}</button>`).join(' '),
-    // A checkout: paying asks every time.
+    // A sign-up form: filled from its card, then reset by the assistant (the owner's preview, 2026-11-24).
+    '/form': '<title>Sign up</title><form><label>Full name <input name=name></label> <label>Email <input name=email></label> <button type=button onclick="this.form.reset()">Reset</button></form>',
     // M2e-2b: what a click can set off. Each button's outcome goes in the page's log (and the passkey's time, for the
     // pending-request check: one asked with a 20 s timeout while Chord holds WebAuthn).
     '/tricks':
@@ -36,6 +37,7 @@ test.beforeAll(async () => {
       '<button onclick="getSelection().selectAllChildren(copyme); document.execCommand(\'copy\'); log.textContent += \'copied \'">Copy</button>' +
       '<button onclick="const t = Date.now(); navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32), timeout: 20000, userVerification: \'discouraged\', allowCredentials: [] } }).then(() => (log.textContent += \'passkey-ok \'), (e) => (log.textContent += \'passkey-\' + e.name + \'-\' + Math.round((Date.now() - t) / 1000) + \'s \'))">Passkey</button>' +
       '<button onclick="file.click()">Download</button>',
+    // A checkout: paying asks every time.
     '/checkout': '<title>Checkout</title><form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> <button>Place order</button></form>',
   };
   const server = createServer((req, res) => {
@@ -134,6 +136,10 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     const sendCard = card(/^Send data to /);
     await expect(sendCard).toBeVisible({ timeout: 15_000 });
     await expect(sendCard).toContainText('The assistant clicked “Raise”, and the page is sending something to its site.');
+    // Mid-action, the bar over the tab says what it's doing, with Stop (round 2 of #147: the bar and its Stop).
+    const bar = shell.getByRole('status').filter({ hasText: 'The assistant is clicking “Raise”' });
+    await expect(bar).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Stop' })).toBeVisible();
     expect(reached).toEqual([]);
     await shell.waitForTimeout(700);
     await sendCard.getByRole('button', { name: 'Allow for this chat' }).click();
@@ -176,7 +182,69 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(4);
     expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('The user said no to this step');
     expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
+
+    // Once more, and Stop (the bar's, as Ctrl+.: every agent and reply) ends it: the card comes down, nothing is sent.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Place order' }]));
+    await expect(pay.last()).toBeVisible({ timeout: 20_000 });
+    await dispatch(shell, { t: 'agents.stopAll' });
+    await expect(panel.getByRole('group', { name: /^Place the order/ })).toHaveCount(0);
+    expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
   } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('after a turn that only filled a form (its card answered), the next message acts in the same tab: the site card, never “switched away” (the owner’s preview)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const windowId = (await where(shell)).windowId;
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/form` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/form`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/form`))!;
+    const panel = await openAssistant(shell);
+    // A read-only turn: the fill card, answered.
+    await send(panel, 'fill this form for me');
+    const fill = panel.getByRole('button', { name: /^Fill \d+ fields?$/ });
+    await expect(fill).toBeVisible({ timeout: 20_000 });
+    await fill.click();
+    await expect.poll(() => page.evaluate(() => (document.querySelector('input[name=name]') as HTMLInputElement).value)).toBe('Ada Lovelace');
+    // You switch to another tab and back, between turns; the form is on screen as you send: the new message acts there
+    // (the owner's preview, 2026-11-24): the site card, never a refusal carried from between turns.
+    const formTab = (await where(shell)).tabId!;
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/table` });
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: formTab });
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Reset' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => page.evaluate(() => (document.querySelector('input[name=name]') as HTMLInputElement).value), { timeout: 20_000 }).toBe('');
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
+    expect(lastActing(config).find((x) => x.tool === 'click')?.result).toContain('Clicked “Reset”');
+
+    // A switch during a turn still ends that turn's acting, and says what was seen.
+    await send(panel, act([{ sleep: 2500 }, { tool: 'snapshot' }, { tool: 'click', name: 'Reset' }]));
+    await shell.waitForTimeout(500);
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/table` });
+    expect((await where(shell)).tabId).not.toBe(formTab);
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: formTab });
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
+    expect(lastActing(config).find((x) => x.tool === 'click')?.result).toContain('That tab left the screen while you were working on this message (another tab is on screen in its window)');
+  } finally {
+    const acted = (() => {
+      try {
+        return readFileSync(join(config, 'acting.jsonl'), 'utf8');
+      } catch {
+        return '';
+      }
+    })();
+    if (acted) console.log(`acting: ${acted}`);
     await app.close();
     rmSync(profile, { recursive: true, force: true });
     rmSync(config, { recursive: true, force: true });

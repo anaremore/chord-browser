@@ -129,6 +129,11 @@ async function turn(sent, images = []) {
     const results = [];
     let outline = '';
     for (const step of steps) {
+      // A model thinking before its first step: the test does something meanwhile (the owner's preview).
+      if (step.sleep) {
+        await new Promise((done) => setTimeout(done, step.sleep));
+        continue;
+      }
       const args = { tab_id: tab, ...(step.args ?? {}) };
       // The element's ref, by its name as the outline quotes it: `button "Raise" [ref=e3]`.
       if (step.name) args.ref = outline.split('\n').find((line) => line.includes(`"${step.name}" [ref=`))?.match(/\[ref=(e\d+)\]/)?.[1] ?? 'e0';
