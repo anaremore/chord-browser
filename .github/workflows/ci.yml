@@ -18,7 +18,7 @@ name: CI
 # "run the full tier now" escape hatch: adding the label runs it once, on that commit.
 # Without a merge queue (until the owner turns it on), as before: a platform-sensitive pull request's `E2E` stays
 # pending until the full tier passes (label it `ready`), and a push to main runs the full tier.
-# The nightly run and a run by hand run the full tier; a failure on main opens an issue (`main-failed`). Before a
+# The nightly run and a run by hand run the full tier; a failure on main opens an issue (ci-main-failed.yml). Before a
 # release is tagged, the last full run on its commit must be green (docs/releasing/patch-runbook.md, §5).
 on:
   # Every push to main runs everything. A pull request that changes only docs or the website skips the slow
@@ -383,7 +383,7 @@ jobs:
             elif [ "$EVENT" = merge_group ]; then
               echo "A merge group: the $TIER tier, on the commit main gets. If it fails, the queue drops the pull request."
             elif [ "$EVENT" != pull_request ]; then
-              echo "A $EVENT run: every platform runs. If it fails on main, the \`main-failed\` job opens an issue (or comments on the open one)."
+              echo "A $EVENT run: every platform runs. If it fails on main, ci-main-failed.yml opens an issue (or comments on the open one)."
             elif [ "$QUEUE" = true ] && [ "$CODE" = true ]; then
               echo "A pull request: \`E2E\` passes with the fast tier, and its merge group runs the platforms it needs before it merges (\`gh pr merge <n> --merge --auto\`). Label it \`ready\` to run every platform now."
             elif [ "$CODE" != true ]; then
@@ -988,62 +988,3 @@ jobs:
         run: |
           echo "::error::$DESCRIPTION"
           exit 1
-
-  # A failed run on main (a push, the nightly run, or a run by hand) opens an issue, or comments on the open one:
-  # a pull request that isn't platform-sensitive merges on the fast tier, so this is where a platform bug it
-  # missed shows up. One open issue at a time, by its exact title; close it once main is green again.
-  main-failed:
-    name: Report a failure on main
-    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e-perf, e2e]
-    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && contains(needs.*.result, 'failure')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    # This job's alone: no other job can write issues.
-    permissions:
-      actions: read
-      issues: write
-    steps:
-      - name: Open or update the issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          EVENT: ${{ github.event_name }}
-          SHA: ${{ github.sha }}
-          TITLE: Nightly full tier failed on main
-        run: |
-          case "$EVENT" in
-            schedule) what="The nightly run" ;;
-            push) what="The push to main" ;;
-            *) what="A $EVENT run on main" ;;
-          esac
-          # Every failed job of this run, with its link (its name says the platform), and under each the tests
-          # that failed both tries, from Playwright's summary at the end of its log. This job is still running, so
-          # it isn't one of them.
-          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
-            --jq '.jobs[] | select(.conclusion == "failure") | [.id, .name, .html_url] | @tsv' > "$RUNNER_TEMP/failed.tsv"
-          failed=''
-          while IFS=$'\t' read -r id name url; do
-            failed+="- [$name]($url)"$'\n'
-            specs="$(gh api "repos/$REPO/actions/jobs/$id/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //' | tr -d '\r' | awk '
-              /^ +[0-9]+ failed$/ { on = 1; next }
-              on && /^ +[0-9]+ (flaky|skipped|passed|did not run|interrupted)/ { on = 0 }
-              on && /spec\.ts:[0-9]+:[0-9]+/ { sub(/^ +/, ""); print }' | head -n 20 || true)"
-            while IFS= read -r spec; do [ -n "$spec" ] && failed+="  - \`${spec//\`/}\`"$'\n'; done <<< "$specs"
-          done < "$RUNNER_TEMP/failed.tsv"
-          failed="${failed:-- (none listed: see the run)}"
-          body="$what failed at ${SHA:0:7}: $RUN_URL
-
-          Failed jobs, by platform, with the tests that failed both tries:
-          $failed
-
-          Rerun the failed jobs to tell a flake from a bug. Close this issue once main is green again: the next failure opens a new one."
-          # An API error fails the job rather than open a second issue.
-          number="$(gh issue list --repo "$REPO" --state open --limit 200 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // ""')"
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --repo "$REPO" --body "$body"
-            echo "Commented on #$number."
-          else
-            gh issue create --repo "$REPO" --title "$TITLE" --body "$body"
-          fi
