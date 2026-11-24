@@ -52,6 +52,8 @@ export interface ControlCard {
     more: number;
     shows?: string;
     typed?: string;
+    /** A download the assistant's click started in a tab of yours (S18 M2e-2b): its file's name. */
+    download?: string;
     /** What the page is sending, by site (control/sends.ts). */
     sends?: string[];
     /** Sent between actions (the tab's, not an action's: sends.ts). */

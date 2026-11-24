@@ -90,7 +90,7 @@ import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type
 import { duetScope, USER_TAB_REFUSALS, type DuetChat } from './scope';
 import { siteOfUrl } from '../agents/shares';
 import { dropAgentGuard } from '../control/page';
-import { beginUserAction, endUserAction, endUserLease } from '../control/user-watch';
+import { beginUserAction, endUserAction, endUserLease, type UserTabNote } from '../control/user-watch';
 
 type Decision = 'once' | 'thread' | 'always' | 'denied';
 
@@ -1381,6 +1381,23 @@ export class AssistantService {
                   );
                   return answer === 'once' ? 'once' : answer === 'always' ? 'until' : 'deny';
                 },
+                // What its click set off, caught in the moment after (M2e-2b, A6): a muted row each.
+                note: (what, detail) => void this.activity(s, 'act', USER_TAB_NOTES[what](detail), contents.getURL(), false),
+                askDownload: async (filename, signal) =>
+                  (await s.control.ask(
+                    {
+                      kind: 'step',
+                      tool: 'act',
+                      description: 'start a download',
+                      target: [contents.getURL()],
+                      tab: node.id,
+                      subject: `${node.id}|download|${randomBytes(4).toString('hex')}`,
+                      step: { why: 'confirm', site: siteOfUrl(contents.getURL()) ?? '', fields: [], more: 0, download: filename.slice(0, 120) },
+                    },
+                    signal,
+                    CONTROL_WAIT_MS,
+                  )) === 'once',
+                clipboard: { read: () => clipboard.readText(), write: (text) => clipboard.writeText(text) },
               });
               return ok ? null : 'Chord can’t check this page now (its developer tools may have it). Ask the user to close them, then to ask again.';
             },
@@ -1849,6 +1866,18 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
  * The gate's acting card as the chat shows it (S18 M2e-2a; mocks/agents-s18-m2.html §7): the site card, a risky step,
  * or what an action sends. Chord's words only (card.description is Chord's: *click “Raise”*), never the model's.
  */
+/** What the chat says of something the assistant's click set off (M2e-2b, A6), Chord's words around the page's. */
+export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
+  file: () => 'The page tried to open a file picker; it wasn’t shown',
+  dialog: (detail) => `The page showed a dialog (${detail}); it was answered Cancel`,
+  signin: () => 'The page asked to sign in with another site; Chord said no',
+  popup: (detail) => `The page tried to open a window (${detail}); it wasn’t opened`,
+  download: (detail) => `The page tried to download ${detail}`,
+  clipboard: () => 'The page changed your clipboard; Chord put it back',
+  unload: () => 'The page has unsaved changes, so it stayed',
+  away: (detail) => `The page opened ${detail} in a background tab`,
+};
+
 export function actCard(card: ControlCard): AssistantActCard | null {
   if (card.kind === 'site') {
     return {
@@ -1872,6 +1901,10 @@ export function actCard(card: ControlCard): AssistantActCard | null {
       lines: [`Goes to: ${step.sends.join(', ')}`],
       danger: other,
     };
+  }
+  // A download its click started (M2e-2b): saved only if you say so.
+  if (step.download !== undefined) {
+    return { kind: 'step', title: `Save ${step.download} from ${step.site}?`, note: 'The assistant’s click started a download.', lines: [], danger: false };
   }
   const lines: string[] = [];
   if (step.to) lines.push(`It goes to ${step.to}.`);

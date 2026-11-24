@@ -16,6 +16,7 @@ import { existsSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command, Download, DownloadAction, State, ThreatKind, WindowId } from '@chord/core';
+import { askUserTabDownload } from './control/user-watch';
 import { app, shell, type DownloadItem, type Session, type WebContents } from 'electron';
 import { safeFilename, uniquePath } from './files';
 
@@ -76,6 +77,16 @@ export class DownloadManager {
       if (contents && this.deps.refuse?.(contents, item.getURL(), item.getFilename())) {
         event.preventDefault();
         return;
+      }
+      // A download the assistant's click started in a tab of yours (S18 M2e-2b, A6): paused until you say, in the chat.
+      const asking = contents ? askUserTabDownload(contents, item.getFilename()) : null;
+      if (asking) {
+        item.pause();
+        void asking.then((yes) => {
+          if (item.getState() !== 'progressing') return;
+          if (yes) item.resume();
+          else item.cancel();
+        });
       }
       const id = this.deps.newId();
       const finalPath = uniquePath(downloadsDir(), safeFilename(item.getFilename()), (p) => existsSync(p) || this.reserved.has(p));

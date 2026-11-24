@@ -27,9 +27,23 @@ test.beforeAll(async () => {
       '<title>Table 7</title><h1>Hand 12</h1><p id=log></p>' +
       ['Fold', 'Call', 'Raise'].map((m) => `<button onclick="fetch('/move?${m}', { method: 'POST', body: '${m}' }).then(() => (log.textContent += '${m} '))">${m}</button>`).join(' '),
     // A checkout: paying asks every time.
+    // M2e-2b: what a click can set off. Each button's outcome goes in the page's log (and the passkey's time, for the
+    // pending-request check: one asked with a 20 s timeout while Chord holds WebAuthn).
+    '/tricks':
+      '<title>Tricks</title><p id=log></p><p id=copyme>page-clipboard-text</p><a id=file href="/file.zip" download hidden>f</a><input type=file id=up hidden>' +
+      '<button onclick="log.textContent += (window.open(\'/table\', \'p\', \'width=300,height=200\') ? \'opened \' : \'blocked \')">Open window</button>' +
+      '<button onclick="up.click()">Upload</button>' +
+      '<button onclick="getSelection().selectAllChildren(copyme); document.execCommand(\'copy\'); log.textContent += \'copied \'">Copy</button>' +
+      '<button onclick="const t = Date.now(); navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32), timeout: 20000, userVerification: \'discouraged\', allowCredentials: [] } }).then(() => (log.textContent += \'passkey-ok \'), (e) => (log.textContent += \'passkey-\' + e.name + \'-\' + Math.round((Date.now() - t) / 1000) + \'s \'))">Passkey</button>' +
+      '<button onclick="file.click()">Download</button>',
     '/checkout': '<title>Checkout</title><form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> <button>Place order</button></form>',
   };
   const server = createServer((req, res) => {
+    if (req.url === '/file.zip') {
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="file.zip"' });
+      res.end('PK');
+      return;
+    }
     if (req.method === 'POST') {
       reached.push(`POST ${req.url}`);
       req.resume();
@@ -160,6 +174,50 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(4);
     expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('The user said no to this step');
     expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('what the assistant’s click sets off in your tab is caught: a window, a file picker, the clipboard, a passkey, a download (M2e-2b)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/tricks` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/tricks`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/tricks`))!;
+    await app.evaluate(({ clipboard }) => clipboard.writeText('yours'));
+    const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Open window' }, { tool: 'click', name: 'Upload' }, { tool: 'click', name: 'Copy' }, { tool: 'click', name: 'Passkey' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    // A window of its own is never made; a file picker never shows; each is said in the chat.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(windows);
+    await expect(page.locator('#log')).toContainText('blocked');
+    await expect(panel.getByText(/^The page tried to open a window/)).toBeVisible();
+    await expect(panel.getByText('The page tried to open a file picker; it wasn’t shown')).toBeVisible();
+    // The passkey: refused with no prompt; whether a request still pending when the domain turns off ends then is the
+    // record's check (M2e-2 spike): its time is printed.
+    await expect(page.locator('#log')).toContainText(/passkey-NotAllowedError-\d+s/, { timeout: 30_000 });
+    console.log(`passkey: ${await page.locator('#log').textContent()}`);
+    // The clipboard the page changed is put back once its click can set nothing off.
+    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 15_000 }).toBe('yours');
+    // A download its click starts asks first; Don't, and nothing is saved.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Download' }]));
+    const save = panel.getByRole('group', { name: /^Save file\.zip from / });
+    await expect(save).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await save.getByRole('button', { name: 'Don’t' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
