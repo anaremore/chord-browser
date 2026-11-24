@@ -82,7 +82,7 @@ git push -u origin HEAD                           # then open a PR
 
 ## 4. The suites that must pass
 
-Every one, on the bump's commit. CI runs the first two on every push to `main`, each night, and on PRs: every platform's E2E only on a platform-sensitive or `ready`-labeled PR (Renovate's always get every platform), Linux x64 X11 alone on the rest.
+Every one, on the bump's commit. CI runs the first two on every push to `main`, each night, and on PRs: every platform's E2E only on a platform-sensitive or `ready`-labeled PR (an Electron bump is platform-sensitive, so its PR gets every platform with no label), Linux x64 X11 alone on the rest.
 
 | Suite | Where | Command |
 |---|---|---|
