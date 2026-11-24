@@ -26,7 +26,7 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { dropAgentGuard } from '../control/page';
-import { endUntil, failHeld, sendHoldDeps, shownOrigin } from '../control/sends';
+import { endUntil, failHeld, normalUrl, sendHoldDeps, shownOrigin } from '../control/sends';
 import { randomBytes } from 'node:crypto';
 import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
@@ -76,6 +76,16 @@ const USER_MS = 15_000;
 /** At most this long after you move an agent's tab, its outgoing page's sends are no one's (`leaving`). */
 const LEAVING_MS = 15_000;
 
+/** Where your move takes an agent's tab: its own address again, the entry behind or ahead of it, an address, or nowhere. */
+export type Going = 'reload' | 'back' | 'forward' | 'stay' | { url: string };
+
+function goingUrl(contents: WebContents, going: Exclude<Going, 'stay'>): string | null {
+  if (typeof going === 'object') return going.url;
+  if (going === 'reload') return contents.getURL();
+  const history = contents.navigationHistory;
+  return history.getEntryAtIndex(history.getActiveIndex() + (going === 'back' ? -1 : 1))?.url ?? null;
+}
+
 export class AgentChords {
   private readonly chords = new Map<ChordId, AgentChord>();
   /** What each agent tab's bar says now, so only changes are dispatched. */
@@ -88,11 +98,14 @@ export class AgentChords {
   /** What the agent is doing on each tab (M2c), and since when: a wording stays at least ACT_BAR_MIN_MS. */
   private readonly doings = new Map<NodeId, { text: string; since: number; clear?: ReturnType<typeof setTimeout> }>();
   /**
-   * Agent tabs you just moved yourself (a reload, back, forward, an address: S18 M2e-1): until the page you sent it to
-   * commits and loads, what the outgoing page sends (its `pagehide` keepalive POST, a beacon) is no one's and fails,
-   * never yours (Neon's S1 on #116). Cleared once a committed page stops loading, a load fails, or after LEAVING_MS.
+   * Agent tabs you just moved yourself (a reload, back, forward, an address: S18 M2e-1). Until the page you sent it to
+   * has committed (a new document in the main frame, `did-navigate`) and stopped loading, everything that reaches the
+   * send hold fails, never yours (Neon's S1 and round 2 on #116): the outgoing page's `pagehide` keepalive POST, a beacon,
+   * a form it posts, an address that signs out; only the address you asked for goes, once (`going`). It fails closed:
+   * nothing the outgoing page can do (a pushState, `window.stop()`, a stall, a 204) clears it as yours; a load that
+   * fails, or doesn't commit within LEAVING_MS, gives the tab back to the agent (unpaused, held), never to you.
    */
-  private readonly leaving = new Map<NodeId, { committed: boolean; timer: ReturnType<typeof setTimeout> }>();
+  private readonly leaving = new Map<NodeId, { committed: boolean; going: string | null; timer: ReturnType<typeof setTimeout> }>();
   private readonly unsubscribe: () => void;
   /** A tab handed over to you: the agents' refs for it say it's closed. Set by the service. */
   onHandedOver: ((nodeId: NodeId) => void) | null = null;
@@ -251,37 +264,49 @@ export class AgentChords {
    * buttons, keys and menus, never from the page navigating itself (Neon's B6: a pause makes its sends yours, so a
    * page's own reload or redirect must not be able to turn the hold off). A tab that isn't an agent's: nothing.
    */
-  takeOver(nodeId: NodeId, contents = this.deps.page(nodeId), navigating = false): void {
+  takeOver(nodeId: NodeId, contents = this.deps.page(nodeId), going: Going = 'stay'): void {
     const chord = this.chordOfTab(nodeId);
     if (!chord) return;
     const live = contents && !contents.isDestroyed() ? contents : null;
-    // Never your keys stopped: an action's guard comes down at once (the action stops at its next check).
-    if (live) dropAgentGuard(live);
+    // Paused (its sends yours) only where you can see it: a tab no window shows stays the agent's, held as before
+    // (Neon's B1 on #116: a reload from its row's menu mustn't turn the hold off unseen, with no bar to say so).
+    const shown = Object.values(this.deps.store.state.windows).some((w) => w.agentTab === nodeId);
+    // Never your keys stopped: an action's guard comes down at once (the action stops at its next check). A tab no window
+    // shows gets no keys of yours, so its guard stays up for the action, which hears of the takeover (Neon's round 2 S1).
+    if (live && shown) dropAgentGuard(live);
     this.userActed(nodeId);
     // What the page held to send for the agent fails before anything is yours, and the tab's cards come down.
     if (live) failHeld(live);
     chord.agent.cancelCardsFor(nodeId);
-    if (navigating && live) this.leave(nodeId);
-    // Paused (its sends yours) only where you can see it: a tab no window shows stays the agent's, held as before
-    // (Neon's B1 on #116: a reload from its row's menu mustn't turn the hold off unseen, with no bar to say so).
-    const shown = Object.values(this.deps.store.state.windows).some((w) => w.agentTab === nodeId);
+    if (going !== 'stay' && live) this.leave(nodeId, goingUrl(live, going));
     if (shown && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
   }
 
   /** takeOver, for a page Chord's buttons, keys or menus are about to reload or move (a tab of yours: nothing). */
-  takeOverPage(contents: WebContents): void {
+  takeOverPage(contents: WebContents, going: Going = 'reload'): void {
     for (const chord of this.chords.values()) {
-      for (const tab of this.tabsOf(chord.chordId)) if (this.deps.page(tab.id) === contents) return this.takeOver(tab.id, contents, true);
+      for (const tab of this.tabsOf(chord.chordId)) if (this.deps.page(tab.id) === contents) return this.takeOver(tab.id, contents, going);
     }
   }
 
-  /** The page in this tab is on its way out (you moved it): its sends are no one's until the next one loads. */
-  private leave(nodeId: NodeId): void {
+  /** The page in this tab is on its way out (you moved it to `going`): its sends are no one's until the next one loads. */
+  private leave(nodeId: NodeId, going: string | null): void {
     const was = this.leaving.get(nodeId);
     if (was) clearTimeout(was.timer);
-    const timer = setTimeout(() => this.leaving.delete(nodeId), LEAVING_MS);
+    // Not committed in time (a stall, a 204, a download): back to the agent, held, never yours.
+    const timer = setTimeout(() => this.giveBack(nodeId), LEAVING_MS);
     timer.unref?.();
-    this.leaving.set(nodeId, { committed: false, timer });
+    this.leaving.set(nodeId, { committed: false, going: going ? normalUrl(going) : null, timer });
+  }
+
+  /** Your move didn't happen (it failed, or never committed): the old page stays, and so it's the agent's again. */
+  private giveBack(nodeId: NodeId): void {
+    const was = this.leaving.get(nodeId);
+    if (!was) return;
+    if (was.committed) return this.left(nodeId);
+    this.left(nodeId);
+    const chord = this.chordOfTab(nodeId);
+    if (chord && chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, false);
   }
 
   private left(nodeId: NodeId): void {
@@ -334,7 +359,9 @@ export class AgentChords {
       if (input.type === 'keyDown' && !isAgentInput(contents)) yours();
     });
     contents.on('will-prevent-unload', (event) => event.preventDefault());
-    // The page you sent it to: committed, then loaded (or failed): what it sends is judged as anything else again.
+    // The page you sent it to: a new document committed in the main frame (`did-navigate` is the main frame's, and never
+    // a same-document one), then loaded: what it sends is judged as anything else again. A pushState, a hash or
+    // `window.stop()` of the outgoing page clears nothing (Neon's round 2 on #116).
     contents.on('did-navigate', () => {
       const was = this.leaving.get(nodeId);
       if (was) was.committed = true;
@@ -342,21 +369,22 @@ export class AgentChords {
     contents.on('did-stop-loading', () => {
       if (this.leaving.get(nodeId)?.committed) this.left(nodeId);
     });
-    // Back or forward within the same document (a pushState entry): nothing unloads, so nothing is on its way out.
-    contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
-      if (isMainFrame) this.left(nodeId);
-    });
+    // Failed before it committed (ERR_ABORTED from `window.stop()` included): the old page stays, the agent's again.
     contents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
-      if (isMainFrame) this.left(nodeId);
+      if (isMainFrame) this.giveBack(nodeId);
     });
     // What it sends (control/sends.ts): the agent's (held, asked) unless you have the tab (it's paused); once the agent is
     // done, only what follows your own key or click goes, the rest no one is there to ask about.
     sendHoldDeps(contents, {
       whose: (request) => {
-        // The page you moved it from, on its way out: none of its sends go; only the page you sent it to loads as usual (a
-        // document in the page's own target: a frame in another process is never it; one in the same process can't be
-        // told apart here, a stated limit: Claude's review 2 of #116).
-        if (this.leaving.has(nodeId) && request && !(request.type === 'Document' && request.top)) return 'none';
+        // The page you moved it from, on its way out: nothing that reaches the hold goes (a page's ordinary loads are reads,
+        // and never reach it), but the address you asked for, as the page's own document, once (Neon's round 2 on #116).
+        const leaving = this.leaving.get(nodeId);
+        if (leaving && request) {
+          const yours = request.type === 'Document' && request.top && leaving.going !== null && normalUrl(request.url) === leaving.going;
+          if (!yours) return 'none';
+          leaving.going = null;
+        }
         const chord = this.chordOfTab(nodeId);
         // An agent's page never becomes yours (a tab you keep gets a new one): with its chord gone (closed, Close all, a
         // site you keep private), what it sends on its way out is no one's to ask about, and fails (round 4 of #112).

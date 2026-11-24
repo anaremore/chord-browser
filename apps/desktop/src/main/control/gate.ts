@@ -306,7 +306,7 @@ export class ControlAgent {
       } catch {
         return 'deny';
       } finally {
-        this.open.delete(key);
+        if (this.open.get(key) === open) this.open.delete(key);
         for (const waited of open.tabs) this.step(waited, { t: 'answer', card: id });
       }
     })();
@@ -334,7 +334,11 @@ export class ControlAgent {
       open.waiting.delete(tab);
       open.tabs.delete(tab);
       this.step(tab, { t: 'answer', card: open.id });
-      if (open.tabs.size === 0) open.cancel.abort();
+      if (open.tabs.size === 0) {
+        // Out of `open` now, before its answer settles: an ask meanwhile gets a card of its own, not this taken-down one.
+        for (const [key, value] of this.open) if (value === open) this.open.delete(key);
+        open.cancel.abort();
+      }
     }
     for (const key of [...this.late.keys()]) if (!key.startsWith('site:') && key.endsWith(`:${tab}`)) this.late.delete(key);
   }

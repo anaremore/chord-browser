@@ -27,7 +27,7 @@ export interface ContextMenuDeps {
   /** The window showing this contents, and the view's offset in it, to place the menu where the click was. */
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
   /** Back, Forward or Reload chosen here: about to move the page (an agent's tab: you take it over, S18 M2e-1). */
-  navigates?(): void;
+  navigates?(going: 'back' | 'forward' | 'reload'): void;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
   extensionItems?(params: ContextMenuParams): MenuItem[];
   /**
@@ -120,7 +120,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
         label: 'Back',
         enabled: history.canGoBack(),
         click: () => {
-          deps.navigates?.();
+          deps.navigates?.('back');
           history.goBack();
         },
       },
@@ -128,7 +128,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
         label: 'Forward',
         enabled: history.canGoForward(),
         click: () => {
-          deps.navigates?.();
+          deps.navigates?.('forward');
           history.goForward();
         },
       },
@@ -136,7 +136,7 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
         label: 'Reload',
         accelerator: accel('nav.reload'),
         click: () => {
-          deps.navigates?.();
+          deps.navigates?.('reload');
           contents.reload();
         },
       },

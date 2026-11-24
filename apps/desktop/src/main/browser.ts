@@ -88,6 +88,7 @@ import { IdleKeeper, type IdleTiming } from './idle';
 import { MiniWindows } from './mini-window';
 import { MediaWatcher } from './media';
 import { liveOf, Peeks } from './peek';
+import type { Going } from './agents/chords';
 import { buildAgentTabMenu, buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH, type AgentShareMenu } from './menu';
 import type { PermissionBroker } from './permissions';
 import { Previews } from './previews';
@@ -307,7 +308,7 @@ export class Browser {
    * Chord's own buttons, keys or menus are about to reload or move this page (S18 M2e-1): if it's an agent's tab, you
    * take it over (agents/chords.ts' takeOverPage). Never called for a page navigating itself. Set by main.
    */
-  userNavigates: ((contents: WebContents) => void) | null = null;
+  userNavigates: ((contents: WebContents, going?: Going) => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -553,7 +554,7 @@ export class Browser {
             return owner && bounds ? { window: owner, x: bounds.x, y: bounds.y } : undefined;
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
-          navigates: () => this.userNavigates?.(contents),
+          navigates: (going) => this.userNavigates?.(contents, going),
           adBlocking: this.blockingMenu(contents),
           screenshot: () => {
             const w = this.windowFor(contents);
@@ -1629,7 +1630,7 @@ export class Browser {
     const contents = where === 'current' ? w.activeTabContents : this.openTabFor(w, request.home, where === 'background');
     if (!contents || contents.isDestroyed()) return;
     // Loading it into the tab on screen moves it: an agent's tab is yours from here (S18 M2e-1).
-    if (where === 'current') this.userNavigates?.(contents);
+    if (where === 'current') this.userNavigates?.(contents, { url: request.url });
     const upload = () => {
       if (contents.isDestroyed()) return;
       contents.loadURL(request.url, { postData: [{ type: 'rawData', bytes: request.body }], extraHeaders: `Content-Type: ${request.contentType}
@@ -2400,7 +2401,7 @@ export class Browser {
     else if (target === 'here') {
       // A link you followed in its reader view: an agent's tab is yours from here (S18 M2e-1).
       const page = pageOf(this.tabs.get(nodeId));
-      if (page) this.userNavigates?.(page);
+      if (page) this.userNavigates?.(page, { url });
       this.store.dispatch({ t: 'tab.navigate', nodeId, url });
     } else this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background: target === 'background' });
   }
@@ -2643,9 +2644,14 @@ export class Browser {
   safeBrowsingAction(sender: WebContents, nodeId: NodeId, action: 'back' | 'proceed'): void {
     const w = this.windowFor(sender);
     if (!w || !shownTabs(this.store.state, w.id).includes(nodeId)) return;
-    // Back to safety or Visit anyway moves the page: an agent's tab is yours from here (S18 M2e-1).
+    // Back to safety or Visit anyway: an agent's tab is yours from here (S18 M2e-1). Back moves the page only while it's
+    // still on the flagged page itself (guard.ts' back); otherwise it only takes the warning down (Neon's round 2 S3).
     const page = pageOf(this.tabs.get(nodeId));
-    if (page) this.userNavigates?.(page);
+    const threat = this.store.state.live[nodeId]?.threat;
+    if (page && threat) {
+      const onFlagged = page.getURL().split('#')[0] === threat.url.split('#')[0] && !threat.frameUrl;
+      this.userNavigates?.(page, action === 'proceed' ? { url: threat.url } : onFlagged ? 'back' : 'stay');
+    }
     if (action === 'back') this.safeBrowsing.back(nodeId);
     else this.safeBrowsing.proceed(nodeId);
   }
@@ -2801,13 +2807,13 @@ export class Browser {
         return true;
       case 'nav.back':
         if (pageContents?.navigationHistory.canGoBack()) {
-          this.userNavigates?.(pageContents);
+          this.userNavigates?.(pageContents, 'back');
           pageContents.navigationHistory.goBack();
         }
         return true;
       case 'nav.forward':
         if (pageContents?.navigationHistory.canGoForward()) {
-          this.userNavigates?.(pageContents);
+          this.userNavigates?.(pageContents, 'forward');
           pageContents.navigationHistory.goForward();
         }
         return true;

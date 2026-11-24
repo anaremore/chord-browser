@@ -11,7 +11,7 @@ import { size } from '@chord/tokens';
 import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AgentChords } from '../../src/main/agents/chords';
+import { AgentChords, type Going } from '../../src/main/agents/chords';
 import { agentConnection } from '../../src/main/agents/connection';
 import { AuthBroker } from '../../src/main/http-auth';
 import { agentScope, NOT_YOURS } from '../../src/main/agents/scope';
@@ -149,6 +149,9 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     const debug = new EventEmitter();
     const answered: [string, string][] = [];
     Object.assign(contents, {
+      getURL: () => `https://agent.test/${nodeId}`,
+      // Behind it, a page of the site's; ahead, nothing.
+      navigationHistory: { getActiveIndex: () => 1, getEntryAtIndex: (i: number) => (i === 0 ? { url: 'https://agent.test/before' } : i === 1 ? { url: `https://agent.test/${nodeId}` } : null) },
       debugger: Object.assign(debug, {
         isAttached: () => true,
         sendCommand: async (method: string, params: { requestId?: string }) => void answered.push([method, params.requestId ?? '']),
@@ -159,9 +162,9 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     let n = 0;
     /** What the page sends now (a POST to its site, or a load): its request id. */
     /** `session`: a frame in another process (its own debugger session); none, the page's own target. */
-    const send = (type = 'XHR', method = 'POST', session?: string) => {
+    const send = (type = 'XHR', method = 'POST', session?: string, url = `https://agent.test/${nodeId}/save`) => {
       const requestId = `r${++n}`;
-      debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method, url: `https://agent.test/${nodeId}/save` }, resourceType: type }, session);
+      debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method, url }, resourceType: type }, session);
       return requestId;
     };
     const how = (requestId: string) => answered.find(([, id]) => id === requestId)?.[0] ?? 'held';
@@ -171,15 +174,15 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
 
   const show = (t: ReturnType<typeof setup>, nodeId: string) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId });
 
-  // [what you did, whether a window shows the tab, whether it moves the page]
-  const takeovers: [string, boolean, boolean][] = [
-    ['the toolbar’s Back, on the tab you see', true, true],
-    ['the app menu’s Reload, on the tab you see', true, true],
-    ['an address you typed for the tab you see', true, true],
-    ['the row menu’s Reload, on a tab no window shows', false, true],
-    ['a key in the page you see', true, false],
+  // [what you did, whether a window shows the tab, where it takes the page]
+  const takeovers: [string, boolean, Going][] = [
+    ['the toolbar’s Back, on the tab you see', true, 'back'],
+    ['the app menu’s Reload, on the tab you see', true, 'reload'],
+    ['an address you typed for the tab you see', true, { url: 'https://agent.test/next' }],
+    ['the row menu’s Reload, on a tab no window shows', false, 'reload'],
+    ['a key in the page you see', true, 'stay'],
   ];
-  for (const [what, shown, navigating] of takeovers) {
+  for (const [what, shown, going] of takeovers) {
     it(`${what}: the held send fails, its card comes down; paused only where you see it`, async () => {
       const t = setup([], unanswered);
       const tab = held(t, 'a1');
@@ -188,7 +191,7 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
       await tick();
       expect(tab.how(waiting)).toBe('held');
       const step = t.agent.ask(card('a1', 'step', 'a1|p1|e4|click'), never);
-      if (navigating) t.chords.takeOver('a1', tab.contents, true);
+      if (going !== 'stay') t.chords.takeOver('a1', tab.contents, going);
       else tab.events.emit('before-input-event', {}, { type: 'keyDown', key: 'a' });
       expect(tab.how(waiting)).toBe('Fetch.failRequest');
       await expect(step).resolves.toBe('deny');
@@ -207,27 +210,59 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     });
   }
 
-  it('moving the page yourself: the outgoing page’s sends fail until the next one has loaded, then they’re yours; the new page’s load goes', async () => {
+  it('moving the page yourself: everything the outgoing page sends fails but the address you asked for, once; then the new page’s are yours', async () => {
     const t = setup();
     const tab = held(t, 'a1');
     show(t, 'a1');
-    t.chords.takeOver('a1', tab.contents, true);
-    // Its pagehide's keepalive POST and beacon: no one's, though you have the tab.
+    t.chords.takeOver('a1', tab.contents, { url: 'https://agent.test/logout' });
+    // Its pagehide's keepalive POST and beacon, a form it posts, a frame's, an address that signs out: no one's, though
+    // you have the tab (Neon's round 2 on #116).
     expect(tab.how(tab.send('XHR'))).toBe('Fetch.failRequest');
     expect(tab.how(tab.send('Ping'))).not.toBe('Fetch.continueRequest');
-    // The page you sent it to, a document: on its way, even one that posts (a form you resubmit); a frame's in another
-    // process is never it (Claude's review 2 of #116).
-    expect(tab.how(tab.send('Document', 'GET'))).toBe('Fetch.continueRequest');
-    expect(tab.how(tab.send('Document', 'POST'))).toBe('Fetch.continueRequest');
-    expect(tab.how(tab.send('Document', 'POST', 'frame-1'))).toBe('Fetch.fulfillRequest'); // dropped: a document answered with nothing
-    tab.events.emit('did-navigate', {}, 'https://agent.test/a1');
-    tab.events.emit('did-stop-loading');
-    // Loaded, and you have the tab: what it sends is yours.
-    expect(tab.how(tab.send())).toBe('Fetch.continueRequest');
-    // Back within the same document: nothing unloads, nothing waits.
-    t.chords.takeOver('a1', tab.contents, true);
+    expect(tab.how(tab.send('Document', 'POST'))).toBe('Fetch.fulfillRequest'); // dropped: a document answered with nothing
+    expect(tab.how(tab.send('Document', 'POST', 'frame-1', 'https://agent.test/logout'))).toBe('Fetch.fulfillRequest');
+    expect(tab.how(tab.send('Document', 'GET', undefined, 'https://agent.test/account/delete'))).toBe('Fetch.fulfillRequest');
+    // A page's ordinary load is a read: it never reaches the hold's question.
+    expect(tab.how(tab.send('Document', 'GET', undefined, 'https://agent.test/next'))).toBe('Fetch.continueRequest');
+    // The address you typed (it signs out, so it asks the hold): yours, once.
+    expect(tab.how(tab.send('Document', 'GET', undefined, 'https://agent.test/logout'))).toBe('Fetch.continueRequest');
+    expect(tab.how(tab.send('Document', 'GET', undefined, 'https://agent.test/logout'))).toBe('Fetch.fulfillRequest');
+    // A pushState or a hash of the outgoing page clears nothing.
     tab.events.emit('did-navigate-in-page', {}, 'https://agent.test/a1#x', true);
+    expect(tab.how(tab.send())).toBe('Fetch.failRequest');
+    // Committed and loaded: what it sends is yours.
+    tab.events.emit('did-navigate', {}, 'https://agent.test/logout');
+    tab.events.emit('did-stop-loading');
     expect(tab.how(tab.send())).toBe('Fetch.continueRequest');
+  });
+
+  it('your move that doesn’t happen (window.stop(), a failed load, no commit in time) gives the tab back to the agent, held, never to you', async () => {
+    vi.useFakeTimers();
+    for (const how of ['stopped', 'stalled'] as const) {
+      const t = setup([], unanswered);
+      const tab = held(t, 'a1');
+      show(t, 'a1');
+      t.chords.takeOver('a1', tab.contents, 'reload');
+      expect(t.agent.state('a1').paused).toBe(true);
+      // window.stop() of the outgoing page (ERR_ABORTED), or a server that never answers (or a 204).
+      if (how === 'stopped') tab.events.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://agent.test/a1', true);
+      else await vi.advanceTimersByTimeAsync(15_000);
+      expect(t.agent.state('a1').paused, how).toBe(false);
+      // The old page's next send: the agent's, so held (a card asks), not yours.
+      const next = tab.send();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tab.how(next), how).toBe('held');
+      t.agent.cancelCards();
+    }
+  });
+
+  it('a load failing in a tab you didn’t move: nothing (your pause stays)', () => {
+    const t = setup();
+    const tab = held(t, 'a1');
+    show(t, 'a1');
+    tab.events.emit('before-input-event', {}, { type: 'keyDown', key: 'a' });
+    tab.events.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://agent.test/a1', true);
+    expect(t.agent.state('a1').paused).toBe(true);
   });
 
   it('the page navigating itself never takes it over (Neon’s B6), shown or not: what it sends stays held', async () => {
@@ -271,6 +306,24 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     await expect(Promise.all([b1, b2])).resolves.toEqual(['deny', 'deny']);
     expect(presented!.aborted).toBe(true);
     expect(t.agent.hasOpenCard('site', 'other.test')).toBe(false);
+  });
+
+  it('a card let go of by its only tab is gone at once: an ask right after gets a card of its own (Neon’s round 2 S2)', async () => {
+    const shown: string[] = [];
+    const t = setup([], (c, signal) => {
+      shown.push(c.tab ?? '');
+      return new Promise((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
+    });
+    const a1 = t.agent.ask(card('a1', 'site', 'agent.test'), never);
+    t.chords.takeOver('a1');
+    // Before the taken-down card's answer settles: a2's ask isn't joined to it.
+    const a2 = t.agent.ask(card('a2', 'site', 'agent.test'), never);
+    await expect(a1).resolves.toBe('deny');
+    await tick();
+    expect(shown).toEqual(['a1', 'a2']);
+    expect(t.agent.hasOpenCard('site', 'agent.test')).toBe(true);
+    t.agent.cancelCards();
+    await a2;
   });
 
   it('closing the tab (or Close all, or a Never site) answers its cards no at once, unpauses it, and fails what it held', async () => {
