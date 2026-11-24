@@ -21,6 +21,7 @@ import { PasswordService } from '../../src/main/passwords/service';
 import { Store } from '../../src/main/store';
 import { holdForAgent } from '../../src/preload/agent-hold';
 import { holdSends } from '../../src/main/control/sends';
+import { pageLoaded } from '../../src/main/control/tools';
 
 afterEach(() => vi.useRealTimers());
 
@@ -157,9 +158,10 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     t.chords.wire(contents, nodeId);
     let n = 0;
     /** What the page sends now (a POST to its site, or a load): its request id. */
-    const send = (type = 'XHR', method = 'POST') => {
+    /** `session`: a frame in another process (its own debugger session); none, the page's own target. */
+    const send = (type = 'XHR', method = 'POST', session?: string) => {
       const requestId = `r${++n}`;
-      debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method, url: `https://agent.test/${nodeId}/save` }, resourceType: type });
+      debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method, url: `https://agent.test/${nodeId}/save` }, resourceType: type }, session);
       return requestId;
     };
     const how = (requestId: string) => answered.find(([, id]) => id === requestId)?.[0] ?? 'held';
@@ -213,8 +215,11 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     // Its pagehide's keepalive POST and beacon: no one's, though you have the tab.
     expect(tab.how(tab.send('XHR'))).toBe('Fetch.failRequest');
     expect(tab.how(tab.send('Ping'))).not.toBe('Fetch.continueRequest');
-    // The page you sent it to, a document: on its way.
+    // The page you sent it to, a document: on its way, even one that posts (a form you resubmit); a frame's in another
+    // process is never it (Claude's review 2 of #116).
     expect(tab.how(tab.send('Document', 'GET'))).toBe('Fetch.continueRequest');
+    expect(tab.how(tab.send('Document', 'POST'))).toBe('Fetch.continueRequest');
+    expect(tab.how(tab.send('Document', 'POST', 'frame-1'))).toBe('Fetch.fulfillRequest'); // dropped: a document answered with nothing
     tab.events.emit('did-navigate', {}, 'https://agent.test/a1');
     tab.events.emit('did-stop-loading');
     // Loaded, and you have the tab: what it sends is yours.
@@ -275,14 +280,34 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
       show(t, 'a1');
       tab.events.emit('before-input-event', {}, { type: 'keyDown', key: 'a' });
       expect(t.agent.state('a1').paused).toBe(true);
+      tab.events.emit('before-input-event', {}, { type: 'keyDown', key: 'b' });
+      // You let it go on; then it holds a POST between actions, and asks.
+      t.chords.continue(t.chordId);
+      const post = tab.send();
+      await tick();
+      expect(tab.how(post)).toBe('held');
       const step = t.agent.ask(card('a1', 'step', 'a1|p1|e4|click'), never);
       const site = t.agent.ask(card('a1', 'site', 'agent.test'), never);
       t.chords.doing('a1', { tool: 'click', name: 'Save', role: 'button' });
       t.store.dispatch(close === 'tab.close' ? { t: 'tab.close', windowId: 'w1', nodeId: 'a1' } : { t: 'agent.tab.remove', nodeId: 'a1' });
       await expect(Promise.all([step, site])).resolves.toEqual(['deny', 'deny']);
+      expect(tab.how(post)).toBe('Fetch.failRequest');
       expect(t.agent.state('a1').paused).toBe(false);
       expect(t.agent.hasOpenCard('site', 'agent.test')).toBe(false);
     }
+  });
+
+  it('a page closed while an action waits on its load: the wait ends at once, not at its limit', async () => {
+    let destroyed = false;
+    const contents = Object.assign(new EventEmitter(), { isDestroyed: () => destroyed, isLoading: () => true }) as unknown as WebContents;
+    const started = Date.now();
+    const waiting = pageLoaded(contents, 10_000);
+    setTimeout(() => {
+      destroyed = true;
+      (contents as unknown as EventEmitter).emit('destroyed');
+    }, 20);
+    await waiting;
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('a tab of yours: nothing', () => {

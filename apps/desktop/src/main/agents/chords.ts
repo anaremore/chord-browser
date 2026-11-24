@@ -294,6 +294,7 @@ export class AgentChords {
   /** A tab of the agent's that's gone, or yours now: its cards, its pause and its bar's wording go with it. */
   private letGo(chord: AgentChord, nodeId: NodeId): void {
     chord.agent.cancelCardsFor(nodeId);
+    chord.agent.forgetTab(nodeId);
     if (chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, false);
     const doing = this.doings.get(nodeId);
     if (doing?.clear) clearTimeout(doing.clear);
@@ -352,8 +353,10 @@ export class AgentChords {
     // done, only what follows your own key or click goes, the rest no one is there to ask about.
     sendHoldDeps(contents, {
       whose: (request) => {
-        // The page you moved it from, on its way out: none of its sends go (the page you sent it to loads as usual).
-        if (this.leaving.has(nodeId) && request && request.type !== 'Document') return 'none';
+        // The page you moved it from, on its way out: none of its sends go; only the page you sent it to loads as usual (a
+        // document in the page's own target: a frame in another process is never it; one in the same process can't be
+        // told apart here, a stated limit: Claude's review 2 of #116).
+        if (this.leaving.has(nodeId) && request && !(request.type === 'Document' && request.top)) return 'none';
         const chord = this.chordOfTab(nodeId);
         // An agent's page never becomes yours (a tab you keep gets a new one): with its chord gone (closed, Close all, a
         // site you keep private), what it sends on its way out is no one's to ask about, and fails (round 4 of #112).

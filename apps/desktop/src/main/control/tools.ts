@@ -442,6 +442,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
+  // Your taking the tab over lets go of its cards (S18 M2e-1): one no window shows isn't paused, so the count is how
+  // an action hears of it (Claude's review 2 of #116).
+  const releasedAtStart = scope.agent.releases(node.id);
+  const takenOver = () => (scope.agent.releases(node.id) !== releasedAtStart ? ACT_REFUSALS.takenOver : null);
   const ref = scope.refs.refFor(node.id);
   const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
@@ -538,7 +542,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       let sent: string | null;
       try {
         const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
-        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : null);
+        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : takenOver());
         sent = await askHeld(
           w,
           going,
@@ -614,6 +618,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   const halt = (): string | null => {
     if (call.stopped()) return CONTROL_REFUSALS.stopped;
     if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
+    const taken = takenOver();
+    if (taken) return taken;
     // The page went somewhere: input now would land on another page's element.
     if (page.id !== pageAtCheck) return ELEMENT_REFUSALS.stale;
     return null;
@@ -964,7 +970,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Its document as it was when the card opened, not when the action began (Claude's final pass: a page the action
       // went to that posts as it loads gets its Allow).
       const sendHalt = (opened: unknown) =>
-        call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null;
+        call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? (page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
       const sent = await askHeld(w, acting, (held, sites, why, takeDown) => askSendCard(held, sites, why, w, takeDown), sendHalt, originOf(page.url()), () => page.mark);
       refused ??= sent;
     }
@@ -1083,6 +1089,9 @@ async function askHeld(
     }
     w.deny();
     if (w.cancelled.aborted) return halt(opened);
+    // A no that wasn't the user's (the tab taken over, Stop, the page gone: #116) says so.
+    const halted = halt(opened);
+    if (halted) return halted;
     return answer === 'waiting' ? ACT_REFUSALS.sendsDropped : ACT_REFUSALS.stepDenied;
   }
 }

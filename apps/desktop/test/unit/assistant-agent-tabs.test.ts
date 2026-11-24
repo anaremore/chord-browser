@@ -33,7 +33,8 @@ function setup(scope: AssistantScope) {
   const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-'));
   dirs.push(dir);
   const persistence = { assistant: async () => ({ threads: [] }) };
-  const service = new AssistantService({ store } as never, persistence as never, dir);
+  // No windows to push the panel to (its push runs on a timer after the test too).
+  const service = new AssistantService({ store, allWindows: [] } as never, persistence as never, dir);
   return { store, service, mine };
 }
 

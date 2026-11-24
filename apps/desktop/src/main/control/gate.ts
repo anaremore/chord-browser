@@ -339,6 +339,11 @@ export class ControlAgent {
     for (const key of [...this.late.keys()]) if (!key.startsWith('site:') && key.endsWith(`:${tab}`)) this.late.delete(key);
   }
 
+  /** The tab is gone (closed, or yours now): what was kept for it goes too (after cancelCardsFor). */
+  forgetTab(tab: string): void {
+    this.releases_.delete(tab);
+  }
+
   /** How many times this tab's cards were let go of: taken before an ask, a different count after its no means the no wasn't the user's. */
   releases(tab: string): number {
     return this.releases_.get(tab) ?? 0;
