@@ -31,17 +31,26 @@ const exe = join(installed, 'Chord.exe');
 const built = resolve(import.meta.dirname, '../../release/win-unpacked/resources/app.asar');
 const version = (JSON.parse(readFileSync(resolve(import.meta.dirname, '../../package.json'), 'utf8')) as { version: string }).version;
 
+const t0 = Date.now();
+/** What happened when, in ms from the start: the agent's restarts and each setup's start and end. */
+const timeline: string[] = [];
+const note = (what: string) => timeline.push(`+${Date.now() - t0} ${what}`);
+
 const sha = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const powershell = (command: string) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', env: { ...process.env, CHORD_INSTDIR: `${installed}\\` } }).trim();
 
 /** Runs setup and waits for it. NSIS exits 0 when it installed, 1 when cancelled, 2 when it gave up. */
 function setup(file: string, args: string[]): number {
+  note(`setup ${args.join(' ')} starts`);
+  let code: number;
   try {
     execFileSync(file, args, { stdio: 'ignore', timeout: 300_000 });
-    return 0;
+    code = 0;
   } catch (error) {
-    return (error as { status?: number }).status ?? -1;
+    code = (error as { status?: number }).status ?? -1;
   }
+  note(`setup ${args.join(' ')} exited ${code}`);
+  return code;
 }
 
 /** The installed Chord.exe's version (electron-builder writes the app's version as its file version). */
@@ -70,10 +79,12 @@ function agent(profile: string) {
     } catch (error) {
       // Windows refuses at once (EPERM) while setup keeps the folder from running anything, or ENOENT mid-update.
       events.push(`couldn't start: ${(error as NodeJS.ErrnoException).code}`);
+      note(events.at(-1)!);
       setTimeout(run, 100);
       return;
     }
     child = relay;
+    note(`relay ${relay.pid} started`);
     let buffer = '';
     relay.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
       buffer += chunk;
@@ -89,6 +100,7 @@ function agent(profile: string) {
       if (again) return;
       again = true;
       events.push(why);
+      note(`relay ${relay.pid} ${why}`);
       setTimeout(run, 100);
     };
     relay.once('error', (error: NodeJS.ErrnoException) => restart(`couldn't start: ${error.code}`));
@@ -153,6 +165,7 @@ test('setup updates Chord from the last release while an agent keeps its relay r
     console.log(`The agent's relay, through both updates: ${connected.events.length} restarts (${[...new Set(connected.events)].join(', ')})`);
     connected.stop();
   } finally {
+    console.log(['What happened:', ...timeline].join('\n'));
     endAll();
     rmSync(profile, { recursive: true, force: true });
   }
