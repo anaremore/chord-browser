@@ -54,9 +54,9 @@ Queued work without fixed dates, grouped by what it unlocks.
 
 ### Agents and the assistant
 
-- **WebMCP pass-through.** Expose sites' own structured page tools (`document.modelContext`) to outside agents and the assistant through Chord's approval gate once Chromium ships WebMCP on by default ([S18](docs/decisions/S18-agent-mcp.md#webmcp-later)).
 - **Share a tab and let an agent act in it.** Opt-in acting on a tab you explicitly share with an outside agent, extending today's read-only tab sharing ([S18](docs/decisions/S18-agent-mcp.md#owners-answers-2026-11-22)).
-- **Separate extension-free profile for agents.** Run agent tabs in a dedicated profile without user extensions, closing Electron's current limit where extension content scripts still run inside agent tabs ([S18](docs/decisions/S18-agent-mcp.md#m2d-as-built-2026-11-23)).
+- **WebMCP pass-through.** Expose sites' own structured page tools (`document.modelContext`) to outside agents and the assistant through Chord's approval gate once Chromium ships WebMCP on by default ([S18](docs/decisions/S18-agent-mcp.md#webmcp-later)).
+- **Optional extension-free profile for agents.** An opt-in setting to run agent tabs in a dedicated profile (you sign in there once) without user extensions, closing Electron's current limit where extension content scripts still run inside agent tabs ([S18](docs/decisions/S18-agent-mcp.md#m2d-as-built-2026-11-23)).
 - **Antigravity as a built-in assistant app (on hold).** Revisit when `agy acp` can disable or gate its built-in web search, timers, and subagents; Antigravity remains supported as an outside agent ([S19](docs/decisions/S19-antigravity-assistant.md)).
 
 ### Browsing and passwords
@@ -67,7 +67,7 @@ Queued work without fixed dates, grouped by what it unlocks.
 
 ### Tooling and maintenance
 
-- **Code quality and dependency hygiene.** Adopt Oxfmt at 1.0, evaluate type-aware Oxlint (`oxlint-tsgolint`), run a Knip unused-code cleanup ([#111](https://github.com/anaremore/chord-browser/pull/111)), activate the Renovate app for automated Electron update PRs, and close open bug, test, and CI follow-ups ([#27](https://github.com/anaremore/chord-browser/issues/27), [#44](https://github.com/anaremore/chord-browser/issues/44), [#64](https://github.com/anaremore/chord-browser/issues/64), [#80](https://github.com/anaremore/chord-browser/issues/80), [#85](https://github.com/anaremore/chord-browser/issues/85), [#87](https://github.com/anaremore/chord-browser/issues/87)).
+- **Code quality and dependency hygiene.** Adopt Oxfmt at 1.0, evaluate type-aware Oxlint (`oxlint-tsgolint`), run a Knip unused-code cleanup ([#111](https://github.com/anaremore/chord-browser/pull/111)), keep Renovate's automated update PRs (installed 2026-11-24) flowing, and close open bug, test, and CI follow-ups ([#27](https://github.com/anaremore/chord-browser/issues/27), [#44](https://github.com/anaremore/chord-browser/issues/44), [#64](https://github.com/anaremore/chord-browser/issues/64), [#80](https://github.com/anaremore/chord-browser/issues/80), [#85](https://github.com/anaremore/chord-browser/issues/85), [#87](https://github.com/anaremore/chord-browser/issues/87)).
 
 ---
 
