@@ -512,11 +512,17 @@ export class Browser {
         contents.on('focus', () => {
           if (!isAgentInput(contents)) this.paneFocused(nodeId);
         });
+        // Your key or click in a tab of yours: the assistant stops acting there for this message (S18 M2e-2a, F1). As the
+        // page sees it (before it), never input Chord sends (control/input.ts).
+        contents.on('before-input-event', (_event, input) => {
+          if (input.type === 'keyDown' && !isAgentInput(contents)) this.userInput?.(nodeId);
+        });
+        contents.on('before-mouse-event', (_event, mouse) => {
+          if (mouse.type === 'mouseDown' && !isAgentInput(contents)) this.userInput?.(nodeId);
+        });
         contents.on('input-event', (_event, input) => {
           // A click Chord sends for an agent (control/input.ts) doesn't move your focus to its pane.
           if (input.type === 'mouseDown' && !isAgentInput(contents)) this.paneFocused(nodeId);
-          // Your key or click in a tab of yours: the assistant stops acting there for this message (S18 M2e-2a, F1).
-          if ((input.type === 'mouseDown' || input.type === 'keyDown') && !isAgentInput(contents)) this.userInput?.(nodeId);
           // Scrolling, typing or a click changes what the saved history should bring back (scroll, form fields).
           if (input.type === 'mouseWheel' || input.type === 'keyDown' || input.type === 'mouseUp') this.histories.touch(nodeId);
         });

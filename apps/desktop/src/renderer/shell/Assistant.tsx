@@ -979,7 +979,9 @@ function useAssistantAnnouncements(view: AssistantView): void {
       if (asked.current.has(m.id)) continue;
       if (m.body.role === 'approval') {
         asked.current.add(m.id);
-        if (m.body.decision === 'pending') announce(`The assistant is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
+        // An acting card says its own buttons (S18 M2e-2a).
+        const choices = m.body.act ? { site: 'Always on this site, Allow for this chat, or No', step: 'Allow, Don’t, or Show me', send: 'Allow, Allow for this chat, Don’t, or Show me' }[m.body.act.kind] : 'Allow once, Allow for this chat, or No';
+        if (m.body.decision === 'pending') announce(`The assistant is asking: ${m.body.description}. ${choices}.`);
       } else if (m.body.role === 'tool' && m.body.fill) {
         asked.current.add(m.id);
         if (m.body.fill.status === 'pending') announce(`The assistant suggests values for ${fieldCount(m.body.fill.fields.length)} on ${m.body.fill.site}. Check them, then Fill or Not now.`);
