@@ -427,6 +427,16 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
  * went somewhere else (its refs are then stale). navigate and back need no ref and no site card, as open_tab.
  */
 async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>): Promise<ToolOutput> {
+  // A tab of yours (the assistant): its lease, begun in actOn once the tab's checked, always ended here.
+  const leased: { node: TabNode | null } = { node: null };
+  try {
+    return await actOn(call, tool, args, leased);
+  } finally {
+    if (leased.node) call.scope.act?.lease?.end(leased.node);
+  }
+}
+
+async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, leased: { node: TabNode | null }): Promise<ToolOutput> {
   const { scope, browser } = call;
   const host = scope.act!;
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs for the tabs there are.');
@@ -442,6 +452,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
+  // A tab of yours: its debugger and send hold, for this action (control/user-watch.ts).
+  if (host.lease) {
+    const no = await host.lease.begin(node);
+    if (no) return refuse(no);
+    leased.node = node;
+  }
   // Your taking the tab over lets go of its cards (S18 M2e-1): one no window shows isn't paused, so the count is how
   // an action hears of it (Claude's review 2 of #116).
   const releasedAtStart = scope.agent.releases(node.id);

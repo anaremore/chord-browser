@@ -149,6 +149,8 @@ interface Hold {
   once: Set<string>;
   go(p: Paused): void;
   drop(p: Paused): void;
+  /** Stops answering the tab's requests (unholdSends: a lease on a tab of yours ending, S18 M2e-2a). */
+  stop(): void;
 }
 
 const holds = new WeakMap<object, Hold>();
@@ -189,6 +191,7 @@ export function holdSends(contents: WebContents): void {
     card: null,
     until: new Set(),
     once: new Set(),
+    stop: () => undefined,
     go: (p) => answer('Fetch.continueRequest', { requestId: p.requestId }, p.sessionId),
     drop: (p) =>
       p.type === 'Document'
@@ -196,7 +199,7 @@ export function holdSends(contents: WebContents): void {
         : answer('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, p.sessionId),
   };
   holds.set(contents, hold);
-  debug.on('message', (_event, method: string, params: unknown, sessionId?: string) => {
+  const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
     if (method !== 'Fetch.requestPaused') return;
     const at = params as {
       requestId?: string;
@@ -250,13 +253,37 @@ export function holdSends(contents: WebContents): void {
       return;
     }
     heldBetween(hold, [p]);
-  });
+  };
+  debug.on('message', onMessage);
   // Gone with its page: nothing held outlives it (a closed tab's requests go with its renderer).
-  contents.once('destroyed', () => {
+  const gone = () => {
     hold.card?.cancel.abort();
     hold.action?.cancel.abort();
     holds.delete(contents);
-  });
+  };
+  contents.once('destroyed', gone);
+  hold.stop = () => {
+    debug.off('message', onMessage);
+    contents.off('destroyed', gone);
+    gone();
+  };
+}
+
+/**
+ * The hold on a tab of yours ends (the assistant's lease: control/user-watch.ts). What's still held fails first (its
+ * cards come down); the caller then turns Fetch off, so the tab's requests go as they always did.
+ */
+export function unholdSends(contents: object): void {
+  const hold = holds.get(contents);
+  if (!hold) return;
+  failHeld(contents);
+  hold.stop();
+}
+
+/** Whether something is held, or on a card, now: a lease waits for it before it ends. */
+export function holding(contents: object): boolean {
+  const hold = holds.get(contents);
+  return Boolean(hold && (hold.card || hold.idle.length || hold.action));
 }
 
 /** The tab's chord, once its page is wired (agents/chords.ts): what was held meanwhile is asked about now. */

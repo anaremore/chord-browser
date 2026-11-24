@@ -11,6 +11,14 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   agentChords,
+  assistantActing,
+  barDoing,
+  CONTROL_WAIT_MS,
+  sendTitle,
+  splitOf,
+  stepDanger,
+  stepTitle,
+  type AssistantActCard,
   children,
   nodesOfChord,
   ASSISTANT_MAX_IMAGES,
@@ -79,9 +87,12 @@ import type { ControlScope } from '../control/scope';
 import { runControlTool } from '../control/tools';
 import { AssistantImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
-import { duetScope, type DuetChat } from './scope';
+import { duetScope, USER_TAB_REFUSALS, type DuetChat } from './scope';
+import { siteOfUrl } from '../agents/shares';
+import { dropAgentGuard } from '../control/page';
+import { beginUserAction, endUserAction, endUserLease } from '../control/user-watch';
 
-type Decision = 'once' | 'thread' | 'denied';
+type Decision = 'once' | 'thread' | 'always' | 'denied';
 
 /** An image for the assistant, as a pasted image or a screenshot brings it: the picture for the model, and a thumbnail. */
 export interface ImageInput {
@@ -109,7 +120,11 @@ interface ThreadState extends DuetChat {
   queue: string[];
   /** Each queued message's attachments, taken when it was sent (S18 M2e-1: never what's on screen when it goes). */
   queuedWith: AssistantAttachment[][];
+  /** Each queued message's tab on screen as it was sent (S18 M2e-2a): the one it may act in. */
+  queuedTab: DuetChat['actTab'][];
   streaming: AssistantMessage | null;
+  /** Show me on an acting card, by its message id: outlines the element in its page. */
+  shows: Map<string, () => void>;
   startedAt: number | null;
   /** Approval cards in the chat, by message id: the gate's card, answered from the panel. */
   pending: Map<string, (decision: Decision) => void>;
@@ -236,6 +251,17 @@ export class AssistantService {
       }
       // "Nothing" turned on or off: every session starts again with its tools (or none) and instructions,
       // busy ones too, so a reply already under way can't read on with the tools it started with.
+      // Click and type on pages (S18 M2e-2a): turned off, acting stops at once and the sessions start again without the
+      // tools; a site taken off the list asks again, in every chat, mid-task too.
+      const before = change.before.settings.assistant;
+      const now = change.state.settings.assistant;
+      if (before.acting !== now.acting) {
+        for (const threadId of [...this.live.keys()]) this.drop(threadId);
+        if (!now.acting) for (const state of this.threads.values()) this.endActing(state, USER_TAB_REFUSALS.off);
+      }
+      if (before.actSites !== now.actSites) {
+        for (const site of before.actSites.filter((x) => !now.actSites.includes(x))) for (const state of this.threads.values()) state.control.forget('site', site);
+      }
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'assistant' && p.path[2] === 'readsNothing')) {
         for (const threadId of [...this.live.keys()]) this.drop(threadId);
         // A fill card waiting then fills nothing: what it read was read before.
@@ -342,6 +368,10 @@ export class AssistantService {
       refs: new TabRefs<NodeId>('t'),
       attached: new Set(),
       pointed: new Set(),
+      actTab: null,
+      actEnded: null,
+      shows: new Map(),
+      queuedTab: [],
       // The chat is the agent; its cards are approval messages in the chat.
       control: new ControlAgent(`duet:${randomUUID()}`, (card, signal) => this.showCard(state, card, signal)),
       read: new Set(),
@@ -395,6 +425,65 @@ export class AssistantService {
   private nodeByUrl(chordId: string, url: string): NodeId | null {
     for (const node of nodeList(this.browser.store.state)) if (node.kind === 'tab' && node.chordId === chordId && node.url === url) return node.id;
     return null;
+  }
+
+  /** Whether the assistant clicks and types (S18 M2e): a build with M2, Settings → Assistant's switch on, and not *Nothing*. */
+  private acting(): boolean {
+    return assistantActing({ packaged: app.isPackaged }) && this.settings.acting && !this.settings.readsNothing;
+  }
+
+  /** The tab on screen as a message is sent: the one it may act in (S18 M2e-2a, A1). */
+  private tabOnScreen(windowId: WindowId): DuetChat['actTab'] {
+    const node = this.activeTab(windowId);
+    return node ? { nodeId: node.id, windowId } : null;
+  }
+
+  /**
+   * Acting ends for this message (S18 M2e-2a): you used the tab (F1), Stop, or the switch went off. Its cards come
+   * down (each a no the action hears isn't yours: cancelCardsFor), what the lease held fails, the bar goes.
+   */
+  private endActing(state: ThreadState, why: string | null): void {
+    const at = state.actTab;
+    if (why) state.actEnded = why;
+    if (!at) return;
+    state.control.cancelCardsFor(at.nodeId);
+    const contents = this.browser.tabs.get(at.nodeId)?.webContents;
+    if (contents && !contents.isDestroyed()) {
+      dropAgentGuard(contents);
+      endUserLease(contents);
+    }
+    this.barFor(at.nodeId, null);
+  }
+
+  /**
+   * Your key or click in a tab of yours (browser.ts, never input Chord sends: S18 M2e-2a, F1): a chat acting there this
+   * turn stops acting for the message, and says so once.
+   */
+  userUsedTab(nodeId: NodeId): void {
+    for (const state of this.threads.values()) {
+      if (!state.streaming || state.actTab?.nodeId !== nodeId || state.actEnded) continue;
+      this.endActing(state, USER_TAB_REFUSALS.tookOver);
+      if (state.control.releases(nodeId) > 0 || this.acted.has(state)) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
+    }
+  }
+
+  /** Your reload, back, forward or address for a tab's page (browser.ts' userNavigates): as your key or click there. */
+  userMovedPage(contents: WebContents): void {
+    for (const state of this.threads.values()) {
+      const at = state.actTab;
+      if (at && this.browser.tabs.get(at.nodeId)?.webContents === contents) this.userUsedTab(at.nodeId);
+    }
+  }
+
+  /** Chats that acted this turn: your using the tab says it stopped them. */
+  private readonly acted = new WeakSet<ThreadState>();
+
+  /** The bar over a tab of yours while the assistant acts there (M2c's words: *The assistant is clicking “Raise”*). */
+  private barFor(nodeId: NodeId, text: string | null): void {
+    const node = nodeOf(this.browser.store.state, nodeId);
+    if (node?.kind !== 'tab') return;
+    const agent = text ? { state: 'working' as const, name: 'The assistant', chordId: node.chordId, doing: text } : null;
+    this.browser.store.dispatch({ t: 'tab.live', nodeId, live: { agent } });
   }
 
   /** The tab on screen: an agent's tab the window shows over its chord's (S18), else the chord's own. */
@@ -796,6 +885,8 @@ export class AssistantService {
       case 'stop':
         state.queue = [];
         state.queuedWith = [];
+        state.queuedTab = [];
+        this.endActing(state, null);
         // Through the gate: a tool call in flight answers at once, and its card goes. The next message lets it go on.
         state.control.stop();
         if (state.thread) this.live.get(state.thread.id)?.session.stop();
@@ -820,6 +911,10 @@ export class AssistantService {
       case 'unqueue':
         state.queue.splice(action.index, 1);
         state.queuedWith.splice(action.index, 1);
+        state.queuedTab.splice(action.index, 1);
+        return;
+      case 'showStep':
+        state.shows.get(action.messageId)?.();
         return;
       case 'approve': {
         const resolve = state.pending.get(action.messageId);
@@ -930,7 +1025,7 @@ export class AssistantService {
 
   /* ---------- Sending and sessions ---------- */
 
-  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: AssistantAttachment[], reuseImages?: readonly AssistantImage[]): Promise<void> {
+  private async send(windowId: WindowId, state: ThreadState, text: string, reuse?: AssistantAttachment[], reuseImages?: readonly AssistantImage[], tab?: DuetChat['actTab']): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed || this.settings.offChords.includes(state.chordId)) return;
     if (state.streaming) {
@@ -938,6 +1033,7 @@ export class AssistantService {
       // sent: a tab you look at while they wait (an agent's) is never theirs (S18 M2e-1).
       state.queue.push(trimmed);
       state.queuedWith.push(reuse ?? (this.settings.readsNothing ? [] : this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url }))));
+      state.queuedTab.push(tab ?? this.tabOnScreen(windowId));
       return;
     }
     // A new message lets the chat go on after Stop (the gate refused its tools until now).
@@ -970,6 +1066,9 @@ export class AssistantService {
     const thread = state.thread;
     state.windowId = windowId;
     state.lastError = null;
+    // The message's tab (S18 M2e-2a, A1): the tab on screen as it was sent (a queued one's, when it was queued).
+    state.actTab = tab ?? this.tabOnScreen(windowId);
+    state.actEnded = null;
 
     const nothing = this.settings.readsNothing;
     const attachments: AssistantAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url })));
@@ -1049,7 +1148,7 @@ export class AssistantService {
     const making: AssistantImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
     // Settings' "Nothing": no tools at all, so the model has no way to ask for a page (ARCHITECTURE.md §11.3).
     const readsPages = !this.settings.readsNothing;
-    const instructions = assistantInstructions(making, readsPages);
+    const instructions = assistantInstructions(making, readsPages, this.acting());
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = thread.providerSessionId;
@@ -1061,7 +1160,7 @@ export class AssistantService {
       instructionsFile,
       resumeId,
       newSessionId: randomUUID(),
-      tools: readsPages ? assistantTools(agentActions({ packaged: app.isPackaged })) : [],
+      tools: readsPages ? assistantTools(agentActions({ packaged: app.isPackaged }), this.acting()) : [],
       images,
     };
     let resumeFailed = false;
@@ -1156,6 +1255,8 @@ export class AssistantService {
     const streaming = state.streaming;
     if (!streaming || streaming.body.role !== 'assistant') return;
     state.streaming = null;
+    // The turn's over: no acting until the next message (the lease's own tail still ends what the last action sent).
+    state.actTab = null;
     state.startedAt = null;
     // Cards still waiting go with the turn, each answered no.
     state.control.cancelCards();
@@ -1196,7 +1297,8 @@ export class AssistantService {
     this.schedulePush();
     const next = state.queue.shift();
     const with_ = state.queuedWith.shift();
-    if (next && state.windowId && outcome.status !== 'error') void this.send(state.windowId, state, next, with_);
+    const tab = state.queuedTab.shift() ?? null;
+    if (next && state.windowId && outcome.status !== 'error') void this.send(state.windowId, state, next, with_, undefined, tab);
   }
 
   private async addMessage(state: ThreadState, body: AssistantMessageBody): Promise<AssistantMessage> {
@@ -1240,6 +1342,55 @@ export class AssistantService {
       agentOf: (node) => this.agentOf(node),
       activeTab: (windowId) => this.activeTab(windowId),
       activity: (chat, tool, summary, detail, ok) => this.activity(chat as ThreadState, tool, summary, detail, ok),
+      acting: (chat) => {
+        const s = chat as ThreadState;
+        return {
+          on: () => this.acting(),
+          shownAlone: (node, windowId) => {
+            const model = this.browser.store.state.windows[windowId];
+            const w = this.browser.allWindows.find((x) => x.id === windowId);
+            return Boolean(model && w && !w.window.isMinimized() && this.activeTab(windowId)?.id === node.id && !splitOf(this.browser.store.state, node.id));
+          },
+          siteOf: siteOfUrl,
+          siteAllowed: (site) => this.settings.actSites.includes(site),
+          keepSite: (site) => this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [...this.settings.actSites, site] } } }),
+          doing: (nodeId, doing) => {
+            if (doing) this.acted.add(s);
+            this.barFor(nodeId, doing ? barDoing(doing) : null);
+          },
+          lease: {
+            begin: async (node) => {
+              const contents = this.browser.tabs.get(node.id)?.webContents;
+              if (!contents || contents.isDestroyed()) return 'That tab could not be loaded.';
+              const ok = await beginUserAction(contents, {
+                siteOf: (url) => new URL(url).origin,
+                // What the page still sends a moment after the action: the chat's card, as the action's own.
+                ask: async (sites, why, signal) => {
+                  const answer = await s.control.ask(
+                    {
+                      kind: 'step',
+                      tool: 'act',
+                      description: 'After the assistant’s last step here',
+                      target: [contents.getURL()],
+                      tab: node.id,
+                      subject: `${node.id}|tail|${randomBytes(4).toString('hex')}`,
+                      step: why ? { why, site: sites[0] ?? '', fields: [], more: 0, idle: true } : { why: 'send', site: siteOfUrl(contents.getURL()) ?? '', fields: [], more: 0, sends: sites, idle: true },
+                    },
+                    signal,
+                    CONTROL_WAIT_MS,
+                  );
+                  return answer === 'once' ? 'once' : answer === 'always' ? 'until' : 'deny';
+                },
+              });
+              return ok ? null : 'Chord can’t check this page now (its developer tools may have it). Ask the user to close them, then to ask again.';
+            },
+            end: (node) => {
+              const contents = this.browser.tabs.get(node.id)?.webContents;
+              if (contents && !contents.isDestroyed()) endUserAction(contents);
+            },
+          },
+        };
+      },
       search: (chat, tool, query) => this.searchFor(chat as ThreadState, tool, query),
       fills: (chat) => {
         const s = chat as ThreadState;
@@ -1263,7 +1414,10 @@ export class AssistantService {
    * record of the answer. Stop or the turn ending takes it down, as a no.
    */
   private async showCard(state: ThreadState, card: ControlCard, signal: AbortSignal): Promise<'once' | 'always' | 'deny'> {
-    const message = await this.addMessage(state, { role: 'approval', tool: card.tool, description: card.description, target: card.target, decision: 'pending' });
+    const act = actCard(card);
+    const message = await this.addMessage(state, { role: 'approval', tool: card.tool, description: act ? act.title : card.description, target: act ? [] : card.target, decision: 'pending', ...(act ? { act } : {}) });
+    // Show me (a risky step's): the element outlined in its page, the card still up.
+    if (card.show) state.shows.set(message.id, card.show);
     const decision = await new Promise<Decision>((resolve) => {
       if (signal.aborted) return resolve('denied');
       state.pending.set(message.id, resolve);
@@ -1277,8 +1431,18 @@ export class AssistantService {
         { once: true },
       );
     });
+    state.shows.delete(message.id);
     if (message.body.role === 'approval') await this.updateMessage(message, { ...message.body, decision });
-    return decision === 'thread' ? 'always' : decision === 'once' ? 'once' : 'deny';
+    // An acting card's answers (S18 M2e-2a): a site card's *Allow for this chat* is the gate's once (kept for the chat),
+    // its *Always on this site* the gate's always (kept in Settings); a send card's *Allow for this chat* is its
+    // *Allow until done* (always: those origins, this tab, the chat's life). A read card's as before.
+    if (act) {
+      if (decision === 'denied') return 'deny';
+      if (act.kind === 'site') return decision === 'always' ? 'always' : 'once';
+      if (act.kind === 'send') return decision === 'thread' ? 'always' : 'once';
+      return 'once';
+    }
+    return decision === 'thread' || decision === 'always' ? 'always' : decision === 'once' ? 'once' : 'deny';
   }
 
   private async activity(state: ThreadState, tool: string, summary: string, detail = '', ok = true): Promise<void> {
@@ -1628,6 +1792,8 @@ export class AssistantService {
       if (!state.streaming) continue;
       state.queue = [];
       state.queuedWith = [];
+      state.queuedTab = [];
+      this.endActing(state, null);
       state.control.stop();
       if (state.thread) this.live.get(state.thread.id)?.session.stop();
     }
@@ -1679,3 +1845,44 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
   });
 }
 
+/**
+ * The gate's acting card as the chat shows it (S18 M2e-2a; mocks/agents-s18-m2.html §7): the site card, a risky step,
+ * or what an action sends. Chord's words only (card.description is Chord's: *click “Raise”*), never the model's.
+ */
+export function actCard(card: ControlCard): AssistantActCard | null {
+  if (card.kind === 'site') {
+    return {
+      kind: 'site',
+      title: `Let the assistant click and type on ${card.subject}?`,
+      note: `It wants to ${card.description}.`,
+      lines: ['It asks before anything it does sends data, and before it submits, pays, sends or deletes.'],
+      danger: false,
+    };
+  }
+  const step = card.step;
+  if (card.kind !== 'step' || !step) return null;
+  const did = card.description.charAt(0).toLowerCase() + card.description.slice(1);
+  if (step.sends) {
+    const other = step.sends.some((s) => s !== step.site);
+    const where = step.sends.length > 1 ? `${step.sends.length} sites` : other ? 'another site' : 'its site';
+    return {
+      kind: 'send',
+      title: sendTitle(step.sends),
+      note: step.idle ? `After the assistant’s last step, the page is sending something to ${where}.` : `The assistant ${did}, and the page is sending something to ${where}.`,
+      lines: [`Goes to: ${step.sends.join(', ')}`],
+      danger: other,
+    };
+  }
+  const lines: string[] = [];
+  if (step.to) lines.push(`It goes to ${step.to}.`);
+  if (step.shows) lines.push(`It reads “${step.shows}”.`);
+  if (step.typed !== undefined) lines.push(`It types: “${step.typed}”`);
+  if (step.fields.length) lines.push(`Goes with it: ${step.fields.join(', ')}${step.more ? ` and ${step.more} more` : ''}`);
+  return {
+    kind: 'step',
+    title: stepTitle(step.why, step.site),
+    note: step.going ? `The assistant ${did}, and the page is going to ${step.going}.` : `The assistant is about to ${card.description}.`,
+    lines,
+    danger: stepDanger(step.why) || Boolean(step.to),
+  };
+}

@@ -55,6 +55,8 @@ import { durations, easing } from '@chord/tokens';
 import type { Input, WebContents, WebFrameMain } from 'electron';
 import type { PasswordDetectorEvents, PasswordsFocusEvent } from './detector';
 import { keyIdOf, routeMenuKey, routeTakenKey, TAKEN_KEY_PATIENCE } from './menu-keys';
+import { isAgentInput } from '../control/input';
+import { userTabActing } from '../control/user-watch';
 import { generatePasswordFor, type Generated } from './generator';
 import { HOLD_MS, type CandidateValues } from './saving';
 import type { PasswordService } from './service';
@@ -465,6 +467,13 @@ export class PasswordAssist {
     const tab = host.tabOf(e.contents);
     if (!tab) return;
     const open = this.menuOf(e.contents);
+    // The assistant acting in this tab (S18 M2e-2a, A4; Neon's B2): its click or focus never opens your passwords, and
+    // a menu open as it starts closes.
+    if (userTabActing(e.contents)) {
+      this.pending.delete(e.contents);
+      if (open) this.close(open);
+      return;
+    }
     // A new password's field: the generator's row (never in a private window, which never saves). Otherwise an account's.
     const generating = NEW_ROLES.has(e.role) && e.kind !== 'username-only' && !tab.private;
     if (!generating && (!MENU_KINDS.has(e.kind) || !MENU_ROLES.has(e.role))) {
@@ -646,6 +655,9 @@ export class PasswordAssist {
   }
 
   private onKey(contents: WebContents, guard: KeyGuard, event: { preventDefault(): void }, input: Input): void {
+    // Keys Chord sends for the assistant or an agent (control/input.ts) are the page's, never the menu's: Enter there
+    // never fills a saved password (Neon's B2 on the M2e plan).
+    if (isAgentInput(contents)) return;
     const menu = this.menuOf(contents);
     if (menu && input.type === 'keyDown') return this.key(menu, guard, event, input);
     const routed = routeTakenKey(guard.taken, input);

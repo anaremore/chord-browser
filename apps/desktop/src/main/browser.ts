@@ -20,6 +20,7 @@ import {
   effectsHost,
   isInternalUrl,
   agentChords,
+  assistantActing,
   isAgentChord,
   isPrivateChord,
   passwordsOnIn,
@@ -309,6 +310,8 @@ export class Browser {
    * take it over (agents/chords.ts' takeOverPage). Never called for a page navigating itself. Set by main.
    */
   userNavigates: ((contents: WebContents, going?: Going) => void) | null = null;
+  /** Your key or click in a tab's page (never input Chord sends): the assistant stops acting there (S18 M2e-2a). Set by main. */
+  userInput: ((nodeId: NodeId) => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -512,6 +515,8 @@ export class Browser {
         contents.on('input-event', (_event, input) => {
           // A click Chord sends for an agent (control/input.ts) doesn't move your focus to its pane.
           if (input.type === 'mouseDown' && !isAgentInput(contents)) this.paneFocused(nodeId);
+          // Your key or click in a tab of yours: the assistant stops acting there for this message (S18 M2e-2a, F1).
+          if ((input.type === 'mouseDown' || input.type === 'keyDown') && !isAgentInput(contents)) this.userInput?.(nodeId);
           // Scrolling, typing or a click changes what the saved history should bring back (scroll, form fields).
           if (input.type === 'mouseWheel' || input.type === 'keyDown' || input.type === 'mouseUp') this.histories.touch(nodeId);
         });
@@ -2069,6 +2074,7 @@ export class Browser {
       spellcheckLanguages: spellcheckLanguages(),
       linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),
       effects: this.effects.sites(),
+      assistantActing: assistantActing({ packaged: app.isPackaged }),
     };
   }
 
