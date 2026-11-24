@@ -922,6 +922,27 @@ describe('acting through the gate (S18 M2c)', () => {
     return { ...t, tab, steps, doings, kept, at };
   }
 
+  it('a tab of yours: its lease begins only after the site card, right before the input; the tab leaving the screen meanwhile stops it (Neon’s B5 and B6 on #147)', async () => {
+    const order: string[] = [];
+    let here: string | null = null;
+    const t = await acting({
+      onCard: () => void order.push('card'),
+      act: { mayAct: () => here, lease: { begin: async () => (order.push('lease'), null), end: () => void order.push('end') } },
+    });
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+    expect(order).toEqual(['card', 'lease', 'end']);
+    // The tab off screen after the check: nothing goes, though the action had begun.
+    order.length = 0;
+    const u = await acting({
+      onCard: () => void (here = 'The user switched away from that tab. Stop, and tell them what’s left.'),
+      act: { mayAct: () => (order.includes('checked') ? here : (order.push('checked'), null)), lease: { begin: async () => (order.push('lease'), null), end: () => void order.push('end') } },
+    });
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe('The user switched away from that tab. Stop, and tell them what’s left.');
+    expect(u.at.input).toEqual([]);
+    expect(order).not.toContain('lease');
+    here = null;
+  });
+
   it('is unknown where the scope doesn’t let its agent act (the assistant, until M2e)', async () => {
     const { scope, call } = setup({ read: page([]), actions: true });
     expect(refusal(await call('click', { tab_id: scope.refs.refFor('n1'), ref: 'e1' })).error).toBe('Unknown tool click');

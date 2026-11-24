@@ -310,6 +310,8 @@ export class Browser {
    * take it over (agents/chords.ts' takeOverPage). Never called for a page navigating itself. Set by main.
    */
   userNavigates: ((contents: WebContents, going?: Going) => void) | null = null;
+  /** The assistant has a bar up over a tab of yours (S18 M2e-2a): the bars are kept in step for it too (Neon's B8 on #147). */
+  assistantBars = false;
   /** Your key or click in a tab's page (never input Chord sends): the assistant stops acting there (S18 M2e-2a). Set by main. */
   userInput: ((nodeId: NodeId) => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
@@ -987,7 +989,7 @@ export class Browser {
   private syncAgentBars(state: State): void {
     // A tab you shared has a bar too (M1e), though its agent may have no chord: with no bar up, no agent's chord and
     // nothing shared, there's nothing to do.
-    if (!this.agentBars && agentChords(state).length === 0 && !this.agentSharing?.()) return;
+    if (!this.agentBars && !this.assistantBars && agentChords(state).length === 0 && !this.agentSharing?.()) return;
     let any = false;
     for (const w of this.windows.values()) {
       const shown = shownTabs(state, w.id);

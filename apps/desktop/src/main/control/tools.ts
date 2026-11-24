@@ -452,12 +452,16 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
-  // A tab of yours: its debugger and send hold, for this action (control/user-watch.ts).
-  if (host.lease) {
+  // A tab of yours: its debugger and send hold for this action (control/user-watch.ts), begun only right before its
+  // input or its load, once the cards and checks have passed (Neon's B5 on #147); ended by actTool.
+  const leaseOn = async (): Promise<string | null> => {
+    if (!host.lease || leased.node) return null;
     const no = await host.lease.begin(node);
-    if (no) return refuse(no);
-    leased.node = node;
-  }
+    if (!no) leased.node = node;
+    return no;
+  };
+  /** Where it may act, asked again at every step (A1: the tab switched away, a split, minimized: Neon's B6 on #147). */
+  const notHereNow = () => host.mayAct(node);
   // Your taking the tab over lets go of its cards (S18 M2e-1): one no window shows isn't paused, so the count is how
   // an action hears of it (Claude's review 2 of #116).
   const releasedAtStart = scope.agent.releases(node.id);
@@ -552,13 +556,15 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       // What its load sends, or a redirect to an address that deletes or signs out, is held as an action's is: only what
       // the card named goes (the address itself, when it asked).
+      const notNow = notHereNow() ?? (await leaseOn());
+      if (notNow) return refuse(notNow);
       const w = page.watchSends(goingWhy ? { urls: new Set(), documents: new Set([normalUrl(goingTo)]) } : null);
       if (!w) return refuse(ACT_REFUSALS.noCheck);
       let went: { loading: boolean } | null;
       let sent: string | null;
       try {
         const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
-        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : takenOver());
+        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? notHereNow()));
         sent = await askHeld(
           w,
           going,
@@ -634,7 +640,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const halt = (): string | null => {
     if (call.stopped()) return CONTROL_REFUSALS.stopped;
     if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
-    const taken = takenOver();
+    const taken = takenOver() ?? notHereNow();
     if (taken) return taken;
     // The page went somewhere: input now would land on another page's element.
     if (page.id !== pageAtCheck) return ELEMENT_REFUSALS.stale;
@@ -893,6 +899,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // From here input goes in: the debugger's checks (deep.ts), and the watch on what it sends (sends.ts): for an
       // `act` step anything that sends data is held for the card; a step the user allowed sends as it does. Reports
       // (beacons, pings) are dropped either way.
+      if ((refused = await leaseOn())) return;
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
       watch = page.watchSends(step.class === 'risky' ? allowedBy(element, stepSubmits(tool, args, element)) : null);
