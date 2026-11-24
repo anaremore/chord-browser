@@ -7,10 +7,17 @@
   "minimumReleaseAge": "7 days",
   "ignoreTests": false,
   "platformAutomerge": false,
+  "prConcurrentLimit": 3,
   "vulnerabilityAlerts": {
-    "labels": ["security"]
+    "labels": ["security"],
+    "schedule": ["at any time"]
   },
   "packageRules": [
+    {
+      "description": "Everything waits for Monday morning, once a week, so a burst of updates doesn't fill CI's free runners while pull requests wait. Electron (below) and security fixes (vulnerabilityAlerts) don't wait.",
+      "matchPackageNames": ["*"],
+      "schedule": ["before 6am on monday"]
+    },
     {
       "description": "Renovate can't check release age for these update types, so 7 days would hold them back forever. Pins only freeze what we already use; lock file maintenance PRs are reviewed by a person.",
       "matchUpdateTypes": ["pin", "pinDigest", "lockFileMaintenance", "lockfileUpdate", "rollback", "bump", "replacement"],
@@ -21,6 +28,7 @@
       "matchPackageNames": ["electron"],
       "matchUpdateTypes": ["patch", "minor"],
       "groupName": "electron",
+      "schedule": ["at any time"],
       "minimumReleaseAge": null,
       "prPriority": 10,
       "prConcurrentLimit": 0,
@@ -31,6 +39,7 @@
       "description": "Electron majors need a person: breaking changes every 8 weeks.",
       "matchPackageNames": ["electron"],
       "matchUpdateTypes": ["major"],
+      "schedule": ["at any time"],
       "minimumReleaseAge": null,
       "prPriority": 5,
       "prConcurrentLimit": 0,

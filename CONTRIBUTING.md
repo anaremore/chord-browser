@@ -58,16 +58,18 @@ Checks inside tests that only run on Windows: downloads carry the mark of the we
 
 ## What CI runs on a pull request
 
-Every push gets the fast tier: typecheck, lint, unit tests, the password detector, and E2E on Linux x64 X11 (about 16 minutes). The full tier adds E2E on Windows, macOS, Linux Wayland and Linux arm64, and Chord Player (about 27 minutes). The `E2E` commit status is the merge gate:
+Every push gets the fast tier: typecheck, lint, unit tests, and E2E on Linux x64 X11, every spec but `perf.spec.ts`, in 6 shards balanced by how long each spec takes (`scripts/ci/e2e-shards.json`). The password detector's corpora run too when the pull request touches the detector. The full tier adds E2E on Windows, macOS, Linux Wayland and Linux arm64, `perf.spec.ts` on every platform, the password detector's corpora, and Chord Player. The `E2E` commit status is the merge gate:
 
 | The pull request | Runs | `E2E` |
 |---|---|---|
 | Docs, the site or mocks only | typecheck, lint, unit tests | success |
 | Not platform-sensitive | the fast tier | success once it passes |
 | Platform-sensitive | the fast tier | pending once it passes, until it's labeled `ready` |
-| Labeled `ready` (and not a draft), or Renovate's | the full tier | success once every platform passes |
+| Labeled `ready` (and not a draft), or a platform-sensitive one of Renovate's (Electron's, say) | the full tier | success once every platform passes |
 
 Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Every push to `main`, and a run each night, run the full tier; a failure there opens (or comments on) the issue *Nightly full tier failed on main*.
+
+The *E2E* job's summary shows how even the shards were, and warns past 1.5×. To rebalance them, refresh the weights from a passing run on `main` and commit the map: `node scripts/ci/e2e-shard-weights.mjs <run-id>` (it needs `gh`). A new spec file runs before it's in the map, dealt to a shard in turn. Renovate opens at most 3 pull requests at a time, on Monday mornings, apart from Electron and security fixes, which come at once.
 
 ## Ground rules
 
