@@ -1535,6 +1535,11 @@ const reached: string[] = [];
 test.beforeAll(async () => {
   const pages: Record<string, string> = {
     '/notes': '<title>Release notes</title><h1>Notes</h1><p>Electron 46 brings a faster start.</p>',
+    // M2e-1: a page that reloads itself twice, then sends itself on with a meta refresh (no hand of yours in it).
+    '/ticker':
+      '<title>Ticker</title><script>const n = Number(sessionStorage.n || 0); sessionStorage.n = n + 1; document.title = "Ticker " + n;' +
+      'if (n < 2) setTimeout(() => location.reload(), 200); else setTimeout(() => { location.href = "/refresh"; }, 200);</script>',
+    '/refresh': '<title>Refreshing</title><meta http-equiv="refresh" content="0;url=/notes#refreshed">',
     // A page that shows a dialog as it loads: Chord holds it, and the read never waits on it.
     '/dialog': '<title>Greeter</title><p>Hello there.</p><script>setTimeout(() => alert("Hi from the page"), 50)</script>',
     // A page that downloads a file as it loads: refused in an agent's tab.
@@ -1894,6 +1899,62 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
     await shell.getByRole('button', { name: 'Keep', description: 'Claude Code finished. Keep these tabs?' }).click();
     await expect(shell.getByRole('region', { name: 'Claude Code’s tabs' })).toHaveCount(0);
     await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Release notes');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('your hand on an agent’s tab: its row’s × and middle-click close it; an agent with no tabs has no section; your reload pauses it, the page’s own never does (M2e-1)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/notes` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    await mcp.call('open_tab', { url: `${site.origin}/notes#two` });
+    const section = shell.getByRole('region', { name: 'Codex’s tabs' });
+    await expect(section.getByRole('button', { name: /Release notes/ })).toHaveCount(2);
+
+    // The row's × (your own rows' close button: shown on hover): the agent hears the tab is gone.
+    const first = section.locator('[data-agent-tab]').first();
+    await first.hover();
+    const close = first.locator('button[aria-label^="Close"]');
+    await expect(close).toHaveCSS('opacity', '1');
+    await expect(close).toHaveAttribute('title', /Close tab/);
+    // For the PR: the × on an agent's row, as on your own.
+    mkdirSync(capturesDir, { recursive: true });
+    await shell.screenshot({ path: join(capturesDir, 'agent-tab-close.png') });
+    await close.click();
+    await expect(section.getByRole('button', { name: /Release notes/ })).toHaveCount(1);
+    expect((await mcp.call('read_tab', { tab_id: 'a1' })).text).toBe('That tab is closed. Use list_tabs for the tabs there are now.');
+
+    // Middle-click closes the last one: the agent is still connected, but its section goes.
+    await section.locator('[data-agent-tab]').first().click({ button: 'middle' });
+    await expect(section).toHaveCount(0);
+    expect((JSON.parse((await mcp.call('list_tabs')).text) as { data: { tabs: unknown[] } }).data.tabs).toEqual([]);
+
+    // Its next tab brings the section back.
+    await mcp.call('open_tab', { url: `${site.origin}/ticker` });
+    await expect(section.getByRole('button', { name: /Release notes/ })).toBeVisible({ timeout: 10_000 });
+    // The page reloaded itself twice and sent itself on with a meta refresh: never you, so never paused.
+    expect((await mcp.call('read_tab', { tab_id: 'a3' })).isError).toBe(false);
+    await expect(shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' })).toHaveCount(0);
+
+    // Your reload, from the toolbar: you take the tab over, and it's paused there until you let it go on.
+    await section.getByRole('button', { name: /Release notes/ }).click();
+    await shell.getByRole('button', { name: 'Reload', exact: true }).click();
+    const paused = shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' });
+    await expect(paused).toBeVisible();
+    await paused.getByRole('button', { name: 'Let Codex continue' }).click();
+    await expect(paused).toHaveCount(0);
+    mcp.child.stdin!.end();
+    await mcp.exited;
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
