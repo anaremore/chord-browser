@@ -60,7 +60,15 @@ function agent(profile: string) {
   const events: string[] = [];
   const run = () => {
     if (stopped) return;
-    const relay = spawn(exe, [`--user-data-dir=${profile}`, 'mcp'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    let relay: ChildProcess;
+    try {
+      relay = spawn(exe, [`--user-data-dir=${profile}`, 'mcp'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch (error) {
+      // Windows refuses to start it at once (EPERM) while setup keeps the folder from running anything.
+      events.push(`couldn't start: ${(error as NodeJS.ErrnoException).code}`);
+      setTimeout(run, 100);
+      return;
+    }
     child = relay;
     let buffer = '';
     relay.stdout!.setEncoding('utf8').on('data', (chunk: string) => {

@@ -6,7 +6,7 @@
  * Linux, another user refused.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -319,6 +319,23 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     expect(await inFlight).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     expect(existsSync(join(ud, AGENT_ENDPOINT_FILE))).toBe(false);
+  });
+
+  it('Chord restarts for an update while the relay runs on (macOS and Linux keep it, #142): the next call reaches the new Chord', async () => {
+    const ud = profile();
+    const before = await chord(ud);
+    const c = client(ud);
+    await c.initialize();
+    expect((await c.call('list_tabs')).error).toBe(false);
+    const { token } = JSON.parse(readFileSync(join(ud, AGENT_ENDPOINT_FILE), 'utf8')) as { token: string };
+    await before.stop();
+    expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
+    // The updated Chord: a new endpoint and token, which the same relay finds on its next call.
+    await chord(ud);
+    expect((JSON.parse(readFileSync(join(ud, AGENT_ENDPOINT_FILE), 'utf8')) as { token: string }).token).not.toBe(token);
+    const listed = await c.call('list_tabs');
+    expect(listed.error).toBe(false);
+    expect(c.ended).toBe(false);
   });
 
   it('no token, or a wrong one: the endpoint sends nothing and hangs up', async () => {
