@@ -847,13 +847,13 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
     if (code.includes('__chordAgentGuard')) {
       // A key's keydown, handled (agent-guard.ts' seen): at once.
-      if (code.includes('.seen(')) return true;
+      if (code.includes('.seen(')) return !twist.unseen;
       const op = code.includes('.arm(') ? 'guard' : 'unguard';
       steps.push(op);
       onAct?.(events, op);
@@ -1213,7 +1213,15 @@ describe('acting through the gate (S18 M2c)', () => {
     const v = await acting({ twist: { moved: true, passed: 1 } });
     expect(refusal(await v.call('press_key', { tab_id: v.tab, ref: 'e2', key: 'Tab' })).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
     expect(v.steps.filter((x) => x === 'guard')).toHaveLength(1);
-    // Every try stopped: at most PRESS_TRIES, then a no.
+    // A keydown the guard hadn't seen yet (late, maybe still coming), or an input whose last event never came (lost):
+    // never tried again, as it could land twice (Claude's review 5 of #117).
+    const late = await acting({ twist: { moved: true, unseen: true } });
+    expect(refusal(await late.call('press_key', { tab_id: late.tab, ref: 'e2', key: 'Enter' })).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect(late.steps.filter((x) => x === 'guard')).toHaveLength(1);
+    const lost = await acting({ twist: { moved: true, lost: true } });
+    expect(refusal(await lost.call('press_key', { tab_id: lost.tab, ref: 'e2', key: 'Tab' })).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect(lost.steps.filter((x) => x === 'guard')).toHaveLength(1);
+    // Every try stopped: at most PRESS_TRIES (5), then a no.
     const w = await acting({ twist: { moved: true } });
     expect(refusal(await w.call('press_key', { tab_id: w.tab, ref: 'e2', key: 'Tab' })).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
     expect(w.steps.filter((x) => x === 'guard')).toHaveLength(5);
@@ -1234,7 +1242,7 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(marks[0]).toBe(marks[1]);
   });
 
-  it('a node the page replaced on the way to the press: tried again from the pointer’s move, at most five times (PRESS_TRIES), never once pressed (the review of #117)', async () => {
+  it('a node the page replaced on the way to the press: tried again from the pointer’s move, at most PRESS_TRIES (5) times, never once pressed (the review of #117)', async () => {
     const CHANGED = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
     // Replaced at the hit test once: pointed at again, and pressed.
     const t = await acting({ twist: { replaced: { hit: 1 } } });

@@ -200,15 +200,28 @@ export const SNAPSHOT_LIB = String.raw`
   // them (as resolved: an empty one and a <base> count), what makes a field sensitive (autocomplete, name, id,
   // placeholder), whether it's disabled (aria-disabled too), read-only or an editor, and its words where an aria-label
   // says otherwise. (The items it's in: itemsOf, below.)
-  const refShape = (el) => {
-    const t = actTarget(el);
-    const link = closestDeep(el, 'a[href], area[href]');
-    const form = (t.form !== undefined ? t.form : null) || closestDeep(t, 'form');
+  // What a ref's shape reads (refShape, in two halves): shapeParts finds its target, link and form, and its own words
+  // where an aria-label names it; shapeOf reads them. The walk takes the parts (near: el's nearest label, button, link
+  // and form among its ancestors, out through open shadow roots as closestDeep climbs, so no climb), and the task after
+  // the snapshot reads them, from the nodes held even if the page has replaced them since (round 6 of #117: on one CPU
+  // a 100 ms redraw came before that task, and no ref of the snapshot could be found again). The same answer as
+  // refShape on the same node.
+  const shapeParts = (el, near) => {
+    const nearest = (key, selector, self) => (self ? el : near ? near[key] : closestDeep(el, selector));
+    const label = nearest('label', 'label', el.localName === 'label');
+    const control = label && label.control && label.control !== el ? label.control : null;
+    const inButton = !control && el.localName !== 'button' ? nearest('button', 'button', false) : null;
+    const t = control || inButton || el;
+    const link = nearest('a', 'a[href], area[href]', (el.localName === 'a' || el.localName === 'area') && el.hasAttribute('href'));
+    const form = (t.form !== undefined ? t.form : null) || (t === el ? nearest('form', 'form', el.localName === 'form') : closestDeep(t, 'form'));
+    const own = el.getAttribute('aria-label') ? clip(String(el.innerText || ''), NAME_MAX) : '';
+    return { el, t, link, form, own };
+  };
+  const shapeOf = ({ el, t, link, form, own }) => {
     const formGet = (f, prop) => {
       try { return String(Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f)); } catch { return ''; }
     };
     const has = (a) => typeof t.hasAttribute === 'function' && t.hasAttribute(a);
-    const own = el.getAttribute('aria-label') ? clip(String(el.innerText || ''), NAME_MAX) : '';
     return JSON.stringify([
       t.localName, String(t.type || ''), t.id || '', el.localName === 'label' ? String(el.htmlFor || '') : '',
       link ? String(link.href) : '', form ? [formGet(form, 'action'), formGet(form, 'method')] : null,
@@ -217,6 +230,7 @@ export const SNAPSHOT_LIB = String.raw`
       Boolean(t.disabled), t.getAttribute('aria-disabled') || '', Boolean(t.readOnly), Boolean(t.isContentEditable), own,
     ]);
   };
+  const refShape = (el) => shapeOf(shapeParts(el, null));
   const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
   // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
   const roleNow = (el) => {
@@ -271,11 +285,22 @@ export function snapshotScript(owner: string, token: string): string {
   // JSON, the same) is built from it, never by climbing again for each (the review of #117: measured, it cost the
   // snapshot ~4 ms on the typical page).
   // It carries the named items on the way too (itemsOf's, the same), each at its depth: only the nearest 64 ancestors'.
+  // And each element's nearest label, button, link and form, itself included, for its children's shapes (refShape).
+  const NO_NEAR = { label: null, button: null, a: null, form: null };
+  const nearHere = (el, up) => {
+    const above = up ? up.near : NO_NEAR;
+    const tag = el.localName;
+    if (tag === 'label') return { ...above, label: el };
+    if (tag === 'button') return { ...above, button: el };
+    if ((tag === 'a' || tag === 'area') && el.hasAttribute('href')) return { ...above, a: el };
+    if (tag === 'form') return { ...above, form: el };
+    return above;
+  };
   const link = (el, up, role) => {
     const n = up ? up.n + 1 : 1;
     const part = itemOf(el, role);
     const items = up ? up.items : null;
-    return { part: [el.localName, el.getAttribute('role') || ''], up, n, items: part ? { part, n, up: items } : items };
+    return { part: [el.localName, el.getAttribute('role') || ''], up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
   };
   const placeOf = (chain) => {
     const parts = [];
@@ -332,7 +357,7 @@ export function snapshotScript(owner: string, token: string): string {
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, chain }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
       }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
@@ -363,11 +388,11 @@ export function snapshotScript(owner: string, token: string): string {
     for (const n of above.reverse()) chain = link(n, chain, roleNow(n));
     walk(start, 0, false, false, chain);
   }
-  // What finds a ref again and checks it (the review of #117): each ref's items, place and shape. Taken in a task right
-  // after the snapshot answers, or first thing by any step that comes before it (act.ts, deep.ts): taken before
-  // answering, it cost the typical page's snapshot about 5 ms (12.8 → 17.9 ms median, interleaved in one page), and
-  // arm64 its budget. A node gone by then gives none, and then no ref of this snapshot is found again (its twin could be
-  // the one gone); nor if anything here throws.
+  // What finds a ref again and checks it (the review of #117): each ref's items, place and shape, in a task right after
+  // the snapshot answers, or first thing by any step that comes before it (act.ts, deep.ts), from what the walk held
+  // (its chain, and the shape's parts: shapeParts), never the page as it is then. Taken before answering, it cost the
+  // typical page's snapshot about 5 ms (12.8 → 17.9 ms median, interleaved in one page), and arm64 its budget; and a
+  // page that redraws before that task can't take it away (round 6). If anything here throws, none is found again.
   let pending = true;
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
   const read = { token: args.token, url: location.href, keep, finish: null, finishMs: 0 };
@@ -381,16 +406,16 @@ export function snapshotScript(owner: string, token: string): string {
     try {
       for (const k of keep) {
         if (!k.chain) continue;
-        const el = k.ref.deref();
-        if (el && el.isConnected) { k.items = itemsAt(k.chain); k.path = placeOf(k.chain); k.shape = refShape(el); }
-        else whole = false;
+        k.items = itemsAt(k.chain);
+        k.path = placeOf(k.chain);
+        k.shape = shapeOf(k.parts);
       }
     } catch { whole = false; }
     // Found again only if nothing else here looked like it: its role, name, items, place and shape unique among the
     // snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin). Its items stay
     // either way: every step checks them (act.ts).
     const counts = new Map();
-    for (const k of keep) { delete k.chain; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
+    for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
     for (const k of keep) {
       if (!whole || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
       delete k.sig;

@@ -743,6 +743,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      */
     let nothingWent = false;
     /**
+     * A keydown sent that the page's guard hadn't seen by KEY_SEEN_MS: late, maybe still coming. Then nothing is ever
+     * tried again, as it could land twice (Claude's review 5 of #117).
+     */
+    let keyUnseen = false;
+    /**
      * Under the guard, before each input: the focus the element's (in this document, so not in a frame; the check marks
      * it for the guard, which takes no input until then), its insides all to be seen (no closed shadow root), the
      * file picker hold, Stop and a pause.
@@ -776,6 +781,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       let failed: string | null;
       let inputBegan = false;
       nothingWent = false;
+      keyUnseen = false;
       try {
         failed = (await stillOk()) ?? ((inputBegan = true), await input());
       } catch {
@@ -786,7 +792,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       const down = await page.unguard();
       if (failed) {
         refused = failed;
-        nothingWent = failed === ACT_REFUSALS.focusMoved && (!inputBegan || (typeof down === 'object' && down.passed === 0));
+        // Nothing reached the page, for sure: nothing was sent, or all of it was seen by the guard, stopped (none went
+        // through) and none of it is still on its way (lost: the input's last event never came; a keydown unseen).
+        nothingWent = failed === ACT_REFUSALS.focusMoved && (!inputBegan || (typeof down === 'object' && down.passed === 0 && !down.lost && !keyUnseen));
         return false;
       }
       // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
@@ -807,7 +815,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (down.moved && enterOneLine && down.keydownPassed) enterMovedFocus = true;
       else if (down.moved) {
         refused = ACT_REFUSALS.focusMoved;
-        nothingWent = down.passed === 0;
+        nothingWent = down.passed === 0 && !down.lost && !keyUnseen;
       }
       // A key that types nothing (Tab, an arrow, Escape) may take the focus anywhere, a frame too: its keyup there is
       // that, not text gone astray. So may Enter's keydown in a one-line field (its keyup's all that went after).
@@ -890,7 +898,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // the key let go of. The keydown did what it does (a link went, a menu opened): that's done.
         page.keys([down!]);
         // Its keydown handled first (its handlers have run), then the check: never the check before it.
-        await page.keySeen(1, KEY_SEEN_MS);
+        if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
         const again = await stillOk();
         // A menu that moves the focus on its keydown loses Enter's click (the character): harmless, the agent sees the
         // menu open and goes on from there.
@@ -906,7 +914,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       enterOneLine = pressed === 'Enter' && element.risk?.multiline === false;
       page.keys([down!]);
       // Its keydown handled first (its handlers have run), then the check: never the check before it.
-      await page.keySeen(1, KEY_SEEN_MS);
+      if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
       const again = await stillOk();
       // Never the character: the key's let go of, nothing typed.
       if (again) {
