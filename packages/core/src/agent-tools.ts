@@ -6,7 +6,7 @@
  * nothing here pulls in the rest of core.
  */
 import { CONTROL_REFUSALS } from './control-gate';
-import { ASSISTANT_READ_MAX, CONTROL_TOOLS, type ControlTier } from './control-tools';
+import { ASSISTANT_READ_MAX, CONTROL_TOOLS, type ControlTier, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS } from './control-tools';
 
 /** What a call says while no Chord is running (or it quit mid-call): the bridge says it itself. */
 export const AGENT_NOT_OPEN = CONTROL_REFUSALS.notOpen;
@@ -145,6 +145,10 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
       ['back', 'Go back a page in one of your own tabs. Waits for the page to load.', false],
     ] as const
   ).map(([name, description, destructive]): AgentToolSpec => ({ name, level: 'act', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: false, destructiveHint: destructive, openWorldHint: true } })),
+  read(
+    'wait_for',
+    `Wait, instead of polling with snapshots or sleeping, until a text (text) or an element (role and its exact name) shows in one of your tabs, or with gone, stops showing; at most timeout_ms (${WAIT_FOR_MAX_MS} ms, ${WAIT_FOR_DEFAULT_MS} by default). Answers met (true or false) and waited_ms; with snapshot true, the tab's outline and refs when it's met, as snapshot gives them. One wait at a time. For a turn-based page: wait for your turn's controls with snapshot, then act.`,
+  ),
 ];
 
 /** The tools of this build: M1's, and M2's when it has them (agentActions). */

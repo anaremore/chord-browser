@@ -87,6 +87,31 @@ The owner's preview (main plus #117) played a full hand at a bot table. At a liv
 - *The settle change:* the page's quiet is now waited for alongside the 150 ms wait for a navigation to start, not after it: 100 ms off every action.
 - *Still to measure:* the agent's real round trip through Claude Code and Codex (the model's own time, separate from Chord's), `wait_for`'s CPU cost and how fast it wakes, and `tab_screenshot`.
 
+## Slice (b): wait_for (built, 2026-11-24)
+
+- **The tool:** `wait_for` waits for a text, or an element by its role and exact name, to show in the tab (or, with `gone`, to stop showing), for at most `timeout_ms` (30 s; 10 s by default). It answers `met` and `waited_ms`, and with `snapshot` true, the tab's outline and refs as `snapshot` gives them. It's for outside agents only; the assistant isn't offered it.
+- **How it looks:** with the snapshot's rules (`waitScript`, SNAPSHOT_LIB): only what's shown, open shadow roots, never what's typed in a field, at most SNAPSHOT_SCAN nodes. It looks once, then again as the page changes, at most once each max(150 ms, 4 × the last look's time), by a timer. A look that was cut short never proves something gone, and the result says so.
+- **How it ends:**
+  - The page side runs in 1 s chunks (`WAIT_CHUNK_MS`). Between them, Stop, the client's cancel, the user taking the tab, the tab closing, or the page going elsewhere (`navigated: true`) end it.
+  - The page's observer lasts one chunk at most.
+  - One wait per agent at a time.
+- **The client's cancel reaches every tool:** `runControlTool` takes the call's `cancelled` signal (connection.ts), as Stop does (B5).
+- **Measured** on the timed table (X11, 3 turns each way):
+
+  | | Polling (today) | wait_for |
+  |---|---|---|
+  | Tool calls per move | 8 | 2 |
+  | Turn start to Chord's click done, median | 494 ms | 347 ms |
+
+  Each tool call is a model round trip for a real agent (seconds), so the calls saved are what matters. `wait_for` wakes about 150 ms after the turn starts (the throttle's floor).
+- *Tests:*
+  - control.test, *wait_for (S18 M2g-1)*: its arguments; met, with the outline and refs; not met by the timeout; a cut look; one at a time; Stop and the client's cancel; a navigation mid-wait.
+  - agents.spec, *a timed table*: polling, then `wait_for` with no sleeps, each move under 3 s of Chord's time; a text that comes and goes.
+- *Still to do* for slice (b):
+  - The bar's *is waiting on this page* wording.
+  - Its CPU cost on a page that changes every frame.
+  - `pushState` against a real navigation (S3).
+
 ## #143: what the clients do (looked up 2026-11-24, to check in slice (a))
 
 - **Codex:** each MCP tool call times out after `tool_timeout_sec`, 60 s by default, per server in `config.toml`.

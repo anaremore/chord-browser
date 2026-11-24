@@ -61,6 +61,9 @@ import {
   type NodeId,
   type State,
   type TabNode,
+  WAIT_FOR_DEFAULT_MS,
+  WAIT_FOR_MAX_MS,
+  WAIT_FOR_TEXT_MAX,
 } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
@@ -105,7 +108,11 @@ interface Call {
 }
 
 /** A tool call from a model: through the gate, then its handler. */
-export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
+/**
+ * `cancelled`: the client gave up on this call (MCP's notifications/cancelled; Neon's review of M2g-1, B5): as Stop is for
+ * it, so a long call (wait_for) ends and takes down what it left in the page.
+ */
+export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>, cancelled?: AbortSignal): Promise<ToolOutput> {
   const spec = controlTool(name);
   // M2's tools exist only where the scope offers them (a build that has M2), and acting only where it lets its agent
   // act (outside agents in M2c): elsewhere they're unknown, as they were.
@@ -118,7 +125,8 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
   const clock = phaseClock(spec.name);
   const answered = scope.agent.call(
     tab,
-    async (signal) => {
+    async (gateSignal) => {
+      const signal = cancelled ? AbortSignal.any([gateSignal, cancelled]) : gateSignal;
       const call: Call = {
         scope,
         browser,
@@ -139,6 +147,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
         if (spec.name === 'read_form' || spec.name === 'propose_fill') return await formTool(call, spec.name, args);
         if (spec.name === 'page_diagnostics') return await diagnosticsTool(call, args);
         if (spec.name === 'snapshot') return await snapshotTool(call, args);
+        if (spec.name === 'wait_for') return await waitForTool(call, args);
         if (spec.level === 'act') return await actTool(call, spec.name as ActTool, args);
         return await readTool(call, spec.name, args);
       } catch (error) {
@@ -418,6 +427,78 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
+}
+
+/* ---------- wait_for (S18 M2g-1) ---------- */
+
+/** Agents waiting now (one wait each: Neon's review of M2g-1, B5). */
+const waiting = new WeakSet<object>();
+/** wait_for waits in chunks this long: between them, Stop, the client's cancel, your taking the tab and the page going elsewhere end it. */
+const WAIT_CHUNK_MS = 1000;
+/** Roles wait_for looks for: what the outline names. */
+const WAIT_ROLE = /^[a-z]{1,40}$/;
+
+/**
+ * wait_for: until a text, or an element by its role and exact name, shows in the tab (or goes, with `gone`), as the
+ * snapshot sees the page, at most timeout_ms. Read under read_tab's rules (the scope's readable, its card). One at a
+ * time for each agent. In chunks of WAIT_CHUNK_MS: Stop, the client giving up, your taking the tab, the tab closing or
+ * its page going elsewhere end it at once, and the page's watcher with it. With `snapshot`, the outline once it's met.
+ */
+async function waitForTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
+  const { scope, browser } = call;
+  const text = typeof args['text'] === 'string' ? args['text'] : undefined;
+  const role = typeof args['role'] === 'string' ? args['role'].trim().toLowerCase() : undefined;
+  const name = typeof args['name'] === 'string' ? args['name'] : undefined;
+  if ((text === undefined) === (role === undefined)) return refuse('wait_for takes text, or role and name (one of them).');
+  if (text !== undefined && (!text.trim() || text.length > WAIT_FOR_TEXT_MAX)) return refuse(`wait_for's text is 1 to ${WAIT_FOR_TEXT_MAX} characters.`);
+  if (role !== undefined && (!WAIT_ROLE.test(role) || !name || name.length > WAIT_FOR_TEXT_MAX)) return refuse(`wait_for's role is a role from the outline (button, generic…) and its name the element's exact name, 1 to ${WAIT_FOR_TEXT_MAX} characters.`);
+  const timeout = typeof args['timeout_ms'] === 'number' && Number.isFinite(args['timeout_ms']) ? Math.min(WAIT_FOR_MAX_MS, Math.max(100, Math.round(args['timeout_ms']))) : WAIT_FOR_DEFAULT_MS;
+  const gone = args['gone'] === true;
+  const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs or an attached tab id.');
+  if (isOutput(found)) return found;
+  const node = found;
+  if (!scope.readable(node)) return refuse(unreadable(scope, node));
+  if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
+  const what = text !== undefined ? `“${text}”` : `${role} “${name}”`;
+  const refused = await call.card('snapshot', node, `Wait for ${what} in “${node.title || safeHost(node.url)}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
+  if (refused) return refused;
+  if (waiting.has(scope.agent)) return refuse('You’re waiting already: one wait at a time.');
+  const page = await loadedPage(browser, node.id);
+  if (!page) return refuse('That tab could not be loaded.');
+  const before = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+  if (before) return refuse(before);
+  const pageId = page.id;
+  const began = Date.now();
+  const want = text !== undefined ? { text, gone } : { role: role!, name: name!, gone };
+  waiting.add(scope.agent);
+  let answer: { met: boolean; cut: boolean } | null = null;
+  try {
+    for (;;) {
+      const left = timeout - (Date.now() - began);
+      if (left <= 0) break;
+      answer = await page.waitFor(want, Math.min(WAIT_CHUNK_MS, left));
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+      // During, and after: the tab closed, the page went somewhere it may not be read, or somewhere else at all.
+      const during = blockedNow(call, node.id, page, 'That page could not be read.');
+      if (during) return refuse(during);
+      if (page.id !== pageId) return { text: toolResult({ tab_id: scope.refs.refFor(node.id), met: false, waited_ms: Date.now() - began, navigated: true, note: 'The page changed while you waited: call snapshot again.' }) };
+      if (!answer) return refuse('That page didn’t answer while you waited.');
+      if (answer.met) break;
+    }
+  } finally {
+    waiting.delete(scope.agent);
+  }
+  const waited = Date.now() - began;
+  const met = answer?.met === true;
+  scope.memory.read.add(node.id);
+  await call.activity('wait_for', `Waited for ${what} in “${node.title || safeHost(node.url)}”`, met ? `after ${waited} ms` : `not after ${waited} ms`, met);
+  const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(answer?.cut ? { note: 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' } : {}) };
+  if (!met || args['snapshot'] !== true) return { text: toolResult(result) };
+  // Met, with the outline: as snapshot gives it (its refs the tab's latest).
+  const snap = await snapshotTool(call, { tab_id: args['tab_id'] });
+  if (snap.isError || !snap.text) return snap;
+  return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), wait: result }) };
 }
 
 /* ---------- Acting (S18 M2c) ---------- */

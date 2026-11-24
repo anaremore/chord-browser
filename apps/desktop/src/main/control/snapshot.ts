@@ -433,6 +433,85 @@ export function snapshotScript(owner: string, token: string): string {
 })(${JSON.stringify(args)})`;
 }
 
+/** What wait_for looks for (M2g-1): a text, or an element by its role and exact name; and whether it's to show or go. */
+export type WaitFor = { text?: string; role?: string; name?: string; gone: boolean };
+/** One look's answer: met, and whether the look was cut short (then it never proves something gone). */
+export type WaitAnswer = { met: boolean; cut: boolean };
+
+/**
+ * wait_for in the page, for at most `ms` (the caller waits in chunks: tools.ts). It looks as the snapshot does (SNAPSHOT_LIB:
+ * only what's shown, open shadow roots, never what's typed in a field, at most SNAPSHOT_SCAN nodes and SNAPSHOT_SCAN_MS),
+ * once now, then again as the page changes: at most one look each max(150 ms, 4 × the last look's time), by a timer
+ * (Neon's review of M2g-1, B5). A look that was cut short never proves something gone.
+ */
+export function waitScript(want: WaitFor, ms: number): string {
+  const args = { ...want, ms, scan: SNAPSHOT_SCAN, scanMs: SNAPSHOT_SCAN_MS };
+  return String.raw`new Promise((done) => {
+  const args = ${JSON.stringify(args)};
+  ${SNAPSHOT_LIB}
+  const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const want = args.text !== undefined ? norm(args.text) : '';
+  const look = () => {
+    const began = performance.now();
+    let looked = 0;
+    let cut = false;
+    let found = false;
+    const over = () => {
+      if (++looked > args.scan) { cut = true; return true; }
+      if (looked % 100 === 0 && performance.now() - began > args.scanMs) { cut = true; return true; }
+      return false;
+    };
+    const walk = (parent, keyed) => {
+      for (const child of parent.childNodes) {
+        if (found || cut) return;
+        if (child.nodeType === 3) {
+          if (over()) return;
+          if (args.text !== undefined && norm(child.nodeValue).includes(want)) found = true;
+          continue;
+        }
+        if (child.nodeType !== 1) continue;
+        const el = child;
+        if (over()) return;
+        if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
+        let role = roleNow(el);
+        if (!role && !keyed && pointerGeneric(el)) role = 'generic';
+        if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name) { found = true; return; }
+        // A field's inside is what's typed in it: never looked at.
+        if (isField(el) || TYPED.has(role)) continue;
+        const inner = keyed || ACTED.has(role) || role === 'generic';
+        if (el.shadowRoot) walk(el.shadowRoot, inner);
+        walk(el, inner);
+      }
+    };
+    walk(document.body || document.documentElement, false);
+    return { found, cut, ms: performance.now() - began };
+  };
+  const met = (r) => (args.gone ? !r.found && !r.cut : r.found);
+  let last = look();
+  if (met(last)) return done({ met: true, cut: last.cut });
+  let timer = 0;
+  let pending = false;
+  const finish = (r) => { watch.disconnect(); clearTimeout(timer); clearTimeout(end); done({ met: met(r), cut: r.cut }); };
+  const watch = new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    timer = setTimeout(() => {
+      pending = false;
+      last = look();
+      if (met(last)) finish(last);
+    }, Math.max(150, 4 * last.ms));
+  });
+  watch.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  const end = setTimeout(() => { if (!pending) return finish(last); clearTimeout(timer); last = look(); finish(last); }, args.ms);
+})`;
+}
+
+export async function waitInPage(contents: WebContents, want: WaitFor, ms: number): Promise<WaitAnswer | null> {
+  if (contents.isDestroyed()) return null;
+  const answer = await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: waitScript(want, ms) }]), null, ms + 2000);
+  return answer && typeof answer === 'object' && typeof (answer as WaitAnswer).met === 'boolean' ? (answer as WaitAnswer) : null;
+}
+
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
 export async function snapshotPage(contents: WebContents, owner: string, token: string): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;

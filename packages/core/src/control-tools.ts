@@ -48,7 +48,9 @@ export type AssistantToolName =
   | 'select_option'
   | 'hover'
   | 'navigate'
-  | 'back';
+  | 'back'
+  /** M2g-1 (S18, docs/decisions/S18-m2g-timed-pages): wait until a text or an element shows or goes. */
+  | 'wait_for';
 
 export interface AssistantToolSpec {
   name: AssistantToolName;
@@ -126,6 +128,11 @@ export const ASSISTANT_TOOLS: readonly AssistantToolSpec[] = [
 ];
 export const assistantTool = (name: string): AssistantToolSpec | undefined => ASSISTANT_TOOLS.find((t) => t.name === name);
 
+/** wait_for's limits (M2g-1): how long at most, by default, and how long a text or a name it looks for. */
+export const WAIT_FOR_MAX_MS = 30_000;
+export const WAIT_FOR_DEFAULT_MS = 10_000;
+export const WAIT_FOR_TEXT_MAX = 200;
+
 /**
  * M2's tools (S18, docs/decisions/S18-agent-mcp.md, "M2: plan"): offered only by a build that has M2 (agentActions),
  * to the assistant and outside agents alike, and refused by a scope that doesn't say it has them (`actions`).
@@ -173,6 +180,23 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
     tier: 0, level: 'act', readOnly: false,
     description: 'Go back a page in one of your own tabs. Waits for the page to load.',
     inputSchema: object({ tab_id: { type: 'string' } }, ['tab_id']),
+  },
+  {
+    name: 'wait_for',
+    tier: 0, level: 'read', readOnly: true,
+    description: `Wait until a text, or an element with a role and its exact name, shows in a tab (or, with gone, stops showing), at most timeout_ms (${WAIT_FOR_MAX_MS} ms; ${WAIT_FOR_DEFAULT_MS} by default). Answers whether it did and how long it took; with snapshot, the tab's outline then too, as snapshot gives it. One wait at a time.`,
+    inputSchema: object(
+      {
+        tab_id: { type: 'string' },
+        text: { type: 'string', minLength: 1, maxLength: WAIT_FOR_TEXT_MAX },
+        role: { type: 'string', minLength: 1, maxLength: 40 },
+        name: { type: 'string', minLength: 1, maxLength: WAIT_FOR_TEXT_MAX },
+        gone: { type: 'boolean' },
+        timeout_ms: { type: 'integer', minimum: 100, maximum: WAIT_FOR_MAX_MS },
+        snapshot: { type: 'boolean' },
+      },
+      ['tab_id'],
+    ),
   },
 ];
 

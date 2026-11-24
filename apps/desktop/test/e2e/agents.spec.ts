@@ -1221,7 +1221,7 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
-test('a timed table, as an agent plays it today: a snapshot until it’s its turn, then a click; where each move’s time goes (M2g-1, measure first)', async () => {
+test('a timed table: played as an agent does today (polling snapshots), then with wait_for and its outline, no sleeps; where each move’s time goes (M2g-1)', async () => {
   test.setTimeout(240_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const app = await launch(profile, { CHORD_AGENTS: '1' });
@@ -1240,22 +1240,10 @@ test('a timed table, as an agent plays it today: a snapshot until it’s its tur
       const out = await f();
       return { out, ms: Date.now() - t0 };
     };
-    const snaps: number[] = [];
-    const clicks: number[] = [];
-    const moves: number[] = [];
+    const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
     let siteAllowed = false;
-    await phases();
-    // Five turns: no wait_for yet, so a snapshot each 500 ms until the controls show (what an agent does with no way
-    // to wait), then Call.
-    for (let turn = 0; turn < 5; turn++) {
-      let outline = '';
-      for (;;) {
-        const snap = await timed(() => mcp.call('snapshot', { tab_id: 'a1' }));
-        snaps.push(snap.ms);
-        outline = (JSON.parse(snap.out.text) as { content: string }).content;
-        if (outline.includes('generic "Call"')) break;
-        await new Promise((r) => setTimeout(r, 500));
-      }
+    /** Call, by its ref in `outline`; the site card answered the first time. */
+    const call = async (outline: string) => {
       const clicking = timed(() => mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'generic "Call"') }));
       if (!siteAllowed) {
         const siteCard = siteCardOf(popover, 'Codex');
@@ -1265,21 +1253,57 @@ test('a timed table, as an agent plays it today: a snapshot until it’s its tur
         siteAllowed = true;
       }
       const click = await clicking;
-      expect(click.out.text, `turn ${turn}`).toMatch(/^\{/);
-      if (turn > 0) clicks.push(click.ms);
-      const turnAt = Number(await inPage('window.turnAt'));
-      if (turn > 0) moves.push(Date.now() - turnAt);
-      await expect.poll(() => inPage('document.getElementById("log").textContent')).toContain(`Call after`);
+      expect(click.out.text).toMatch(/^\{/);
+      await expect.poll(() => inPage('document.getElementById("log").textContent')).toContain('Call after');
       await inPage('document.getElementById("log").textContent = ""');
+      return click.ms;
+    };
+    const report = async (how: string, moves: number[], calls: number, laps: { tool: string; phase: string; ms: number }[]) => {
+      const byPhase = new Map<string, number[]>();
+      for (const l of laps) byPhase.set(`${l.tool}:${l.phase}`, [...(byPhase.get(`${l.tool}:${l.phase}`) ?? []), l.ms]);
+      console.log(`[timed table] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${how}: turn start to Chord's click done, median ${med(moves)} ms; ${calls} tool calls for ${moves.length} moves (each a model round trip for an agent); phases (median ms): ${[...byPhase].map(([k, v]) => `${k} ${med(v).toFixed(0)}`).join(', ')}`);
+    };
+    await phases();
+    // Today: a snapshot each 500 ms until it's the agent's turn (a model round trip each, and a sleep), then Call.
+    {
+      const moves: number[] = [];
+      let calls = 0;
+      for (let turn = 0; turn < 3; turn++) {
+        let outline = '';
+        for (;;) {
+          calls++;
+          outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+          if (outline.includes('generic "Call"')) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        calls++;
+        await call(outline);
+        if (turn > 0) moves.push(Date.now() - Number(await inPage('window.turnAt')));
+      }
+      await report('polling', moves, calls, await phases());
     }
-    const log = String(await inPage('document.getElementById("log").textContent'));
-    expect(log).not.toContain('auto-folded');
-    const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
-    const laps = await phases();
-    const byPhase = new Map<string, number[]>();
-    for (const l of laps) byPhase.set(`${l.tool}:${l.phase}`, [...(byPhase.get(`${l.tool}:${l.phase}`) ?? []), l.ms]);
-    const breakdown = [...byPhase].map(([k, v]) => `${k} ${med(v).toFixed(0)}`).join(', ');
-    console.log(`[timed table] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} snapshot median ${med(snaps)} ms (${snaps.length}); click median ${med(clicks)} ms; turn start to Chord's click done, median ${med(moves)} ms (no model thinking: the 15 s clock's rest is the agent's); phases (median ms): ${breakdown}`);
+    // With wait_for: one call waits for the turn's controls and gives the outline, then Call. No sleeps.
+    {
+      const moves: number[] = [];
+      let calls = 0;
+      for (let turn = 0; turn < 3; turn++) {
+        calls++;
+        const waited = JSON.parse((await mcp.call('wait_for', { tab_id: 'a1', role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text) as { content: string; wait: { met: boolean; waited_ms: number } };
+        expect(waited.wait.met, `turn ${turn}`).toBe(true);
+        calls++;
+        await call(waited.content);
+        moves.push(Date.now() - Number(await inPage('window.turnAt')));
+      }
+      expect(String(await inPage('document.getElementById("log").textContent'))).not.toContain('auto-folded');
+      await report('wait_for', moves, calls, await phases());
+      // Every move well inside the 15 s clock (Chord's share: the agent's thinking is the rest).
+      expect(Math.max(...moves)).toBeLessThan(3000);
+    }
+    // A text, coming and going: the turn's words show, then go once it's played.
+    expect(JSON.parse((await mcp.call('wait_for', { tab_id: 'a1', text: 'Your turn', timeout_ms: 20_000 })).text)).toMatchObject({ data: { met: true } });
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    await call(outline);
+    expect(JSON.parse((await mcp.call('wait_for', { tab_id: 'a1', text: 'Your turn', gone: true, timeout_ms: 5_000 })).text)).toMatchObject({ data: { met: true } });
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

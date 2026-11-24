@@ -365,7 +365,9 @@ function setup(
     activity: async (_tool, summary) => void activity.push(summary),
   };
   const call = (name: string, args: Record<string, unknown> = {}) => runControlTool(scope, browser, name, args);
-  return { scope, agent, call, close, cards, activity, pages, go };
+  /** A call the client can give up on (MCP's notifications/cancelled). */
+  const callUntil = (name: string, args: Record<string, unknown>, cancelled: AbortSignal) => runControlTool(scope, browser, name, args, cancelled);
+  return { scope, agent, call, callUntil, close, cards, activity, pages, go };
 }
 
 const refusal = (out: { text?: string }) => (JSON.parse(out.text!) as { data: { refused?: string; error?: string } }).data;
@@ -767,6 +769,71 @@ describe('A shared tab is read only on its site (S18 M1e, review 1 of #96)', () 
 });
 
 /* ---------- snapshot (S18 M2b) ---------- */
+
+describe('wait_for (S18 M2g-1)', () => {
+  type Answer = { met: boolean; cut: boolean } | 'hold';
+  /** The page answers wait_for's looks in turn (the last one again after), the snapshot with a button, else as a read. */
+  const page = (answers: Answer[], onWait?: (events: EventEmitter) => void) => {
+    let i = 0;
+    return async (code: string, events: EventEmitter) => {
+      if (code.includes('const want =')) {
+        onWait?.(events);
+        const a = answers[Math.min(i++, answers.length - 1)]!;
+        return a === 'hold' ? new Promise((r) => setTimeout(() => r({ met: false, cut: false }), 50)) : a;
+      }
+      if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Table', nodes: [{ depth: 0, role: 'generic', name: 'Call', key: 0 }], cut: {} };
+      return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
+    };
+  };
+  const data = (out: { text?: string }) => JSON.parse(out.text!) as { data?: Record<string, unknown>; content?: string; wait?: Record<string, unknown> };
+
+  it('takes text, or role and name: never both, never neither', async () => {
+    const { scope, call } = setup({ read: page([{ met: true, cut: false }]), actions: true });
+    const tab = scope.refs.refFor('n1');
+    expect(refusal(await call('wait_for', { tab_id: tab })).refused).toBe('wait_for takes text, or role and name (one of them).');
+    expect(refusal(await call('wait_for', { tab_id: tab, text: 'Your turn', role: 'button', name: 'Call' })).refused).toBe('wait_for takes text, or role and name (one of them).');
+    expect(refusal(await call('wait_for', { tab_id: tab, role: 'button' })).refused).toMatch(/^wait_for's role is a role from the outline/);
+  });
+
+  it('met: says so and how long it took; with snapshot, the outline and its refs too; never a page that can never be read', async () => {
+    const { scope, call } = setup({ read: page([{ met: false, cut: false }, { met: true, cut: false }]), actions: true });
+    const tab = scope.refs.refFor('n1');
+    const out = data(await call('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true }));
+    expect(out.wait).toMatchObject({ tab_id: tab, met: true });
+    expect(out.content).toBe('- generic "Call" [ref=e1]');
+    expect(scope.memory.elements!.get('n1')!.resolve('e1', (out as { page_id: string }).page_id)).toMatchObject({ ok: true });
+    expect(refusal(await call('wait_for', { tab_id: scope.refs.refFor('n2'), text: 'x' })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+  });
+
+  it('not met by timeout_ms: says so (never an error); a look cut short says it can’t tell it’s gone', async () => {
+    const { scope, call } = setup({ read: page([{ met: false, cut: true }]), actions: true });
+    const out = data(await call('wait_for', { tab_id: scope.refs.refFor('n1'), text: 'Your turn', gone: true, timeout_ms: 100 }));
+    expect(out.data).toMatchObject({ met: false, note: 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' });
+  });
+
+  it('one wait at a time for an agent; Stop or the client giving up ends it', async () => {
+    const t = setup({ read: page(['hold']), actions: true });
+    const tab = t.scope.refs.refFor('n1');
+    const first = t.call('wait_for', { tab_id: tab, text: 'Your turn', timeout_ms: 5000 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(refusal(await t.call('wait_for', { tab_id: tab, text: 'Your turn' })).refused).toBe('You’re waiting already: one wait at a time.');
+    t.agent.stop();
+    expect(refusal(await first).refused).toBe(CONTROL_REFUSALS.stopped);
+    // The client giving up (notifications/cancelled): the same, at once.
+    const u = setup({ read: page(['hold']), actions: true });
+    const giveUp = new AbortController();
+    const waiting = u.callUntil('wait_for', { tab_id: u.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 5000 }, giveUp.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    giveUp.abort();
+    expect(refusal(await waiting).refused).toBe(CONTROL_REFUSALS.stopped);
+  });
+
+  it('the page going somewhere else while it waits ends it: not met, and said so', async () => {
+    const t = setup({ read: page([{ met: false, cut: false }], (events) => events.emit('did-navigate')), actions: true });
+    const out = data(await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 3000 }));
+    expect(out.data).toMatchObject({ met: false, navigated: true });
+  });
+});
 
 describe('snapshot through the gate (S18 M2b)', () => {
   /** The page answers the snapshot script with these nodes (and anything else as a plain read). */

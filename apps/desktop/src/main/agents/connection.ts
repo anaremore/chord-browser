@@ -304,7 +304,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
           if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
           if (tool === 'close_tab') return closeTab(args);
-          return toPlain(await runControlTool(callScope, deps.browser, tool, args));
+          return toPlain(await runControlTool(callScope, deps.browser, tool, args, cancel.signal));
         },
         refused,
       );
