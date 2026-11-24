@@ -1260,18 +1260,15 @@ test('a game whose action controls are pointer divs, re-rendered every 100 ms an
       const typed = await mcp.call('type', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), text: `${round + 1}0` });
       expect(typed.text, `the bet, round ${round}`).toMatch(/^\{/);
       // Enter in it, as the owner's agent pressed it (a field in no form: it asks as a submit; allowed, it goes).
-      const enter = async () => {
-        const entering = mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), key: 'Enter' });
-        const card = popover.getByRole('alertdialog');
-        await expect(card).toBeVisible({ timeout: 15_000 });
-        await popover.waitForTimeout(600);
-        await card.getByRole('button', { name: 'Allow', exact: true }).click();
-        return entering;
-      };
-      const entered = await enter();
+      const entering = mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), key: 'Enter' });
+      const card = popover.getByRole('alertdialog');
+      await expect(card).toBeVisible({ timeout: 15_000 });
+      await popover.waitForTimeout(600);
+      await card.getByRole('button', { name: 'Allow', exact: true }).click();
+      const entered = await entering;
       expect(entered.text, `Enter in the bet, round ${round}`).toMatch(/^\{/);
       // Done, once, and said so: the page took the focus on Enter's keydown (refused, the agent pressed again: two bets).
-      expect(JSON.parse(entered.text)).toMatchObject({ data: { done: 'Pressed Enter in “Bet”', focus: 'The page moved the focus away from that field after Enter. Enter was pressed once; don’t press it again.' } });
+      expect(JSON.parse(entered.text)).toMatchObject({ data: { done: 'Pressed Enter in “Bet”', focus: 'The page moved the focus away from that field after Enter. Enter was pressed once: call snapshot to see what it did, and don’t press it again.' } });
       await expect.poll(async () => (await logText()).match(/bet \d+/g)?.length ?? 0, `one bet per Enter, round ${round}`).toBe(round + 1);
     }
     expect((await logText()).match(/bet \d+/g)).toEqual(['bet 10', 'bet 20', 'bet 30']);

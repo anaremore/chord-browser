@@ -41,6 +41,8 @@ export function installAgentGuard(win: GuardWindow): void {
     keydownPassed: boolean;
     /** Events that went through to the page (keyup aside): none, and nothing of the input reached it. */
     passed: number;
+    /** The last keydown was stopped: its keyup is too (never an orphan keyup for the page; round 5 of #117). */
+    lastKeydownStopped: boolean;
     /** Who waits for a keydown to have been handled (seen). */
     onKeydown: (() => void)[];
   } | null = null;
@@ -58,9 +60,11 @@ export function installAgentGuard(win: GuardWindow): void {
       guard.done = true;
       guard.finished?.();
     }
-    // Nothing marked yet (null): nothing passes, even with no focus anywhere (Neon, round 4).
-    const passes = event.type === 'keyup' || (guard.expected !== null && deepFocus() === guard.expected);
+    // Nothing marked yet (null): nothing passes, even with no focus anywhere (Neon, round 4). A keyup goes wherever the
+    // focus is (a key may move it on purpose), unless its keydown was stopped.
+    const passes = event.type === 'keyup' ? !guard.lastKeydownStopped : guard.expected !== null && deepFocus() === guard.expected;
     if (event.type === 'keydown') {
+      guard.lastKeydownStopped = !passes;
       guard.keydowns++;
       if (passes) guard.keydownPassed = true;
       // Those waiting hear of it a task later, once the page's own keydown handlers have run.
@@ -76,6 +80,23 @@ export function installAgentGuard(win: GuardWindow): void {
     event.stopImmediatePropagation();
   };
   for (const type of GUARDED_EVENTS) win.addEventListener(type, stop, true);
+  /**
+   * Presses this document saw (trusted mouseups), counted by the window's first listener, before any of the page's
+   * scripts (round 5 of #117: typing goes in only after the page saw its click; a page's own listener can't hide it).
+   */
+  let presses = 0;
+  const onPress: (() => void)[] = [];
+  win.addEventListener(
+    'mouseup',
+    (event: GuardEvent) => {
+      if (!event.isTrusted) return;
+      presses++;
+      // A task later, once the page's own handlers for it have run.
+      const waiting = onPress.splice(0);
+      if (waiting.length) win.setTimeout(() => waiting.forEach((w) => w()), 0);
+    },
+    true,
+  );
   /**
    * The element Chord's focus check found focused, by the event it fires at it (only Chord's world fires it: it's
    * untrusted, as any script's, but no page knows its name). Its first node on the way, so inside an open shadow root
@@ -97,7 +118,7 @@ export function installAgentGuard(win: GuardWindow): void {
       if (!GUARD_MARK.test(mark)) return false;
       if (armed) down(armed);
       // Nothing may take input until Chord's check says which element does.
-      const guard = { expected: null, mark, until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0, keydowns: 0, keydownPassed: false, passed: 0, onKeydown: [] };
+      const guard = { expected: null, mark, until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0, keydowns: 0, keydownPassed: false, passed: 0, lastKeydownStopped: false, onKeydown: [] };
       win.addEventListener(mark, marked, true);
       // Never left up for good: main takes it down when the input's in (or the action ends), at the latest after
       // 30 s, longer than an action's worst path between arming and the input (its checks' limits).
@@ -124,6 +145,24 @@ export function installAgentGuard(win: GuardWindow): void {
           } else guard.onKeydown.push(check);
         };
         guard.onKeydown.push(check);
+      });
+    },
+    /** How many presses this document has seen so far (pressSeen waits for one more). */
+    pressMark(): number {
+      return presses;
+    },
+    /** Whether a press after `mark` has been seen (and its handlers have run), at most `waitMs` (1 s). */
+    pressSeen(mark: number, waitMs: number): Promise<boolean> {
+      if (presses > mark) return new Promise((resolve) => win.setTimeout(() => resolve(true), 0));
+      return new Promise((resolve) => {
+        const timer = win.setTimeout(() => resolve(false), Math.max(0, Math.min(waitMs, 1000)));
+        const check = () => {
+          if (presses > mark) {
+            win.clearTimeout(timer);
+            resolve(true);
+          } else onPress.push(check);
+        };
+        onPress.push(check);
       });
     },
     /** Down at once: the user took the tab (their key or click), and their keys are never stopped. */

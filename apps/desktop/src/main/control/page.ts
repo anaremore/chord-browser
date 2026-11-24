@@ -15,7 +15,7 @@ import { readPage, screenshot, type PageRead } from './extract';
 import { fillFormPage, readFormPage, undoFillPage, type FillHighlight, type FillOutcome, type FormPage } from './forms';
 import { fetchPdf } from './pdf';
 import { ACT_LOAD_MS, type FillWrite, type SnapshotRead } from '@chord/core';
-import { actOnPage, pressSeen, settle, watchPress, type ActAnswer, type ActOp } from './act';
+import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
 import { openDeep, type DeepSession } from './deep';
 import { pickersLost, pickersUnsecured, retryPickers } from '../agents/pickers';
 import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
@@ -53,9 +53,12 @@ export interface ControlPage {
   pointer(x: number, y: number): void;
   /** The button pressed and let go there (after pointer, and a last hit test). */
   press(x: number, y: number): void;
-  /** A press about to be sent, watched for; then whether the page saw it (its handlers ran), at most `waitMs`. */
-  watchPress(): Promise<void>;
-  pressSeen(waitMs: number): Promise<boolean>;
+  /**
+   * A press about to be sent, watched for by the page preload's guard (its first listener): the presses seen so far,
+   * or null with no guard; then whether one more was seen (its handlers ran), at most `waitMs`.
+   */
+  watchPress(): Promise<number | null>;
+  pressSeen(mark: number, waitMs: number): Promise<boolean>;
   /** Keys, as the agent's (control/input.ts refuses anything off its list). */
   keys(events: readonly AgentInputEvent[]): void;
   /**
@@ -69,7 +72,7 @@ export interface ControlPage {
    * guard was ever up in that document (another document: the page went); `expired`: it was, and ran out or was
    * dropped (the user took the tab); `timeout`: the page didn't answer.
    */
-  unguard(): Promise<{ moved: boolean; lost: boolean; keydownPassed: boolean; passed: number } | 'gone' | 'expired' | 'timeout'>;
+  unguard(waitMs?: number): Promise<{ moved: boolean; lost: boolean; keydownPassed: boolean; passed: number } | 'gone' | 'expired' | 'timeout'>;
   /**
    * Whether `count` keydowns sent have reached the page and its handlers have run (the guard's count), at most `waitMs`:
    * a key's check comes after its keydown is handled, never before (the review of #117, round 5).
@@ -231,8 +234,12 @@ export function controlPage(contents: WebContents): ControlPage {
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),
     act: (owner, token, key, op) => actOnPage(contents, owner, token, key, op),
     pointer: (x, y) => sendAgentInput(contents, [{ type: 'mouseMove', ...viewPoint(contents, x, y) }]),
-    watchPress: () => watchPress(contents),
-    pressSeen: (waitMs) => pressSeen(contents, waitMs),
+    watchPress: async () => {
+      const mark = await inPreload(contents, 'globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.pressMark ? globalThis.__chordAgentGuard.pressMark() : null');
+      return typeof mark === 'number' ? mark : null;
+    },
+    pressSeen: async (mark, waitMs) =>
+      (await inPreload(contents, `globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.pressSeen ? globalThis.__chordAgentGuard.pressSeen(${Number(mark)}, ${Number(waitMs)}) : false`)) === true,
     press: (x, y) => {
       const at = viewPoint(contents, x, y);
       sendAgentInput(contents, [
@@ -248,8 +255,8 @@ export function controlPage(contents: WebContents): ControlPage {
       toFrames(contents, true);
       return (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}, ${JSON.stringify(mark)}) : false`)) === true;
     },
-    unguard: async () => {
-      const answer = await inPreload(contents, 'globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(250) : null');
+    unguard: async (waitMs = 250) => {
+      const answer = await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(${Number(waitMs)}) : null`);
       toFrames(contents, false);
       contents.ipc?.off('page:agentGuardStopped', onFrameStopped);
       if (answer === PRELOAD_TIMEOUT) return 'timeout';

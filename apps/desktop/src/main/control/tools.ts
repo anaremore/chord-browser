@@ -447,7 +447,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // A ref whose node the page had replaced, found again (the owner's bug #2).
         ...(refoundElement ? { refound: 'The page had redrawn that element; Chord found it again by its role, name, place and target.' } : {}),
         // Enter's keydown went, and the page then moved the focus (its handler did): done, once; never press it again.
-        ...(focusTaken ? { focus: 'The page moved the focus away from that field after Enter. Enter was pressed once; don’t press it again.' } : {}),
+        ...(focusTaken ? { focus: 'The page moved the focus away from that field after Enter. Enter was pressed once: call snapshot to see what it did, and don’t press it again.' } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
       }),
     };
@@ -780,21 +780,29 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       const markAtInput = page.mark;
       let failed: string | null;
       let inputBegan = false;
+      // Fresh for this input: what a try before it found never counts (Neon's B2 of round 5).
       nothingWent = false;
       keyUnseen = false;
+      enterMovedFocus = false;
+      enterOneLine = false;
       try {
         failed = (await stillOk()) ?? ((inputBegan = true), await input());
       } catch {
         // The input itself failed (the page went mid-way): nothing more goes in.
         failed = ACT_REFUSALS.changed;
       }
-      // Always down: the input's events are on their way (each its own message), and unguard waits for the last one.
-      const down = await page.unguard();
+      // Always down: the input's events are on their way (each its own message), and unguard waits for the last one
+      // (none sent: no wait).
+      const down = await page.unguard(inputBegan ? undefined : 0);
       if (failed) {
         refused = failed;
         // Nothing reached the page, for sure: nothing was sent, or all of it was seen by the guard, stopped (none went
         // through) and none of it is still on its way (lost: the input's last event never came; a keydown unseen).
-        nothingWent = failed === ACT_REFUSALS.focusMoved && (!inputBegan || (typeof down === 'object' && down.passed === 0 && !down.lost && !keyUnseen));
+        // Or nothing was sent at all, and the element was replaced before it (a page that redraws: the table on Wayland):
+        // found again and checked again by the retry (refocus), as for the focus taken.
+        nothingWent =
+          (failed === ACT_REFUSALS.focusMoved && (!inputBegan || (typeof down === 'object' && down.moved && down.passed === 0 && !down.lost && !keyUnseen))) ||
+          (failed === ACT_REFUSALS.changed && !inputBegan);
         return false;
       }
       // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
@@ -812,6 +820,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Something stopped. Enter in a one-line field whose keydown went through, the rest stopped (the page took the focus
       // after the check: the review of #117, round 5): the keydown did its work, nothing was typed; done, said so.
       // Anything else stopped: a no.
+      // Enter that moved the focus is done only when its keydown went through (Neon's B2 of round 5): else as anything.
+      if (!down.keydownPassed) enterMovedFocus = false;
       if (down.moved && enterOneLine && down.keydownPassed) enterMovedFocus = true;
       else if (down.moved) {
         refused = ACT_REFUSALS.focusMoved;
@@ -827,7 +837,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      * key). A node the page replaced on the way (a re-render) is looked for again from the pointer's move and checked
      * again, at most PRESS_TRIES times, as a press is (the review of #117, round 3); never once input went in.
      */
-    const readyAgain = async (first?: () => Promise<ActAnswer>): Promise<string | null> => {
+    const readyAgain = async (first?: () => Promise<ActAnswer>, tries = PRESS_TRIES): Promise<string | null> => {
       for (let attempt = 1; ; attempt++) {
         const halted = halt();
         if (halted) return halted;
@@ -839,14 +849,14 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if (first) {
           const did = await first();
           if (!did.ok) {
-            if (did.why === 'replaced' && attempt < PRESS_TRIES) continue;
+            if (did.why === 'replaced' && attempt < tries) continue;
             return actRefusal(did);
           }
         }
         const changed = await stepNow();
         // Stop, the user taking the tab, the page gone on while the step was checked: nothing goes in (Neon, round 4).
         if (!changed) return halt();
-        if (changed.why === 'replaced' && attempt < PRESS_TRIES) continue;
+        if (changed.why === 'replaced' && attempt < tries) continue;
         return changed.refused;
       }
     };
@@ -867,8 +877,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         refused = null;
       }
     };
-    /** The element focused again, and the step checked again (guardedTries). */
-    const refocus = () => readyAgain(() => actOn({ op: 'focus' }));
+    /**
+     * The element focused again, and the step checked again (guardedTries): its own tries kept to RETRY_CHECKS, so a
+     * key's tries and their checks stay at most PRESS_TRIES × RETRY_CHECKS steps (Claude's N3 of round 5).
+     */
+    const refocus = () => readyAgain(() => actOn({ op: 'focus' }), RETRY_CHECKS);
     /** After text or a value went in: this field changed, or now holds the text; and no other field changed. */
     const typedWhere = async (): Promise<string | null> => {
       const after = await actOn({ op: 'values', mode: 'compare', text: value ?? (text as string) });
@@ -1013,6 +1026,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // it (the page runs between the test and the press too). A page that re-renders (the owner's retest of #117: a
       // game's controls rebuilt every frame) may replace the element anywhere on the way: then it starts over from the
       // pointer's move (which looks for it again), at most PRESS_TRIES times, never once anything's pressed.
+      // Typing watches for its click (the page preload's guard counts presses), from before the press's checks: the
+      // last check stays right before the press, nothing awaited between (Neon's B3 of round 5).
+      const pressMark = tool === 'type' ? await page.watchPress() : null;
       let at = pointed;
       for (let attempt = 1; ; attempt++) {
         const again = (why: string | undefined) => why === 'replaced' && attempt < PRESS_TRIES;
@@ -1071,12 +1087,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       }
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
-      // Typing waits for the page to have seen its click (the caret goes where the click put it): only then the select
-      // and the text, never before it (the review of #117, round 5: under load, 30 typed over 20 made 2030).
-      if (tool === 'type') await page.watchPress();
       page.press(at.x!, at.y!);
       if (tool !== 'type') return;
-      await page.pressSeen(PRESS_SEEN_MS);
+      // Typing waits for the page to have seen its click (the caret goes where the click put it): only then the select
+      // and the text (round 5: under load, 30 typed over 20 made 2030). Not seen: nothing typed.
+      if (pressMark === null || !(await page.pressSeen(pressMark, PRESS_SEEN_MS))) return void (refused = ACT_REFUSALS.changed);
       if ((refused = halt())) return;
       if (args['replace'] !== false) {
         const selected = await actOn({ op: 'select' });
@@ -1092,13 +1107,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           await page.insertText(text as string);
           return null;
         },
-        // Focused again, and what's there selected again when it's replaced.
-        async () => {
-          const back = await refocus();
-          if (back || args['replace'] === false) return back;
-          const selected = await actOn({ op: 'select' });
-          return selected.ok ? null : actRefusal(selected);
-        },
+        // Focused and selected again by the select op (Neon's nit 3 of round 5). Text added to what's there is never
+        // tried again: the caret could be elsewhere now (Claude's N2).
+        async () => (args['replace'] === false ? ACT_REFUSALS.focusMoved : readyAgain(() => actOn({ op: 'select' }), RETRY_CHECKS)),
       );
       if (!typed) return;
       // Where it went: this field changed (or holds the text), and no other did (#112: text that lands in the field
@@ -1189,6 +1200,9 @@ const KEY_SEEN_MS = 500;
 
 /** A key whose element the page redrew between its keydown and the rest: maybe nothing happened. */
 const KEY_REDRAWN = 'The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.';
+
+/** A key's retry checks the step again with at most this many tries of its own. */
+const RETRY_CHECKS = 2;
 
 /** How long typing waits for the page to have seen its click, at most. */
 const PRESS_SEEN_MS = 500;

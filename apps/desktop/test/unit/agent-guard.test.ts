@@ -101,6 +101,42 @@ describe('the agent guard (preload/agent-guard.ts)', () => {
     await expect(guard.seen(1, 20)).resolves.toBe(false);
   });
 
+  it('a keydown it stopped: seen, not through, and its keyup stopped too (never an orphan keyup for the page); seen() after the keydown came (round 5 of #117)', async () => {
+    const { win, guard, send } = guardWindow();
+    const field = {};
+    win.document.activeElement = field;
+    guard.arm('keyup', MARK);
+    send(MARK, field);
+    // The focus elsewhere before the keydown: stopped, and its keyup too.
+    win.document.activeElement = {};
+    expect(send('keydown')).toBe(false);
+    await expect(guard.seen(1, 500)).resolves.toBe(true);
+    expect(send('keyup')).toBe(false);
+    expect(await guard.disarm(0)).toMatchObject({ moved: true, keydownPassed: false, passed: 0 });
+    // A keydown that went through keeps its keyup, wherever the focus went.
+    guard.arm('keyup', MARK);
+    win.document.activeElement = field;
+    send(MARK, field);
+    expect(send('keydown')).toBe(true);
+    win.document.activeElement = {};
+    expect(send('keyup')).toBe(true);
+    // seen() asked after the keydown already came: at once.
+    await expect(guard.seen(1, 0)).resolves.toBe(true);
+    await guard.disarm(0);
+  });
+
+  it('counts the presses it sees from before the page’s scripts, and says when one more came (round 5 of #117)', async () => {
+    const { guard, send } = guardWindow();
+    const g = guard as unknown as { pressMark(): number; pressSeen(mark: number, waitMs: number): Promise<boolean> };
+    const mark = g.pressMark();
+    const seen = g.pressSeen(mark, 500);
+    send('mouseup');
+    await expect(seen).resolves.toBe(true);
+    // None more: false after the wait; an untrusted one never counts.
+    send('mouseup', undefined, false);
+    await expect(g.pressSeen(g.pressMark(), 20)).resolves.toBe(false);
+  });
+
   it('a mark that isn’t Chord’s shape arms nothing, and the mark’s listener goes when the guard comes down', async () => {
     const { win, guard, send, listeners } = guardWindow();
     expect(guard.arm('keyup', 'keydown')).toBe(false);

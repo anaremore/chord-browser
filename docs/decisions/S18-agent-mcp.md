@@ -915,6 +915,23 @@ The owner, on a web game whose table redraws every second (a turn timer): every 
     - *Measured* (interleaved in one page, X11, twice): main 11 and 12 ms median, the fully deferred version 12 and 12, this 12 and 12. The task after: 2.3 ms. Found again 30 of 30. Taking the shape in the walk itself had cost 1 to 4 ms; a microtask instead of a task, 4.5 ms.
     - With that fixed, `PRESS_TRIES` 5 is enough: the journeys pass strict, 16 of 16 on one CPU (8 was tried and wasn't needed).
   - **Enter on a button the page redrew between its keydown and the rest** (the table, on X11 at 4d8f34b): the result said *Pressed Enter* but the page never saw the click, which comes with the character. When the element is gone after its keydown in the same document, the result now says *The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.* It's never said done, and never pressed again by Chord (its keydown reached the page). *Tests:* control.test, *Enter on a button the page redrew…*; the table journey accepts that answer or done with the click in the page's log.
+- *Round 5 of the review of #117 (Claude and Neon, at 0ad272c), one merged list; each item with a unit test that failed first:*
+  - **B1, a lost input tried again could land twice:** a retry needs the guard to have stopped all of the input (`moved`, `passed` 0), nothing lost, and every keydown seen. *Tests:* lost Enter in a textarea, lost Space, lost Enter in a field: one guard each.
+  - **B2, Enter's done carried across tries and hid a lost input:** `enterMovedFocus` and `enterOneLine` are fresh for each input, and Enter that moved the focus is done only when its keydown went through; otherwise a lost input refuses as `focusLost`.
+  - **B3, an await between the press's last check and the press:** typing's press watch is started before the press's checks, so nothing is awaited between the last check and `page.press`.
+  - **An orphan keyup:** the guard stops the keyup of a keydown it stopped; a keydown that went through keeps its keyup.
+  - **Typing after a click the page never saw:** the press watch is in the page preload's guard now (the window's first listener, before any page script), with a waiter, not a poll. A click not seen is refused as changed, with nothing selected and nothing typed.
+  - **Order tests:** the unit steps show the click watched before its checks and seen before the select, and Enter's keydown seen before its check. Deleting a wait fails them.
+  - **Nits:**
+    - The Enter note adds *call snapshot to see what it did*.
+    - Text added to what's there (`replace: false`) is never tried again.
+    - A retry's own checks are at most `RETRY_CHECKS` (2) tries.
+    - No disarm wait when nothing was sent.
+    - The retry for typing focuses with the select op.
+  - **Nothing sent, the element replaced before it** (the table on Wayland): tried again too, found again and checked again (`refocus`), as when the focus was taken first.
+  - **Invariant 9** (X11, the round trip through the relay, 25 runs each, taking turns, twice):
+    - `press_key` median 298.9 / 306.8 ms at 5200372 → 285.1 / 290.3 ms now.
+    - `type` 325.6 / 327.4 → 311.3 / 313.7 ms.
 - **The frame stays on** (the owner, 2026-11-24: its flashing off and on between actions was jarring). An agent's tab stays shown as worked on (the frame's blue edge, the bar) for `AGENT_STEADY_MS` (45 s) after its last call. Stop, your taking the tab, or the agent letting go end it at once; between actions only the bar's words change. *Tests:* agent-chords.test, *the frame stays on while the agent works…* (it failed before: off between each action).
   - **60 Hz:** a node replaced every frame is still refused (0 of 6 on one CPU), never another control: a check and a press can't fit in one frame. A stated limit; M2g-1 shortens the chain.
 - *Round 4* (Neon SF1): a key's, a choice's or a value's last check (`readyAgain`) ends with Stop, the user taking the tab and the page gone on checked again, and so does the moment right before a value is set (a unit test: the tab taken during the check, nothing set or chosen; it failed before). The guard passes nothing while no element is marked, even with no focus anywhere.
