@@ -68,6 +68,12 @@ export interface ExtensionsDeps {
   nodeFor(contents: WebContents): NodeId | undefined;
   /** Tabs that have a page right now. */
   liveTabs(): Iterable<[NodeId, WebContents]>;
+  /**
+   * An outside agent's tab (S18): never one extensions' chrome.tabs lists or is told is shown (the owner,
+   * 2026-11-23). Their content scripts still run there: Electron injects them for the whole profile session, which an
+   * agent's tab shares for the chord's sign-ins (a stated limit; Settings → Agents says so).
+   */
+  agentPage?(contents: WebContents): boolean;
   ensureTab(nodeId: NodeId): WebContents | undefined;
   toast(windowId: WindowId, message: string, action?: Toast['action']): void;
   openSettings(section: string): void;
@@ -143,11 +149,11 @@ export class Extensions {
     this.hosts.set(profileId, host);
     // Pages already open in this profile become tabs extensions can see.
     for (const [nodeId, contents] of this.deps.liveTabs()) {
-      if (contents.session !== host.session) continue;
+      if (contents.session !== host.session || this.deps.agentPage?.(contents)) continue;
       const w = this.windowForNode(nodeId);
       if (w) host.addTab(contents, w.window);
     }
-    for (const w of this.deps.windows()) if (w.activeTabContents?.session === host.session) host.selectTab(w.activeTabContents);
+    for (const w of this.deps.windows()) if (w.activeTabContents?.session === host.session && !this.shownAgentTab(w)) host.selectTab(w.activeTabContents);
     return host;
   }
 
@@ -269,6 +275,7 @@ export class Extensions {
 
   /** A tab got a page: extensions in its profile see it as a tab. */
   tabCreated(contents: WebContents, nodeId: NodeId): void {
+    if (this.deps.agentPage?.(contents)) return;
     const host = this.hostForSession(contents.session);
     const w = this.windowForNode(nodeId);
     if (host && w) host.addTab(contents, w.window);
@@ -277,8 +284,14 @@ export class Extensions {
   /** A window now shows this tab. */
   tabShown(w: AppWindow): void {
     const contents = w.activeTabContents;
-    if (contents) this.hostForSession(contents.session)?.selectTab(contents);
+    if (contents && !this.shownAgentTab(w)) this.hostForSession(contents.session)?.selectTab(contents);
     this.sync();
+  }
+
+  /** The window shows an agent's tab (over its chord): never one extensions are told about. */
+  private shownAgentTab(w: AppWindow): boolean {
+    const contents = w.activeTabContents;
+    return Boolean(contents && this.deps.agentPage?.(contents));
   }
 
   /** Extensions' items for a right-click on a page. */

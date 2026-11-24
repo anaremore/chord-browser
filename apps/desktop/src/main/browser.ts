@@ -729,6 +729,11 @@ export class Browser {
       ...(options.extensions.publisherKeyHash ? { publisherKeyHash: options.extensions.publisherKeyHash } : {}),
       windows: () => this.windows.values(),
       windowById: (windowId) => this.windows.get(windowId),
+      // An outside agent's tab: never in extensions' chrome.tabs (the owner, 2026-11-23).
+      agentPage: (contents) => {
+        const nodeId = this.tabOfPage.get(contents);
+        return Boolean(nodeId && this.isAgentNode(nodeId));
+      },
       // Extensions never open tabs in a private window (they don't run there).
       lastWindow: () => this.lastNormalWindow(),
       windowOfNode: (nodeId) => this.windowShowing(nodeId),

@@ -936,6 +936,38 @@ test('round 4 of #112: a page closed by the agent sends nothing on its way out; 
   }
 });
 
+test('extensions never list an agent’s tab in chrome.tabs (the owner, 2026-11-23); their content scripts still run there, the stated limit', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_HOME_URL: `${site.origin}/notes`, CHORD_LOAD_EXTENSION: resolve(appDir, 'test/fixtures/extension') });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await pageWhere(app, (url) => url === `${site.origin}/notes`);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/act` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    // The extension's own view of the tabs, from its popup.
+    const button = shell.locator('[data-placement="sidebar"]').getByRole('button', { name: /^Chord Test/ });
+    await expect(button).toBeVisible({ timeout: 20_000 });
+    await button.click();
+    const popup = await pageWhere(app, (url) => url.startsWith('chrome-extension://') && url.endsWith('/popup.html'));
+    const urls = await popup.evaluate(() => (globalThis as unknown as { chrome: { tabs: { query(q: object): Promise<{ url?: string }[]> } } }).chrome.tabs.query({}).then((tabs) => tabs.map((t) => t.url ?? '')));
+    expect(urls).toContain(`${site.origin}/notes`);
+    expect(urls.filter((u) => u.startsWith(`${site.origin}/act`))).toEqual([]);
+    // The stated limit: its content script (session-wide, as an agent's tab shares the chord's sign-ins) runs there too.
+    const injected = await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.documentElement.dataset.chordTestExtension ?? null'), `${site.origin}/act`);
+    expect(injected).toBe('injected');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('your own tab on a site with a service worker, and an agent’s tab there: what you send never asks; what it sends is held, never sent through the worker (Claude’s review 3 of #112)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
