@@ -332,7 +332,7 @@ export function snapshotScript(owner: string, token: string): string {
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, items: itemsAt(chain), path: placeOf(chain), shape: refShape(el) }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, chain }); }
       }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
@@ -363,19 +363,46 @@ export function snapshotScript(owner: string, token: string): string {
     for (const n of above.reverse()) chain = link(n, chain, roleNow(n));
     walk(start, 0, false, false, chain);
   }
-  // A ref is found again only if nothing else here looked like it (the review of #117): its role, name, items, place and
-  // shape unique among the snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its
-  // twin). Its items stay either way: every step checks them (act.ts).
-  const counts = new Map();
-  for (const k of keep) { k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
-  for (const k of keep) {
-    if (cut.refs || cut.elements || cut.time || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
-    delete k.sig;
-  }
-  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
+  // What finds a ref again and checks it (the review of #117): each ref's items, place and shape. Taken in a task right
+  // after the snapshot answers, or first thing by any step that comes before it (act.ts, deep.ts): taken before
+  // answering, it cost the typical page's snapshot about 5 ms (12.8 → 17.9 ms median, interleaved in one page), and
+  // arm64 its budget. A node gone by then gives none, and then no ref of this snapshot is found again (its twin could be
+  // the one gone); nor if anything here throws.
+  let pending = true;
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
+  const read = { token: args.token, url: location.href, keep, finish: null, finishMs: 0 };
+  const finish = () => {
+    if (!pending) return;
+    pending = false;
+    // Another snapshot since (its refs replace these): nothing to keep.
+    if (reads.get(args.owner) !== read) return;
+    const began = performance.now();
+    let whole = !(cut.refs || cut.elements || cut.time);
+    try {
+      for (const k of keep) {
+        if (!k.chain) continue;
+        const el = k.ref.deref();
+        if (el && el.isConnected) { k.items = itemsAt(k.chain); k.path = placeOf(k.chain); k.shape = refShape(el); }
+        else whole = false;
+      }
+    } catch { whole = false; }
+    // Found again only if nothing else here looked like it: its role, name, items, place and shape unique among the
+    // snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin). Its items stay
+    // either way: every step checks them (act.ts).
+    const counts = new Map();
+    for (const k of keep) { delete k.chain; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
+    for (const k of keep) {
+      if (!whole || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
+      delete k.sig;
+    }
+    // (Its cost, for the budgets journey.)
+    read.finishMs = performance.now() - began;
+  };
+  read.finish = finish;
+  setTimeout(finish, 0);
+  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
   reads.delete(args.owner);
-  reads.set(args.owner, { token: args.token, url: location.href, keep });
+  reads.set(args.owner, read);
   while (reads.size > args.owners) reads.delete(reads.keys().next().value);
   return { url: location.href, title: document.title, nodes, cut };
 })(${JSON.stringify(args)})`;

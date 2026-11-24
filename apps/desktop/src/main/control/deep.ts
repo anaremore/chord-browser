@@ -61,6 +61,7 @@ const CHECK_FN = String.raw`function (owner, token, key) {
   const hit = this;
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner);
   if (!read || read.token !== token) return { ok: false, why: 'stale' };
+  if (read.finish) read.finish();
   const entry = read.keep[key];
   const el = entry && entry.ref.deref();
   // Replaced since the action pointed at it (a page that re-renders): said so, and the action starts over (tools.ts).
@@ -230,7 +231,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           const now = await send<{ result: { objectId?: string; value?: unknown } }>('Runtime.evaluate', {
             contextId: worldId,
             objectGroup: OBJECT_GROUP,
-            expression: `(() => { const r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return 'stale'; const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.path !== undefined ? 'replaced' : 'changed'; })()`,
+            expression: `(() => { const r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return 'stale'; if (r.finish) r.finish(); const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.path !== undefined ? 'replaced' : 'changed'; })()`,
           });
           if (!now) return { ok: false, why: 'no-check', step: `open ${lastError}` };
           const currentId = now.result.objectId;

@@ -1545,7 +1545,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     expect(Math.min(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax + 1);
 
     // Budgets (docs/decisions/S18-agent-mcp.md, "M2: plan"): a typical page (about 1,500 elements) and a 20,000-element one.
-    type Times = { times: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
+    type Times = { times: number[]; after: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
     const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
     const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
     for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/noisy', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
@@ -1562,6 +1562,13 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         const typical = SNAPSHOT_TYPICAL_MS[`${process.platform}/${process.arch}`] ?? SNAPSHOT_TYPICAL_MS['default']!;
         expect(median, seen).toBeLessThan(typical.median);
         expect(worst, seen).toBeLessThan(typical.worst);
+        // The refs' items, place and shape, taken in the task right after the snapshot answers (the review of #117).
+        const after = sorted(measured.after);
+        const afterMedian = after[Math.floor(after.length / 2)]!;
+        const afterSeen = `${path}: the refs' re-find data after the snapshot, median ${afterMedian.toFixed(1)} ms (${after.map((t) => t.toFixed(0)).join(' ')})`;
+        console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${afterSeen}`);
+        expect(after.every((t) => t > 0), afterSeen).toBe(true);
+        expect(afterMedian, afterSeen).toBeLessThan(typical.median);
         // M2c: an action's own work before its input goes (the element checked, scrolled to, hit-tested), on this page.
         type ActTimes = { times: number[]; deep: number[]; refind: number[]; refound: number; failed?: string } | null;
         const act = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentActTimes(u: string, r: number): Promise<ActTimes> } }).chordTestHooks.agentActTimes(u, r), [`${site.origin}${path}`, 30] as const))!;

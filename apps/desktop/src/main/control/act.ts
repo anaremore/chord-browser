@@ -89,6 +89,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   ${SNAPSHOT_LIB}
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(args.owner);
   if (!read || read.token !== args.token) return { ok: false, why: 'stale' };
+  // Its refs' items, place and shape, if the snapshot's own task hasn't taken them yet (snapshot.ts).
+  if (read.finish) read.finish();
   const entry = read.keep[args.key];
   let el = entry && entry.ref.deref();
   // A node the page replaced (a table that redraws, the owner's bug #2): looked for again, once, in this document, by

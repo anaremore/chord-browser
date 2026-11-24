@@ -1392,17 +1392,23 @@ if (!app.requestSingleInstanceLock()) {
          * work and the answer's way back), `runs` times; and what the last one found.
          */
         agentSnapshotTimes: async (url: string, runs: number) => {
-          const { snapshotPage } = await import('./control/snapshot');
+          const [{ snapshotPage }, { ASSISTANT_WORLD }] = await Promise.all([import('./control/snapshot'), import('./control/extract')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
           if (!contents) return null;
           const times: number[] = [];
+          const after: number[] = [];
           let last: Awaited<ReturnType<typeof snapshotPage>> = null;
           for (let i = 0; i < runs; i++) {
             const started = performance.now();
             last = await snapshotPage(contents, 'timing', `timing${i}`);
             times.push(performance.now() - started);
+            // A moment between snapshots, as an agent's are (seconds apart): the refs' items, place and shape are taken
+            // in the task right after each (snapshot.ts), timed on its own.
+            await new Promise((done) => setTimeout(done, 30));
+            const ms = await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { const r = globalThis.__chordSnapshots.get('timing'); return r ? r.finishMs : -1; })()` }]);
+            after.push(Number(ms));
           }
-          return { times, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
+          return { times, after, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
         },
         /**
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
