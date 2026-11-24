@@ -661,6 +661,9 @@ export class AssistantService {
   }
 
   /** The bar over a tab of yours while the assistant acts there (M2c's words: *The assistant is clicking “Raise”*). */
+  /** A bar between steps, by tab: taken down after BAR_IDLE_MS with no next step. */
+  private readonly barIdle = new Map<NodeId, ReturnType<typeof setTimeout>>();
+
   private barFor(nodeId: NodeId, text: string | null, owner?: string): void {
     // Only its own bars are cleared (never an agent's); off the list first, so a closed tab's never keeps the bars in
     // step for nothing (Claude's S2, round 2).
@@ -1463,6 +1466,13 @@ export class AssistantService {
     state.streaming = null;
     // The turn's over: no acting until the next message (the lease's own tail still ends what the last action sent).
     state.actTab = null;
+    // Its bars come down with it (they stayed on between its steps).
+    for (const [nodeId, owner] of [...this.bars]) {
+      if (owner !== state.control.id) continue;
+      clearTimeout(this.barIdle.get(nodeId));
+      this.barIdle.delete(nodeId);
+      this.barFor(nodeId, null, owner);
+    }
     state.startedAt = null;
     // Cards still waiting go with the turn, each answered no.
     // A tab of yours's lease asks on its own after the turn (what the page still sends, a download its click started:
@@ -1546,9 +1556,22 @@ export class AssistantService {
       siteOf: siteOfUrl,
       siteAllowed: (site) => this.settings.actSites.includes(site),
       keepSite: (site) => this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [...this.settings.actSites, site] } } }),
+      // The bar stays on from the first step until the turn ends, Stop, your taking the tab or a long idle; between
+      // steps it says it's working (the owner, 2026-11-24: never on and off with each step).
       doing: (nodeId, doing) => {
-        if (doing) this.acted.add(s);
-        this.barFor(nodeId, doing ? barDoing(doing) : null, s.control.id);
+        clearTimeout(this.barIdle.get(nodeId));
+        this.barIdle.delete(nodeId);
+        if (doing) {
+          this.acted.add(s);
+          return this.barFor(nodeId, barDoing(doing), s.control.id);
+        }
+        this.barFor(nodeId, BAR_BETWEEN, s.control.id);
+        const idle = setTimeout(() => {
+          this.barIdle.delete(nodeId);
+          this.barFor(nodeId, null, s.control.id);
+        }, BAR_IDLE_MS);
+        idle.unref?.();
+        this.barIdle.set(nodeId, idle);
       },
       lease: {
         begin: async (node) => {
@@ -2149,6 +2172,11 @@ export function actCard(card: ControlCard): AssistantActCard | null {
     showable: Boolean(card.show),
   };
 }
+
+/** The bar between the assistant's steps in a tab (the owner, 2026-11-24: it stays on while it works). */
+const BAR_BETWEEN = 'is working in this tab';
+/** How long the bar stays up with no next step before it comes down (a model thinking long, a card unanswered). */
+const BAR_IDLE_MS = 45_000;
 
 /** An address's origin (scheme, host and port), or empty when it has none. */
 function originOf(url: string): string {

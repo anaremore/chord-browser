@@ -427,4 +427,32 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       expect(s.control.isStopped, end).toBe(true);
     }
   });
+
+  it('the bar over the tab stays on while it works: between steps it says it’s working, never off; off at the turn’s end, or after a long idle (the owner, 2026-11-24)', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      const s = (await t.turn()) as Awaited<ReturnType<typeof t.turn>> & { streaming: { body?: unknown } | null };
+      const host = (t.service as unknown as { actingHost(s: unknown): { doing(nodeId: string, doing: unknown): void } }).actingHost(s);
+      const bar = () => t.store.state.live[t.mine]?.agent?.doing ?? null;
+      host.doing(t.mine, { tool: 'click', name: 'Raise', role: 'button' });
+      expect(bar()).toContain('clicking');
+      host.doing(t.mine, null);
+      expect(bar()).toBe('is working in this tab');
+      host.doing(t.mine, { tool: 'click', name: 'Call', role: 'button' });
+      expect(bar()).toContain('Call');
+      // A long idle between steps: off.
+      host.doing(t.mine, null);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(bar()).toBeNull();
+      // The turn's end: off.
+      host.doing(t.mine, { tool: 'click', name: 'Fold', role: 'button' });
+      host.doing(t.mine, null);
+      s.streaming = { id: 'reply', body: { role: 'assistant', text: '', citations: [], status: 'streaming' } } as never;
+      await (t.service as unknown as { finishTurn(state: unknown, outcome: { status: 'done' }): Promise<void> }).finishTurn(s, { status: 'done' });
+      expect(bar()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
