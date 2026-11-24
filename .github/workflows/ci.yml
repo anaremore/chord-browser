@@ -503,28 +503,36 @@ jobs:
             ARCHIVES="$HOME/apt-archives"
             mkdir -p "$ARCHIVES/partial"
             installed=false
-            # On a cache hit, install the cached packages offline: no `apt-get update`, no mirror. Only those not
-            # installed already, so nothing on the image is ever replaced. If dpkg can't (a package missing from
-            # the cache), apt below fixes it up from the mirror.
+            # On a cache hit, install the cached packages offline: no `apt-get update`, no mirror. The cache holds
+            # what apt fetched on this image: packages it was missing, and some it upgraded (newer libraries the
+            # new ones need), so a cached package goes in unless the same or a newer version is installed. If dpkg
+            # can't, what it left half done is removed and apt fetches everything from the mirror.
             if [ "$CACHE_HIT" = true ] && ls "$ARCHIVES"/*.deb >/dev/null 2>&1; then
               debs=()
               for deb in "$ARCHIVES"/*.deb; do
                 pkg="$(dpkg-deb -f "$deb" Package)"
                 arch="$(dpkg-deb -f "$deb" Architecture)"
+                version="$(dpkg-deb -f "$deb" Version)"
                 [ "$arch" = all ] && name="$pkg" || name="$pkg:$arch"
-                dpkg-query -W -f='${Status}' "$name" 2>/dev/null | grep -q 'install ok installed' || debs+=("$deb")
+                have="$(dpkg-query -W -f='${Status}|${Version}' "$name" 2>/dev/null || true)"
+                if [ "${have%%|*}" != 'install ok installed' ] || dpkg --compare-versions "$version" gt "${have#*|}"; then debs+=("$deb"); fi
               done
               echo "Installing ${#debs[@]} cached packages offline."
               if [ "${#debs[@]}" -eq 0 ] || sudo -E dpkg -i --force-confdef --force-confold "${debs[@]}"; then
                 installed=true
                 for cmd in $NEED; do command -v "$([ "$cmd" = xvfb ] && echo Xvfb || echo "$cmd")" >/dev/null || installed=false; done
               fi
-              [ "$installed" = true ] || echo "::warning::The cached packages didn't install offline; fetching them instead."
+              if [ "$installed" != true ]; then
+                echo "::warning::The cached packages didn't install offline; fetching them instead."
+                # Packages dpkg unpacked but couldn't configure would hold apt to their versions: remove them.
+                broken="$(dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | awk '$1 != "ii" && $1 !~ /^(un|rc|pn)/ { print $2 }')"
+                if [ -n "$broken" ]; then echo "Removing what dpkg left half done: $broken"; sudo dpkg --remove --force-depends $broken; fi
+              fi
             fi
             if [ "$installed" != true ]; then
               sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
-              # Packages already in the cache aren't downloaded again. -f finishes anything dpkg left half done.
-              sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -o Dir::Cache::Archives="$ARCHIVES" install -f -y --no-install-recommends $NEED
+              # Packages already in the cache aren't downloaded again.
+              sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -o Dir::Cache::Archives="$ARCHIVES" install -y --no-install-recommends $NEED
             fi
             sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
           fi
