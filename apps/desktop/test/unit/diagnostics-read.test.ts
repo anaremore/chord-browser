@@ -44,6 +44,26 @@ class FakeDebugger extends EventEmitter {
   }
 }
 
+/**
+ * What `read` answers, on fake timers: not before `limit` ms, and once that much has passed. A clock, not a stopwatch:
+ * no wall-clock budget in the parallel suite (issue #85).
+ */
+async function byTheLimit<T>(read: () => Promise<T>, limit: number): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let answer: { value: T } | null = null;
+    const reading = read().then((value) => (answer = { value }));
+    await vi.advanceTimersByTimeAsync(limit - 1);
+    expect(answer, `answered before its ${limit} ms`).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(answer, `still waiting after its ${limit} ms`).not.toBeNull();
+    await reading;
+    return answer!.value;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 /** The page itself: its navigation events, as Electron sends them. */
 const page = (debug: FakeDebugger, script: () => Promise<unknown> = async () => ({}), events = new EventEmitter()) =>
   Object.assign(events, { isDestroyed: () => false, executeJavaScriptInIsolatedWorld: script, debugger: debug }) as unknown as DiagnosticsContents;
@@ -63,9 +83,7 @@ describe('page_diagnostics reads a page once and lets go', () => {
 
   it('a hung page: given up on within the limit, and detached at once, without waiting on it again', async () => {
     const debug = new FakeDebugger('hang');
-    const started = Date.now();
-    const read = await readDiagnostics(page(debug), 50);
-    expect(Date.now() - started).toBeLessThan(1000);
+    const read = await byTheLimit(() => readDiagnostics(page(debug), 50), 50);
     expect(read).toEqual({ ok: false, why: 'The page took too long to answer.' });
     expect(debug.detach).toHaveBeenCalledOnce();
     expect(debug.sent).toEqual(['Log.enable']);
@@ -91,9 +109,7 @@ describe('page_diagnostics reads a page once and lets go', () => {
   it('someone else’s client, attached already: used, its domains turned off without waiting, and left attached', async () => {
     const debug = new FakeDebugger('hang');
     debug.attached = true;
-    const started = Date.now();
-    const read = await readDiagnostics(page(debug), 50);
-    expect(Date.now() - started).toBeLessThan(1000);
+    const read = await byTheLimit(() => readDiagnostics(page(debug), 50), 50);
     expect(read.ok).toBe(false);
     expect(debug.attach).not.toHaveBeenCalled();
     expect(debug.detach).not.toHaveBeenCalled();
