@@ -140,5 +140,9 @@ New decision records (S20 and on) are a small folder each, not one growing file:
   model).
 - **CI is tiered.** Every push gets the fast tier (Linux X11); the `ready` label adds every other platform. The
   merge gate is the `E2E` commit status (`.github/workflows/ci.yml`).
-- **PR descriptions** say what changed, what was measured, which invariants it touches and how each is tested.
-  Commits use Conventional Commits prefixes.
+- **Small PRs.** Aim under about 1,500 changed lines (lockfiles, fixtures, docs and vendored lists not counted):
+  review rounds grow with size. CI warns past it (`scripts/ci/pr-size.mjs`), never fails; split a slice into
+  stacked PRs, or say in the description why it's one piece.
+- **Evidence, not claims.** The PR template (`.github/pull_request_template.md`) asks for a table: each checklist
+  item or invariant the change touches, the code that does it (path:line), and the test that proves it. Reviewers
+  check the table first. Also: what was measured, before and after. Commits use Conventional Commits prefixes.

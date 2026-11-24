@@ -104,6 +104,11 @@ jobs:
           done < "$RUNNER_TEMP/changed"
           echo "$(wc -l < "$RUNNER_TEMP/changed") files changed; anything but docs: $code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
+      # How much review reads (scripts/ci/pr-size.mjs): over about 1,500 changed lines, without lockfiles, fixtures,
+      # docs and vendored lists, a warning on the run and in its summary. Never a failure.
+      - name: How big?
+        if: github.event_name == 'pull_request'
+        run: git diff --numstat --no-renames HEAD^1 HEAD | node scripts/ci/pr-size.mjs
       # Whether the pull request is platform-sensitive: whether its diff touches code that behaves differently by
       # OS. Its `E2E` status then needs the full tier; otherwise the fast tier is enough (the `e2e` job).
       - name: Platform-sensitive?
