@@ -529,6 +529,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
     if (page.lost() && !(await page.retryHold())) return refuse(ACT_REFUSALS.noCheck);
     const before = page.id;
+    // It runs: a late Allow given on this tab for another step is spent.
+    scope.agent.dropLateSteps(node.id);
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
       // The tab's load can take a while: the user taking the tab, or Stop, meanwhile stops it here.
@@ -722,6 +724,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     return null;
   };
 
+  // It runs: a late Allow given on this tab for another step is spent (Neon's review of M2g-1, B1).
+  scope.agent.dropLateSteps(node.id);
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
   let deep: DeepSession | null = null;
@@ -861,7 +865,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           takeDown,
         },
         AbortSignal.any([call.signal, w.cancelled]),
-        scope.cardWaitMs,
+        scope.sendWaitMs ?? scope.cardWaitMs,
       );
     /** Once the watch is on: what's held from then is asked about (below). */
     let watchOn: () => void = () => undefined;

@@ -26,3 +26,12 @@ For the plan in `plan.md`. Written before the design review; each item gets a te
   - Stop, the user denying, or the card expiring drop it.
   - With progress notifications, the call stays open only while the card is up, never past the card's own limit.
 
+
+**Added after Neon's design review (2026-11-24):**
+- *A name from `aria-label` that says something else than the element shows* (B3): name targeting refuses any element whose name isn't its visible text, a visible label's or a button's value. Exact, non-empty, allowlisted roles (generic included).
+- *A name-resolved target overwriting the agent's refs* (B4): it lives in its own slot. The step key is a JSON tuple binding its items, place, visible text and shape, so a late Allow never covers a lookalike.
+- *A step card answered twice* (B1): a retry joins the step's card; another action spends the tab's late Allows.
+- *A Send data card dropped by a call's budget* (B2): never; it keeps its full wait.
+- *`wait_for` left running after the client gave up* (B5): the client's cancel, Stop, the tab taken or a navigation end it and take its observer down; one wait per agent.
+- *A cut walk read as "gone"* (B5): it never proves `disappear`.
+- *A diff that mixes two pages* (B6): never across page IDs or origins; only the redacted outline.

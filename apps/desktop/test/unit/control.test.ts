@@ -292,6 +292,7 @@ function setup(
     answer?: Grant | 'hold';
     read?: Answer;
     cardWaitMs?: number;
+    sendWaitMs?: number;
     onCard?: (t: Meanwhile) => void;
     onEnsure?: (t: Meanwhile) => void;
     onCapture?: (t: Meanwhile) => void;
@@ -354,6 +355,7 @@ function setup(
     needsCard: (tool) => (opts.needsCard ? { kind: 'read', subject: tool } : null),
     mayInspect: (node) => (node.id === 'n1' ? null : 'Not that one.'),
     ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
+    ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
     ...(opts.sharedOn ? { siteOk: (_node: TabNode, url: string) => siteOfUrl(url) === opts.sharedOn, whyNot: () => NOT_SHARED } : {}),
     activity: async (_tool, summary) => void activity.push(summary),
   };
@@ -542,6 +544,59 @@ describe('Cards, review 1 of #76', () => {
     expect(settled).toBe(false);
     shown[1]!.answer('deny');
     await expect(second).resolves.toBe('deny');
+  });
+
+  it('a step’s retry after waiting joins its card still up, never a second; its Allow runs the retry once (Neon’s review of M2g-1, B1)', async () => {
+    vi.useFakeTimers();
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const step = card({ kind: 'step', tool: 'click', subject: 'n1|p1|e4|click||false', tab: 'n1', target: ['https://shop.test/checkout'] });
+    const asked = agent.ask(step, new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(asked).resolves.toBe('waiting');
+    // The retry waits on the card already up.
+    const retry = agent.ask(step, new AbortController().signal, 20_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(1);
+    shown[0]!.answer('once');
+    await expect(retry).resolves.toBe('once');
+    // Spent by the retry: nothing kept for a third ask, which gets a card of its own.
+    void agent.ask(step, new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it('a step’s late Allow is spent when another action runs on its tab, and kept (not lost) when asked from another page (Neon’s review of M2g-1, B1)', async () => {
+    vi.useFakeTimers();
+    const { shown, present } = presenter();
+    const agent = new ControlAgent('a', present);
+    const step = (target: string) => card({ kind: 'step', tool: 'click', subject: 'n1|p1|e4|click||false', tab: 'n1', target: [target] });
+    const late = async (target: string) => {
+      const asked = agent.ask(step(target), new AbortController().signal, 20);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(asked).resolves.toBe('waiting');
+      shown.at(-1)!.answer('once');
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    // Another action on the tab meanwhile: the retry asks again.
+    await late('https://shop.test/checkout');
+    agent.dropLateSteps('n2');
+    agent.dropLateSteps('n1');
+    void agent.ask(step('https://shop.test/checkout'), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(2);
+    // That card, answered after its ask gave up: a late Allow again.
+    await vi.advanceTimersByTimeAsync(20);
+    shown[1]!.answer('once');
+    await vi.advanceTimersByTimeAsync(0);
+    // Asked from another address: a card of its own, and the late Allow is still there for its own page.
+    void agent.ask(step('https://shop.test/elsewhere'), new AbortController().signal, 20);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown).toHaveLength(3);
+    await expect(agent.ask(step('https://shop.test/checkout'), new AbortController().signal, 20)).resolves.toBe('once');
+    expect(shown).toHaveLength(3);
+    vi.useRealTimers();
   });
 
   it('a step’s late Allow counts for that same step only (tab, page, ref, action), for 2 minutes (S18 M2d)', async () => {
@@ -895,7 +950,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -904,6 +959,7 @@ describe('acting through the gate (S18 M2c)', () => {
       actions: true,
       answer: opts.answer ?? 'once',
       ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
+      ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
       ...(opts.onCard ? { onCard: opts.onCard } : {}),
       act: { doing: (_n, d) => void doings.push(d), keepSite: (site) => void kept.push(site), ...opts.act },
     });
@@ -1411,6 +1467,13 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.');
       await new Promise((r) => setTimeout(r, 0));
       expect(t.agent.state('n1').cards).toEqual([]);
+    });
+
+    it('a Send data card waits its own full wait, never a call’s budget for cards (Neon’s review of M2g-1, B2)', async () => {
+      const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 30, sendWaitMs: 400, act: { siteAllowed: () => true } });
+      const began = Date.now();
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.');
+      expect(Date.now() - began).toBeGreaterThanOrEqual(350);
     });
 
     it('a document’s response gets one clean policy: the page’s own (malformed or not) is dropped, deferred sends, passkeys, payments and sign-in dialogs off (the final pass)', async () => {

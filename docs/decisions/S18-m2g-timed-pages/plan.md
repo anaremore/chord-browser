@@ -12,6 +12,61 @@ The owner, on a real-time online table (main plus #117): the agent played a full
 3. *A compact snapshot with each action's result.* Optional (`snapshot: true` on an action), it's the page's outline after the action has settled, bounded (refs and characters) and cut the same way `snapshot` is, so the next step needs no extra call.
 4. *#143, card waits.* A tool call waiting on a card answers before the client's timeout: *Waiting for the user to approve on Chord's card. Try the same step again in a moment.* The card stays up, and the user's Allow is kept for that exact step (the late Allow `stepKey`), so the retry goes straight through, once. Where a client sends a `progressToken`, Chord sends MCP progress notifications to keep the call alive instead.
 
+## After Neon's design review (2026-11-24, through 7c4e271)
+
+Each claim checked against the code; what was decided, and where Neon's reading was off.
+
+- **B1, a step card retried after *waiting*:** confirmed. Step cards never joined (`cardKey` adds a counter), so a retry opened a second card while the first stayed up, and the first card's late Allow stayed usable. Late entries were also deleted before their address was checked.
+  - **Fixed in slice (a):**
+    - A retry joins the step's card still up when no call waits on it (`openSteps`). Two calls waiting at once still get a card each, so one Allow runs one action.
+    - Any action that runs on a tab spends that tab's unspent step late-Allows (`dropLateSteps`, from tools.ts).
+    - A late Allow asked from another address is kept for its own page, not lost.
+  - *Tests:* control.test, *a step's retry after waiting joins its card…* and *…is spent when another action runs on its tab…*. Both failed on the old gate.
+- **B2, the card budget:**
+  - *Send data cards:* confirmed. A Send data card asked late in a call got the 5 s floor and then dropped what the page sent. Send data cards now take `scope.sendWaitMs`, the full 45 s, never the call's budget. *Test:* control.test, *a Send data card waits its own full wait…*.
+  - *The floor:* "blows past the 50 s cap" was 5 s past, still under Codex's 60. The floor is 1 s now.
+  - *Repro with a real client (Claude Code 2.1.331, headless `-p`, a stdio server that answers after 70 s or 130 s):*
+    - Both calls completed, at 70 s and 130 s; the client never cancelled.
+    - It sends a `progressToken` on every `tools/call`, and a `server/discover` request before `initialize`.
+    - So a single 45 s card doesn't fail headless Claude Code.
+    - What the owner saw (*MCP task … failed*) is the interactive session's 2-minute background move, or a client bug there. It isn't reproduced yet; the owner's interactive version and transcript line are needed for that.
+  - *The decision:*
+    - Progress notifications stay: the real client asks for them, and they count as activity.
+    - The 50 s budget stays for connection, site and step cards. A risky first action on a new site chains a site card and a step card (90 s), past Codex's documented 60 s default. That's not reproduced in Codex yet, and it's on the measurement list.
+- **B3, name spoofing (`aria-label`):** agreed. Name targeting accepts an element only when its name is what the user sees: its own visible text, a visible `<label>`'s text, or a button's value.
+  - A name from `aria-label`, `aria-labelledby` or `title` refuses (*use snapshot and a ref*).
+  - Exact match only, never empty.
+  - The role allowlist: button, link, checkbox, radio, switch, tab, menuitem, option, combobox, listbox, textbox, searchbox, spinbutton, slider, and **generic**. The game's controls are pointer `div`s, so generic is included; its name is always its own text.
+- **B4, name-resolved targets:** agreed.
+  - They live in their own slot (per agent and tab, one target at a time) and never replace the snapshot's refs.
+  - The step key becomes a JSON tuple (delimiter-safe), binding the target's item chain, place, visible text and `stepShape`.
+  - The walk finds every match (no first-match shortcut) and refuses at its cap. A `within` that matches more than one item refuses.
+  - Sensitive fields and file inputs are refused for every acting tool, as with refs. *Checked:* describe's sensitive-field refusal already applies to every tool (tools.ts), and file openers never get a ref (`opensFiles`). Name targeting uses the same checks.
+- **B5, `wait_for`:** agreed on all of it.
+  - The check is throttled by a timer: `max(150 ms, 4× the last walk)`. One wait per agent at a time.
+  - The client's cancel reaches the tool: `notifications/cancelled` aborts the call. *Confirmed:* connection.ts's `cancel` signal never reached `runControlTool`, so this fix is needed for any long tool.
+  - Cancel, Stop, the tab taken or a navigation tear down the page's observer.
+  - The text match uses SNAPSHOT_LIB's visibility rules and never reads fields.
+  - A cut walk never proves `disappear`.
+  - `blockedNow` is checked before, during (each wake) and after.
+  - Scope: outside agents only (not the assistant); its own tabs and shared tabs, under `read_tab`'s rules. While it waits, the bar says *“Codex is waiting on this page”*.
+- **B6, the snapshot after an action:** agreed.
+  - It comes in its own untrusted envelope, apart from Chord's status.
+  - A diff is only of the redacted outline, never across page IDs or origins.
+  - It's bounded, falling back to a compact snapshot.
+  - Its refs are issued normally (the tab's latest snapshot), and a compact slice of them is returned.
+  - Order changed: **`wait_for` with `snapshot: true` comes first.** It saves a whole model turn per move; a snapshot after a click comes after.
+- **The waits after each action (should-change):** confirmed. After each action Chord sleeps `NAVIGATION_START_MS` (150 ms) for a navigation to start, then waits for the page to be quiet for 100 ms, at most `ACT_SETTLE_MS` (500 ms). A table that redraws never goes quiet: 650 ms an action. The repeat-click hit wait (`HIT_WAIT_MS`, 250 ms) adds more. To measure first, then: start the navigation wait and the settle together, end the settle at a quiet frame, not 100 ms of no mutations, and end the hit wait on the move being seen, not the timer.
+- **`tab_screenshot`:** measure the PNG encode and its size; consider JPEG or a smaller scale; check whether SVG or canvas game cards force screenshots, where the outline shows nothing.
+- **Progress hygiene (S4):** a beat names a card only when it's this call's (by tab and kind), the token's size is bounded, beats stop on cancel, and a bridge test covers it end to end.
+- **`pushState` against a real navigation (S3):** `wait_for` and the snapshot treat a same-document navigation as the same page (page ID), with its own test.
+
+**Required measurements before slices b–d** (Neon's §4):
+- The real-client repro: Claude Code headless done above; interactive, and Codex, still to do.
+- A per-phase latency breakdown on the redraw fixtures, p50 and p95.
+- `wait_for`'s CPU cost and wake-up latency on a page mutating every frame.
+- An end-to-end move budget against a 15 s turn clock: snapshot, the agent's thinking (not ours), an action, its settle, and the next state.
+
 ## #143: what the clients do (looked up 2026-11-24, to check in slice (a))
 
 - **Codex:** each MCP tool call times out after `tool_timeout_sec`, 60 s by default, per server in `config.toml`.
@@ -31,7 +86,7 @@ The owner, on a real-time online table (main plus #117): the agent played a full
 
 ## Slices
 
-**PRs (each about 1.5k lines or less, pushed early):** (a) measurement and #143; (b) target by role and name; (c) `wait_for`; (d) the snapshot with a result. The order after (a) is decided by what the measurement shows.
+**PRs (each about 1.5k lines or less, pushed early):** (a) #143 and B1 (this PR), then the measurements; (b) `wait_for` with `snapshot: true`; (c) target by role and name; (d) the waits after each action, and the snapshot with a result. The order after (a) can change with what the measurement shows.
 
 ## Checklist to tests
 

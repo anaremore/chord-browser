@@ -76,12 +76,13 @@ export interface ConnectionDeps {
 
 /**
  * How long one call waits on cards in all (#143): the connection's, a site's and a step's can come one after another,
- * 45 s each, and a client gives up on a call before that (Codex at 60 s; Claude Code moves one past 2 minutes to the
- * background). Past it, the call answers *waiting* and the card stays up: the user's Allow counts for the agent's retry
- * of that same step (M2d's late Allow). A card asked late in the call still waits CARD_WAIT_MIN_MS.
+ * 45 s each, and a client gives up on a call before that (Codex at 60 s by default). Past it, the call answers
+ * *waiting* and the card stays up: the user's Allow counts for the agent's retry of that same step (M2d's late Allow).
+ * A card asked at the very end still shows, for CARD_WAIT_MIN_MS. Send data cards are never cut (scope.sendWaitMs: no
+ * answer drops what the page sent).
  */
 const CALL_WAIT_MS = 50_000;
-const CARD_WAIT_MIN_MS = 5_000;
+const CARD_WAIT_MIN_MS = 1_000;
 
 /**
  * A call that carries a progressToken hears this often that it's still under way (#143): what a client counts as
