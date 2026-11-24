@@ -25,7 +25,7 @@
  * Each action outlines its element in the agents' blue for a moment (the Web Animations API: nothing is added to the
  * page), shown and gone at once with reduced motion. Main never waits on a hung page: each call has its own limit.
  */
-import { ACT_SETTLE_MS, ACT_SETTLE_QUIET_MS, type SnapshotField } from '@chord/core';
+import { ACT_SETTLE_MS, ACT_SETTLE_QUIET_MS, SNAPSHOT_SCAN, type SnapshotField } from '@chord/core';
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 import { ASSISTANT_WORLD } from './extract';
@@ -71,20 +71,55 @@ export interface ActRisk {
 }
 
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number }
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
   | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
+/**
+ * Looking for a ref's node again (the owner's bug #2): at most this many elements, and this long, as the snapshot is
+ * bounded (core's SNAPSHOT_SCAN and SNAPSHOT_SCAN_MS): past either, it isn't found.
+ */
+const REFIND_SCAN = SNAPSHOT_SCAN;
+const REFIND_MS = 50;
 
 function actScript(owner: string, token: string, key: number, op: ActOp): string {
-  const args = { owner, token, key, hitWait: HIT_WAIT_MS, ...op };
+  const args = { owner, token, key, hitWait: HIT_WAIT_MS, refindScan: REFIND_SCAN, refindMs: REFIND_MS, ...op };
   return String.raw`(async (args) => {
   ${SNAPSHOT_LIB}
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(args.owner);
   if (!read || read.token !== args.token) return { ok: false, why: 'stale' };
   const entry = read.keep[args.key];
-  const el = entry && entry.ref.deref();
+  let el = entry && entry.ref.deref();
+  // A node the page replaced (a table that redraws, the owner's bug #2): looked for again, once, in this document, by
+  // its role, name, place and shape (snapshot.ts' refPath and refShape), shown. Exactly one: the ref is it from now on,
+  // and every check below is on it. None, or more than one (two named alike in one place: bug #5), or past the budget:
+  // changed, as before. A node that's still here but says something else is never looked for again.
+  let refound = false;
+  if (entry && (!el || !el.isConnected)) {
+    if (entry.path === undefined) return { ok: false, why: 'changed' };
+    const started = performance.now();
+    let looked = 0;
+    let over = false;
+    const found = [];
+    const visit = (root) => {
+      for (const c of root.querySelectorAll('*')) {
+        if (++looked > args.refindScan || (looked % 200 === 0 && performance.now() - started > args.refindMs)) { over = true; return; }
+        if (c.shadowRoot) { visit(c.shadowRoot); if (over || found.length > 1) return; }
+        const r = entry.role === 'generic' ? (!roleNow(c) && getComputedStyle(c).cursor === 'pointer' ? 'generic' : null) : roleNow(c);
+        if (r !== entry.role || nameOf(c, r) !== entry.name) continue;
+        if (refPath(c) !== entry.path || refShape(c) !== entry.shape) continue;
+        if (!(isField(c) ? visibleField(c, typeOf(c)) : shown(c))) continue;
+        found.push(c);
+        if (found.length > 1) return;
+      }
+    };
+    visit(document);
+    if (over || found.length !== 1) return { ok: false, why: 'changed' };
+    el = found[0];
+    entry.ref = new WeakRef(el);
+    refound = true;
+  }
   if (!el || !el.isConnected) return { ok: false, why: 'changed' };
   // The same element as the snapshot described: its role and name now, and on screen.
   const role = roleNow(el);
@@ -96,7 +131,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const editable = el.isContentEditable || (el.localName === 'textarea' && !el.readOnly) || (el.localName === 'input' && !el.readOnly && TEXT_TYPES.has(String(el.type || '').toLowerCase()));
   const select = el.localName === 'select';
   // A field as it is now, for main's sensitiveField: a page can turn a field into a password field after the snapshot.
-  const said = { role: entry.role, name: entry.name, ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
+  const said = { role: entry.role, name: entry.name, ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
   // What has the focus now, through open shadow roots: text and keys go to it, so it must be this element.
   const deepFocus = () => {
     let f = document.activeElement;

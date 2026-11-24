@@ -162,6 +162,27 @@ export const SNAPSHOT_LIB = String.raw`
   // field (an editor). The snapshot gives it with each field, and an action checks it again before text or a key goes in.
   // What opens a file picker: a file input, or a label for one (Neon's review of #110). Agents never choose files: no ref.
   const opensFiles = (el) => (el.localName === 'input' && String(el.type).toLowerCase() === 'file') || (el.localName === 'label' && Boolean(el.control) && String(el.control.type).toLowerCase() === 'file');
+  // Where a kept element is (the owner's bug #2: a ref whose node the page replaced is found again by it): its ancestors'
+  // tags and roles, out through open shadow roots to their hosts, at most 16 of them.
+  const refPath = (el) => {
+    const parts = [];
+    let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
+    while (node && parts.length < 16) {
+      parts.push(node.localName + (node.getAttribute('role') ? '[' + node.getAttribute('role') + ']' : ''));
+      node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
+    }
+    return parts.join('<');
+  };
+  // Where risk lives in it (the same check): its tag and type, its link's address, its form's address and method (read
+  // through the form's prototype: a field named action can't stand in), its own formaction and formmethod.
+  const refShape = (el) => {
+    const link = el.closest('a[href]');
+    const form = el.form || el.closest('form');
+    const formGet = (f, prop) => {
+      try { return String(Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f)); } catch { return ''; }
+    };
+    return JSON.stringify([el.localName, String(el.type || ''), link ? String(link.href) : '', form ? [formGet(form, 'action'), formGet(form, 'method')] : null, el.getAttribute('formaction') || '', el.getAttribute('formmethod') || '']);
+  };
   const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
   // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
   const roleNow = (el) => {
@@ -232,7 +253,7 @@ export function snapshotScript(owner: string, token: string): string {
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, path: refPath(el), shape: refShape(el) }); }
       }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
@@ -251,7 +272,7 @@ export function snapshotScript(owner: string, token: string): string {
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);
-    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name }); }
+    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name, path: refPath(start), shape: refShape(start) }); }
     nodes.push(node);
   } else walk(start, 0, false, false);
   // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.

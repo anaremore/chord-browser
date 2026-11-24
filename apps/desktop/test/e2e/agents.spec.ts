@@ -1154,6 +1154,66 @@ test('between actions, the noise: a poll that posts, a feed that only reads, an 
   }
 });
 
+test('a table that redraws its buttons: a ref whose node was replaced is found again, once, by role, name, place and target; duplicates and a changed target refuse (the owner’s bug #2)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/table` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    const STALE = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    const outline = await snap();
+    // The table redraws (every 300 ms): the snapshot's nodes are gone before the click.
+    await new Promise((r) => setTimeout(r, 700));
+    const folding = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Fold"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const folded = JSON.parse((await folding).text) as { data: { done: string; refound?: string } };
+    expect(folded.data.done).toBe('Clicked “Fold”');
+    expect(folded.data.refound).toBe('The page had redrawn that element; Chord found it again by its role, name, place and target.');
+    await expect.poll(read).toContain('Fold');
+    // A key on a redrawn button, from the same (older) snapshot.
+    await new Promise((r) => setTimeout(r, 700));
+    expect(JSON.parse((await mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'button "Call"'), key: 'Enter' })).text)).toMatchObject({ data: { done: 'Pressed Enter in “Call”' } });
+    await expect.poll(read).toContain('Call');
+    // A risky step on a redrawn button: its card names the element found, the page redraws it while the card is up,
+    // and the step's checked again before the click (stepShape): it goes, once.
+    const deleting = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Delete row"') });
+    const step = popover.getByRole('alertdialog', { name: /^Delete this on / });
+    await expect(step).toBeVisible({ timeout: 15_000 });
+    await expect(step).toContainText('Codex is about to click “Delete row”.');
+    await popover.waitForTimeout(700);
+    await step.getByRole('button', { name: 'Allow', exact: true }).click();
+    const deleted = JSON.parse((await deleting).text) as { data: { done: string; refound?: string } };
+    expect(deleted.data.done).toBe('Clicked “Delete row”');
+    expect(deleted.data.refound).toBeTruthy();
+    await expect.poll(read).toContain('Delete row');
+    // Two buttons named alike in one place: never a guess.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Bet"') })).text).toBe(STALE);
+    // Raise, now in a form that buys: not the element the snapshot named.
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Switch"') })).text)).toMatchObject({ data: { done: 'Clicked “Switch”' } });
+    await new Promise((r) => setTimeout(r, 700));
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Raise"') })).text).toBe(STALE);
+    expect(reached.filter((r) => r.includes('buy-chips'))).toEqual([]);
+    expect(await read()).not.toContain('Raise');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1236,7 +1296,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         expect(median, seen).toBeLessThan(typical.median);
         expect(worst, seen).toBeLessThan(typical.worst);
         // M2c: an action's own work before its input goes (the element checked, scrolled to, hit-tested), on this page.
-        type ActTimes = { times: number[]; deep: number[]; failed?: string } | null;
+        type ActTimes = { times: number[]; deep: number[]; refind: number[]; refound: number; failed?: string } | null;
         const act = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentActTimes(u: string, r: number): Promise<ActTimes> } }).chordTestHooks.agentActTimes(u, r), [`${site.origin}${path}`, 30] as const))!;
         expect(act.failed).toBeUndefined();
         const at = sorted(act.times);
@@ -1246,6 +1306,10 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${actSeen}`);
         expect(actMedian, actSeen).toBeLessThan(ACT_POINT_MS.median);
         expect(actP95, actSeen).toBeLessThan(ACT_POINT_MS.p95);
+        // The owner's bug #2: the same step on the element after the page replaced it with a copy (found again, or not:
+        // a page of rows named alike is two matches). A report; its cap is act.ts' REFIND_MS.
+        const rf = sorted(act.refind);
+        console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${path}: the point step on a replaced element, found again ${act.refound}/${rf.length}, median ${rf[Math.floor(rf.length / 2)]!.toFixed(1)} ms, p95 ${rf[Math.floor(rf.length * 0.95)]!.toFixed(1)} ms`);
         // Neon's review of #110: the debugger's session a press or typing opens, on this page. The document's first
         // finds Chord's world (Runtime enabled once: the page's stored console replayed, ~1,000 entries at most on
         // /noisy); the rest don't.
@@ -1708,6 +1772,14 @@ test.beforeAll(async () => {
       '<button onclick="log.textContent += \'yes-no=\' + confirm(\'Keep it?\') + \' \'">Ask yes or no</button>' +
       '<button onclick="log.textContent += \'name=\' + prompt(\'Your name?\', \'Sam\') + \' \'">Ask a name</button>' +
       '<p id=log></p></main>',
+    // The owner's bug #2 (2026-11-24): a table that redraws its buttons every 300 ms (a turn timer), the same role, name
+    // and place each time; two buttons named alike in one place; and, after Switch, Raise inside a form that buys.
+    '/table':
+      '<title>Table</title><main><button id=sw onclick="window.mode = \'buy\'">Switch</button><div id=t></div><p id=log></p><script>' +
+      'const draw = () => { t.innerHTML = \'<div class=row><button>Fold</button> <button>Call</button> \' + (window.mode === \'buy\' ? \'<form method=post action=/buy-chips><button>Raise</button></form>\' : \'<button>Raise</button>\') + \'</div><div class=twins><button>Bet</button> <button>Bet</button></div><div class=danger><button>Delete row</button></div>\'; };' +
+      'draw(); setInterval(draw, 300);' +
+      't.addEventListener(\'click\', (e) => { if (e.target.localName === \'button\') { e.preventDefault(); log.textContent += \' \' + e.target.textContent; } });' +
+      '</script></main>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +

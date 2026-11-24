@@ -1461,7 +1461,21 @@ if (!app.requestSingleInstanceLock()) {
             deep.push(performance.now() - opened);
             if (!hit.ok || !open.ok) return { times, deep, failed: `deep: ${JSON.stringify(hit.ok ? open : hit)}` };
           }
-          return { times, deep };
+          // The owner's bug #2: the same element replaced by a copy of itself each time (a page that redraws), then the
+          // step that finds it again (act.ts). Whether it was found, and how long the step took.
+          const { ASSISTANT_WORLD } = await import('./control/extract');
+          const refind: number[] = [];
+          let refound = 0;
+          for (let i = 0; i < runs; i++) {
+            await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [
+              { code: `(() => { const e = globalThis.__chordSnapshots.get('timing').keep[${key}].ref.deref(); if (e) e.replaceWith(e.cloneNode(true)); })()` },
+            ]);
+            const started = performance.now();
+            const answer = await actOnPage(contents, 'timing', 'timing-act', key, { op: 'point', highlight: false });
+            refind.push(performance.now() - started);
+            if (answer.ok && answer.refound) refound++;
+          }
+          return { times, deep, refind, refound };
         },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),
