@@ -1,4 +1,5 @@
 /**
+ * (Scratch: tests CI's not-platform-sensitive path, #118. Never merged.)
  * The reducer (ARCHITECTURE.md §6.1). Pure and deterministic given `ctx`, so
  * renderers can apply commands optimistically and land on the same state.
  * Returns Immer patches (for mirrors and persistence) and effects (for main to
