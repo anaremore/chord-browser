@@ -59,7 +59,7 @@
     "@dnd-kit/abstract": "0.5.1",
     "@dnd-kit/dom": "0.5.1",
     "@dnd-kit/react": "0.5.1",
-    "@ghostery/adblocker": "2.20.1",
+    "@ghostery/adblocker": "2.20.3",
     "@mozilla/readability": "0.6.0",
     "electron-updater": "6.8.11",
     "immer": "11.2.9",
