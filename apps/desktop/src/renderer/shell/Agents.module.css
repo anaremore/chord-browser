@@ -48,10 +48,6 @@
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
-.row:hover {
-  background: var(--color-item-hover);
-}
-
 .row[data-shown] {
   background: var(--color-item-active-bg);
 }
@@ -59,6 +55,17 @@
 .row:focus-visible {
   outline: var(--size-focus-ring) solid var(--color-focus-ring);
   outline-offset: calc(var(--size-focus-ring) * -1);
+}
+
+/* Each row sits in an App.module.css .item, so its close button is your own rows' (S18 M2e-1): room for it while it shows. */
+.item:hover .row,
+.item:focus-within .row {
+  padding-inline-end: calc(var(--space-2) + var(--size-hit-min));
+}
+
+/* The row's own hover, kept while the pointer is on its × (as your own rows': .item:hover .row). */
+.item:hover .row:not([data-shown]) {
+  background: var(--color-item-hover);
 }
 
 .title {

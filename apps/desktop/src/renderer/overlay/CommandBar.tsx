@@ -7,7 +7,7 @@
  * keyword or `@filter` followed by Tab narrows the bar to a chip, and the
  * engine's suggestions slot in under the local rows when they arrive.
  */
-import { imageSearchFor, keycapFor, parseInput, type ActionId, type AssistantHit, type SearchEngineId } from '@chord/core';
+import { activeTabId, imageSearchFor, keycapFor, parseInput, type ActionId, type AssistantHit, type SearchEngineId } from '@chord/core';
 import type { CaptureStart, HistorySearch, OverlayOpenEvent, PeekState, SystemInfo } from '@chord/ipc';
 import { AppWindow, Archive, Columns2, ArchiveRestore, ArrowDown, ArrowUp, Code, Command, CornerDownLeft, Globe, History, Keyboard, Layers, Link, Maximize, Network, PanelBottom, PanelLeft, Pin, Presentation, Printer, RotateCcw, RotateCw, ScanSearch, Search, Settings, SquareTerminal, TextSearch, Trash2, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { motion, MotionConfig } from 'motion/react';
@@ -457,7 +457,9 @@ export function CommandBar({ info: infoSource, mirror }: { info: Live<SystemInfo
       return;
     }
     if (result.kind === 'open' || result.kind === 'history') {
-      if (session?.mode === 'edit' && activeId && where === 'here') void dispatch({ t: 'tab.navigate', nodeId: activeId, url: result.url });
+      // The tab on screen: an agent's the window shows over your chord's, if any (S18 M2e-1: your address takes it over).
+      const shownId = activeTabId(state, windowId);
+      if (session?.mode === 'edit' && shownId && where === 'here') void dispatch({ t: 'tab.navigate', nodeId: shownId, url: result.url });
       else void dispatch({ t: 'tab.open', windowId, url: result.url, background: where === 'background', route: true });
     } else if (result.kind === 'tab') {
       void dispatch({ t: 'tab.activate', windowId, nodeId: result.tab.id });

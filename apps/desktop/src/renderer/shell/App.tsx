@@ -739,7 +739,7 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
               </div>
 
               {/* Outside agents' tabs (S18), each agent's below your chord's: never in a private window. */}
-              <AgentSections state={state} windowId={windowId} appearance={appearance} />
+              <AgentSections state={state} windowId={windowId} appearance={appearance} info={info} />
 
               {/* Collapsed, toasts show in the bar, a peek included: the sidebar would show them twice. */}
               {!collapsed && <Toasts store={toasts} transition={spring('overlay', 'sidebar')} compact={false} undoKeys mac={info.platform === 'darwin'} />}

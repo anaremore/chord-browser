@@ -369,6 +369,20 @@ export function buildTabMenu(a: TabMenuActions): Menu {
   ]);
 }
 
+/**
+ * Right-click on an outside agent's tab row (S18 M2e-1): only what you may do to an agent's tab. Reload is you taking
+ * the tab over (the agent pauses there); Close tells the agent the tab is gone.
+ */
+export function buildAgentTabMenu(a: { url: string; copyLink(): void; reload(): void; close(): void }): Menu {
+  return Menu.buildFromTemplate([
+    { label: 'Copy link', enabled: /^https?:/i.test(a.url), click: a.copyLink },
+    { type: 'separator' },
+    { label: 'Reload', click: a.reload },
+    { type: 'separator' },
+    { label: 'Close tab', accelerator: acceleratorFor('tab.close'), click: a.close },
+  ]);
+}
+
 /** Right-click on a folder row. */
 export function buildFolderMenu(a: { collapsed: boolean; toggle(): void; rename(): void; newFolderInside(): void; delete(): void }): Menu {
   return Menu.buildFromTemplate([
