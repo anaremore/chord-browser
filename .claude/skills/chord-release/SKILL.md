@@ -24,7 +24,10 @@ description: Cut a Chord (anaremore/chord-browser) patch or minor release, from 
 
 ## 2. The release commit (runbook §5)
 
-One commit, `chore(release): vA.B.C`, with everything the tag needs:
+One commit, `chore(release): vA.B.C`, with everything the tag needs. `pnpm release:prep A.B.C --kind security` (or
+`preview`; `--lists` refreshes the ad-blocking lists) makes the first three edits and refuses a version that isn't
+newer; then write the notes entry over its placeholder. `node scripts/release-prep.mjs --check A.B.C` says whether
+it's complete; `.github/workflows/release.yml` runs the same check on the tag before it builds anything.
 - `version` in `apps/desktop/package.json`;
 - a `<release>` line at the top of `<releases>` in `flatpak/io.github.anaremore.chord-browser.metainfo.xml`;
 - the entry at the top of `RELEASE_NOTES.md` (append-only; a security release names the Electron and Chromium versions: runbook §9);

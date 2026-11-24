@@ -101,7 +101,7 @@ Electron updates change Chromium, so the packaged smoke test matters: it proves 
 
 ## 5. Tag the release
 
-Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/desktop/package.json`, or the release workflow stops. One commit carries everything the tag needs, because the release page links to `RELEASE_NOTES.md` **at the tag**:
+Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/desktop/package.json`, or the release workflow stops. One commit carries everything the tag needs, because the release page links to `RELEASE_NOTES.md` **at the tag**. `pnpm release:prep A.B.C --kind security` makes the first three edits below (`--lists` the fourth); write the notes over its placeholder, and `node scripts/release-prep.mjs --check A.B.C` says whether the commit is complete. The release workflow runs that check on the tag too.
 
 - [ ] Bump the patch `version` in `apps/desktop/package.json` (`A.B.C` → `A.B.C+1`).
 - [ ] Add the [release notes](#9-release-notes) entry at the top of `RELEASE_NOTES.md`.
