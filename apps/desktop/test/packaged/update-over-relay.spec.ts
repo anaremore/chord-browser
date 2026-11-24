@@ -39,16 +39,22 @@ const note = (what: string) => timeline.push(`+${Date.now() - t0} ${what}`);
 const sha = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 const powershell = (command: string) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', env: { ...process.env, CHORD_INSTDIR: `${installed}\\` } }).trim();
 
-/** Runs setup and waits for it. NSIS exits 0 when it installed, 1 when cancelled, 2 when it gave up. */
-function setup(file: string, args: string[]): number {
+/**
+ * Runs setup and waits for it. NSIS exits 0 when it installed, 1 when cancelled, 2 when it gave up. Never
+ * synchronously: the agent has to see its relay end while setup runs, which a blocked event loop would only report
+ * after setup exits.
+ */
+async function setup(file: string, args: string[]): Promise<number> {
   note(`setup ${args.join(' ')} starts`);
-  let code: number;
-  try {
-    execFileSync(file, args, { stdio: 'ignore', timeout: 300_000 });
-    code = 0;
-  } catch (error) {
-    code = (error as { status?: number }).status ?? -1;
-  }
+  const code = await new Promise<number>((done) => {
+    const run = spawn(file, args, { stdio: 'ignore' });
+    const timer = setTimeout(() => run.kill(), 300_000);
+    run.once('error', () => done(-1));
+    run.once('exit', (exit) => {
+      clearTimeout(timer);
+      done(exit ?? -1);
+    });
+  });
   note(`setup ${args.join(' ')} exited ${code}`);
   return code;
 }
@@ -142,7 +148,7 @@ test('setup updates Chord from the last release while an agent keeps its relay r
 
   /** Installs the last release with no agent running, then connects one. */
   const lastRelease = async () => {
-    expect(setup(from, ['/S']), 'installing the last release').toBe(0);
+    expect(await setup(from, ['/S']), 'installing the last release').toBe(0);
     const connected = agent(profile);
     await connected.answers();
     expect(relays(), 'a relay runs from the install folder').toBeGreaterThan(0);
@@ -164,7 +170,7 @@ test('setup updates Chord from the last release while an agent keeps its relay r
     console.log(`Setup's install folder: ${installLocation()}`);
     // As a person runs setup. Setup itself must end the relay that runs as it starts (not leave it to die after).
     let running = connected.current();
-    expect(setup(installer!, ['/S']), 'setup over a running relay').toBe(0);
+    expect(await setup(installer!, ['/S']), 'setup over a running relay').toBe(0);
     expect(connected.endedBefore(running, Date.now()), `setup ended relay ${running}`).toBe(true);
     isThisBuild('by hand');
     await connected.answers();
@@ -174,7 +180,7 @@ test('setup updates Chord from the last release while an agent keeps its relay r
     // As the in-app updater runs it.
     connected = await lastRelease();
     running = connected.current();
-    expect(setup(installer!, ['--updated', '/S', '--force-run']), 'an in-app update over a running relay').toBe(0);
+    expect(await setup(installer!, ['--updated', '/S', '--force-run']), 'an in-app update over a running relay').toBe(0);
     expect(connected.endedBefore(running, Date.now()), `the in-app update ended relay ${running}`).toBe(true);
     isThisBuild('in-app');
     await connected.answers();
