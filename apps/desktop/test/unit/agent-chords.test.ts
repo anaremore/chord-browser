@@ -559,6 +559,33 @@ describe('Review 1 of #77', () => {
     vi.useRealTimers();
   });
 
+  it('one call waits on its cards 50 s in all: a step card after a slow connection card gets what’s left, then waiting (#143)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const sent: { id?: number; result?: { content: { text: string }[]; isError: boolean } }[] = [];
+    const answers: ((grant: 'once') => void)[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Codex' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+      present: () => new Promise((done) => void answers.push(done)),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+    });
+    // open_tab of an address that signs out: the connection card, answered after 40 s, then the step card.
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://mail.test/logout' } } });
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(answers).toHaveLength(1);
+    answers[0]!('once');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answers).toHaveLength(2);
+    // The step card waits what's left of the 50 s (10 s), not its own 45: the call answers waiting by 50 s, under
+    // Codex's 60.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(sent.find((m) => m.id === 1)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(sent.find((m) => m.id === 1)?.result?.content[0]?.text).toBe(CONTROL_REFUSALS.waiting);
+    vi.useRealTimers();
+  });
+
   it('close_tab waits while you use the tab: it answers paused, and the tab stays', async () => {
     vi.useFakeTimers();
     const t = setup();

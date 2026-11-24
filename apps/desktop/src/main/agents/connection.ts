@@ -70,7 +70,18 @@ export interface ConnectionDeps {
   sites?: { allowed(site: string): boolean; keep(site: string): void };
   /** How often a call that asked for progress hears it (PROGRESS_MS; tests shorten it). */
   progressMs?: number;
+  /** How long one call waits on cards in all (CALL_WAIT_MS; tests shorten it). */
+  callWaitMs?: number;
 }
+
+/**
+ * How long one call waits on cards in all (#143): the connection's, a site's and a step's can come one after another,
+ * 45 s each, and a client gives up on a call before that (Codex at 60 s; Claude Code moves one past 2 minutes to the
+ * background). Past it, the call answers *waiting* and the card stays up: the user's Allow counts for the agent's retry
+ * of that same step (M2d's late Allow). A card asked late in the call still waits CARD_WAIT_MIN_MS.
+ */
+const CALL_WAIT_MS = 50_000;
+const CARD_WAIT_MIN_MS = 5_000;
 
 /**
  * A call that carries a progressToken hears this often that it's still under way (#143): what a client counts as
@@ -147,10 +158,10 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   if (hello.toolsVersion !== agentToolsVersion(agentToolList(actions))) send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
 
   /** The connection card, once per connection (or for good, with Always or a no). */
-  const connectionAnswer = async (signal: AbortSignal): Promise<'go' | Grant | 'waiting'> => {
+  const connectionAnswer = async (signal: AbortSignal, wait: number): Promise<'go' | Grant | 'waiting'> => {
     if (allowed) return 'go';
     const card: Omit<ControlCard, 'id'> = { kind: 'connection', tool: 'connect', description: `“${name}” wants to use Chord`, target: [], tab: null, subject: name };
-    const answer = await agent.ask(card, signal, waitMs);
+    const answer = await agent.ask(card, signal, wait);
     if (answer === 'once' || answer === 'always') {
       allowed = true;
       profile ??= deps.allowedProfile?.() ?? null;
@@ -159,7 +170,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** open_tab: a tab in its Agent chord, signed in as the user, once its page has loaded (at most LOAD_MS). */
-  const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal): Promise<ToolOutput> => {
+  const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal, cardWait: () => number): Promise<ToolOutput> => {
     const url = typeof args['url'] === 'string' ? args['url'].trim() : '';
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
     if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
@@ -172,7 +183,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: `open|${url}`, step: { why, site, fields: [], more: 0 } },
         // The call's own signal (Neon's review 2 of #112): Stop or the agent cancelling takes the card down for it.
         callSignal,
-        waitMs,
+        cardWait(),
       );
       if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
       if (answer === 'deny') return { text: ACT_REFUSALS.stepDenied, isError: true };
@@ -258,6 +269,10 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const cancel = new AbortController();
     calls.set(m.id, cancel);
     lastCallAt = Date.now();
+    // What's left of the call's wait on cards, for the next card it asks (CALL_WAIT_MS).
+    const started = Date.now();
+    const cardWait = () => Math.min(waitMs, Math.max(CARD_WAIT_MIN_MS, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)));
+    const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait } });
     // Progress, when the client asked for it (MCP's progressToken): every PROGRESS_MS until the answer, saying whether a
     // card waits on the user (#143: a client must never take a call waiting on a card for one that hung).
     const token = (m.params?.['_meta'] as { progressToken?: unknown } | undefined)?.progressToken;
@@ -273,13 +288,13 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       const out = await agent.call(
         null,
         async (signal): Promise<ToolOutput> => {
-          const answer = await connectionAnswer(AbortSignal.any([signal, cancel.signal]));
+          const answer = await connectionAnswer(AbortSignal.any([signal, cancel.signal]), cardWait());
           if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
-          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]));
+          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
           if (tool === 'close_tab') return closeTab(args);
-          return toPlain(await runControlTool(scope, deps.browser, tool, args));
+          return toPlain(await runControlTool(callScope, deps.browser, tool, args));
         },
         refused,
       );
