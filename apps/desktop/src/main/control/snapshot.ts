@@ -162,11 +162,104 @@ export const SNAPSHOT_LIB = String.raw`
   // field (an editor). The snapshot gives it with each field, and an action checks it again before text or a key goes in.
   // What opens a file picker: a file input, or a label for one (Neon's review of #110). Agents never choose files: no ref.
   const opensFiles = (el) => (el.localName === 'input' && String(el.type).toLowerCase() === 'file') || (el.localName === 'label' && Boolean(el.control) && String(el.control.type).toLowerCase() === 'file');
+  // closest(), across open shadow roots to their hosts (a button in a component, inside a form or a link, is that
+  // form's or that link's), as deep.ts walks them. Shared by act.ts' riskOf and refShape.
+  const closestDeep = (from, selector) => {
+    for (let node = from; node; ) {
+      const found = node.closest(selector);
+      if (found) return found;
+      const root = node.getRootNode();
+      node = root && root.host ? root.host : null;
+    }
+    return null;
+  };
+  // What a click on an element acts on (#112 review 1): a label's control, else a button it's inside, else itself.
+  const actTarget = (el) => {
+    const label = closestDeep(el, 'label');
+    const control = label && label.control && label.control !== el ? label.control : null;
+    const inButton = !control && el.localName !== 'button' ? closestDeep(el, 'button') : null;
+    return control || inButton || el;
+  };
+  // A clickable element by its look (the snapshot's own rule): a pointer cursor, not just inherited from its parent.
+  const pointerGeneric = (el) => getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer');
+  // Where a kept element is (the owner's bug #2: a ref whose node the page replaced is found again by it): its ancestors'
+  // tags and roles, out through open shadow roots to their hosts, up to the root (at most 64), as JSON (a role's words
+  // can't pass for another ancestor: the review of #117).
+  const refPath = (el) => {
+    const parts = [];
+    let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
+    while (node && parts.length < 64) {
+      parts.push([node.localName, node.getAttribute('role') || '']);
+      node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
+    }
+    return JSON.stringify(parts);
+  };
+  // Where risk lives in it, from what a click acts on (actTarget), as riskOf reads it (the review of #117): the target's
+  // tag, type and id (a label's for), its link's address (a, area, across shadow roots), its form's address and method
+  // (through the form's prototype: a field named action can't stand in), its own formaction and formmethod where it has
+  // them (as resolved: an empty one and a <base> count), what makes a field sensitive (autocomplete, name, id,
+  // placeholder), whether it's disabled (aria-disabled too), read-only or an editor, and its words where an aria-label
+  // says otherwise. (The items it's in: itemsOf, below.)
+  // What a ref's shape reads (refShape, in two halves): shapeParts finds its target, link and form, and its own words
+  // where an aria-label names it; shapeOf reads them. The walk takes the parts (near: el's nearest label, button, link
+  // and form among its ancestors, out through open shadow roots as closestDeep climbs, so no climb), and the task after
+  // the snapshot reads them, from the nodes held even if the page has replaced them since (round 6 of #117: on one CPU
+  // a 100 ms redraw came before that task, and no ref of the snapshot could be found again). The same answer as
+  // refShape on the same node.
+  const shapeParts = (el, near) => {
+    const nearest = (key, selector, self) => (self ? el : near ? near[key] : closestDeep(el, selector));
+    const label = nearest('label', 'label', el.localName === 'label');
+    const control = label && label.control && label.control !== el ? label.control : null;
+    const inButton = !control && el.localName !== 'button' ? nearest('button', 'button', false) : null;
+    const t = control || inButton || el;
+    const link = nearest('a', 'a[href], area[href]', (el.localName === 'a' || el.localName === 'area') && el.hasAttribute('href'));
+    const form = (t.form !== undefined ? t.form : null) || (t === el ? nearest('form', 'form', el.localName === 'form') : closestDeep(t, 'form'));
+    const own = el.getAttribute('aria-label') ? clip(String(el.innerText || ''), NAME_MAX) : '';
+    return { el, t, link, form, own };
+  };
+  const shapeOf = ({ el, t, link, form, own }) => {
+    const formGet = (f, prop) => {
+      try { return String(Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f)); } catch { return ''; }
+    };
+    const has = (a) => typeof t.hasAttribute === 'function' && t.hasAttribute(a);
+    return JSON.stringify([
+      t.localName, String(t.type || ''), t.id || '', el.localName === 'label' ? String(el.htmlFor || '') : '',
+      link ? String(link.href) : '', form ? [formGet(form, 'action'), formGet(form, 'method')] : null,
+      has('formaction') ? String(t.formAction) : '', has('formmethod') ? String(t.formMethod) : '',
+      t.getAttribute('autocomplete') || '', t.getAttribute('name') || '', t.getAttribute('placeholder') || '',
+      Boolean(t.disabled), t.getAttribute('aria-disabled') || '', Boolean(t.readOnly), Boolean(t.isContentEditable), own,
+    ]);
+  };
+  const refShape = (el) => shapeOf(shapeParts(el, null));
   const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
   // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
   const roleNow = (el) => {
     const own = String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
     return el.isContentEditable ? (TYPED.has(own) ? own : 'textbox') : roleOf(el);
+  };
+  // The items an element is in (the owner, 2026-11-24; the review of #117): its rows, list items, articles, dialogs, tab
+  // panels and regions (a section counts as one), each by its role and its name as the outline names it (what
+  // aria-labelledby names, its aria-label, its title: never its text, which a turn timer changes), nearest first; an
+  // unnamed one says nothing and is left out. The same control for another item (Table 4, not 3) is another element.
+  const ITEMS = new Set(['row', 'listitem', 'article', 'dialog', 'alertdialog', 'tabpanel', 'region']);
+  const itemRole = (n, role) => (ITEMS.has(role) ? role : !role && n.localName === 'section' ? 'region' : null);
+  const itemOf = (n, role) => {
+    const r = itemRole(n, role);
+    if (!r) return null;
+    const name = nameOf(n, r);
+    return name ? [r, name] : null;
+  };
+  // Climbing, out through open shadow roots to their hosts, at most 64 ancestors (as refPath): act.ts' checks. The
+  // snapshot builds the same from its walk (itemsAt).
+  const itemsOf = (el) => {
+    const parts = [];
+    let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
+    for (let i = 0; node && i < 64; i++) {
+      const part = itemOf(node, roleNow(node));
+      if (part) parts.push(part);
+      node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
+    }
+    return JSON.stringify(parts);
   };
 `;
 
@@ -188,7 +281,38 @@ export function snapshotScript(owner: string, token: string): string {
   let stopped = false;
   // depth: the outline's depth here; keyed: inside an element with a key (a pointer cursor there is its own); named:
   // inside an element its words name (an acted-on one, a heading), whose text is its name already.
-  const walk = (parent, depth, keyed, named) => {
+  // Each element's ancestors as the walk passes them (a linked list, from the parent up): a kept ref's place (refPath's
+  // JSON, the same) is built from it, never by climbing again for each (the review of #117: measured, it cost the
+  // snapshot ~4 ms on the typical page).
+  // It carries the named items on the way too (itemsOf's, the same), each at its depth: only the nearest 64 ancestors'.
+  // And each element's nearest label, button, link and form, itself included, for its children's shapes (refShape).
+  const NO_NEAR = { label: null, button: null, a: null, form: null };
+  const nearHere = (el, up) => {
+    const above = up ? up.near : NO_NEAR;
+    const tag = el.localName;
+    if (tag === 'label') return { ...above, label: el };
+    if (tag === 'button') return { ...above, button: el };
+    if ((tag === 'a' || tag === 'area') && el.hasAttribute('href')) return { ...above, a: el };
+    if (tag === 'form') return { ...above, form: el };
+    return above;
+  };
+  const link = (el, up, role) => {
+    const n = up ? up.n + 1 : 1;
+    const part = itemOf(el, role);
+    const items = up ? up.items : null;
+    return { part: [el.localName, el.getAttribute('role') || ''], up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
+  };
+  const placeOf = (chain) => {
+    const parts = [];
+    for (let c = chain; c && parts.length < 64; c = c.up) parts.push(c.part);
+    return JSON.stringify(parts);
+  };
+  const itemsAt = (chain) => {
+    const parts = [];
+    for (let c = chain && chain.items; c && chain.n - c.n < 64; c = c.up) parts.push(c.part);
+    return JSON.stringify(parts);
+  };
+  const walk = (parent, depth, keyed, named, chain) => {
     for (const child of parent.childNodes) {
       if (stopped) return;
       if (child.nodeType === 3) {
@@ -207,10 +331,11 @@ export function snapshotScript(owner: string, token: string): string {
       // its labels alone, described as a field for sensitiveField, and never walked into (its inside is what's typed).
       let role = roleNow(el);
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
-      if (!role && !keyed && getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer')) role = 'generic';
+      if (!role && !keyed && pointerGeneric(el)) role = 'generic';
       if (!role) {
-        if (el.shadowRoot) walk(el.shadowRoot, depth, keyed, named);
-        walk(el, depth, keyed, named);
+        const inner = link(el, chain, role);
+        if (el.shadowRoot) walk(el.shadowRoot, depth, keyed, named, inner);
+        walk(el, depth, keyed, named, inner);
         continue;
       }
       const acted = ACTED.has(role) || role === 'generic';
@@ -232,15 +357,17 @@ export function snapshotScript(owner: string, token: string): string {
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
       }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
       // element's words are its name.
       if (role === 'iframe' || isField(el) || TYPED.has(role)) continue;
       const inside = named || acted || role === 'heading';
-      if (el.shadowRoot) walk(el.shadowRoot, depth + 1, keyed || acted, inside);
-      walk(el, depth + 1, keyed || acted, inside);
+      // (A pointer-cursor element's role, for its items, as itemsOf reads it: none.)
+      const inner = link(el, chain, role === 'generic' ? null : role);
+      if (el.shadowRoot) walk(el.shadowRoot, depth + 1, keyed || acted, inside, inner);
+      walk(el, depth + 1, keyed || acted, inside, inner);
     }
   };
   // The walk's start, checked as every element is: a page that's all editor (<body contenteditable>, <html
@@ -251,13 +378,56 @@ export function snapshotScript(owner: string, token: string): string {
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);
-    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name }); }
+    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name, items: itemsOf(start), path: refPath(start), shape: refShape(start) }); }
     nodes.push(node);
-  } else walk(start, 0, false, false);
-  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
+  } else {
+    // The start's own ancestors, and itself, as its children's place.
+    let chain = null;
+    const above = [];
+    for (let n = start; n; n = n.parentElement) above.push(n);
+    for (const n of above.reverse()) chain = link(n, chain, roleNow(n));
+    walk(start, 0, false, false, chain);
+  }
+  // What finds a ref again and checks it (the review of #117): each ref's items, place and shape, in a task right after
+  // the snapshot answers, or first thing by any step that comes before it (act.ts, deep.ts), from what the walk held
+  // (its chain, and the shape's parts: shapeParts), never the page as it is then. Taken before answering, it cost the
+  // typical page's snapshot about 5 ms (12.8 → 17.9 ms median, interleaved in one page), and arm64 its budget; and a
+  // page that redraws before that task can't take it away (round 6). If anything here throws, none is found again.
+  let pending = true;
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
+  const read = { token: args.token, url: location.href, keep, finish: null, finishMs: 0 };
+  const finish = () => {
+    if (!pending) return;
+    pending = false;
+    // Another snapshot since (its refs replace these): nothing to keep.
+    if (reads.get(args.owner) !== read) return;
+    const began = performance.now();
+    let whole = !(cut.refs || cut.elements || cut.time);
+    try {
+      for (const k of keep) {
+        if (!k.chain) continue;
+        k.items = itemsAt(k.chain);
+        k.path = placeOf(k.chain);
+        k.shape = shapeOf(k.parts);
+      }
+    } catch { whole = false; }
+    // Found again only if nothing else here looked like it: its role, name, items, place and shape unique among the
+    // snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin). Its items stay
+    // either way: every step checks them (act.ts).
+    const counts = new Map();
+    for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
+    for (const k of keep) {
+      if (!whole || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
+      delete k.sig;
+    }
+    // (Its cost, for the budgets journey.)
+    read.finishMs = performance.now() - began;
+  };
+  read.finish = finish;
+  setTimeout(finish, 0);
+  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
   reads.delete(args.owner);
-  reads.set(args.owner, { token: args.token, url: location.href, keep });
+  reads.set(args.owner, read);
   while (reads.size > args.owners) reads.delete(reads.keys().next().value);
   return { url: location.href, title: document.title, nodes, cut };
 })(${JSON.stringify(args)})`;
