@@ -37,10 +37,19 @@ test.beforeAll(async () => {
       '<button onclick="getSelection().selectAllChildren(copyme); document.execCommand(\'copy\'); log.textContent += \'copied \'">Copy</button>' +
       '<button onclick="const t = Date.now(); navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32), timeout: 20000, userVerification: \'discouraged\', allowCredentials: [] } }).then(() => (log.textContent += \'passkey-ok \'), (e) => (log.textContent += \'passkey-\' + e.name + \'-\' + Math.round((Date.now() - t) / 1000) + \'s \'))">Passkey</button>' +
       '<button onclick="file.click()">Download</button>',
+    // M2e-2b, C3: a page whose service worker sends its POSTs itself (the worker's own fetch, which no page hold sees).
+    '/sw':
+      '<title>Worker</title><p id=log></p><script>navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).then(() => (log.textContent += navigator.serviceWorker.controller ? "controlled " : "ready "))</script>' +
+      `<button onclick="fetch('/swmove', { method: 'POST', body: 'x' }).then(() => (log.textContent += 'moved '))">Move</button>`,
     // A checkout: paying asks every time.
     '/checkout': '<title>Checkout</title><form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> <button>Place order</button></form>',
   };
   const server = createServer((req, res) => {
+    if (req.url === '/sw.js') {
+      res.writeHead(200, { 'content-type': 'text/javascript' });
+      res.end("self.addEventListener('install', () => self.skipWaiting()); self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim())); self.addEventListener('fetch', (e) => { if (e.request.method === 'POST') e.respondWith(fetch(e.request)); });");
+      return;
+    }
     if (req.url === '/file.zip') {
       res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="file.zip"' });
       res.end('PK');
@@ -289,6 +298,47 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await shell.waitForTimeout(700);
     await save.getByRole('button', { name: 'Don’t' }).click();
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('a page whose service worker sends its POSTs: while the assistant acts, its requests skip the worker and are held and asked about; after, the worker is back (M2e-2b, C3)', async () => {
+  test.setTimeout(120_000);
+  reached.length = 0;
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    const windowId = (await where(shell)).windowId;
+    // On localhost: a service worker needs a secure context.
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.other}/sw` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.other}/sw`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.other}/sw`))!;
+    await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller)), { timeout: 15_000 }).toBe(true);
+    // Before: the worker's own (the page sends through it, as it always does).
+    await page.evaluate(() => fetch('/swmove', { method: 'POST', body: 'yours' }));
+    expect(reached).toEqual(['POST /swmove']);
+    reached.length = 0;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Move' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    // The click's POST skipped the worker: held, and asked about; nothing reached the site meanwhile.
+    const sendCard = panel.getByRole('group', { name: /^Send data to / });
+    await expect(sendCard).toBeVisible({ timeout: 15_000 });
+    expect(reached).toEqual([]);
+    await shell.waitForTimeout(700);
+    await sendCard.getByRole('button', { name: 'Allow', exact: true }).click();
+    await expect.poll(() => reached).toEqual(['POST /swmove']);
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
+    // After the lease: the worker controls the page again.
+    await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller)), { timeout: 15_000 }).toBe(true);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
