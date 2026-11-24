@@ -335,10 +335,15 @@ function loaded(contents: WebContents, start: () => unknown): Promise<{ loading:
     const stopped = () => finish(false);
     function finish(loading: boolean) {
       clearTimeout(timer);
-      if (!contents.isDestroyed()) contents.off('did-stop-loading', stopped);
+      if (!contents.isDestroyed()) {
+        contents.off('did-stop-loading', stopped);
+        contents.off('destroyed', stopped);
+      }
       done({ loading });
     }
     contents.on('did-stop-loading', stopped);
+    // Closed mid-load (#116): at once, not at the time limit.
+    contents.once('destroyed', stopped);
     void start();
   });
 }

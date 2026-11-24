@@ -402,7 +402,7 @@ test('SOCKS5 sends sites’ names to the proxy, never to this computer’s DNS; 
 
     await visit(shell, overlay, page('/socks'));
     await expect.poll(async () => (await app.windows().find((p) => p.url() === page('/socks'))?.title()) ?? null).toBe('Direct /socks');
-    expect(socks.seen).toContainEqual({ version: 5, host: 'socks.test', port: direct.port });
+    await expect.poll(() => socks.seen).toContainEqual({ version: 5, host: 'socks.test', port: direct.port });
     // The command bar's connection ahead of Enter goes through the proxy too, by name.
     await commandBar(shell, overlay);
     await overlay.keyboard.type(`http://preconnect.test:${direct.port}/`);
@@ -410,16 +410,27 @@ test('SOCKS5 sends sites’ names to the proxy, never to this computer’s DNS; 
     await overlay.keyboard.press('Escape');
 
     // For comparison, SOCKS4 on a session of its own (Settings never offers it): the name is looked up here first,
-    // and the proxy gets only the address (socks4.test is mapped to this machine).
-    await app.evaluate(
-      async ({ session }, { rules, address }) => {
+    // and the proxy gets only the address (socks4.test is mapped to this machine). Chord gives every new session the
+    // proxy for every chord as it's made (proxy.ts, SOCKS5 here), so the probe's fetch waits until the network service
+    // answers with the probe's own proxy: on CI's slower runners it went out on another (issue #64, twice on Windows
+    // arm64 and x64), with no SOCKS4 hello at the proxy.
+    const probed = await app.evaluate(
+      async ({ session }, { rules, address, want }) => {
         const probe = session.fromPartition('socks4-probe', { cache: false });
         await probe.setProxy({ proxyRules: rules });
-        await probe.fetch(address).then((r) => r.text());
+        let proxy = await probe.resolveProxy(address);
+        for (const until = Date.now() + 10_000; proxy !== want && Date.now() < until; ) {
+          await new Promise((done) => setTimeout(done, 50));
+          proxy = await probe.resolveProxy(address);
+        }
+        const body = await probe.fetch(address).then((r) => r.text());
+        return { proxy, body };
       },
-      { rules: `socks4://127.0.0.1:${socks.port}`, address: `http://socks4.test:${direct.port}/socks4` },
+      { rules: `socks4://127.0.0.1:${socks.port}`, address: `http://socks4.test:${direct.port}/socks4`, want: `SOCKS 127.0.0.1:${socks.port}` },
     );
-    expect(socks.seen.filter((s) => s.version === 4)).toEqual([{ version: 4, host: '127.0.0.1', port: direct.port }]);
+    const what = `the probe's proxy ${probed.proxy}, its answer ${JSON.stringify(probed.body)}, the proxy saw ${JSON.stringify(socks.seen)}`;
+    expect(probed.proxy, what).toBe(`SOCKS 127.0.0.1:${socks.port}`);
+    await expect.poll(() => socks.seen.filter((s) => s.version === 4), { message: what }).toEqual([{ version: 4, host: '127.0.0.1', port: direct.port }]);
   } finally {
     await app.close();
     socks.server.close();

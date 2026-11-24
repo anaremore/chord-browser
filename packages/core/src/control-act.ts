@@ -167,6 +167,8 @@ export function valueFits(type: string, text: string): boolean {
 }
 
 export const ACT_REFUSALS = {
+  // S18 M2e-1: a card let go of because the user took the tab over (a card's no that wasn't theirs).
+  takenOver: 'The user took that tab over while you waited, so nothing was done there. Call snapshot again if you still need to act there.',
   changed: 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.',
   covered: (what: string) => `Something is covering that element: ${what}. Deal with it first, or call snapshot again.`,
   disabled: 'That element is disabled.',

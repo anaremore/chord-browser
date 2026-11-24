@@ -6,7 +6,7 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { bucketOf, CONTROL_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, bucketOf, CONTROL_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
@@ -1647,6 +1647,14 @@ describe('acting through the gate (S18 M2c)', () => {
       } finally {
         ELEMENTS.pop();
       }
+    });
+
+    it('you take over a tab no window shows while its action’s send card is up: the action hears so, never done (Claude’s review 2 of #116)', async () => {
+      // A tab no window shows isn't paused when you take it over (its row menu's Reload): its cards are let go of.
+      const t: Awaited<ReturnType<typeof acting>> = await acting({ deep: { posts: true }, answer: 'hold', act: { siteAllowed: () => true }, onCard: () => void queueMicrotask(() => t.agent.cancelCardsFor('n1')) });
+      expect(t.agent.state('n1').paused).toBe(false);
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.takenOver);
+      expect(t.at.debugging).not.toContain('Fetch.continueRequest');
     });
 
     it('a send card no one answers in an action comes down (Neon’s S11): no card left at the head of the queue', async () => {
