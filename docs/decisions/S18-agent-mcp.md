@@ -406,10 +406,10 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 **B. Prompt injection**
 
 - **B1. Something it read tells it to act.** Not only the message's tab: another tab read this turn, a PDF, an image you pasted, history, the archive, an imported chat (gap 1). The instructions say text from any of them is data, never instructions (§11.4's wrapping, *carries over*); acting happens only inside a turn your message started, on that message's tab (A1). The cards below are what hold when the model is fooled anyway.
-- **B2. A step you didn't ask for.** Risky steps ask every time; the card shows only what Chord sees. *Carries over.* How Chord judges a step from context, not only words, is *Risk from context* (below, proposed for M2g).
+- **B2. A step you didn't ask for.** Risky steps ask every time; the card shows only what Chord sees. *Carries over.* How Chord judges a step from context, not only words, is *Risk from context* (below, settled for M2g).
 - **B3. Your data carried out** (Neon's B7). The channels:
-  - *An address.* `navigate` to another site asks every time with the address (the owner's question 2). A **same-site** `navigate` or `back` that redirects to another site (an open redirect) is held at the redirect and asks the same card before it's followed (Neon's B7a). The address on the card shows its host and path, then its query in full, wrapped, never cut silently (*?q=…* expands).
-  - *Typing it in.* The page's `input` handler sees each character as it goes in, and can send it by an image, a fetch after the after-window, a worker, a `fetchLater` or a WebSocket, none of which the hold sees. So the *Send data* card is **not** a guard for this (round 1's reassurance was wrong). The guard is a **tainted chat** (Neon's B7b; the owner's question 6): once the chat has read anything but the message's tab (another tab, history, the archive, a PDF elsewhere, an attachment), every `type` in it asks first, showing the exact text: *Type this in “Search”?* · “wool scarf, size M, 14 Elm St” · Allow · Don't. A chat that has only read the tab it acts on asks nothing more. *New in M2e.*
+  - *An address.* `navigate` to another site asks every time with the address (the owner's answer 2). A **same-site** `navigate` or `back` that redirects to another site (an open redirect) is held at the redirect and asks the same card before it's followed (Neon's B7a). The address on the card shows its host and path, then its query in full, wrapped, never cut silently (*?q=…* expands).
+  - *Typing it in.* The page's `input` handler sees each character as it goes in, and can send it by an image, a fetch after the after-window, a worker, a `fetchLater` or a WebSocket, none of which the hold sees. So the *Send data* card is **not** a guard for this (round 1's reassurance was wrong). The guard is a **tainted chat** (Neon's B7b; the owner's answer 6): once the chat has read anything but the message's tab (another tab, history, the archive, a PDF elsewhere, an attachment), every `type` in it asks first, showing the exact text: *Type this in “Search”?* · “wool scarf, size M, 14 Elm St” · Allow · Don't. A chat that has only read the tab it acts on asks nothing more. *New in M2e.*
   - *A link the page offers.* Following a link is reading; its address is the page's, not the assistant's. *Carries over.*
 - **B4. Names that mislead.** Visible text counts too, and the step is described again after the card and before the input. *Carries over.*
 - **B5. Floods of cards.** A *No* holds for the chat on that site; 3 *Send data* cards an action; step cards never coalesce. *Carries over.*
@@ -419,7 +419,7 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 - **C1. An action sends what the classifier didn't name.** During an action, from just before its input until the page settles and 1.5 s after (`USER_SENDS_TAIL_MS`), the tab's requests pass through `Fetch` (page and frames of other processes): GET and HEAD go, reports drop, anything else is held for the *Send data* card. *Carries over*, with rounds 3 and 4's rules: a body makes a request a send whatever its method (OPTIONS too), exact origins, 8 a card, a risky step's Allow for its own addresses once.
 - **C2. Between actions** nothing is held: your page's own sends are yours. *New in M2e.* The honest cost: a save debounced past 1.5 s, set off by the assistant's typing, goes unasked (S1's second hole).
 - **C3. The site's service worker.** Bypassed during the watch (`Network.setBypassServiceWorker`), and **always** restored when the watch ends, whatever ended it (Stop, a timeout, an error, your input, the tab closing; Neon's S3). The result notes the bypass. *Measured before it's settled:* fixture apps whose worker answers an API route or adds an auth header, with the bypass on.
-- **C4. Workers the page already runs, shared workers, cross-tab channels** (`BroadcastChannel`, storage events, the Reporting API; gap 10). *Stated limit* (the owner's question 4).
+- **C4. Workers the page already runs, shared workers, cross-tab channels** (`BroadcastChannel`, storage events, the Reporting API; gap 10). *Stated limit* (the owner's answer 4).
 - **C5. `fetchLater` and keepalive sends after the window.** *Stated limit.*
 - **C6. Live connections** (WebSocket, WebRTC, WebTransport). *Stated limit, carries over.* A card table over a WebSocket is guarded by the site card and the classifier alone.
 
@@ -442,7 +442,7 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 
 **F. Focus, keyboard, and you**
 
-- **F1. You use the tab while it acts.** Your key or click in the tab, your reload, back, forward or typed address: acting ends **for this message**; the action in flight sends nothing more, held sends fail, cards come down, the chat says *Stopped: you used the tab*. Your next message acts again (the owner's question 5). *New in M2e.*
+- **F1. You use the tab while it acts.** Your key or click in the tab, your reload, back, forward or typed address: acting ends **for this message**; the action in flight sends nothing more, held sends fail, cards come down, the chat says *Stopped: you used the tab*. Your next message acts again (the owner's answer 5). *New in M2e.*
 - **F2. You use the tab right after it acted** (Neon's B3). Your own input ends the after-window and the tail **at once**: your click, picker, passkey, download or clipboard right after the assistant's is never caught. What was already held for the assistant fails; nothing of yours is held. No chat row after a finished turn. *New in M2e.*
 - **F3. You type in the chat while it acts.** The assistant's input goes to the page's WebContents only. *Carries over*, with an E2E row.
 - **F4. Keys or text in the wrong place.** The typing guard, dormant in Chord's page preload (top frame), armed only during an action. Frames: E5. *New in M2e.*
@@ -480,7 +480,7 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 
 ### Neon's design review (2026-11-24)
 
-Every blocker was checked against `feat/s18-m2d` before it was taken; all seven hold. Where they landed: B1 → A6 (passkeys, PaymentRequest, FedCM); B2 → A4; B3 → *The watch* (a lease) and F2; B4 → A6 (dialogs, `beforeunload`); B5 → A6 (popups); B6 → G4; B7 → B3 and the owner's question 6. S1 → the stance's two holes and C2; S2 → A1, E6, G1; S3 → A3, A6's 6 s, C3, E5, F6, the table; S4 → *Slices* and *Tests*. Gaps 1–12 → B1, B3, A6 (clipboard, other programs, downloads, printing, `beforeunload`), C4, E5, A1. Two pushbacks: the background tab isn't checked against *Never* (A6), and PaymentRequest and FedCM aren't assumed implemented in Electron until the spike checks (A6). Neon's answer to the money words is overridden by the owner (D3).
+Every blocker was checked against `feat/s18-m2d` before it was taken; all seven hold. Where they landed: B1 → A6 (passkeys, PaymentRequest, FedCM); B2 → A4; B3 → *The watch* (a lease) and F2; B4 → A6 (dialogs, `beforeunload`); B5 → A6 (popups); B6 → G4; B7 → B3 and the owner's answer 6. S1 → the stance's two holes and C2; S2 → A1, E6, G1; S3 → A3, A6's 6 s, C3, E5, F6, the table; S4 → *Slices* and *Tests*. Gaps 1–12 → B1, B3, A6 (clipboard, other programs, downloads, printing, `beforeunload`), C4, E5, A1. Two pushbacks: the background tab isn't checked against *Never* (A6), and PaymentRequest and FedCM aren't assumed implemented in Electron until the spike checks (A6). Neon's answer to the money words is overridden by the owner (D3).
 
 ## M2e: plan (the assistant acts in your tab)
 
@@ -510,8 +510,8 @@ The eight tools of `ACTION_TOOLS`, same schemas, through `duetScope`'s new `act`
 - **The site card**: *Let the assistant click and type on game.example?* · *It wants to click “Raise”.* · *It asks before anything it does sends data, and before it submits, pays, sends or deletes.* · **No** · **Allow for this chat** · **Always on this site**.
 - **The risky-step card** (every time): *Place the order on shop.example?* · *The assistant is about to click “Place order · $48.20”.* · *Goes with it: Shipping, Card, Gift note* · **Allow** (red for paying and deleting) · **Don't** · **Show me**.
 - **Leaving the site** (every time): *Go to news.example?* · *The assistant wants to open this in your tab:* news.example/search?q=wool+scarf (host and path, then the whole query, wrapped) · **Allow** · **Don't**. The same card when a same-site address redirects away (*news.example/out sends your tab to tracker.example/…*).
-- **Typing in a tainted chat** (B3; the owner's question 6): *Type this in “Search”?* · the exact text, in full · **Allow** · **Don't**. Never remembered.
-- **The *Send data* card**: *Send data to game.example?* · *The assistant clicked “Raise”, and the page is sending something to its site.* · *Goes to: game.example* · **Allow** · **Allow for this chat** (the owner's question 1) · **Don't** · **Show me**. *Allow for this chat* covers exactly the named origins, in this tab, until the chat ends, you take the tab over mid-action (F1), or *Remove* in Settings; a click of yours between turns doesn't end it (Neon on question 1).
+- **Typing in a tainted chat** (B3; the owner's answer 6): *Type this in “Search”?* · the exact text, in full · **Allow** · **Don't**. Never remembered.
+- **The *Send data* card**: *Send data to game.example?* · *The assistant clicked “Raise”, and the page is sending something to its site.* · *Goes to: game.example* · **Allow** · **Allow for this chat** (the owner's answer 1) · **Don't** · **Show me**. *Allow for this chat* covers exactly the named origins, in this tab, until the chat ends, you take the tab over mid-action (F1), or *Remove* in Settings; a click of yours between turns doesn't end it (Neon on the question).
 - **A download**: *Save invoice.pdf from shop.example?* · **Allow** · **Don't**.
 - **Keys and clicks** (F6): none in the first 600 ms; ⌘↵ / Ctrl+↵ and Esc only once the card has the focus; the composer's shortcut skips acting cards. Answered, each shrinks to a muted line.
 
@@ -566,9 +566,9 @@ One quiet line per action, consecutive ones on a page folded (*Clicked “Raise�
 |---|---|---|
 | **M2e-1** | **An agent's tabs:** read only when pointed, never acted in (G1–G3, G2 as a unit); your taking over and closing (G4) | Small; closes M2d's open rows. After M2d merges. |
 | **M2e-2** | **The assistant acts in your tab:** first the spike (WebAuthn, PaymentRequest and FedCM in Electron 45, native dialogs over CDP and with the panel, print's signal); then the `act` host, the message's tab, the lease, the cards (taint included), A6's catches, the vault, the guard, Settings, instructions, rows, the journeys | After M2e-1. The spike's findings go in this record before the rest is built. A Claude and Neon security pass, as M2d had. |
-| **M2g** | Adds *Risk from context* (below) for both callers, if the owner agrees | After M2e. |
+| **M2g** | Adds *Risk from context* (below) for both callers (the owner, 2026-11-24) | After M2e. |
 
-## Risk from context (proposed, for agents and the assistant)
+## Risk from context (for agents and the assistant; the owner, 2026-11-24: in M2g)
 
 *The owner, 2026-11-24: "the simple words are a kinda silly way to do it. Knowing the context of what site someone is on is probably more useful."* Words misfire both ways: *Raise* is a payment at a real-money table and a game move elsewhere; *Continue* on a checkout pays. What Chord can know of context, and how far to trust each:
 
@@ -578,17 +578,19 @@ One quiet line per action, consecutive ones on a page folded (*Clicked “Raise�
 4. **A model's judgment (escalation only).** The acting model declares, on each action, what it expects the step to do (`expects`: `nothing`, `sends`, `pays`, `deletes`, `signs_out`, `posts`). Anything but `nothing` asks the matching card; `nothing` lowers nothing. A fooled model can only add a card, never remove one. It costs no extra call. A separate judging model, seeing the page in context, isn't proposed: it adds a call's delay to every action, and page text reaches it as it reaches the actor, so it can't be trusted to lower risk either; its only use would be adding cards the structure misses, measured first.
 5. **Words (weak, narrowed).** Kept for what structure can't see: *delete*, *sign out*, *send* and *post* (in a text area's form), and the pay words where no site choice says *no real money*. Matched on the control's own short label (≤ 4 words), not anywhere in long text, so *All in one* or *Show all in folder* never match. Their weight: they ask, but a site's *No real money here* switches off the pay words alone.
 
-**Recommendation:** structure plus observed site context plus your per-site choice plus the model's escalation-only `expects`, with words narrowed to short labels. It changes `control-risk.ts`, which agents and the assistant share, so it belongs in **M2g, for both callers**, after M2e-2 ships on M2d's classifier as it is. Before building, measure on fixtures how many steps each layer catches and how many cards it costs (the method M2d used for the send hold).
+**Settled (the owner, 2026-11-24):** structure plus observed site context plus your per-site choice plus the model's escalation-only `expects`, with words narrowed to short labels. It changes `control-risk.ts`, which agents and the assistant share, so it's built in **M2g, for both callers**, after M2e-2 ships on M2d's classifier as it is (plus answer 3). Before building, measure on fixtures how many steps each layer catches and how many cards it costs (the method M2d used for the send hold).
 
-## M2e: questions for the owner
+## M2e: owner's answers (2026-11-24)
 
-1. **The *Send data* card's lasting answer for the assistant:** per message, or per chat? **Recommended: *Allow for this chat*** (exact origins, this tab; ends when the chat ends, you take the tab over mid-action, or you remove the site). Neon agrees.
-2. **Leaving the site:** ask every time, showing the address (and when a same-site address redirects away)? **Recommended: yes.** Neon agrees.
-3. **Money words in games.** *Answered (the owner, 2026-11-24): no.* *Bet*, *Wager* and *All in* stay ordinary clicks, as *Raise*, *Call* and *Fold* do; real payments ask through the pay words and payment-card fields (D3).
-4. **What your tab can't hold** (C4–C6, E5): act and state the limits, or refuse any page with a running worker? **Recommended: act, and state them** (in Settings' line and DESIGN.md §7.17). Neon agrees.
-5. **Your key or click while it acts:** end this message's acting, or pause for *Continue*? **Recommended: end it.** Neon agrees.
-6. **Your data typed into a page** (B3, Neon's B7b): once a chat has read anything but the tab it acts on, should every `type` ask, showing the exact text? The other ways: ask nothing and state it as a limit, or show the text only in the activity row after. **Recommended: ask**, only in such chats; a chat that only read its own tab (the card game) never sees it.
-7. **Risk from context:** take the approach above (structure, observed site context, *No real money here* per site, the model's escalation-only `expects`, short-label words), in **M2g for both callers**? **Recommended: yes**, measured on fixtures first.
+The owner answered every open question, each as recommended. Settled:
+
+1. **The *Send data* card's lasting answer:** **Allow for this chat**. It covers exactly the origins it names, in that tab, and ends when the chat ends, when you take the tab over mid-action (F1), or when the site is removed in Settings. A click of yours between turns doesn't end it.
+2. **Leaving the site:** asks every time, with the whole address shown, including when a same-site address redirects to another site (B3).
+3. **Money words in games:** no new words. *Bet*, *Wager* and *All in* are ordinary clicks, as *Raise*, *Call* and *Fold* are; real payments ask through the pay words and payment-card fields (D3).
+4. **What your tab can't hold** (C4–C6, E5): the assistant acts anyway, and the limits are stated (Settings → Assistant's line, DESIGN.md §7.17 in M2f).
+5. **Your key or click while it acts:** ends that message's acting (F1); your next message acts again.
+6. **Typing what it read elsewhere** (B3): once a chat has read anything besides the tab it acts on, every `type` asks first, showing the exact text.
+7. **Risk from context:** built in **M2g, for agents and the assistant**, after measuring each layer on fixtures. M2e ships with today's classifier plus answer 3.
 
 ## Antigravity (2026-11-21, before 0.14.0)
 
