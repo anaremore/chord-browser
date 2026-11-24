@@ -446,7 +446,7 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 
 **G. An outside agent's tabs**
 
-- **G1. The assistant reads an agent's tab without being asked.** Today, with *All chords*, it could (an Agent chord's tabs are tabs like any). M2e leaves Agent chords out of `list_tabs` and every read unless your message points at the tab (you mention it, attach it, or pick it). *New in M2e.*
+- **G1. The assistant reads an agent's tab without being asked.** Today, with *All chords*, it could (an Agent chord's tabs are tabs like any). M2e leaves Agent chords out of `list_tabs` and every read unless your message points at the tab (it was on screen when you sent it, or you mention it, attach it, or pick it). *New in M2e.*
 - **G2. It acts in one.** Never: *That tab is Claude Code's. Keep it first to make it yours, then I can act in it.* A tab you keep is yours, and the rules above apply. *New in M2e.*
 - **G3. Its reads disturb the agent.** The assistant's snapshot is its own owner's (M2b keeps 16 owners' latest), so the agent's refs stay good. *Carries over.*
 - **G4. You close or reload an agent's tab** (M2d's record, *Your hand on an agent's tab*): close ends its action and drops its cards (teardown fails closed, *carries over*); reload, back, forward and a typed address are you taking over: the agent is paused (*The user reloaded this tab.*), its refs go stale, its open cards for the tab drop and held requests fail. The tab's hold is the tab's for life, so the reloaded document is held from its start as before (*carries over*: Fetch, `PAGE_LACKS`, the deferred-fetch header). *New in M2e* (no reload handling exists yet: M2d checked).
@@ -511,7 +511,7 @@ Held sends ask the inline *Send data* card; at the watch's end, what's still hel
 
 ### An agent's tabs (G1–G4)
 
-- `duetScope.tabs()` and `readable` leave out Agent chords' tabs unless the message points at one: attached, mentioned (`@` a tab), or picked in the reading scope's tab list. A pointed tab is read as any tab (the scope's card rules). Activity rows: *Read Claude Code's tab “Checkout”*. Acting there is refused (G2) with a row: *Didn't act in Claude Code's tab*.
+- `duetScope.tabs()` and `readable` leave out Agent chords' tabs unless the message points at one: on screen when it was sent, attached, mentioned (`@` a tab), or picked in the reading scope's tab list. A pointed tab is read as any tab (the scope's card rules). Activity rows: *Read Claude Code's tab “Checkout”*. Acting there is refused (G2) with a row: *Didn't act in Claude Code's tab*.
 - **Your reload, back, forward or typed address** in an agent's tab: core's `agentTabTakenOver(reason)`, from `nav.ts`' toolbar handlers, the menu and keys, and `did-start-navigation` with no agent action under way: the agent is paused with *The user reloaded this tab.* (or *went back in*, *went to another address in*), `ElementRefs` for the tab cleared, `failHeld` for its cards and held requests.
 - **Close:** M1's *That tab is closed.*; its site, step and *Send data* cards for the tab come down (`dropCardsFor(nodeId)`).
 
