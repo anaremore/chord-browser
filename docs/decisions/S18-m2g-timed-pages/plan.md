@@ -12,6 +12,23 @@ The owner, on a real-time online table (main plus #117): the agent played a full
 3. *A compact snapshot with each action's result.* Optional (`snapshot: true` on an action), it's the page's outline after the action has settled, bounded (refs and characters) and cut the same way `snapshot` is, so the next step needs no extra call.
 4. *#143, card waits.* A tool call waiting on a card answers before the client's timeout: *Waiting for the user to approve on Chord's card. Try the same step again in a moment.* The card stays up, and the user's Allow is kept for that exact step (the late Allow `stepKey`), so the retry goes straight through, once. Where a client sends a `progressToken`, Chord sends MCP progress notifications to keep the call alive instead.
 
+## #143: what the clients do (looked up 2026-11-24, to check in slice (a))
+
+- **Codex:** each MCP tool call times out after `tool_timeout_sec`, 60 s by default, per server in `config.toml`.
+- **Antigravity:** 3 minutes a tool call by default (and 5 to connect), per server with `timeoutSeconds`.
+- **Claude Code:**
+  - No total limit by default (`MCP_TOOL_TIMEOUT`, about 28 hours; a per-server `timeout` overrides it). Progress notifications don't extend it.
+  - An idle limit: no answer and no progress notification for 30 minutes on stdio (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`).
+  - A call still running after 2 minutes moves to a background task (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`). Its transcript names it *MCP task … (server/tool)*, the words the owner saw.
+  - A report against one release (2.1.148) has stdio tool calls failing after about 1 s.
+- **Chord:** a card waits 45 s (`CONTROL_WAIT_MS`), then answers *Waiting for the user to allow this in Chord…*. A late Allow counts for that same step once (M2d). Chord's server doesn't declare MCP tasks.
+- **So:**
+  - Codex and Antigravity should never time out on a card. What the owner saw in Claude Code needs a reproduction first: the owner's Claude Code version, and whether the call was backgrounded or failed outright.
+  - The fix to test:
+    - Answer *waiting* well before every client's limit, about 20 s.
+    - Send progress notifications every few seconds while a card is up, when the call carries a `progressToken`.
+    - Keep the late Allow for the retry.
+
 ## Slices
 
 **PRs (each about 1.5k lines or less, pushed early):** (a) measurement and #143; (b) target by role and name; (c) `wait_for`; (d) the snapshot with a result. The order after (a) is decided by what the measurement shows.
