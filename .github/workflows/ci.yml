@@ -52,27 +52,8 @@ jobs:
       code: ${{ steps.diff.outputs.code }}
       tier: ${{ steps.tier.outputs.tier }}
       platform: ${{ steps.platform.outputs.platform }}
+      forms: ${{ steps.forms.outputs.forms }}
     steps:
-      # The fast tier or the full one. A pull request's labels and draft state are the event's: a run re-run by
-      # hand keeps the tier it had, so add `ready` (which starts a new run) rather than re-run an old one.
-      # Renovate's pull requests get the full tier: Electron's automerge once every check passes.
-      - name: Which tier?
-        id: tier
-        env:
-          EVENT: ${{ github.event_name }}
-          DRAFT: ${{ github.event.pull_request.draft }}
-          READY: ${{ contains(github.event.pull_request.labels.*.name, 'ready') }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
-          elif [ "$AUTHOR" = 'renovate[bot]' ]; then tier=full; why="Renovate's pull request"
-          elif [ "$READY" = true ] && [ "$DRAFT" != true ]; then tier=full; why="labeled ready"
-          elif [ "$READY" = true ]; then tier=fast; why="labeled ready, but still a draft"
-          else tier=fast; why="not labeled ready"
-          fi
-          echo "Tier: $tier ($why)."
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "why=$why" >> "$GITHUB_OUTPUT"
       # A pull request's run checks out its merge commit: its first parent is the base branch as it is now,
       # so the diff between the two is exactly what merging the pull request changes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -191,6 +172,52 @@ jobs:
           else
             echo "Not platform-sensitive: none of the changed files."
           fi
+      # The fast tier or the full one. A pull request's labels and draft state are the event's: a run re-run by
+      # hand keeps the tier it had, so add `ready` (which starts a new run) rather than re-run an old one.
+      # Renovate's platform-sensitive pull requests (Electron's among them) get the full tier with no label, so
+      # Electron's automerge once every check passes; its others follow the same rule as anyone's.
+      - name: Which tier?
+        id: tier
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          READY: ${{ contains(github.event.pull_request.labels.*.name, 'ready') }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          PLATFORM: ${{ steps.platform.outputs.platform }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
+          elif [ "$AUTHOR" = 'renovate[bot]' ] && [ "$PLATFORM" = true ]; then tier=full; why="Renovate's platform-sensitive update"
+          elif [ "$READY" = true ] && [ "$DRAFT" != true ]; then tier=full; why="labeled ready"
+          elif [ "$READY" = true ]; then tier=fast; why="labeled ready, but still a draft"
+          else tier=fast; why="not labeled ready"
+          fi
+          echo "Tier: $tier ($why)."
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "why=$why" >> "$GITHUB_OUTPUT"
+      # Whether the password detector's corpus jobs (`forms`, `forms-ttw`) run: on a pull request, only when it
+      # touches the detector, its corpora or what they're built from. Always on the full tier and every other run.
+      - name: Password detector?
+        id: forms
+        env:
+          EVENT: ${{ github.event_name }}
+          TIER: ${{ steps.tier.outputs.tier }}
+        run: |
+          if [ "$EVENT" != pull_request ] || [ "$TIER" = full ]; then
+            echo "The full tier: the password detector's corpora run."
+            echo "forms=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          forms=false
+          while IFS= read -r file; do
+            case "$file" in
+              # The detector (the agent and core's classifier, recipes and vocabulary), its suites, and what
+              # builds and runs them: Playwright, rolldown and the rest come in through the lockfile.
+              apps/desktop/src/passwords/* | apps/desktop/test/forms/* | apps/desktop/playwright.forms.config.ts |               packages/core/src/password-* | packages/core/src/passwords.ts | packages/core/src/assistant-forms.ts |               packages/core/src/model.ts | apps/desktop/package.json | pnpm-lock.yaml | .github/workflows/ci.yml)
+                forms=true; echo "The password detector's: $file"; break ;;
+            esac
+          done < "$RUNNER_TEMP/changed"
+          echo "Password detector's corpora: $forms"
+          echo "forms=$forms" >> "$GITHUB_OUTPUT"
       - name: Summary
         env:
           EVENT: ${{ github.event_name }}
@@ -198,15 +225,17 @@ jobs:
           WHY: ${{ steps.tier.outputs.why }}
           CODE: ${{ steps.diff.outputs.code }}
           PLATFORM: ${{ steps.platform.outputs.platform }}
+          FORMS: ${{ steps.forms.outputs.forms }}
         run: |
           {
             echo "## CI's $TIER tier"
             echo
             echo "Why: $WHY."
             echo
-            echo "- **Fast tier:** typecheck, lint, unit tests, the password detector, E2E on Linux x64 X11."
-            echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, and Chord Player."
+            echo "- **Fast tier:** typecheck, lint, unit tests, E2E on Linux x64 X11 (every spec but perf.spec.ts, in balanced shards), and the password detector's corpora when the detector changed."
+            echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, perf.spec.ts on each platform, the password detector's corpora, and Chord Player."
             echo
+            if [ "$CODE" = true ]; then echo "Password detector's corpora: $([ "$FORMS" = true ] && echo run || echo "skipped (nothing they test changed)")."; echo; fi
             if [ "$EVENT" != pull_request ]; then
               echo "A $EVENT run: every platform runs. If it fails on main, the \`main-failed\` job opens an issue (or comments on the open one)."
             elif [ "$CODE" != true ]; then
@@ -270,7 +299,7 @@ jobs:
   forms:
     name: Password detector · corpus
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.forms == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -315,7 +344,7 @@ jobs:
   forms-ttw:
     name: Password detector · test-the-web
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.forms == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -358,12 +387,15 @@ jobs:
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
     uses: ./.github/workflows/player.yml
 
-  # E2E on every OS, each split into shards (Playwright's --shard, which splits by file, keeping each file's tests
-  # together and in order) that run side by side on their own runners. Each shard sets its runner up in full.
-  # macOS has 2 shards, the rest 3: GitHub's free plan runs 5 macOS jobs at a time (and 20 jobs in all), and Chord
-  # Player takes 2 of those 5, so a third macOS shard would wait for a whole shard to finish.
-  # Two jobs with the same steps (the YAML anchors below): the fast tier's Linux x64 X11 shards, which always run,
-  # and every other platform's, the full tier's. The `e2e` job below says whether they all passed.
+  # E2E on every OS, each split into shards that run side by side on their own runners. A shard is a set of spec
+  # files balanced by how long each takes (CHORD_E2E_SHARD; scripts/ci/e2e-shards.mjs and its map,
+  # e2e-shards.json), each file's tests together and in order. Each shard sets its runner up in full.
+  # Linux x64 X11 has 6 shards, so the fast tier takes minutes; macOS has 2, the rest 3: GitHub's free plan runs
+  # 5 macOS jobs at a time (and 20 jobs in all), and Chord Player takes 2 of those 5.
+  # perf.spec.ts runs in a job of its own on each platform, on the full tier (`e2e-perf`): about 9 minutes, and
+  # its timings are only reported on CI's shared machines.
+  # Three jobs with the same steps (the YAML anchors below): the fast tier's Linux x64 X11 shards, which always
+  # run, every other platform's, and perf.spec.ts's, the full tier's. The `e2e` job below says whether they passed.
   e2e-fast:
     name: E2E · fast tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
     needs: changes
@@ -375,12 +407,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 1, shards: 3 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 2, shards: 3 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 3, shards: 3 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 1, shards: 6 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 2, shards: 6 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 3, shards: 6 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 4, shards: 6 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 5, shards: 6 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 6, shards: 6 }
     env: &e2e-env
       # Names this shard's artifacts: captures-, perf- and e2e-failures-<runner>[-display]-<shard>of<shards>.
       ARTIFACT_SUFFIX: ${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}-${{ matrix.shard }}of${{ matrix.shards }}
+      # The spec files this job runs (playwright.config.ts): <shard>/<shards>, or `perf` for perf.spec.ts alone.
+      CHORD_E2E_SHARD: ${{ matrix.shard == 'perf' && 'perf' || format('{0}/{1}', matrix.shard, matrix.shards) }}
     steps: &e2e-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -434,13 +471,20 @@ jobs:
           path: ~/.cache/chord-ecs
           key: ecs-${{ runner.os }}-x64-${{ hashFiles('apps/player/ecs.json') }}
 
-      # The packages below, kept between runs: the mirror has been slow enough to time the step out.
+      # The packages below, kept between runs: the mirror has been slow enough to time the step out (10 minutes
+      # once on main), and `apt-get update` alone took over a minute. Kept per runner image (GitHub's
+      # ImageVersion, a new one about weekly), so the cached packages are the ones that image was missing.
+      - name: Runner image
+        id: image
+        if: runner.os == 'Linux'
+        run: echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
       - name: Cache display-server packages
+        id: apt-cache
         if: runner.os == 'Linux'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/apt-archives
-          key: apt-${{ matrix.os }}-${{ matrix.display }}-v2
+          key: apt-${{ matrix.os }}-${{ matrix.display }}-${{ steps.image.outputs.version }}-v3
 
       - name: Linux display servers
         if: runner.os == 'Linux'
@@ -449,6 +493,7 @@ jobs:
         timeout-minutes: 10
         env:
           DEBIAN_FRONTEND: noninteractive
+          CACHE_HIT: ${{ steps.apt-cache.outputs.cache-hit }}
         run: |
           # Runner images ship Xvfb. X11 jobs add a window manager: a desktop always has one, and
           # without it no window is ever granted fullscreen (or activated the way a real one is).
@@ -461,9 +506,38 @@ jobs:
           if [ -n "$NEED" ]; then
             ARCHIVES="$HOME/apt-archives"
             mkdir -p "$ARCHIVES/partial"
-            sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
-            # Packages already in the cache aren't downloaded again.
-            sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -o Dir::Cache::Archives="$ARCHIVES" install -y --no-install-recommends $NEED
+            installed=false
+            # On a cache hit, install the cached packages offline: no `apt-get update`, no mirror. The cache holds
+            # what apt fetched on this image: packages it was missing, and some it upgraded (newer libraries the
+            # new ones need), so a cached package goes in unless the same or a newer version is installed. If dpkg
+            # can't, what it left half done is removed and apt fetches everything from the mirror.
+            if [ "$CACHE_HIT" = true ] && ls "$ARCHIVES"/*.deb >/dev/null 2>&1; then
+              debs=()
+              for deb in "$ARCHIVES"/*.deb; do
+                pkg="$(dpkg-deb -f "$deb" Package)"
+                arch="$(dpkg-deb -f "$deb" Architecture)"
+                version="$(dpkg-deb -f "$deb" Version)"
+                [ "$arch" = all ] && name="$pkg" || name="$pkg:$arch"
+                have="$(dpkg-query -W -f='${Status}|${Version}' "$name" 2>/dev/null || true)"
+                if [ "${have%%|*}" != 'install ok installed' ] || dpkg --compare-versions "$version" gt "${have#*|}"; then debs+=("$deb"); fi
+              done
+              echo "Installing ${#debs[@]} cached packages offline."
+              if [ "${#debs[@]}" -eq 0 ] || sudo -E dpkg -i --force-confdef --force-confold "${debs[@]}"; then
+                installed=true
+                for cmd in $NEED; do command -v "$([ "$cmd" = xvfb ] && echo Xvfb || echo "$cmd")" >/dev/null || installed=false; done
+              fi
+              if [ "$installed" != true ]; then
+                echo "::warning::The cached packages didn't install offline; fetching them instead."
+                # Packages dpkg unpacked but couldn't configure would hold apt to their versions: remove them.
+                broken="$(dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | awk '$1 != "ii" && $1 !~ /^(un|rc|pn)/ { print $2 }')"
+                if [ -n "$broken" ]; then echo "Removing what dpkg left half done: $broken"; sudo dpkg --remove --force-depends $broken; fi
+              fi
+            fi
+            if [ "$installed" != true ]; then
+              sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update
+              # Packages already in the cache aren't downloaded again.
+              sudo -E apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -o Dir::Cache::Archives="$ARCHIVES" install -y --no-install-recommends $NEED
+            fi
             sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
           fi
           # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's
@@ -486,7 +560,7 @@ jobs:
             openbox --startup "touch $ready" &
             for i in $(seq 1 100); do [ -e "$ready" ] && break; sleep 0.1; done
             [ -e "$ready" ] || { echo "openbox did not start"; exit 1; }
-            pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
+            pnpm --filter @chord/desktop test:e2e
           '
 
       - name: E2E (Wayland, headless Weston)
@@ -500,11 +574,11 @@ jobs:
           export WAYLAND_DISPLAY=wayland-chord XDG_SESSION_TYPE=wayland
           # No core dumps (see the display servers step).
           ulimit -c 0
-          pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
+          pnpm --filter @chord/desktop test:e2e
 
       - name: E2E
         if: runner.os != 'Linux'
-        run: pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
+        run: pnpm --filter @chord/desktop test:e2e
 
       # A test that passed only on its retry (Playwright's "flaky": the job stays green) goes in the job's summary,
       # with a warning on the run, so a repeat flake shows before it fails twice in one run and blocks a merge.
@@ -543,9 +617,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
     runs-on: ${{ matrix.os }}
-    # A whole suite took 30 to 46 minutes. --shard splits by test count, not time, so a macOS shard can hold
-    # well over half of it (28 minutes on Intel, 2026-11-22), and Intel varies most. Elsewhere a shard took up to
-    # 21 minutes. These limits only have to catch a hung job.
+    # A whole suite took 30 to 46 minutes with perf.spec.ts, and Playwright's --shard (by test count, not time)
+    # once gave a macOS Intel shard 28 minutes (2026-11-22). Shards are balanced by time now, and the weights are
+    # Linux's, so other platforms are only roughly even. These limits only have to catch a hung job.
     timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
     strategy:
       fail-fast: false
@@ -570,6 +644,29 @@ jobs:
     env: *e2e-env
     steps: *e2e-steps
 
+  # perf.spec.ts (docs/testing/performance.md) alone on each platform, full tier only: launch times, memory and warm
+  # launches, held to each runner's baseline (perf-baseline.json) where it has one. Its own job, so it doesn't
+  # weigh down a shard; its perf-* artifacts are what `perf:baseline --run <id>` reads.
+  e2e-perf:
+    name: E2E · perf · ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
+    runs-on: ${{ matrix.os }}
+    # About 9 minutes on Linux x64 (2026-11-24). The limit only has to catch a hung job.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: perf, shards: 1 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: perf, shards: 1 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: perf, shards: 1 }
+          - { name: Windows x64, os: windows-latest, shard: perf, shards: 1 }
+          - { name: Windows arm64, os: windows-11-arm, shard: perf, shards: 1 }
+          - { name: macOS arm64, os: macos-26, shard: perf, shards: 1 }
+          - { name: macOS x64, os: macos-15-intel, shard: perf, shards: 1 }
+    env: *e2e-env
+    steps: *e2e-steps
 
   # The tier's E2E verdict, and the `E2E` commit status: the one status that says a pull request can merge.
   # This job passes when every shard of its tier passed, or none had to run (a pull request of docs alone), and
@@ -586,12 +683,14 @@ jobs:
   # token, so it can't post one: the maintainer runs the full tier from a branch of this repository instead.
   e2e:
     name: E2E · ${{ needs.changes.outputs.tier || 'unknown' }} tier
-    needs: [changes, e2e-fast, e2e-full]
+    needs: [changes, e2e-fast, e2e-full, e2e-perf]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       statuses: write
+      # The shards' timings, for the summary.
+      actions: read
     steps:
       - name: Every shard of the tier passed, or none had to run
         id: verdict
@@ -601,8 +700,15 @@ jobs:
           TIER: ${{ needs.changes.outputs.tier }}
           PLATFORM: ${{ needs.changes.outputs.platform }}
           FAST: ${{ needs.e2e-fast.result }}
-          FULL: ${{ needs.e2e-full.result }}
+          FULL_SHARDS: ${{ needs.e2e-full.result }}
+          PERF: ${{ needs.e2e-perf.result }}
         run: |
+          # The full tier is its shards and perf.spec.ts's jobs: failed or cancelled if either was, else their result.
+          if [ "$FULL_SHARDS" = failure ] || [ "$PERF" = failure ]; then FULL=failure
+          elif [ "$FULL_SHARDS" = cancelled ] || [ "$PERF" = cancelled ]; then FULL=cancelled
+          elif [ "$FULL_SHARDS" = "$PERF" ]; then FULL="$PERF"
+          else FULL="$FULL_SHARDS, perf $PERF"
+          fi
           echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}; platform-sensitive: ${PLATFORM:-n/a}). Tier: ${TIER:-unknown}. Fast tier's shards: $FAST. Full tier's: $FULL."
           path=''
           pass=false state=failure
@@ -642,13 +748,54 @@ jobs:
             echo "| Shards | Result |"
             echo "| --- | --- |"
             echo "| Fast tier: Linux x64 X11 | $FAST |"
-            echo "| Full tier: every other platform | $FULL |"
+            echo "| Full tier: every other platform | $FULL_SHARDS |"
+            echo "| Full tier: perf.spec.ts, each platform | $PERF |"
             echo
             echo "**$desc.** The \`E2E\` status: ${state:-unchanged (cancelled)}."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "pass=$pass" >> "$GITHUB_OUTPUT"
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "description=$desc" >> "$GITHUB_OUTPUT"
+
+      # How even the shards were: each platform's longest and shortest E2E step, and a warning past 1.5× (refresh
+      # the weights: node scripts/ci/e2e-shard-weights.mjs <run-id>). Never fails the job.
+      - name: Shard balance
+        if: needs.changes.outputs.code == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --jq '.jobs[]
+            | select(.name | test("^E2E · (fast|full) tier · .+ · [0-9]+/[0-9]+$"))
+            | select(.conclusion == "success" or .conclusion == "failure")
+            | {platform: (.name | sub("^E2E · (fast|full) tier · "; "") | sub(" · [0-9]+/[0-9]+$"; "")),
+               shard: (.name | capture("(?<s>[0-9]+/[0-9]+)$").s),
+               seconds: ([.steps[] | select(.name | startswith("E2E")) | select(.conclusion == "success" or .conclusion == "failure")
+                          | ((.completed_at | fromdate) - (.started_at | fromdate))] | add // 0)}
+            | [.platform, .shard, .seconds] | @tsv' > "$RUNNER_TEMP/shards.tsv"
+          if [ ! -s "$RUNNER_TEMP/shards.tsv" ]; then echo "No shard timings."; exit 0; fi
+          {
+            echo "### Shard balance (the E2E step, minutes)"
+            echo
+            echo "| Platform | Shards | Longest | Shortest | Ratio |"
+            echo "| --- | --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Per platform: shards, longest, shortest, ratio. Tab-separated in, one table row (and maybe a warning) out.
+          awk -F '\t' -v warnings="$RUNNER_TEMP/warnings" '
+            { n[$1]++
+              if (!($1 in max) || $3 > max[$1]) { max[$1] = $3; maxs[$1] = $2 }
+              if (!($1 in min) || $3 < min[$1]) { min[$1] = $3; mins[$1] = $2 } }
+            END {
+              for (p in n) {
+                ratio = min[p] > 0 ? max[p] / min[p] : 0
+                flag = ratio > 1.5 ? " ⚠" : ""
+                printf "| %s | %d | %.1f (%s) | %.1f (%s) | %.2f×%s |\n", p, n[p], max[p] / 60, maxs[p], min[p] / 60, mins[p], ratio, flag
+                if (ratio > 1.5) printf "::warning::E2E shards on %s are uneven: %.1f min against %.1f (%.2f×). Refresh the weights: node scripts/ci/e2e-shard-weights.mjs <run-id>\n", p, max[p] / 60, min[p] / 60, ratio > warnings
+              }
+            }' "$RUNNER_TEMP/shards.tsv" | sort >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/warnings" 2>/dev/null || true
 
       - name: Post the E2E status
         if: steps.verdict.outputs.state != ''
@@ -689,7 +836,7 @@ jobs:
   # missed shows up. One open issue at a time, by its exact title; close it once main is green again.
   main-failed:
     name: Report a failure on main
-    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e]
+    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e-perf, e2e]
     if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
