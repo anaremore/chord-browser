@@ -112,6 +112,9 @@ Find the heading with `grep -n "^## " <file>` and read that section.
 
 New decision records (S20 and on) are a small folder each, not one growing file: `docs/decisions/README.md`.
 
+**Procedures** are the repo's skills, in `.claude/skills/`: `chord-preview` (a Windows test installer from any ref),
+`chord-e2e-linux` (E2E in the container) and `chord-release` (a patch or minor, tag to site links).
+
 ## The review contract
 
 - **Reviews start when a push lands,** not when CI is green. Every PR with product code gets two independent
