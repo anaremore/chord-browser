@@ -10,7 +10,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  agentChords,
   children,
+  nodesOfChord,
   ASSISTANT_MAX_IMAGES,
   ASSISTANT_MAX_PROCESSES,
   ASSISTANT_PROCESS_IDLE_MS,
@@ -105,6 +107,8 @@ interface PendingImage {
 interface ThreadState extends DuetChat {
   messages: AssistantMessage[];
   queue: string[];
+  /** Each queued message's attachments, taken when it was sent (S18 M2e-1: never what's on screen when it goes). */
+  queuedWith: AssistantAttachment[][];
   streaming: AssistantMessage | null;
   startedAt: number | null;
   /** Approval cards in the chat, by message id: the gate's card, answered from the panel. */
@@ -337,10 +341,12 @@ export class AssistantService {
       messages: [],
       refs: new TabRefs<NodeId>('t'),
       attached: new Set(),
+      pointed: new Set(),
       // The chat is the agent; its cards are approval messages in the chat.
       control: new ControlAgent(`duet:${randomUUID()}`, (card, signal) => this.showCard(state, card, signal)),
       read: new Set(),
       queue: [],
+      queuedWith: [],
       streaming: null,
       startedAt: null,
       windowId: null,
@@ -391,11 +397,17 @@ export class AssistantService {
     return null;
   }
 
+  /** The tab on screen: an agent's tab the window shows over its chord's (S18), else the chord's own. */
   private activeTab(windowId: WindowId): TabNode | null {
     const model = this.browser.store.state.windows[windowId];
-    const id = model ? model.activeTab[model.activeChordId] : null;
+    const id = model ? (model.agentTab ?? model.activeTab[model.activeChordId]) : null;
     const node = id ? nodeOf(this.browser.store.state, id) : undefined;
     return node?.kind === 'tab' ? node : null;
+  }
+
+  /** The outside agent whose tab this is, by name (an Agent chord's), or null for a tab of yours. */
+  private agentOf(node: TabNode): string | null {
+    return this.browser.store.state.chords[node.chordId]?.agent?.name ?? null;
   }
 
   private readable(node: TabNode): boolean {
@@ -451,7 +463,15 @@ export class AssistantService {
       : children(this.browser.store.state, chordId, 'pinned', null)
       .concat(children(this.browser.store.state, chordId, 'today', null))
       .filter((n): n is TabNode => n.kind === 'tab' && this.readable(n))
-      .map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url }));
+      .map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url }))
+      // Agents' tabs (S18 M2e-1): attaching one is how you point the assistant at it, named with its agent.
+      .concat(
+        agentChords(store).flatMap((c) =>
+          nodesOfChord(store, c.id)
+            .filter((n): n is TabNode => n.kind === 'tab' && this.readable(n))
+            .map((n) => ({ nodeId: n.id, title: `${c.agent?.name ?? 'Agent'} · ${n.title || n.url}`, url: n.url })),
+        ),
+      );
     const current = this.activeTab(windowId);
     return {
       ...base,
@@ -775,6 +795,7 @@ export class AssistantService {
         return this.send(windowId, state, action.text);
       case 'stop':
         state.queue = [];
+        state.queuedWith = [];
         // Through the gate: a tool call in flight answers at once, and its card goes. The next message lets it go on.
         state.control.stop();
         if (state.thread) this.live.get(state.thread.id)?.session.stop();
@@ -798,6 +819,7 @@ export class AssistantService {
       }
       case 'unqueue':
         state.queue.splice(action.index, 1);
+        state.queuedWith.splice(action.index, 1);
         return;
       case 'approve': {
         const resolve = state.pending.get(action.messageId);
@@ -912,8 +934,10 @@ export class AssistantService {
     const trimmed = text.trim();
     if (!trimmed || this.settings.offChords.includes(state.chordId)) return;
     if (state.streaming) {
-      // Follow-ups wait their turn instead of being refused (they show as queued).
+      // Follow-ups wait their turn instead of being refused (they show as queued), with what was attached as they were
+      // sent: a tab you look at while they wait (an agent's) is never theirs (S18 M2e-1).
       state.queue.push(trimmed);
+      state.queuedWith.push(reuse ?? (this.settings.readsNothing ? [] : this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url }))));
       return;
     }
     // A new message lets the chat go on after Stop (the gate refused its tools until now).
@@ -949,9 +973,14 @@ export class AssistantService {
 
     const nothing = this.settings.readsNothing;
     const attachments: AssistantAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url })));
+    // What this message points at: an agent's tab is read only while a message of yours points at it (S18 M2e-1).
+    state.pointed = new Set();
     for (const a of attachments) {
       const node = state.refs.get(a.ref);
-      if (node) state.attached.add(node);
+      if (node) {
+        state.attached.add(node);
+        state.pointed.add(node);
+      }
     }
 
     if (state.pendingDivider) {
@@ -1166,7 +1195,8 @@ export class AssistantService {
     }
     this.schedulePush();
     const next = state.queue.shift();
-    if (next && state.windowId && outcome.status !== 'error') void this.send(state.windowId, state, next);
+    const with_ = state.queuedWith.shift();
+    if (next && state.windowId && outcome.status !== 'error') void this.send(state.windowId, state, next, with_);
   }
 
   private async addMessage(state: ThreadState, body: AssistantMessageBody): Promise<AssistantMessage> {
@@ -1207,6 +1237,7 @@ export class AssistantService {
       browser: this.browser,
       settings: () => this.settings,
       readable: (node) => this.readable(node),
+      agentOf: (node) => this.agentOf(node),
       activeTab: (windowId) => this.activeTab(windowId),
       activity: (chat, tool, summary, detail, ok) => this.activity(chat as ThreadState, tool, summary, detail, ok),
       search: (chat, tool, query) => this.searchFor(chat as ThreadState, tool, query),
@@ -1386,7 +1417,8 @@ export class AssistantService {
       const matches = await findMatches(pageOf(this.browser.readers.viewFor(node.id)) ?? contents, citation.quote);
       // A PDF quote the viewer can't find as written (a word split across lines): open its page instead.
       // The viewer reads #page= only when it loads, so it reloads there.
-      if (!matches && citation.page && !contents.isDestroyed()) {
+      // Never in an agent's tab (S18 M2e-1): the assistant doesn't move an agent's page.
+      if (!matches && citation.page && !contents.isDestroyed() && this.agentOf(node) === null) {
         await contents.loadURL(pdfPageUrl(contents.getURL(), citation.page)).catch(() => undefined);
         if (!contents.isDestroyed()) contents.reload();
       }
@@ -1595,6 +1627,7 @@ export class AssistantService {
     for (const state of this.threads.values()) {
       if (!state.streaming) continue;
       state.queue = [];
+      state.queuedWith = [];
       state.control.stop();
       if (state.thread) this.live.get(state.thread.id)?.session.stop();
     }

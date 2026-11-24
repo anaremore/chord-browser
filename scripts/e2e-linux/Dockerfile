@@ -10,7 +10,7 @@
 # The runners' Ubuntu, so Xvfb, openbox, Weston and the libraries are the same
 # versions as CI's. Pinned by digest; packages come from the archive as they do
 # on CI, which doesn't pin them either.
-FROM ubuntu:noble-20260930.1@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+FROM ubuntu:noble-20261110@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9413c4d6a8
 
 # CI's actions/setup-node with node-version 24 resolves to the newest 24.x.
 ARG NODE_VERSION=24.22.1
