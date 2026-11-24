@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ELECTRON_VOLUME, STALE_MS, STORE_VOLUME, containerName, dockerRunArgs, imageTag, parseArgs, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
+import { ELECTRON_VOLUME, STALE_MS, STORE_VOLUME, buildKey, containerName, dockerRunArgs, imageTag, parseArgs, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
@@ -108,6 +108,12 @@ describe('dockerRunArgs', () => {
     expect(after('--env')).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000']);
   });
 
+  it('hands the build’s cache key in only when there is one', () => {
+    const withKey = dockerRunArgs({ ...base, build: '0123456789abcdef' });
+    expect(withKey.flatMap((a, i) => (withKey[i - 1] === '--env' ? [a] : []))).toContain('CHORD_E2E_BUILD_KEY=0123456789abcdef');
+    expect(args.join(' ')).not.toContain('CHORD_E2E_BUILD_KEY');
+  });
+
   it('mounts a shared folder at /share only when one is given', () => {
     const shared = dockerRunArgs({ ...base, share: '/mnt/z/Temp/sweep' });
     const of = (flag: string) => shared.flatMap((a, i) => (a === flag ? [shared[i + 1]] : []));
@@ -199,5 +205,33 @@ describe('tarArchive', () => {
     expect(result.status).toBe(0);
     for (const file of files) expect(readFileSync(join(out, file.path)).equals(file.body)).toBe(true);
     if (process.platform !== 'win32') expect(statSync(join(out, 'scripts/run.sh')).mode & 0o777).toBe(0o755);
+  });
+});
+
+describe('buildKey', () => {
+  const file = (path: string, text: string) => ({ path, body: Buffer.from(text) });
+  const tree = [
+    file('apps/desktop/src/main/index.ts', 'main'),
+    file('packages/core/src/model.ts', 'model'),
+    file('apps/desktop/test/e2e/web.spec.ts', 'a test'),
+    file('apps/desktop/playwright.config.ts', 'config'),
+    file('docs/testing/performance.md', 'docs'),
+    { path: 'apps/desktop/build/link', link: 'icon.png' },
+  ];
+  const key = buildKey(tree, 'chord-e2e-runner:abc');
+
+  it('stays the same when only tests, their configs, docs or CI change, so the build is reused', () => {
+    const edited = tree.map((f) => ('body' in f && !f.path.includes('/src/') ? { ...f, body: Buffer.from('changed') } : f));
+    expect(buildKey(edited, 'chord-e2e-runner:abc')).toBe(key);
+    expect(buildKey([...tree, file('apps/desktop/test/e2e/new.spec.ts', 'x'), file('.github/workflows/ci.yml', 'y'), file('scripts/ci/e2e-shards.mjs', 'z')], 'chord-e2e-runner:abc')).toBe(key);
+    expect(buildKey([...tree].reverse(), 'chord-e2e-runner:abc')).toBe(key);
+  });
+
+  it('changes with anything the build reads, the image, or an unminified build', () => {
+    expect(buildKey(tree.map((f) => (f.path.endsWith('index.ts') ? file(f.path, 'main 2') : f)), 'chord-e2e-runner:abc')).not.toBe(key);
+    expect(buildKey([...tree, file('apps/desktop/src/main/new.ts', 'x')], 'chord-e2e-runner:abc')).not.toBe(key);
+    expect(buildKey(tree.map((f) => ('link' in f ? { ...f, link: 'other.png' } : f)), 'chord-e2e-runner:abc')).not.toBe(key);
+    expect(buildKey(tree, 'chord-e2e-runner:def')).not.toBe(key);
+    expect(buildKey(tree, 'chord-e2e-runner:abc', { CHORD_NO_MINIFY: '1' })).not.toBe(key);
   });
 });
