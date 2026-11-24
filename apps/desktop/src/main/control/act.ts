@@ -436,6 +436,25 @@ export async function actOnPage(contents: WebContents, owner: string, token: str
   return answer;
 }
 
+/**
+ * A press, seen by the page (the review of #117, round 5): the press is sent as input, the step after it as a script,
+ * and the script can reach the page first (under load: `type`'s select ran before the click, the click then put the
+ * caret back, and the text went in after what was there). Watched from before the press; then waited for (its mouseup,
+ * trusted, a task after its handlers), at most `waitMs`. A page that swallows it is only waited for.
+ */
+const WATCH_PRESS = `(() => { globalThis.__chordPress = { n: 0 }; if (!globalThis.__chordPressListening) { globalThis.__chordPressListening = true; addEventListener('mouseup', (e) => { if (e.isTrusted && globalThis.__chordPress) globalThis.__chordPress.n++; }, true); } return true; })()`;
+const pressSeenScript = (waitMs: number) =>
+  `new Promise((done) => { const w = globalThis.__chordPress; if (!w) return done(false); const start = performance.now(); const tick = () => { if (w.n > 0) return setTimeout(() => done(true), 0); if (performance.now() - start > ${Number(waitMs)}) return done(false); setTimeout(tick, 4); }; tick(); })`;
+
+export async function watchPress(contents: WebContents): Promise<void> {
+  if (!contents.isDestroyed()) await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: WATCH_PRESS }]), null, ACT_PAGE_MS);
+}
+
+export async function pressSeen(contents: WebContents, waitMs: number): Promise<boolean> {
+  if (contents.isDestroyed()) return false;
+  return (await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: pressSeenScript(waitMs) }]), null, waitMs + 500)) === true;
+}
+
 /** Resolves once the page has been quiet a moment (or at once if it went). */
 export async function settle(contents: WebContents): Promise<void> {
   if (contents.isDestroyed()) return;

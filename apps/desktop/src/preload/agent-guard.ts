@@ -28,7 +28,22 @@ export const GUARDED_EVENTS = ['keydown', 'keypress', 'keyup', 'beforeinput', 'c
 export const GUARD_MARK = /^chord-guard-[0-9a-f]{32}$/;
 
 export function installAgentGuard(win: GuardWindow): void {
-  let armed: { expected: Focusable | null; mark: string; until: string; moved: boolean; done: boolean; finished: (() => void) | null; timer: number } | null = null;
+  let armed: {
+    expected: Focusable | null;
+    mark: string;
+    until: string;
+    moved: boolean;
+    done: boolean;
+    finished: (() => void) | null;
+    timer: number;
+    /** Trusted keydowns that reached this document since it went up, and whether one went through to the page. */
+    keydowns: number;
+    keydownPassed: boolean;
+    /** Events that went through to the page (keyup aside): none, and nothing of the input reached it. */
+    passed: number;
+    /** Who waits for a keydown to have been handled (seen). */
+    onKeydown: (() => void)[];
+  } | null = null;
   /** A guard was up in this document (this preload is the document's): one not up now ran out, or was dropped. */
   let everArmed = false;
   const deepFocus = (): Focusable | null => {
@@ -44,7 +59,18 @@ export function installAgentGuard(win: GuardWindow): void {
       guard.finished?.();
     }
     // Nothing marked yet (null): nothing passes, even with no focus anywhere (Neon, round 4).
-    if (event.type === 'keyup' || (guard.expected !== null && deepFocus() === guard.expected)) return;
+    const passes = event.type === 'keyup' || (guard.expected !== null && deepFocus() === guard.expected);
+    if (event.type === 'keydown') {
+      guard.keydowns++;
+      if (passes) guard.keydownPassed = true;
+      // Those waiting hear of it a task later, once the page's own keydown handlers have run.
+      const waiting = guard.onKeydown.splice(0);
+      if (waiting.length) win.setTimeout(() => waiting.forEach((w) => w()), 0);
+    }
+    if (passes) {
+      if (event.type !== 'keyup') guard.passed++;
+      return;
+    }
     guard.moved = true;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -71,7 +97,7 @@ export function installAgentGuard(win: GuardWindow): void {
       if (!GUARD_MARK.test(mark)) return false;
       if (armed) down(armed);
       // Nothing may take input until Chord's check says which element does.
-      const guard = { expected: null, mark, until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0 };
+      const guard = { expected: null, mark, until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0, keydowns: 0, keydownPassed: false, passed: 0, onKeydown: [] };
       win.addEventListener(mark, marked, true);
       // Never left up for good: main takes it down when the input's in (or the action ends), at the latest after
       // 30 s, longer than an action's worst path between arming and the input (its checks' limits).
@@ -80,11 +106,31 @@ export function installAgentGuard(win: GuardWindow): void {
       everArmed = true;
       return true;
     },
+    /**
+     * Whether `count` trusted keydowns have reached this document, and the page's handlers for them have run (the
+     * review of #117, round 5: a key's keydown is sent as input, its check after as a script, and the script can reach
+     * the page first). False after `waitMs` (at most 1 s), or with no guard up.
+     */
+    seen(count: number, waitMs: number): Promise<boolean> {
+      const guard = armed;
+      if (!guard) return Promise.resolve(false);
+      if (guard.keydowns >= count) return new Promise((resolve) => win.setTimeout(() => resolve(true), 0));
+      return new Promise((resolve) => {
+        const timer = win.setTimeout(() => resolve(false), Math.max(0, Math.min(waitMs, 1000)));
+        const check = () => {
+          if (guard.keydowns >= count) {
+            win.clearTimeout(timer);
+            resolve(true);
+          } else guard.onKeydown.push(check);
+        };
+        guard.onKeydown.push(check);
+      });
+    },
     /** Down at once: the user took the tab (their key or click), and their keys are never stopped. */
     drop(): void {
       if (armed) down(armed);
     },
-    disarm(waitMs: number): Promise<{ moved: boolean; lost: boolean } | { expired: true } | null> {
+    disarm(waitMs: number): Promise<{ moved: boolean; lost: boolean; keydownPassed: boolean; passed: number } | { expired: true } | null> {
       const guard = armed;
       // None up: in this document, it ran out (or was dropped); null only in another document (the page went).
       if (!guard) return Promise.resolve(everArmed ? { expired: true } : null);
@@ -93,7 +139,7 @@ export function installAgentGuard(win: GuardWindow): void {
           // A task later: the last event's own dispatch is over.
           win.setTimeout(() => {
             down(guard);
-            resolve({ moved: guard.moved, lost: !guard.done });
+            resolve({ moved: guard.moved, lost: !guard.done, keydownPassed: guard.keydownPassed, passed: guard.passed });
           }, 0);
         };
         if (guard.done) return finish();

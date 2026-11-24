@@ -1170,6 +1170,8 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
     const STALE = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    // The page's own log of what its buttons did (never their words).
+    const tableLog = async () => String(await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/table`));
     const outline = await snap();
     // The table redraws (every 300 ms): the snapshot's nodes are gone before the click.
     await new Promise((r) => setTimeout(r, 700));
@@ -1182,10 +1184,11 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
     expect(folded.data.done).toBe('Clicked “Fold”');
     expect(folded.data.refound).toBe('The page had redrawn that element; Chord found it again by its role, name, place and target.');
     await expect.poll(read).toContain('Fold');
-    // A key on a redrawn button, from the same (older) snapshot.
+    // A key on a redrawn button, from the same (older) snapshot. A redraw between its check and its keydown on a slow
+    // machine (the full tier's Windows arm64) is tried again by Chord itself: nothing reached the page (round 6).
     await new Promise((r) => setTimeout(r, 700));
     expect(JSON.parse((await mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'button "Call"'), key: 'Enter' })).text)).toMatchObject({ data: { done: 'Pressed Enter in “Call”' } });
-    await expect.poll(read).toContain('Call');
+    await expect.poll(tableLog).toBe(' Fold Call');
     // A risky step on a redrawn button: its card names the element found, the page redraws it while the card is up,
     // and the step's checked again before the click (stepShape): it goes, once.
     const deleting = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Delete row"') });
@@ -1227,7 +1230,6 @@ test('a game whose action controls are pointer divs, re-rendered every 100 ms an
     expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
     const popover = await pageWhere(app, isPopover);
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
-    const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
     // The page's own log (what its controls and its Enter did), never the controls' words.
     const logText = async () => String(await app.evaluate(({ webContents }, prefix) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(prefix))!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/game`));
     let outline = await snap();
@@ -1247,19 +1249,22 @@ test('a game whose action controls are pointer divs, re-rendered every 100 ms an
         expect(JSON.parse(clicked.text)).toMatchObject({ data: { done: `Clicked “${name}”` } });
       }
     }
-    await expect.poll(read).toContain('Fold Call Raise Fold Call Raise Fold Call Raise');
+    await expect.poll(async () => (await logText()).match(/\b(Fold|Call|Raise)\b/g)?.join(' ')).toBe('Fold Call Raise Fold Call Raise Fold Call Raise');
     // Enter in the bet field, which the page's tick takes the focus from, three times.
     for (let round = 0; round < 3; round++) {
       outline = await snap();
       const typed = await mcp.call('type', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), text: `${round + 1}0` });
       expect(typed.text, `the bet, round ${round}`).toMatch(/^\{/);
       // Enter in it, as the owner's agent pressed it (a field in no form: it asks as a submit; allowed, it goes).
-      const entering = mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), key: 'Enter' });
-      const card = popover.getByRole('alertdialog');
-      await expect(card).toBeVisible({ timeout: 15_000 });
-      await popover.waitForTimeout(600);
-      await card.getByRole('button', { name: 'Allow', exact: true }).click();
-      const entered = await entering;
+      const enter = async () => {
+        const entering = mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), key: 'Enter' });
+        const card = popover.getByRole('alertdialog');
+        await expect(card).toBeVisible({ timeout: 15_000 });
+        await popover.waitForTimeout(600);
+        await card.getByRole('button', { name: 'Allow', exact: true }).click();
+        return entering;
+      };
+      const entered = await enter();
       expect(entered.text, `Enter in the bet, round ${round}`).toMatch(/^\{/);
       // Done, once, and said so: the page took the focus on Enter's keydown (refused, the agent pressed again: two bets).
       expect(JSON.parse(entered.text)).toMatchObject({ data: { done: 'Pressed Enter in “Bet”', focus: 'The page moved the focus away from that field after Enter. Enter was pressed once; don’t press it again.' } });
