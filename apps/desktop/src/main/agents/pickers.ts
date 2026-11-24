@@ -107,7 +107,12 @@ export async function bypassServiceWorkers(contents: WebContents): Promise<boole
 export function holdFailed(contents: object): void {
   lost.add(contents);
   unsecured.add(contents);
+  // An arming in flight counts for nothing: it can't put the hold back on (Claude's final pass).
+  failers.get(contents)?.();
 }
+
+/** Per tab, its hold's way to make an arming in flight count for nothing (holdFailed). */
+const failers = new WeakMap<object, () => void>();
 
 /** An action found the hold lost: one try now (never more than one per action), and whether it's on. */
 export async function retryPickers(contents: object): Promise<boolean> {
@@ -296,8 +301,11 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     tries = 0;
     void arm();
   });
-  // The page loads once its frames are held from their start (or the first arming ended without that): the rest of the
-  // arming (the page's own interception) goes on beside the load.
+  failers.set(contents, () => {
+    generation++;
+  });
+  // The page loads once its hold is on (framesReady: its frames' auto-attach and its sends); the rest of the arming
+  // (the page's own interception) goes on beside that load.
   void arm();
   return framesReady;
 }

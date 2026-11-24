@@ -7,8 +7,9 @@
 export function holdForAgent(held: (kind: 'dialog' | 'file', detail: string) => void): void {
   const page = globalThis as unknown as Record<string, unknown> & { HTMLInputElement?: { prototype: object }; DOMException: new (m: string, n: string) => unknown };
   // No shared workers, deferred sends or service workers (#112 reviews 3 and 4: what they send goes out of the hold's
-  // sight). The hold's new-document script removes them in every frame (agents/agent-scripts.ts' PAGE_LACKS, which
-  // also reaches the frames this preload never runs in); this is the same, where it runs first.
+  // sight). The hold's new-document script removes them in every frame it reaches (agents/agent-scripts.ts'
+  // PAGE_LACKS), and each document's policy leaves deferred sends no quota anywhere (control/sends.ts' AGENT_POLICY);
+  // this is the same, where this preload runs first.
   for (const name of ['SharedWorker', 'fetchLater']) {
     try {
       delete page[name];
@@ -68,5 +69,26 @@ export function holdForAgent(held: (kind: 'dialog' | 'file', detail: string) => 
       configurable: true,
     });
   }
+  // Passkeys, sign-in and payment dialogs: refused in an agent's tab by its policy (control/sends.ts' AGENT_POLICY:
+  // Chord doesn't sign agents in), and said in the agent's next result, as a held dialog is (the final pass of #112).
+  const report = (owner: object | undefined, name: string, what: string) => {
+    const original = (owner as Record<string, unknown> | undefined)?.[name];
+    if (!owner || typeof original !== 'function') return;
+    Object.defineProperty(owner, name, {
+      value: new Proxy(original as (...args: unknown[]) => unknown, {
+        apply: (target, self, args) => {
+          held('dialog', what);
+          return Reflect.apply(target, self, args);
+        },
+      }),
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  };
+  const credentials = (page['CredentialsContainer'] as { prototype?: object } | undefined)?.prototype;
+  report(credentials, 'get', 'a passkey or sign-in dialog (refused: Chord doesn’t sign agents in)');
+  report(credentials, 'create', 'a passkey dialog (refused: Chord doesn’t sign agents in)');
+  report((page['PaymentRequest'] as { prototype?: object } | undefined)?.prototype, 'show', 'a payment dialog (refused)');
 }
 

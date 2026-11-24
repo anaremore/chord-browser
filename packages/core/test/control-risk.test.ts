@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addressWhy, classifyStep, riskWordsWhy, stepDanger, stepFields, stepTitle, type RiskAction, type RiskElement, type RiskForm } from '../src/control-risk';
+import { addressWhy, classifyStep, pageAddressWhy, riskWordsWhy, stepDanger, stepFields, stepTitle, type RiskAction, type RiskElement, type RiskForm } from '../src/control-risk';
 
 const form = (f: Partial<RiskForm> = {}): RiskForm => ({ method: 'post', search: false, searchFields: 0, hidden: 0, overflow: false, textFields: 2, otherFields: 1, payment: false, password: false, labels: [], action: '', ...f });
 const el = (e: Partial<RiskElement> = {}): RiskElement => ({ tag: 'button', role: 'button', type: 'button', name: '', href: '', editable: false, multiline: false, submits: false, form: null, ...e });
@@ -130,4 +130,27 @@ describe('addressWhy: an address an agent goes to (navigate, back)', () => {
     [`https://shop.test/${'x'.repeat(2100)}`, 'confirm'],
     ['https://shop.test/%E0%A4%A', 'confirm'],
   ] as const)('%s', (url, why) => expect(addressWhy(url)).toBe(why));
+});
+
+describe('pageAddressWhy: an address a page sends to or goes to itself (the final pass of #112)', () => {
+  it.each([
+    ['https://shop.test/items/7/delete', 'delete'],
+    ['https://shop.test/account/logout', 'sign-out'],
+    ['https://shop.test/checkout', null],
+    // An archive page isn't a delete; a button that says Archive still is (riskWordsWhy, below).
+    ['https://news.test/archive/2024', null],
+    // Too long: read up to its first 2,048 characters, never "unknown".
+    [`https://ads.test/${'x'.repeat(3000)}`, null],
+    [`https://shop.test/items/delete/${'x'.repeat(3000)}`, 'delete'],
+    // Can't be decoded: read as written.
+    ['https://shop.test/%E0%A4%A/delete', 'delete'],
+    ['https://ads.test/%E0%A4%A', null],
+    ['not an address', null],
+  ] as const)('%s', (url, why) => expect(pageAddressWhy(url)).toBe(why));
+
+  it('archive still counts as a button’s word', () => expect(riskWordsWhy('Archive')).toBe('delete'));
+  it('full-width letters read as plain ones (NFKC)', () => {
+    expect(riskWordsWhy('ｄｅｌｅｔｅ')).toBe('delete');
+    expect(riskWordsWhy('Ｐａｙ now')).toBe('pay');
+  });
 });

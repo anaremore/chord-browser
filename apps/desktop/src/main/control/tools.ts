@@ -66,7 +66,7 @@ import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import type { ActAnswer } from './act';
 import type { DeepAnswer, DeepSession } from './deep';
-import { CARD_ORIGINS, shownOrigin, type Allowed, type SendWatch } from './sends';
+import { CARD_ORIGINS, normalUrl, shownOrigin, type Allowed, type SendWatch } from './sends';
 import type { PageRead } from './extract';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
@@ -503,6 +503,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     }
     // The list may have gained its site while a card was up (Neon's review 2 of #112).
     if (isNeverReadable(goingTo, scope.neverSites())) return refuse(NEVER);
+    // Its hold on (Neon's final pass): a tab whose hold is lost, or never finished, loads nothing for the agent.
+    if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
+    if (page.lost() && !(await page.retryHold())) return refuse(ACT_REFUSALS.noCheck);
     const before = page.id;
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
@@ -511,7 +514,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       // What its load sends, or a redirect to an address that deletes or signs out, is held as an action's is: only what
       // the card named goes (the address itself, when it asked).
-      const w = page.watchSends(goingWhy ? { urls: new Set(), documents: new Set([goingTo]) } : null);
+      const w = page.watchSends(goingWhy ? { urls: new Set(), documents: new Set([normalUrl(goingTo)]) } : null);
       if (!w) return refuse(ACT_REFUSALS.noCheck);
       let went: { loading: boolean } | null;
       let sent: string | null;
@@ -850,7 +853,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // (beacons, pings) are dropped either way.
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      watch = page.watchSends(step.class === 'risky' ? allowedBy(element, tool === 'press_key' || args['submit'] === true || element.risk?.submits === true) : null);
+      watch = page.watchSends(step.class === 'risky' ? allowedBy(element, stepSubmits(tool, args, element)) : null);
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
       watchOn();
       if ((refused = halt())) return;
@@ -938,8 +941,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       const w = watch as SendWatch;
       // Allow lets go only if Stop, your taking the tab, or another document since the input (never the action's own
       // pushState, Neon's S16) haven't come between.
-      const sendHalt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : page.mark.document !== markAtStart.document ? ELEMENT_REFUSALS.stale : null);
-      const sent = await askHeld(w, acting, (held, sites, why, takeDown) => askSendCard(held, sites, why, w, takeDown), sendHalt, originOf(page.url()));
+      // Its document as it was when the card opened, not when the action began (Claude's final pass: a page the action
+      // went to that posts as it loads gets its Allow).
+      const sendHalt = (opened: unknown) =>
+        call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null;
+      const sent = await askHeld(w, acting, (held, sites, why, takeDown) => askSendCard(held, sites, why, w, takeDown), sendHalt, originOf(page.url()), () => page.mark);
       refused ??= sent;
     }
     const { navigated, loading } = await acting;
@@ -998,7 +1004,6 @@ function stepOf(tool: ActTool, args: Record<string, unknown>, element: Extract<A
   return classifyStep(action, { tag: risk.tag, role: element.role, type: risk.type, name: element.name, ...(risk.text ? { text: risk.text } : {}), href: risk.href, ...(risk.hrefUnknown ? { hrefUnknown: true } : {}), editable: element.editable === true, multiline: risk.multiline, submits: risk.submits, form });
 }
 
-/** What a step card showed of a form, to check it's still so after the answer: where it goes, how, its fields. */
 /** Send cards in one action at most (each for sites the ones before didn't name): a page that keeps finding more is stopped. */
 const SEND_CARDS = 3;
 
@@ -1013,8 +1018,10 @@ async function askHeld(
   w: SendWatch,
   acting: Promise<unknown>,
   ask: (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => Promise<Grant | 'waiting'>,
-  halt: () => string | null,
+  halt: (opened: unknown) => string | null,
   own: string,
+  /** Where the page is when a card opens (its document): what `halt` checks Allow against. */
+  mark: () => unknown = () => null,
 ): Promise<string | null> {
   const acted = acting.then(
     () => 'acted' as const,
@@ -1022,11 +1029,11 @@ async function askHeld(
   );
   let cards = 0;
   for (;;) {
-    if (w.cancelled.aborted) return halt();
+    if (w.cancelled.aborted) return halt(mark());
     const next = await Promise.race([acted, w.nextHeld()]);
     const held = w.held();
     if (!held.length) {
-      if (next === 'acted' || w.cancelled.aborted) return w.cancelled.aborted ? halt() : null;
+      if (next === 'acted' || w.cancelled.aborted) return w.cancelled.aborted ? halt(mark()) : null;
       continue;
     }
     if (++cards > SEND_CARDS) {
@@ -1040,10 +1047,11 @@ async function askHeld(
     const sites = (found.includes(own) ? [own, ...found.filter((s) => s !== own)] : found).slice(0, CARD_ORIGINS);
     // Each card its own: one no one answers comes down (Neon's S11), never left at the head of the queue.
     const down = new AbortController();
+    const opened = mark();
     const answer = await ask(held, sites, step?.why ?? null, AbortSignal.any([w.cancelled, down.signal]));
     if (answer === 'waiting') down.abort();
     if (answer === 'once' || answer === 'always') {
-      const halted = halt();
+      const halted = halt(opened);
       if (halted) {
         w.deny();
         return halted;
@@ -1054,7 +1062,7 @@ async function askHeld(
       continue;
     }
     w.deny();
-    if (w.cancelled.aborted) return halt();
+    if (w.cancelled.aborted) return halt(opened);
     return answer === 'waiting' ? ACT_REFUSALS.sendsDropped : ACT_REFUSALS.stepDenied;
   }
 }
@@ -1071,11 +1079,24 @@ function targetOf(element: Extract<ActAnswer, { ok: true }>, site: string, siteO
  * origin: anything else its page sends meanwhile still asks (Claude's review 3 of #112: a POST next to the click's own
  * `location = '/logout'`).
  */
+/**
+ * Whether a step sends its form (its address is then the step's own): a submit button's click or Space, `type` with
+ * `submit`, or Enter in a form's own field, as core's classifyStep has it; never any other key (Neon's final pass).
+ */
+export function stepSubmits(tool: string, args: Record<string, unknown>, element: { editable?: boolean; risk?: { submits?: boolean; tag?: string } }): boolean {
+  if (args['submit'] === true) return true;
+  if (tool === 'press_key') {
+    const field = element.editable === true || ['input', 'select', 'textarea'].includes(element.risk?.tag ?? '');
+    return (args['key'] === 'Enter' && field) || (element.risk?.submits === true && (args['key'] === 'Enter' || args['key'] === 'Space'));
+  }
+  return tool === 'click' && element.risk?.submits === true;
+}
+
 function allowedBy(element: Extract<ActAnswer, { ok: true }>, submits: boolean): Allowed {
   // Its form's address only when the step submits it (Neon's S9); its link's only as a page going there, each once.
   return {
-    urls: new Set(submits && element.risk?.form?.url ? [element.risk.form.url] : []),
-    documents: new Set(element.risk?.hrefUrl ? [element.risk.hrefUrl] : []),
+    urls: new Set(submits && element.risk?.form?.url ? [normalUrl(element.risk.form.url)] : []),
+    documents: new Set(element.risk?.hrefUrl ? [normalUrl(element.risk.hrefUrl)] : []),
   };
 }
 

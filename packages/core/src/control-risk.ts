@@ -183,12 +183,18 @@ function has(words: readonly string[], phrase: string): boolean {
 }
 
 /** The costliest why the words of `text` name, or null. `only`: the whys to look for. */
-export function riskWordsWhy(text: string, only: readonly (keyof typeof RISK_WORDS)[] = ['pay', 'delete', 'sign-out', 'sign-up', 'send', 'confirm']): RiskWhy | null {
+/**
+ * Words a button or a step's name counts, but an address doesn't: `/archive/2024` is a page of old posts, not a
+ * delete (the final pass of #112).
+ */
+const NOT_IN_ADDRESSES: ReadonlySet<string> = new Set(['archive', 'archiver']);
+
+export function riskWordsWhy(text: string, only: readonly (keyof typeof RISK_WORDS)[] = ['pay', 'delete', 'sign-out', 'sign-up', 'send', 'confirm'], skip: ReadonlySet<string> = new Set()): RiskWhy | null {
   const words = wordsOf(text);
   const lower = text.normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Mn}]/gu, '').toLowerCase();
   for (const why of ORDER) {
     if (!(only as readonly string[]).includes(why)) continue;
-    if (RISK_WORDS[why as keyof typeof RISK_WORDS].some((w) => (CJK.test(w) ? lower.includes(w) : has(words, w)))) return why;
+    if (RISK_WORDS[why as keyof typeof RISK_WORDS].some((w) => !skip.has(w) && (CJK.test(w) ? lower.includes(w) : has(words, w)))) return why;
   }
   return null;
 }
@@ -228,7 +234,7 @@ function click(el: RiskElement): RiskClass {
   if (el.tag === 'a' && el.hrefUnknown) return risky('confirm');
   if (el.tag === 'a' && el.href !== '') {
     const byName = riskWordsWhy(named);
-    const byAddress = riskWordsWhy(el.href, ['delete', 'sign-out']);
+    const byAddress = riskWordsWhy(el.href, ['delete', 'sign-out'], NOT_IN_ADDRESSES);
     const why = [byName, byAddress].filter((w): w is RiskWhy => w !== null).sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b))[0];
     return why ? risky(why) : ACT;
   }
@@ -312,7 +318,7 @@ export function addressWhy(url: string): RiskWhy | null {
   // An address that can't be read (not decodable, or past what's read of it) is unknown: it asks (#112 review 1).
   if (url.length > 2048) return 'confirm';
   try {
-    return riskWordsWhy(`${decodeURIComponent(u.pathname)} ${decodeURIComponent(u.search)}`, ['delete', 'sign-out']);
+    return riskWordsWhy(`${decodeURIComponent(u.pathname)} ${decodeURIComponent(u.search)}`, ['delete', 'sign-out'], NOT_IN_ADDRESSES);
   } catch {
     return 'confirm';
   }
@@ -339,7 +345,7 @@ export function pageAddressWhy(url: string): RiskWhy | null {
       return text;
     }
   };
-  return riskWordsWhy(`${decoded(u.pathname)} ${decoded(u.search)}`, ['delete', 'sign-out']);
+  return riskWordsWhy(`${decoded(u.pathname)} ${decoded(u.search)}`, ['delete', 'sign-out'], NOT_IN_ADDRESSES);
 }
 
 /** How long an Allow given after the agent heard *waiting* counts for that same step (tab, page, ref, action). */

@@ -554,7 +554,7 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
           <>
             It wants to {card.action}.
             <br />
-            It asks before anything it does sends data, and before it submits, pays, sends or deletes.
+            It asks before it submits, pays, sends or deletes, and when its pages post data.
           </>
         }
         closeLabel="Close"

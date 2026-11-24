@@ -4,21 +4,22 @@
  * (core's control-risk.ts); this is the layer under them, by what the page does: every request an agent's tab makes,
  * in any frame or dedicated worker, its own process or another's, passes through Chromium's `Fetch` domain on the
  * tab's debugger (attached for the tab's life by agents/pickers.ts, which turns it on in each frame before it runs, and
- * counts the tab's hold as on only once it's on in the page). A dedicated worker's requests are its page's (Chromium
- * gives it no Fetch domain of its own). Service workers are bypassed in an agent's tab, so its requests are its own;
- * a service worker is never held, since it's the site's and your own tabs there send through it too (Claude's review
- * 3 of #112). Shared workers don't exist in an agent's tab. Not held: what a service worker sends on its own when the
- * agent's page asks it to (`postMessage`), a stated limit.
+ * counts the tab's hold as on only once it's on in the page). A dedicated worker reads and never sends (its requests
+ * never pass through its page's Fetch: agents/agent-scripts.ts' lock). Service workers are bypassed in an agent's tab,
+ * so its requests are its own, and a service worker is never held: it's the site's, and your own tabs there send
+ * through it too (Claude's review 3 of #112). An agent's tab has no shared workers, deferred sends or service workers
+ * at all (agent-scripts.ts' PAGE_LACKS, and AGENT_POLICY on every document it loads).
  * A redirect's next request is paused again at its start (Chromium does that; Claude's review 3 of #112 had the
  * response-stage pause dropped, checked end to end): a 307 or 308, which sends the body on, is held again for its
  * new origin (Neon's review 2), and one that takes a page to an address that deletes or signs out asks as that step.
  *
- * - A request that only reads (GET, HEAD, a CORS preflight's OPTIONS) goes on, except a document (a page or a frame
- *   going somewhere) whose address deletes or signs out (core's addressWhy, as `navigate`'s): held, and asked about
- *   as that step (Neon's review 2 of #112: `location = '/account/delete'` from a click handler). A script's image or
- *   fetch GET to such an address isn't checked (a stated limit).
- * - A report (a beacon, an `<a ping>`: `resourceType` Ping; a CSP violation report) is dropped, answered with nothing,
- *   and never asked about (the owner's option A). The rare page that saves data by beacon loses it in an agent's tab.
+ * - A request that only reads (GET, HEAD, OPTIONS, with no body) goes on, except a document (a page or a frame going
+ *   somewhere) whose address deletes or signs out (core's pageAddressWhy): held, and asked about as that step (Neon's
+ *   review 2 of #112: `location = '/account/delete'` from a click handler). A script's image or fetch GET to such an
+ *   address isn't checked, nor what a GET's address carries (stated limits).
+ * - A report (a beacon, an `<a ping>`: `resourceType` Ping; a CSP violation report) the agent's page sends is dropped,
+ *   answered with nothing, and never asked about (the owner's option A); while you have the tab, yours go. The rare
+ *   page that saves data by beacon loses it in an agent's tab.
  * - Anything else that sends data (a form posted, a fetch or XHR with another method) is held and asked about:
  *   - **During an action**, the action's card asks (tools.ts, through `watchSends`), naming the origins (by host);
  *     Allow lets go what goes to those exact origins, and what's sent to them from then on in that action; anything to
@@ -66,9 +67,15 @@ const PATTERNS = [{ requestStage: 'Request' }, { resourceType: 'Document', reque
 /**
  * Every document an agent's tab loads, and every frame under it (a sandboxed one too, which no script of the hold's
  * reaches), has no deferred sends (`fetchLater`: they go after the tab closes, out of the hold's sight; round 4 of
- * #112, seen sent from a sandboxed frame once the tab closed). The browser's own policy, added to the page's.
+ * #112, seen sent from a sandboxed frame once the tab closed), and no passkey, payment or sign-in dialogs (Chord
+ * doesn't sign agents in: the final pass of #112). The browser's own policy, as one header in place of the page's
+ * own: a page's header that doesn't parse would make Chromium drop the whole policy, ours too (Neon's final pass), so
+ * an agent's tab is the stricter for it.
  */
-const NO_DEFERRED_SENDS = { name: 'Permissions-Policy', value: 'deferred-fetch=(), deferred-fetch-minimal=()' };
+export const AGENT_POLICY = {
+  name: 'Permissions-Policy',
+  value: 'deferred-fetch=(), deferred-fetch-minimal=(), publickey-credentials-get=(), publickey-credentials-create=(), payment=(), identity-credentials-get=()',
+};
 
 /** A send card's answer: Don't (or none), Allow, or *Allow until done* (those sites, this tab, until the agent's done). */
 export type SendAnswer = 'deny' | 'once' | 'until';
@@ -196,12 +203,16 @@ export function holdSends(contents: WebContents): void {
       resourceType?: string;
       responseStatusCode?: number;
       responseHeaders?: { name: string; value: string }[];
+      responseErrorReason?: string;
     };
     if (!at.requestId) return;
-    // A document's response: on, with no deferred sends (NO_DEFERRED_SENDS).
+    // A document's response that failed (a network error): let go at once, to fail as it would (never a request again).
+    if (at.responseErrorReason !== undefined) return answer('Fetch.continueRequest', { requestId: at.requestId }, sessionId || undefined);
+    // A document's response: on, with the agent's policy in place of the page's (AGENT_POLICY).
     if (at.responseStatusCode !== undefined) {
+      const headers = (at.responseHeaders ?? []).filter((h) => h.name.toLowerCase() !== 'permissions-policy');
       // Its status as it is (Chromium overrides headers only with the status given too).
-      return answer('Fetch.continueResponse', { requestId: at.requestId, responseCode: at.responseStatusCode, responseHeaders: [...(at.responseHeaders ?? []), NO_DEFERRED_SENDS] }, sessionId || undefined);
+      return answer('Fetch.continueResponse', { requestId: at.requestId, responseCode: at.responseStatusCode, responseHeaders: [...headers, AGENT_POLICY] }, sessionId || undefined);
     }
     // The page's own target comes with an empty session id: answered without one (an empty one reaches no session).
     const type = String(at.resourceType ?? '');
@@ -213,27 +224,29 @@ export function holdSends(contents: WebContents): void {
     const why: RiskWhy | null = how === 'DELETE' ? 'delete' : !read || type === 'Document' ? pageAddressWhy(url) : null;
     const p: Paused = { requestId: at.requestId, sessionId: sessionId || undefined, url, type, why };
     // A document the agent already asked about (open_tab): its first load goes.
-    if (read && type === 'Document' && hold.once.delete(url)) return hold.go(p);
+    if (read && type === 'Document' && hold.once.delete(normalUrl(url))) return hold.go(p);
     if (read && !p.why) return hold.go(p);
-    // A report: dropped, never asked (the owner's option A).
-    if (REPORTS.has(type)) return hold.drop(p);
     const whose = hold.deps?.whose() ?? 'agent';
     if (whose === 'user') return hold.go(p);
+    // A report: dropped, never asked (the owner's option A).
+    if (REPORTS.has(type)) return hold.drop(p);
+    // No one's to ask (its chord gone: the tab closing, Close all): fails, whatever an action allowed (Neon's final
+    // pass: a keepalive POST on close inside an action's settle).
+    if (whose === 'none') {
+      countDropped(contents, 1);
+      return hold.drop(p);
+    }
     // Allowed until done: data to those origins goes (a step an address is still asks).
     if (whose === 'agent' && !p.why && hold.until.has(siteBy(hold, url))) return hold.go(p);
     const action = hold.action;
     if (action) {
       if (action.denied) return hold.drop(p);
       // The step's own addresses, each once: its form's (any request), its link's (a document going there).
-      if (action.urls.delete(url) || (read && type === 'Document' && action.documents.delete(url))) return hold.go(p);
+      if (action.urls.delete(normalUrl(url)) || (read && type === 'Document' && action.documents.delete(normalUrl(url)))) return hold.go(p);
       if (!p.why && action.sites.has(siteBy(hold, url))) return hold.go(p);
       action.held.push(p);
       for (const wake of action.waiting.splice(0)) wake();
       return;
-    }
-    if (whose === 'none') {
-      countDropped(contents, 1);
-      return hold.drop(p);
     }
     heldBetween(hold, [p]);
   });
@@ -323,7 +336,8 @@ export function failHeld(contents: object): void {
 
 /**
  * Starts watching what `contents` sends for one action. `allowed`: what a step the user already allowed lets go (its
- * card named it); nothing for an action no card asked about. `siteOf`: a request's site, as the card names it. Null
+ * card named it); nothing for an action no card asked about. What a card covers is a request's origin (the chord's
+ * deps' siteOf). Null
  * if the tab has no send hold, or another action there still watches: nothing is sent then (tools.ts refuses).
  */
 export function watchSends(contents: WebContents, allowed: Allowed | null): SendWatch | null {
@@ -377,7 +391,21 @@ export function watchSends(contents: WebContents, allowed: Allowed | null): Send
 
 /** open_tab's step card allowed this address: the tab's first load of it goes (it isn't asked again between actions). */
 export function allowFirstLoad(contents: object, url: string): void {
-  holds.get(contents)?.once.add(url);
+  holds.get(contents)?.once.add(normalUrl(url));
+}
+
+/** open_tab's load is over (it came, or didn't): an address it allowed that wasn't used is allowed no more. */
+export function forgetFirstLoad(contents: object, url: string): void {
+  holds.get(contents)?.once.delete(normalUrl(url));
+}
+
+/** An address as the browser writes it (`new URL(u).href`), so two spellings of one compare equal; else as it is. */
+export function normalUrl(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
 }
 
 /**

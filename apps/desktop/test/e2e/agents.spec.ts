@@ -458,7 +458,7 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
     const placing = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Place order · $48.20"') });
     const siteCard = siteCardOf(popover, 'Codex');
     await expect(siteCard).toBeVisible({ timeout: 15_000 });
-    await expect(siteCard).toContainText('It asks before anything it does sends data, and before it submits, pays, sends or deletes.');
+    await expect(siteCard).toContainText('It asks before it submits, pays, sends or deletes, and when its pages post data.');
     await popover.waitForTimeout(600);
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
     const order = stepCardOf(popover, new RegExp(`^Place the order on ${host.replace(/\./g, '\\.')}\\?$`));
@@ -593,7 +593,7 @@ test('what an action sends asks first: held, one card, Allow sends and Don’t d
     const first = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'tab "Details"') });
     const siteCard = siteCardOf(popover, 'Codex');
     await expect(siteCard).toBeVisible({ timeout: 15_000 });
-    await expect(siteCard).toContainText('It asks before anything it does sends data, and before it submits, pays, sends or deletes.');
+    await expect(siteCard).toContainText('It asks before it submits, pays, sends or deletes, and when its pages post data.');
     await popover.waitForTimeout(600);
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
     expect(JSON.parse((await first).text)).toMatchObject({ data: { done: 'Clicked “Details”' } });
@@ -801,6 +801,12 @@ test('workers, redirects and scripts: what a worker sends asks too; a 307 to ano
     expect(JSON.parse((await withCard(saving, ownSite, 'Allow')).text)).toMatchObject({ data: { done: 'Clicked “Save and go on”' } });
     await expect.poll(() => reached.includes('POST /spa-save')).toBe(true);
     reached.length = 0;
+    // A link whose page posts as it loads: its card's Allow sends it (the final pass: not stale for the action's own going).
+    expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/goes` })).text)).toMatchObject({ data: { navigated: true } });
+    const onward = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'link "Onward"') });
+    expect(JSON.parse((await withCard(onward, ownSite, 'Allow')).text)).toMatchObject({ data: { done: 'Clicked “Onward”', navigated: true } });
+    await expect.poll(() => reached.includes('POST /loaded-save')).toBe(true);
+    reached.length = 0;
     // An allowed POST that a 307 sends to another site: asked again, for that site; Don't keeps it from there.
     expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/redirects` })).text)).toMatchObject({ data: { navigated: true } });
     const redirected = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Redirected"') });
@@ -902,9 +908,22 @@ test('round 4 of #112: a page closed by the agent sends nothing on its way out; 
     // What the page, a frame its script made, and a sandboxed frame find.
     expect((await mcp.call('open_tab', { url: `${site.origin}/lookout` })).text).toMatch(/^\{/);
     const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a2' })).text) as { content: string }).content;
-    await expect.poll(read, { timeout: 10_000 }).toContain('sandboxed:');
+    for (const where of ['sandboxed:', 'srcdoc:', 'samesandbox:', 'cross:']) await expect.poll(read, { timeout: 10_000, message: where }).toContain(where);
     const content = await read();
-    for (const where of ['page', 'blank']) expect(content, where).toContain(`${where}:undefined/undefined/false`);
+    // Every frame (a plain srcdoc, a sandboxed one of the same origin, another site's), even with the page's own
+    // malformed Permissions-Policy (the final pass: it's replaced, never joined).
+    for (const where of ['page', 'blank', 'srcdoc', 'samesandbox', 'cross']) expect(content, where).toContain(`${where}:undefined/undefined/false`);
+    // A passkey dialog: refused by the tab's policy (Chord doesn't sign agents in), and the agent hears of it.
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a2' })).text) as { content: string }).content;
+    const keying = mcp.call('click', { tab_id: 'a2', ref: refOf(outline, 'button "Use a key"') });
+    const keyCard = siteCardOf(await pageWhere(app, isPopover), 'Codex');
+    await expect(keyCard).toBeVisible({ timeout: 15_000 });
+    await (await pageWhere(app, isPopover)).waitForTimeout(600);
+    await keyCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const keyed = await keying;
+    await expect.poll(read).toContain('key:NotAllowedError');
+    const heard = [...keyed.held, ...(await mcp.call('list_tabs')).held].join(' | ');
+    expect(heard).toContain('a passkey or sign-in dialog');
     expect(content, 'sandboxed').toMatch(/sandboxed:[A-Za-z]+\/SecurityError\/SecurityError/);
     // Whatever fetchLater did there, nothing it queued arrives once the agent closes the tab.
     expect((await mcp.call('close_tab', { tab_id: 'a2' })).isError).toBeFalsy();
@@ -1647,6 +1666,9 @@ test.beforeAll(async () => {
       '<button onclick="const x = new XMLHttpRequest(); x.open(\'OPTIONS\', \'/options-xhr\'); x.send(\'x\')">Options XHR with a body</button>' +
       '<p id=log></p>' +
       '<script>const w = new Worker("/w.js"); w.onmessage = (e) => { log.textContent += " " + e.data; }; const sh = window.SharedWorker ? new SharedWorker("/shared.js") : null; if (sh) sh.port.start();</script></main>',
+    // A link to a page that saves as it loads (the final pass: the Allow given counts, after the action's own navigation).
+    '/goes': '<title>Goes</title><main><a href="/saves-on-load">Onward</a></main>',
+    '/saves-on-load': '<title>Saves</title><main><p>Saved.</p><script>fetch("/loaded-save", { method: "POST", body: "x" });</script></main>',
     // A single-page app: a click that moves its address (pushState) and saves (round 4: the Allow still counts).
     '/spa': '<title>App</title><main><button onclick="history.pushState({}, \'\', \'/spa/next\'); fetch(\'/spa-save\', { method: \'POST\', body: \'x\' })">Save and go on</button></main>',
     // A page of yours on the same site as an agent's tab: the site's service worker controls both (#112 review 3).
@@ -1655,14 +1677,19 @@ test.beforeAll(async () => {
     // tab never has (shared workers, deferred sends, service workers), in itself and in frames a script makes.
     '/leaving': '<title>Leaving</title><main><p>Bye.</p><script>addEventListener("pagehide", () => { fetch("/bye", { method: "POST", body: "x", keepalive: true }); navigator.sendBeacon("/bye-beacon", "x"); });</script></main>',
     '/lookout':
-      '<title>Lookout</title><main><p id=log></p><script>' +
+      '<title>Lookout</title><main><button onclick="navigator.credentials.get({ publicKey: { challenge: new Uint8Array(16) } }).then(() => { log.textContent += \' key:given\'; }, (e) => { log.textContent += \' key:\' + e.name; })">Use a key</button><p id=log></p><script>' +
       'const what = (w) => [typeof w.SharedWorker, typeof w.fetchLater, String("serviceWorker" in w.navigator)].join("/");' +
       'log.textContent += " page:" + what(window);' +
       'const f = document.createElement("iframe"); document.body.append(f); log.textContent += " blank:" + what(f.contentWindow);' +
       'addEventListener("message", (e) => { log.textContent += " " + e.data; });' +
       // A sandboxed frame's origin is opaque: a shared worker or a service worker can't be had there (each throws or is
       // refused), and fetchLater is off in an agent's tab. What each attempt came to.
-      '</script><iframe sandbox="allow-scripts" srcdoc="<script>(async () => { const r = []; try { fetchLater(&quot;/later-sandboxed&quot;, { method: &quot;POST&quot;, body: &quot;x&quot; }); r.push(&quot;queued&quot;); } catch (e) { r.push(typeof fetchLater === &quot;function&quot; ? e.name : &quot;undefined&quot;); } try { new SharedWorker(&quot;/shared.js&quot;); r.push(&quot;shared&quot;); } catch (e) { r.push(e.name); } try { await navigator.serviceWorker.register(&quot;/sw.js&quot;); r.push(&quot;registered&quot;); } catch (e) { r.push(e.name); } parent.postMessage(&quot;sandboxed:&quot; + r.join(&quot;/&quot;), &quot;*&quot;); })()</script>"></iframe></main>',
+      '</script><iframe sandbox="allow-scripts" srcdoc="<script>(async () => { const r = []; try { fetchLater(&quot;/later-sandboxed&quot;, { method: &quot;POST&quot;, body: &quot;x&quot; }); r.push(&quot;queued&quot;); } catch (e) { r.push(typeof fetchLater === &quot;function&quot; ? e.name : &quot;undefined&quot;); } try { new SharedWorker(&quot;/shared.js&quot;); r.push(&quot;shared&quot;); } catch (e) { r.push(e.name); } try { await navigator.serviceWorker.register(&quot;/sw.js&quot;); r.push(&quot;registered&quot;); } catch (e) { r.push(e.name); } parent.postMessage(&quot;sandboxed:&quot; + r.join(&quot;/&quot;), &quot;*&quot;); })()</script>"></iframe>' +
+      // The final pass of #112: a plain srcdoc frame, a sandboxed one of the same origin, and a frame of another site.
+      '<iframe srcdoc="<script>parent.postMessage(&quot;srcdoc:&quot; + [typeof SharedWorker, typeof fetchLater, String(&quot;serviceWorker&quot; in navigator)].join(&quot;/&quot;), &quot;*&quot;)</script>"></iframe>' +
+      '<iframe sandbox="allow-scripts allow-same-origin" srcdoc="<script>parent.postMessage(&quot;samesandbox:&quot; + [typeof SharedWorker, typeof fetchLater, String(&quot;serviceWorker&quot; in navigator)].join(&quot;/&quot;), &quot;*&quot;)</script>"></iframe>' +
+      '<script>const x = document.createElement("iframe"); x.src = location.origin.replace("127.0.0.1", "localhost") + "/frame-report"; document.body.append(x);</script></main>',
+    '/frame-report': '<script>parent.postMessage("cross:" + [typeof SharedWorker, typeof fetchLater, String("serviceWorker" in navigator)].join("/"), "*")</script>',
     // No worker here: a page's own redirects and navigations.
     '/redirects':
       '<title>Redirects</title><main><button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected</button>' +
@@ -1782,7 +1809,8 @@ test.beforeAll(async () => {
           : req.url === '/noisy'
             ? noisy
             : pages[req.url ?? '/'];
-    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
+    // /lookout sends a Permissions-Policy that doesn't parse (the final pass of #112: an agent's tab replaces it).
+    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', ...(req.url === '/lookout' ? { 'permissions-policy': '@' } : {}) });
     res.end(body ?? 'not found');
   });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));

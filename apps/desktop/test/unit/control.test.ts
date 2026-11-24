@@ -11,7 +11,7 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { runControlTool, type ControlBrowser } from '../../src/main/control/tools';
+import { runControlTool, stepSubmits, type ControlBrowser } from '../../src/main/control/tools';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
@@ -1404,6 +1404,52 @@ describe('acting through the gate (S18 M2c)', () => {
       await new Promise((r) => setTimeout(r, 0));
       expect(t.agent.state('n1').cards).toEqual([]);
     });
+
+    it('a document’s response gets one clean policy: the page’s own (malformed or not) is dropped, deferred sends, passkeys, payments and sign-in dialogs off (the final pass)', async () => {
+      const { t } = await between();
+      t.at.emitDebug!('Fetch.requestPaused', { requestId: 'doc', request: { method: 'GET', url: 'https://news.test/' }, resourceType: 'Document', responseStatusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/html' }, { name: 'permissions-policy', value: '@' }, { name: 'Permissions-Policy', value: 'camera=()' }] });
+      await new Promise((r) => setTimeout(r, 0));
+      const [, sent] = (t.at.commands ?? []).find(([m]) => m === 'Fetch.continueResponse')!;
+      const headers = (sent as { responseHeaders: { name: string; value: string }[] }).responseHeaders;
+      const policies = headers.filter((h) => h.name.toLowerCase() === 'permissions-policy');
+      expect(policies).toEqual([{ name: 'Permissions-Policy', value: 'deferred-fetch=(), deferred-fetch-minimal=(), publickey-credentials-get=(), publickey-credentials-create=(), payment=(), identity-credentials-get=()' }]);
+      expect(headers).toContainEqual({ name: 'Content-Type', value: 'text/html' });
+    });
+
+    it('a response that failed (a network error) is let go at once: no card, never taken for a request', async () => {
+      const { t, asked, continued } = await between();
+      t.at.emitDebug!('Fetch.requestPaused', { requestId: 'err', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Document', responseErrorReason: 'Failed' });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(continued('err')).toBe(true);
+      expect(asked).toEqual([]);
+    });
+
+    it('no one’s to ask (the tab closing) wins over an action’s Allow: what it sends on its way out fails', async () => {
+      const t = await acting({ act: { siteAllowed: () => true } });
+      const contents = t.pages.get('n1')!.contents;
+      let whose: 'agent' | 'none' = 'agent';
+      sendHoldDeps(contents, { whose: () => whose, ask: async () => 'deny', siteOf: (u) => new URL(u).origin });
+      const watch = (await import('../../src/main/control/sends')).watchSends(contents, null)!;
+      watch.allow({ origins: new Set(['https://news.test']) });
+      whose = 'none';
+      t.at.emitDebug!('Fetch.requestPaused', { requestId: 'bye', request: { method: 'POST', url: 'https://news.test/bye' }, resourceType: 'Fetch' });
+      await new Promise((r) => setTimeout(r, 0));
+      expect((t.at.commands ?? []).some(([m, p]) => m === 'Fetch.continueRequest' && (p as { requestId?: string }).requestId === 'bye')).toBe(false);
+      watch.end();
+    });
+
+    // Neon's final pass: only what classifyStep counts as sending a form lets its address go, never any other key.
+    it.each([
+      ['click a submit button', 'click', {}, { risk: { submits: true, tag: 'button' } }, true],
+      ['click a plain button', 'click', {}, { risk: { submits: false, tag: 'button' } }, false],
+      ['Enter in a field', 'press_key', { key: 'Enter' }, { editable: true, risk: { tag: 'input' } }, true],
+      ['Tab in a field', 'press_key', { key: 'Tab' }, { editable: true, risk: { tag: 'input' } }, false],
+      ['a letter in a field', 'press_key', { key: 'a' }, { editable: true, risk: { tag: 'input' } }, false],
+      ['Space on a submit button', 'press_key', { key: 'Space' }, { risk: { submits: true, tag: 'button' } }, true],
+      ['Escape on a submit button', 'press_key', { key: 'Escape' }, { risk: { submits: true, tag: 'button' } }, false],
+      ['type with submit', 'type', { submit: true }, { editable: true, risk: { tag: 'input' } }, true],
+      ['type alone', 'type', {}, { editable: true, risk: { tag: 'input' } }, false],
+    ] as const)('%s sends its form: %s', (_what, tool, args, element, submits) => expect(stepSubmits(tool, args, element)).toBe(submits));
 
     it('an OPTIONS with a body is a send; a real preflight (no body) is a read', async () => {
       const { asked, paused, continued } = await between();

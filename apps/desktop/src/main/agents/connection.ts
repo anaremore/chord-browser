@@ -39,8 +39,8 @@ import { runControlTool, type ControlBrowser, pageLoaded } from '../control/tool
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
 import { siteOfUrl, type AgentShares } from './shares';
-import { allowFirstLoad } from '../control/sends';
-import { pickersUnsecured } from './pickers';
+import { allowFirstLoad, forgetFirstLoad } from '../control/sends';
+import { firstLoadPending, pickersUnsecured } from './pickers';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
 
@@ -185,10 +185,18 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         void page.id;
         // Past its blank first page too (tabs.ts: service workers bypassed in it), at most LOAD_MS.
         await pageLoaded(contents, deps.loadMs ?? LOAD_MS, signal);
+        // Its own address allowed for its first load only: whether that came or not, never after (the final pass).
+        if (why) forgetFirstLoad(contents, url);
         if (signal.aborted) return refused('stopped');
         if (contents.isDestroyed()) return { text: 'That tab closed while it loaded.', isError: true };
-        // Its hold couldn't be finished (round 4 of #112): never a tab that would send unheld; it stays blank.
-        if (pickersUnsecured(contents) || contents.getURL() === 'about:blank') return { text: 'That tab couldn’t be opened safely, so it was left blank. Try again, or ask the user.', isError: true };
+        // Its hold couldn't be finished, or its page never came (round 4 and the final pass of #112): never a tab that
+        // would send unheld, nor a blank one reported as opened. The blank tab goes.
+        // (A slow page still loading is let be: it's reported loading, at the address asked for.)
+        const loadingStill = contents.isLoading();
+        if (pickersUnsecured(contents) || (!loadingStill && (firstLoadPending(contents) || !WEB_ADDRESS.test(contents.getURL())))) {
+          deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
+          return { text: 'That tab couldn’t be opened safely, so it was closed. Try again, or ask the user.', isError: true };
+        }
         // Redirected to a site the user keeps private: the tab goes, and nothing of where it ended up is said.
         // (Only a web address counts: a page still loading at the wait's end may show none yet.)
         const landed = page.url();
@@ -198,7 +206,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
           return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
         }
-        return { text: toolResult({ tab_id: ref, url: page.url(), title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
+        return { text: toolResult({ tab_id: ref, url: WEB_ADDRESS.test(page.url()) ? page.url() : url, title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
       },
       refused,
     );

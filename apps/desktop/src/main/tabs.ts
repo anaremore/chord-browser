@@ -417,6 +417,9 @@ export class TabManager {
   }
 
   private wire(nodeId: NodeId, contents: WebContents, internal: boolean): void {
+    // Whether it's an agent's page, decided once (Neon's nits, round 4 and the final pass of #112): an agent's page is
+    // never another's (a tab you keep gets a new page).
+    const agentPage = Boolean(this.deps.agentTab?.(nodeId));
     // A page being closed (a pinned tab unloading) still fires a few events on its way out.
     // Only the tab's current page may report, or a late event would mark it loaded again.
     const current = () => !contents.isDestroyed() && this.views.get(nodeId)?.webContents === contents;
@@ -497,14 +500,14 @@ export class TabManager {
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
     // An agent's tab (S18): a dialog or file picker its preload held, for the agent's next result. Any frame's.
     contents.ipc.on('page:agentHeld', (event, raw: unknown) => {
-      if (!this.deps.agentTab?.(nodeId) || !raw || typeof raw !== 'object') return;
+      if (!agentPage || !raw || typeof raw !== 'object') return;
       const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
       if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
       this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame));
     });
     // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
     contents.ipc.on('page:agentGuardState', (event) => {
-      event.returnValue = Boolean(this.deps.agentTab?.(nodeId)) && agentGuardUp(contents);
+      event.returnValue = agentPage && agentGuardUp(contents);
     });
     // The count the page gives itself (counts on tabs, ARCHITECTURE.md §9), from Chord's page preload: its top frame's only.
     contents.ipc.on('page:badge', (event, raw: unknown) => {
@@ -527,7 +530,7 @@ export class TabManager {
       // Reload automatically at most twice, then show "This page stopped" (borrowed from Crest). Never an agent's tab:
       // reloaded at once, it would load before its hold is armed again (round 4 of #112); it shows "This page stopped",
       // and its hold, lost, refuses acting there until it's armed again.
-      const attempts = this.deps.agentTab?.(nodeId) ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
+      const attempts = agentPage ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
       if (attempts < MAX_CRASH_RELOADS) {
         this.crashReloads.set(nodeId, attempts + 1);
         contents.reload();
@@ -537,8 +540,6 @@ export class TabManager {
       if (this.badges.delete(nodeId)) live({ badge: null });
     });
 
-    // Whether it's an agent's page, decided once (Neon's nit, round 4 of #112): an agent's page is never another's.
-    const agentPage = Boolean(this.deps.agentTab?.(nodeId));
     contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details, agentPage));
     contents.on('did-create-window', (popup) => this.wirePopup(popup, nodeId));
 
