@@ -5,6 +5,7 @@
     "noEmit": false,
     "emitDeclarationOnly": true,
     "outDir": "node_modules/.tsc/test",
+    "jsx": "react-jsx",
     "lib": [
       "ES2024",
       "DOM",
@@ -22,6 +23,7 @@
     "playwright.sweep.config.ts",
     "src/passwords",
     "test/fixtures",
+    "test/spa",
     "test/packaged",
     "test/shots",
     "test/run-temp.ts",
