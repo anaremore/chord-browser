@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "fractional-indexing": "4.0.0",
-    "immer": "11.2.9",
+    "immer": "11.2.10",
     "tldts": "7.4.19"
   }
 }

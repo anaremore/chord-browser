@@ -75,8 +75,8 @@ importers:
         specifier: 6.8.11
         version: 6.8.11
       immer:
-        specifier: 11.2.9
-        version: 11.2.9
+        specifier: 11.2.10
+        version: 11.2.10
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -182,8 +182,8 @@ importers:
         specifier: 4.0.0
         version: 4.0.0
       immer:
-        specifier: 11.2.9
-        version: 11.2.9
+        specifier: 11.2.10
+        version: 11.2.10
       tldts:
         specifier: 7.4.19
         version: 7.4.19
@@ -2076,8 +2076,8 @@ packages:
     resolution: {integrity: sha512-2E8Q6rh+1RRSq/YdaGsNfXsEZy9FVqv6BSSrkmZJP7BnaoPnRfKL+YaofPvP+5rzdk144qSm6i4+hvPgUcbV4Q==}
     engines: {node: '>= 4'}
 
-  immer@11.2.9:
-    resolution: {integrity: sha512-IQ4UEtXjZjyefyWjtLEDXUSrF6T2hwjKPi6BIJl3bY/2XXW24d6cNGdXJSBOA/+KNnuiXkZY6DR0C3efolhitA==}
+  immer@11.2.10:
+    resolution: {integrity: sha512-pzANBj+0A9u+prdhBJ14DVi44vCvVUQzBa8DKt6I0AMCokPHtt722BK9IX5bFC70xUSU9TnzLRIJLTGqIzjEFw==}
 
   import-fresh@3.3.1:
     resolution: {integrity: sha512-TR3KfrTZTYLPB6jUjfx6MF9WcWrHL9su5TObK4ZkYgBdWKPOFoSoQIdEuTuR82pmtxH2spWG9h6etwfr1pLBqQ==}
@@ -4898,7 +4898,7 @@ snapshots:
 
   ignore@7.0.13: {}
 
-  immer@11.2.9: {}
+  immer@11.2.10: {}
 
   import-fresh@3.3.1:
     dependencies:
