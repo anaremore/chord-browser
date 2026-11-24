@@ -56,6 +56,10 @@ function setup(file: string, args: string[]): number {
 /** The installed Chord.exe's version (electron-builder writes the app's version as its file version). */
 const installedVersion = () => powershell(`(Get-Item -LiteralPath (Join-Path $env:CHORD_INSTDIR 'Chord.exe')).VersionInfo.FileVersion`);
 
+/** Where setup says it installed Chord (its uninstall entry), as setup's own commands see the folder. */
+const installLocation = () =>
+  powershell(`@(Get-ChildItem 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall' | % { Get-ItemProperty $_.PSPath } | ? { $_.DisplayName -like 'Chord*' } | % { $_.UninstallString }) -join ', '`);
+
 /** Relays running from the install folder. */
 const relays = () => Number(powershell(`@(Get-CimInstance Win32_Process | ? { $_.Path -and $_.Path.StartsWith($env:CHORD_INSTDIR, 'OrdinalIgnoreCase') -and $_.CommandLine -match '\\smcp(\\s|$)' }).Count`));
 
@@ -71,6 +75,8 @@ function agent(profile: string) {
   let stopped = false;
   let answered = 0;
   const events: string[] = [];
+  /** When each relay ended, by PID. */
+  const ended = new Map<number, number>();
   const run = () => {
     if (stopped) return;
     let relay: ChildProcess;
@@ -100,6 +106,7 @@ function agent(profile: string) {
       if (again) return;
       again = true;
       events.push(why);
+      if (relay.pid) ended.set(relay.pid, Date.now());
       note(`relay ${relay.pid} ${why}`);
       setTimeout(run, 100);
     };
@@ -109,6 +116,10 @@ function agent(profile: string) {
   run();
   return {
     events,
+    /** The relay running now. */
+    current: () => child?.pid,
+    /** Whether that relay ended before `at`. */
+    endedBefore: (pid: number | undefined, at: number) => pid !== undefined && (ended.get(pid) ?? Infinity) < at,
     /** Waits for a relay started from now on to answer. */
     async answers(): Promise<void> {
       const before = answered;
@@ -150,8 +161,11 @@ test('setup updates Chord from the last release while an agent keeps its relay r
     console.log(`Updating ${fromVersion} (${previous ? 'the last release' : 'this build, no release given'}) to this build, ${version}`);
     if (previous) expect(sha(join(installed, 'resources', 'app.asar')), 'the last release is installed, not this build').not.toBe(sha(built));
 
-    // As a person runs setup.
+    console.log(`Setup's install folder: ${installLocation()}`);
+    // As a person runs setup. Setup itself must end the relay that runs as it starts (not leave it to die after).
+    let running = connected.current();
     expect(setup(installer!, ['/S']), 'setup over a running relay').toBe(0);
+    expect(connected.endedBefore(running, Date.now()), `setup ended relay ${running}`).toBe(true);
     isThisBuild('by hand');
     await connected.answers();
     connected.stop();
@@ -159,7 +173,9 @@ test('setup updates Chord from the last release while an agent keeps its relay r
 
     // As the in-app updater runs it.
     connected = await lastRelease();
+    running = connected.current();
     expect(setup(installer!, ['--updated', '/S', '--force-run']), 'an in-app update over a running relay').toBe(0);
+    expect(connected.endedBefore(running, Date.now()), `the in-app update ended relay ${running}`).toBe(true);
     isThisBuild('in-app');
     await connected.answers();
     console.log(`The agent's relay, through both updates: ${connected.events.length} restarts (${[...new Set(connected.events)].join(', ')})`);
