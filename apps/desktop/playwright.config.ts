@@ -1,7 +1,16 @@
+import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
+import { filesFor } from '../../scripts/ci/e2e-shards.mjs';
+
+// CI's shards (scripts/ci/e2e-shards.mjs): CHORD_E2E_SHARD=<index>/<count> runs that shard's spec files, balanced by
+// how long each takes, and CHORD_E2E_SHARD=perf runs perf.spec.ts alone. Unset, every file runs.
+const shard = process.env['CHORD_E2E_SHARD'];
+const testDir = join(import.meta.dirname, 'test/e2e');
+const testMatch = shard ? filesFor(shard, testDir).map((file) => new RegExp(`[\\\\/]${file.replaceAll('.', '\\.')}$`)) : undefined;
 
 export default defineConfig({
   testDir: 'test/e2e',
+  ...(testMatch ? { testMatch } : {}),
   outputDir: 'test-results',
   // One temp folder per run, removed when it ends: profiles never pile up. Spelling dictionaries
   // from a local server, never downloaded from Google during a test (test/dictionaries.ts).
@@ -16,5 +25,7 @@ export default defineConfig({
   retries: process.env['CI'] ? 1 : 0,
   // One app at a time: each test launches its own Electron instance.
   workers: 1,
-  reporter: process.env['CI'] ? [['list'], ['github']] : 'list',
+  // On CI, a JSON report too: scripts/ci/flaky-summary.mjs lists every test that passed only on its retry in the job's
+  // summary, so a repeat flake shows before it fails twice in one run.
+  reporter: process.env['CI'] ? [['list'], ['github'], ['json', { outputFile: 'playwright-report/results.json' }]] : 'list',
 });

@@ -312,16 +312,12 @@ describe('sanitizeArticle: hostile pages', () => {
     // A tree that refers to itself (structured clone can send one).
     const loop: { tag: string; children: unknown[] } = { tag: 'div', children: ['loop '] };
     loop.children.push(loop, loop);
-    const started = Date.now();
     const looped = sanitizeArticle({ title: 'x', content: el('div', {}, p(LONG), loop as unknown as RawNode) }, PAGE)!;
     expect(looped).not.toBeNull();
-    expect(Date.now() - started).toBeLessThan(2000);
 
-    // A huge page: capped, and quick.
+    // A huge page: capped (how quickly: reader.perf.test.ts).
     const huge = el('div', {}, ...Array.from({ length: 100_000 }, (_, i) => p(`Paragraph ${i} `, el('em', {}, 'with emphasis'))));
-    const t0 = Date.now();
     const big = sanitizeArticle({ title: 'x', content: huge }, PAGE)!;
-    expect(Date.now() - t0).toBeLessThan(2000);
     expect(elements(big.content).length).toBeLessThan(60_000);
   });
 });
