@@ -51,6 +51,8 @@ export interface DuetHost {
   acting?(chat: DuetChat): {
     on(): boolean;
     offScreen(node: TabNode, windowId: WindowId): string | null;
+    /** A step refused for a reason latched earlier in the message (the chat may say it now: your taking the tab). */
+    latched?(why: string): void;
     siteOf(url: string): string | null;
     siteAllowed(site: string): boolean;
     keepSite(site: string): void;
@@ -135,7 +137,10 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
               if (!acting.on()) return USER_TAB_REFUSALS.off;
               const agent = host.agentOf(node);
               if (agent !== null) return AGENT_TAB_REFUSALS.act(agent);
-              if (chat.actEnded) return chat.actEnded;
+              if (chat.actEnded) {
+                acting.latched?.(chat.actEnded);
+                return chat.actEnded;
+              }
               const at = chat.actTab;
               if (!at) return USER_TAB_REFUSALS.noMessage;
               if (at.nodeId !== node.id) {

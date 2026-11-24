@@ -22,6 +22,13 @@ afterEach(() => vi.useRealTimers());
 /** Tabs of yours whose lease was lost (control/user-watch.ts: a detach, the renderer gone), as page.lost() and deep.held() ask. */
 const leaseLost = vi.hoisted(() => new WeakSet<object>());
 vi.mock('../../src/main/control/user-watch', async (actual) => ({ ...(await actual<Record<string, unknown>>()), userLeaseLost: (contents: object) => leaseLost.has(contents) }));
+/** An outside agent's tab whose hold was lost (agents/pickers.ts), and whether trying again gets it back. */
+const pickers = vi.hoisted(() => ({ lost: new WeakSet<object>(), retries: 0 }));
+vi.mock('../../src/main/agents/pickers', async (actual) => ({
+  ...(await actual<Record<string, unknown>>()),
+  pickersLost: (contents: object) => pickers.lost.has(contents),
+  retryPickers: async (contents: object) => (pickers.retries++, pickers.lost.delete(contents), true),
+}));
 
 const card = (over: Partial<Omit<ControlCard, 'id'>> = {}): Omit<ControlCard, 'id'> => ({ kind: 'read', tool: 'read_tab', description: 'Read “A”', target: [], tab: 'n1', subject: 'read_tab', ...over });
 
@@ -1437,6 +1444,59 @@ describe('acting through the gate (S18 M2c)', () => {
       box.contents = t.pages.get('n1')!.contents;
       expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.noCheck);
       expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+    });
+
+    it('a tab of yours interrupted during a Send data card: that action refused, the next one in that tab goes (its new lease clears the old loss) (round 3 of #147)', async () => {
+      const box: { contents?: object } = {};
+      const lease = { begin: async () => (box.contents && leaseLost.delete(box.contents), null), end: () => undefined, going: () => undefined };
+      const t = await acting({ deep: { posts: true }, act: { siteAllowed: () => true, lease }, onCard: () => void (box.contents && leaseLost.add(box.contents)) });
+      box.contents = t.pages.get('n1')!.contents;
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.noCheck);
+      t.at.deep = {};
+      expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+    });
+
+    it('an outside agent’s tab whose hold was lost gets it back by trying again, before anything refuses it (round 3 of #147)', async () => {
+      const t = await acting();
+      pickers.lost.add(t.pages.get('n1')!.contents);
+      pickers.retries = 0;
+      expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
+      expect(pickers.retries).toBeGreaterThan(0);
+    });
+
+    it('the lease lost right before the input: select_option chooses nothing, a date field’s value isn’t set, a click with no card isn’t done, a load isn’t done (Neon’s S3, round 3 of #147)', async () => {
+      const box: { contents?: object } = {};
+      const loseAt = (op: string, nth: number) => (_events: EventEmitter, at: string) => {
+        if (at === op && --nth === 0 && box.contents) leaseLost.add(box.contents);
+      };
+      // select_option: lost at its check right before choosing.
+      const s1 = await acting({ onAct: loseAt('describe', 2), act: { siteAllowed: () => true } });
+      box.contents = s1.pages.get('n1')!.contents;
+      expect(refusal(await s1.call('select_option', { tab_id: s1.tab, ref: 'e3', option: 'Express' })).refused).toBe(ACT_REFUSALS.noCheck);
+      expect(s1.steps).not.toContain('choose');
+      leaseLost.delete(box.contents);
+      // A date field (set to its value, never typed): lost the same way.
+      ELEMENTS.push({ role: 'textbox', name: 'Birthday', editable: true, risk: { tag: 'input', type: 'date' } });
+      try {
+        const s2 = await acting({ onAct: loseAt('describe', 2), act: { siteAllowed: () => true } });
+        box.contents = s2.pages.get('n1')!.contents;
+        expect(refusal(await s2.call('type', { tab_id: s2.tab, ref: `e${ELEMENTS.length}`, text: '1987-02-17' })).refused).toBe(ACT_REFUSALS.noCheck);
+        expect(s2.steps).not.toContain('setValue');
+        leaseLost.delete(box.contents);
+      } finally {
+        ELEMENTS.pop();
+      }
+      // A click with no card: lost as the page settles after it. It went in; it isn't done.
+      const s3 = await acting({ onAct: loseAt('settle', 1), act: { siteAllowed: () => true } });
+      box.contents = s3.pages.get('n1')!.contents;
+      expect(refusal(await s3.call('click', { tab_id: s3.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.noCheck);
+      leaseLost.delete(box.contents);
+      // A load: lost while it loads.
+      const lease = { begin: async () => (queueMicrotask(() => box.contents && leaseLost.add(box.contents)), null), end: () => undefined, going: () => undefined };
+      const s4 = await acting({ act: { siteAllowed: () => true, lease } });
+      box.contents = s4.pages.get('n1')!.contents;
+      expect(refusal(await s4.call('navigate', { tab_id: s4.tab, url: 'https://news.test/b' })).refused).toBe(ACT_REFUSALS.noCheck);
+      leaseLost.delete(box.contents);
     });
 
     it('a send card no one answers in an action comes down (Neon’s S11): no card left at the head of the queue', async () => {
