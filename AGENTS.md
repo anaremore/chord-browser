@@ -61,7 +61,8 @@ pnpm deadcode                  # Knip, on demand only
 1. **Agent input is not yours.** Chord sends an agent's clicks and keys through `sendInputEvent`, so Chord's own
    `before-input-event`, `before-mouse-event` and `input-event` listeners see them too. A listener that acts on
    *your* hands (pausing an agent, shortcuts, DevTools keys, focusing a pane, the passwords menu's keys) asks
-   `isAgentInput(contents)` first (`apps/desktop/src/main/control/input.ts`).
+   `isAgentInput(contents)` first (`apps/desktop/src/main/control/input.ts`). A new listener, `session.fetch`, window-open
+   handler or debugger attach in main fails `apps/desktop/test/unit/invariants.test.ts` until it's classified there.
 2. **What an agent's tab sends goes through the Fetch hold.** Every request the page makes passes Chromium's `Fetch`
    domain on the tab's debugger (`apps/desktop/src/main/control/sends.ts`). A `session.fetch` from main does not:
    it carries the session's cookies outside the hold and skips `isNeverReadable`. Don't add one for an agent's tab
@@ -87,7 +88,7 @@ pnpm deadcode                  # Knip, on demand only
 10. **Mock before UI.** New UI starts as a static HTML mock the owner picks from, with multiple-choice questions.
     No UI code before the mock is approved.
 11. **The renderer is a web page.** Nothing in `apps/desktop/src/renderer` imports `electron`, `node:*`, or main's
-    or preload's code; it talks to main through `packages/ipc` only.
+    or preload's code; it talks to main through `packages/ipc` only (Oxlint's `no-restricted-imports` holds it).
 12. **Tests come with the change.** Logic gets unit tests (tables where there are many cases), user flows get E2E
     tests. Every feature works on Windows, macOS and Linux (X11 and Wayland).
 
