@@ -208,12 +208,19 @@ export const SNAPSHOT_LIB = String.raw`
     };
     const has = (a) => typeof t.hasAttribute === 'function' && t.hasAttribute(a);
     const words = el.getAttribute('aria-label') ? clip(String(el.innerText || ''), NAME_MAX) : '';
+    // The item it's in (the owner, 2026-11-24): the name given to its nearest row, list item, article, dialog, tab panel
+    // or region (its aria-label, or what aria-labelledby names), never its text, which a turn timer changes. The same
+    // control for another item is another element.
+    const item = closestDeep(el, 'tr, [role=row], li, [role=listitem], article, [role=article], dialog, [role=dialog], [role=tabpanel], [role=region], section[aria-label], section[aria-labelledby]');
+    const itemName = item
+      ? clip(item.getAttribute('aria-label') || String(item.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).slice(0, 4).map((id) => { const n = byId(item, id); return n ? String(n.textContent || '') : ''; }).join(' '), NAME_MAX)
+      : '';
     return JSON.stringify([
       t.localName, String(t.type || ''), t.id || '', el.localName === 'label' ? String(el.htmlFor || '') : '',
       link ? String(link.href) : '', form ? [formGet(form, 'action'), formGet(form, 'method')] : null,
       has('formaction') ? String(t.formAction) : '', has('formmethod') ? String(t.formMethod) : '',
       t.getAttribute('autocomplete') || '', t.getAttribute('name') || '', t.getAttribute('placeholder') || '',
-      Boolean(t.disabled), Boolean(t.readOnly), words,
+      Boolean(t.disabled), Boolean(t.readOnly), words, item ? [item.localName, item.getAttribute('role') || '', itemName] : null,
     ]);
   };
   const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });

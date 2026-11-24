@@ -570,9 +570,12 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   let refound = false;
   const refToken = lookup.token;
   const refKey = lookup.key;
+  /** The last step's no, by its why (the press's retry: a node replaced since, `replaced`). */
+  let lastWhy: string | null = null;
   const actOn = async (op: ActOp): Promise<ActAnswer> => {
     const answer = await page.act(owner, refToken, refKey, op);
     if (answer.ok && answer.refound) refound = true;
+    if (!answer.ok) lastWhy = answer.why;
     return answer;
   };
   const owner = scope.agent.id;
@@ -907,32 +910,64 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // The pointer there, then a last hit test right before the button goes down, once the page has seen the move (its
       // mouseenter handlers have run): an overlay or a frame put over the point meanwhile gets no press. The page's
       // own test first, then the debugger's, which sees into closed shadow roots. It narrows the race; it can't close
-      // it (the page runs between the test and the press too).
-      page.pointer(pointed.x, pointed.y);
-      let hit = await actOn({ op: 'hit', x: pointed.x, y: pointed.y });
-      // The move to the point not seen as the page's last: the pointer was there already (a second click at the point:
-      // no move was sent), or another move came after it (Windows sends the real cursor's move when a window changes
-      // under it: CI's Windows x64, #112), and the page only keeps the last. One off and back, and the page must see
-      // both, as any click's move (its mouseenter and mousemove handlers run before the test). A page that swallows
-      // moves still sees neither: no press.
-      if (!hit.ok && hit.why === 'no-move') {
-        const off = { x: pointed.x + 3, y: pointed.y };
-        page.pointer(off.x, off.y);
-        const seen = await actOn({ op: 'hit', ...off, onlyMove: true });
-        if (!seen.ok) return void (refused = actRefusal(seen));
-        page.pointer(pointed.x, pointed.y);
-        hit = await actOn({ op: 'hit', x: pointed.x, y: pointed.y });
+      // it (the page runs between the test and the press too). A page that re-renders (the owner's retest of #117: a
+      // game's controls rebuilt every frame) may replace the element anywhere on the way: then it starts over from the
+      // pointer's move (which looks for it again), at most PRESS_TRIES times, never once anything's pressed.
+      let at = pointed;
+      for (let attempt = 1; ; attempt++) {
+        const again = (why: string | undefined) => why === 'replaced' && attempt < PRESS_TRIES;
+        if (attempt > 1) {
+          const repointed = await actOn({ op: 'point', highlight: false });
+          if (!repointed.ok || repointed.x === undefined || repointed.y === undefined) return void (refused = repointed.ok ? ACT_REFUSALS.changed : actRefusal(repointed));
+          if (repointed.field && sensitiveField(repointed.field)) return void (refused = ACT_REFUSALS.sensitive);
+          at = repointed;
+        }
+        const x = at.x!;
+        const y = at.y!;
+        page.pointer(x, y);
+        let hit = await actOn({ op: 'hit', x, y });
+        // The move to the point not seen as the page's last: the pointer was there already (a second click at the point:
+        // no move was sent), or another move came after it (Windows sends the real cursor's move when a window changes
+        // under it: CI's Windows x64, #112), and the page only keeps the last. One off and back, and the page must see
+        // both, as any click's move (its mouseenter and mousemove handlers run before the test). A page that swallows
+        // moves still sees neither: no press.
+        if (!hit.ok && hit.why === 'no-move') {
+          const off = { x: x + 3, y };
+          page.pointer(off.x, off.y);
+          const seen = await actOn({ op: 'hit', ...off, onlyMove: true });
+          if (!seen.ok) {
+            if (again(seen.why)) continue;
+            return void (refused = actRefusal(seen));
+          }
+          page.pointer(x, y);
+          hit = await actOn({ op: 'hit', x, y });
+        }
+        if (!hit.ok) {
+          if (again(hit.why)) continue;
+          return void (refused = actRefusal(hit));
+        }
+        const under = await deep.hit(x + (hit.scrollX ?? 0), y + (hit.scrollY ?? 0));
+        if (!under.ok) {
+          if (again(under.why)) continue;
+          return void (refused = deepRefusal(under));
+        }
+        // Nothing in it hidden in a closed shadow root (the hit test can't see past one to say what's clicked: #112).
+        const open = await deep.open();
+        if (!open.ok) {
+          if (again(open.why)) continue;
+          return void (refused = deepRefusal(open));
+        }
+        lastWhy = null;
+        const changed = await sameStep();
+        if (changed) {
+          if (again(lastWhy ?? undefined)) continue;
+          return void (refused = changed);
+        }
+        break;
       }
-      if (!hit.ok) return void (refused = actRefusal(hit));
-      const under = await deep.hit(pointed.x + (hit.scrollX ?? 0), pointed.y + (hit.scrollY ?? 0));
-      if (!under.ok) return void (refused = deepRefusal(under));
-      // Nothing in it hidden in a closed shadow root (the hit test can't see past one to say what's clicked: #112).
-      const open = await deep.open();
-      if (!open.ok) return void (refused = deepRefusal(open));
-      if ((refused = await sameStep())) return;
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
-      page.press(pointed.x, pointed.y);
+      page.press(at.x!, at.y!);
       if (tool !== 'type') return;
       if (args['replace'] !== false) {
         const selected = await actOn({ op: 'select' });
@@ -1023,6 +1058,12 @@ function stepOf(tool: ActTool, args: Record<string, unknown>, element: Extract<A
     : null;
   return classifyStep(action, { tag: risk.tag, role: element.role, type: risk.type, name: element.name, ...(risk.text ? { text: risk.text } : {}), href: risk.href, ...(risk.hrefUnknown ? { hrefUnknown: true } : {}), editable: element.editable === true, multiline: risk.multiline, submits: risk.submits, form });
 }
+
+/**
+ * Tries at the pointer's move to the press when the page replaced the element on the way (a re-render: the owner's
+ * retest of #117); then it's refused as changed, as before.
+ */
+const PRESS_TRIES = 3;
 
 /** Send cards in one action at most (each for sites the ones before didn't name): a page that keeps finding more is stopped. */
 const SEND_CARDS = 3;
@@ -1143,6 +1184,8 @@ const emptyRisk: RiskElement = { tag: '', role: '', type: '', name: '', href: ''
 /** The page's no, in words for the agent. */
 function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'stale') return ELEMENT_REFUSALS.stale;
+  // Replaced again and again (the press's tries ran out): changed, as it always was.
+  if (answer.why === 'replaced') return ACT_REFUSALS.changed;
   if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';

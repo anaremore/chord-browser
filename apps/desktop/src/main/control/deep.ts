@@ -36,7 +36,7 @@ const OBJECT_GROUP = 'chord-acting';
 /** Each command's limit. */
 const DEEP_COMMAND_MS = 3000;
 
-export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
+export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'replaced' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
 
 export interface DeepSession {
   /** What's under (x, y), in the document's CSS pixels (the view's point plus the scroll: DOM.getNodeForLocation's), is the element's own. */
@@ -63,7 +63,8 @@ const CHECK_FN = String.raw`function (owner, token, key) {
   if (!read || read.token !== token) return { ok: false, why: 'stale' };
   const entry = read.keep[key];
   const el = entry && entry.ref.deref();
-  if (!el || !el.isConnected) return { ok: false, why: 'stale' };
+  // Replaced since the action pointed at it (a page that re-renders): said so, and the action starts over (tools.ts).
+  if (!el || !el.isConnected) return { ok: false, why: entry && entry.path !== undefined ? 'replaced' : 'stale' };
   const FRAMES = new Set(['iframe', 'frame', 'embed', 'object', 'fencedframe']);
   const up = (n) => n.parentNode ? (n.parentNode.nodeType === 11 ? n.parentNode.host : n.parentNode) : null;
   const coverOf = (cover) => {
@@ -230,7 +231,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
             expression: `(() => { const r = globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return null; const e = r.keep[${JSON.stringify(key)}]; const el = e && e.ref.deref(); return el && el.isConnected ? el : null; })()`,
           });
           const currentId = now?.result.objectId;
-          if (!currentId) return { ok: false, why: 'stale' };
+          if (!currentId) return { ok: false, why: 'replaced' };
           const described = await send<{ node: Node }>('DOM.describeNode', { objectId: currentId, depth: -1, pierce: true });
           if (!described) return { ok: false, why: 'no-check' };
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };

@@ -72,7 +72,7 @@ export interface ActRisk {
 
 export type ActAnswer =
   | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -97,9 +97,12 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // changed, as before. A node that's still here but says something else is never looked for again.
   let refound = false;
   if (entry && (!el || !el.isConnected)) {
-    // Only where the action asks (the review of #117): its first look, the look after a card, the pointer's move and the
-    // hit test. Never once the element is checked and pointed at (the step again, the focus, the text, a choice).
-    if (!(args.refind || args.op === 'point' || args.op === 'hit') || entry.path === undefined) return { ok: false, why: 'changed' };
+    // Only where the action asks (the review of #117): its first look, the look after a card, and the pointer's move.
+    // Never once the element is checked and pointed at (the hit test, the step again, the focus, the text, a choice):
+    // there a node replaced since is said so (replaced, when it could be found again), and the action starts over from
+    // its pointer's move, which looks again (tools.ts; the owner's retest of #117).
+    if (entry.path === undefined) return { ok: false, why: 'changed' };
+    if (!(args.refind || args.op === 'point')) return { ok: false, why: 'replaced' };
     const started = performance.now();
     let looked = 0;
     let over = false;
@@ -126,8 +129,10 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     refound = true;
   }
   if (!el || !el.isConnected) return { ok: false, why: 'changed' };
-  // The same element as the snapshot described: its role and name now, and on screen.
-  const role = roleNow(el);
+  // The same element as the snapshot described: its role and name now, and on screen. A clickable element by its look
+  // (the snapshot's generic: no role, a pointer cursor its parent doesn't give it) is checked by that same rule (the
+  // owner's retest of #117: every generic ref was refused, its role compared with none).
+  const role = entry.role === 'generic' && !roleNow(el) && pointerGeneric(el) ? 'generic' : roleNow(el);
   if (role !== entry.role || nameOf(el, role) !== entry.name) return { ok: false, why: 'changed' };
   if (!(isField(el) ? visibleField(el, typeOf(el)) : shown(el))) return { ok: false, why: 'changed' };
   // One that opens a file picker now (the page made it one since): never acted on.
@@ -355,6 +360,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       });
     }
     await new Promise((done) => setTimeout(done, 0));
+    // Replaced while the move was awaited (a page that re-renders): said so, and the action starts over (tools.ts).
+    if (!el.isConnected) return { ok: false, why: entry.path !== undefined ? 'replaced' : 'changed' };
     if (!arrived) {
       const was = moved && moved.before;
       return { ok: false, why: 'no-move', ...(was && near(was) ? { there: true } : {}) };

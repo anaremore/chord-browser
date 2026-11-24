@@ -1214,6 +1214,73 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
+test('a game whose action controls are pointer divs, re-rendered every 100 ms and every frame; a bet field the page takes the focus from (the owner’s retest of #117)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/game` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    let outline = await snap();
+    // The real button first (the site card), as on the owner's page.
+    const ranking = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Hand rankings"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    expect(JSON.parse((await ranking).text)).toMatchObject({ data: { done: 'Clicked “Hand rankings”' } });
+    // Each control, right after a snapshot, three times over.
+    for (let round = 0; round < 3; round++) {
+      outline = await snap();
+      for (const name of ['Fold', 'Call', 'Raise']) {
+        const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, `generic "${name}"`) });
+        expect(clicked.text, `${name}, round ${round}`).toMatch(/^\{/);
+        expect(JSON.parse(clicked.text)).toMatchObject({ data: { done: `Clicked “${name}”` } });
+      }
+    }
+    await expect.poll(read).toContain('Fold Call Raise Fold Call Raise Fold Call Raise');
+    // Enter in the bet field, which the page's tick takes the focus from, three times.
+    for (let round = 0; round < 3; round++) {
+      outline = await snap();
+      const typed = await mcp.call('type', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), text: `${round + 1}0` });
+      expect(typed.text, `the bet, round ${round}`).toMatch(/^\{/);
+      // Enter in it, as the owner's agent pressed it (a field in no form: it asks as a submit; allowed, it goes).
+      const entering = mcp.call('press_key', { tab_id: 'a1', ref: refOf(outline, 'textbox "Bet"'), key: 'Enter' });
+      const card = popover.getByRole('alertdialog');
+      await expect(card).toBeVisible({ timeout: 15_000 });
+      await popover.waitForTimeout(600);
+      await card.getByRole('button', { name: 'Allow', exact: true }).click();
+      const entered = await entering;
+      expect(entered.text, `Enter in the bet, round ${round}`).toMatch(/^\{/);
+    }
+    await expect.poll(read).toContain('bet 30');
+    // Every frame: the same controls, re-rendered at 60 Hz.
+    expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/game?raf=1` })).text)).toMatchObject({ data: { navigated: true } });
+    // A node replaced every frame can't be checked and pressed within one: each is clicked, or refused as changed
+    // (fails closed), never another element (a stated limit). How many got through is a report.
+    outline = await snap();
+    let through = 0;
+    for (const name of ['Fold', 'Call', 'Raise', 'Fold', 'Call', 'Raise']) {
+      const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, `generic "${name}"`) });
+      if (clicked.text.startsWith('{')) through++;
+      else expect(clicked.text, `${name}, every frame`).toBe('That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.');
+    }
+    console.log(`[game] every frame: ${through} of 6 clicks went through; the rest refused as changed`);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('re-finding, narrowed (the review of #117): never a twin, a field turned sensitive, a changed target, another frame, a huge page; a node still there that changed is never looked for again', async () => {
   test.setTimeout(180_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1290,6 +1357,22 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     await step.getByRole('button', { name: 'Allow', exact: true }).click();
     expect([STALE, 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.']).toContain((await deleting).text);
     expect(reached.filter((r) => r.includes('wipe'))).toEqual([]);
+    // The same control for another item (Table 4, not 3): another element, refused (the owner, 2026-11-24).
+    await mode('');
+    o = await snap();
+    await mode('other');
+    await refused('another table', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Sit out"') }));
+    // A swap while a risky step's card is up that keeps the element (its place and shape) but not the step (its form
+    // now asks for a card number): exactly "step changed", nothing sent (Claude's test gap).
+    await mode('');
+    o = await snap();
+    const removing = mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Remove item"') });
+    const removeCard = popover.getByRole('alertdialog', { name: /^Delete this on / });
+    await expect(removeCard).toBeVisible({ timeout: 15_000 });
+    await mode('fields');
+    await removeCard.getByRole('button', { name: 'Allow', exact: true }).click();
+    expect((await removing).text).toBe('The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.');
+    expect(reached.filter((r) => r.includes('/remove'))).toEqual([]);
     // A node still there that says something else, with a copy elsewhere: never looked for again.
     await mode('');
     o = await snap();
@@ -1880,6 +1963,10 @@ test.beforeAll(async () => {
       't.addEventListener(\'click\', (e) => { if (e.target.localName === \'button\' && !e.target.form) { e.preventDefault(); log.textContent += \' \' + e.target.textContent; } });' +
       '</script></main>',
     // The review of #117: a page that redraws every 300 ms by a mode the test sets, one case each.
+    // The owner's retest of #117 (2026-11-24): a game's action controls are divs with a pointer cursor, rebuilt by a
+    // framework-style render every 100 ms (or every frame, ?raf), in a named table; a bet field the page takes the focus
+    // from on its tick; a real button beside them.
+    '/game': '<title>Game</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div id=table role=region aria-label="Table 3" tabindex=-1><div id=controls></div><label>Bet <input id=bet></label> <button id=rankings>Hand rankings</button></div><p id=log></p></main><script src="/game.js"></script>',
     '/redraws': '<title>Redraws</title><div id=big></div><div id=keep><button id=kb>Keep</button></div><main id=m></main><p id=log></p><script src="/redraws.js"></script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
@@ -1907,6 +1994,19 @@ test.beforeAll(async () => {
         ' if (e.data === "putback") { try { delete self.fetch; } catch {} try { self.fetch = () => 0; } catch {} report(fetch("/worker-putback", { method: "POST", body: "x" }), "putback"); }' +
         '};',
       '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
+      '/game.js': `
+        const c = document.getElementById('controls');
+        const log = document.getElementById('log');
+        const render = () => { c.innerHTML = '<div class=act data-a=fold>Fold</div><div class=act data-a=call>Call</div><div class=act data-a=raise>Raise</div>'; };
+        render();
+        if (location.search.includes('raf')) { const frame = () => { render(); requestAnimationFrame(frame); }; requestAnimationFrame(frame); } else setInterval(render, 100);
+        c.addEventListener('click', (e) => { const a = e.target.closest('.act'); if (a) log.textContent += ' ' + a.textContent; });
+        document.getElementById('rankings').addEventListener('click', () => { log.textContent += ' rankings'; });
+        const bet = document.getElementById('bet');
+        bet.addEventListener('keydown', (e) => { if (e.key === 'Enter') log.textContent += ' bet ' + bet.value; });
+        // The page's tick takes the focus to its table (keyboard shortcuts), once a second.
+        setInterval(() => document.getElementById('table').focus(), 1000);
+      `,
       '/redraws.js': `
         window.mode = '';
         const m = document.getElementById('m');
@@ -1926,6 +2026,8 @@ test.beforeAll(async () => {
           h += '<div class=pass><div role=button tabindex=0 id=pass>Pass</div></div>';
           h += '<a href="' + (md === 'relink' ? '/elsewhere' : '/home') + '"><x-in></x-in></a>';
           h += '<div class=solo><button>Check</button></div>' + (md === 'twin' ? '<div class=solo><button>Check</button></div>' : '');
+          h += '<div role=region aria-label="' + (md === 'other' ? 'Table 4' : 'Table 3') + '"><button>Sit out</button></div>';
+          h += '<form method=post action=/remove><label>Note <input name=note></label>' + (md === 'fields' ? '<label>Card <input name=cc autocomplete=cc-number></label>' : '') + '<button>Remove item</button></form>';
           m.innerHTML = h;
           if (md === 'closed') document.getElementById('pass').attachShadow({ mode: 'closed' }).innerHTML = '<span>Pass</span>';
           m.querySelector('x-in').attachShadow({ mode: 'open' }).innerHTML = '<button>Open the way</button>';
@@ -2009,7 +2111,7 @@ test.beforeAll(async () => {
           ? texts
           : req.url === '/noisy'
             ? noisy
-            : pages[req.url ?? '/'];
+            : (pages[req.url ?? '/'] ?? pages[(req.url ?? '/').split('?')[0]!]);
     // /lookout sends a Permissions-Policy that doesn't parse (the final pass of #112: an agent's tab replaces it).
     res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', ...(req.url === '/lookout' ? { 'permissions-policy': '@' } : {}) });
     res.end(body ?? 'not found');
