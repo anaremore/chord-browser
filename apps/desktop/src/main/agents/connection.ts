@@ -89,6 +89,8 @@ const CARD_WAIT_MIN_MS = 1_000;
  * activity (Claude Code's idle limit), and how its user sees that Chord waits on them, not that it hung.
  */
 const PROGRESS_MS = 5_000;
+/** A progressToken longer than this isn't echoed back (it's the client's; a string one is usually a few characters). */
+const PROGRESS_TOKEN_MAX = 256;
 export const AGENT_PROGRESS = {
   card: 'Waiting for the user to answer Chord’s card.',
   working: 'Still working in Chord.',
@@ -274,17 +276,24 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const started = Date.now();
     const cardWait = () => Math.min(waitMs, Math.max(CARD_WAIT_MIN_MS, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)));
     const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait } });
-    // Progress, when the client asked for it (MCP's progressToken): every PROGRESS_MS until the answer, saying whether a
-    // card waits on the user (#143: a client must never take a call waiting on a card for one that hung).
+    // Progress, when the client asked for it (MCP's progressToken, a string or a number, bounded): every PROGRESS_MS
+    // until the answer or the client's cancel, saying whether a card this call waits on is up: one for its tab, or the
+    // agent-wide one (the connection's) (#143; Neon's review of M2g-1, S4).
     const token = (m.params?.['_meta'] as { progressToken?: unknown } | undefined)?.progressToken;
+    const tokenOk = (typeof token === 'string' && token.length > 0 && token.length <= PROGRESS_TOKEN_MAX) || (typeof token === 'number' && Number.isFinite(token));
+    const tabOf = () => {
+      const found = scope.refs.resolve(args['tab_id'], () => true);
+      return found.ok ? found.id : null;
+    };
     let beats = 0;
-    const beat =
-      typeof token === 'string' || typeof token === 'number'
-        ? setInterval(() => {
-            const card = [...agent.states().values()].some((s) => s.cards.length > 0);
-            send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: card ? AGENT_PROGRESS.card : AGENT_PROGRESS.working } });
-          }, deps.progressMs ?? PROGRESS_MS)
-        : null;
+    const beat = tokenOk
+      ? setInterval(() => {
+          const tab = tabOf();
+          const card = agent.state(null).cards.length > 0 || (tab !== null && agent.state(tab).cards.length > 0);
+          send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: card ? AGENT_PROGRESS.card : AGENT_PROGRESS.working } });
+        }, deps.progressMs ?? PROGRESS_MS)
+      : null;
+    if (beat) cancel.signal.addEventListener('abort', () => clearInterval(beat), { once: true });
     try {
       const out = await agent.call(
         null,

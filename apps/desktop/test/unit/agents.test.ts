@@ -391,6 +391,18 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
     expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList(true));
   });
 
+  it('progress reaches the client through the relay while the connection card waits (#143)', async () => {
+    const ud = profile();
+    const service = new AgentService({ userData: ud, browser, ask: answering('once', 1200), helper: null, waitMs: 2000, progressMs: 300 });
+    await service.start();
+    cleanup.push(() => service.stop());
+    const c = client(ud);
+    await c.initialize();
+    const r = await c.request('tools/call', { name: 'list_tabs', arguments: {}, _meta: { progressToken: 'p1' } });
+    expect(r.result['isError']).toBe(false);
+    expect(c.notifications.filter((m) => m === 'notifications/progress').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('Chord says list_changed when the bridge gave another build’s list', async () => {
     const ud = profile();
     await chord(ud);

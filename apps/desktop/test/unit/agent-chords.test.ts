@@ -551,10 +551,46 @@ describe('Review 1 of #77', () => {
     expect(sent.find((m) => m.id === 1)).toBeDefined();
     await vi.advanceTimersByTimeAsync(5000);
     expect(progress()).toHaveLength(3);
-    // A call without a token hears none.
+    // A call without a token hears none; nor one whose token is past its bound.
     connection.message({ id: 2, method: 'tools/call', params: { name: 'list_tabs', arguments: {} } });
+    connection.message({ id: 3, method: 'tools/call', params: { name: 'list_tabs', arguments: {}, _meta: { progressToken: 'x'.repeat(300) } } });
     await vi.advanceTimersByTimeAsync(5000);
     expect(sent.find((m) => m.id === 2)).toBeDefined();
+    expect(progress()).toHaveLength(3);
+    vi.useRealTimers();
+  });
+
+  it('progress names a card only when it’s this call’s (its tab’s, or the agent-wide one), and stops on the client’s cancel (Neon’s review of M2g-1, S4)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    type Sent = { id?: number; method?: string; params?: { progressToken?: unknown; progress?: number; message?: string } };
+    const sent: Sent[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+      present: (card) => (card.kind === 'connection' ? Promise.resolve('once') : new Promise(() => undefined)),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+      progressMs: 1000,
+    });
+    const chordId = t.chords.chordFor(connection.agent, 'Claude Code', null);
+    t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'b1', url: 'https://agent.test/b1' });
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'list_tabs', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'b2', url: 'https://agent.test/b2' });
+    // A call on b1 (a1) waits: the user has that tab. A card is up on b2 meanwhile: not this call's.
+    connection.agent.pause('b1', true);
+    void connection.agent.ask({ kind: 'step', tool: 'click', description: 'click “Buy”', target: ['https://agent.test/b2'], tab: 'b2', subject: 'b2|step' }, new AbortController().signal);
+    connection.message({ id: 2, method: 'tools/call', params: { name: 'close_tab', arguments: { tab_id: 'a1' }, _meta: { progressToken: 7 } } });
+    await vi.advanceTimersByTimeAsync(2500);
+    const progress = () => sent.filter((m) => m.method === 'notifications/progress');
+    expect(progress().map((m) => m.params?.message)).toEqual([AGENT_PROGRESS.working, AGENT_PROGRESS.working]);
+    // A card on its own tab: that's this call's.
+    void connection.agent.ask({ kind: 'step', tool: 'click', description: 'click “Fold”', target: ['https://agent.test/b1'], tab: 'b1', subject: 'b1|step' }, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(progress().at(-1)?.params).toEqual({ progressToken: 7, progress: 3, message: AGENT_PROGRESS.card });
+    // The client cancels: no beat after.
+    connection.message({ method: 'notifications/cancelled', params: { requestId: 2 } });
+    await vi.advanceTimersByTimeAsync(5000);
     expect(progress()).toHaveLength(3);
     vi.useRealTimers();
   });
