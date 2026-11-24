@@ -336,8 +336,9 @@ function registerIpc(): void {
     if (command.t === 'agents.closeAll') return agents?.service?.chords?.closeAll(command.chordId);
     if (command.t === 'agents.undoClose') return agents?.service?.chords?.undoClose(command.token);
     if (command.t === 'agents.unshare') return agents?.service?.shares?.unshare(command.nodeId);
-    // An address you typed for an agent's tab: where it goes is yours (a site you keep private makes it a tab of yours).
-    if (command.t === 'tab.navigate') agents?.service?.chords?.userActed(command.nodeId);
+    // An address you typed for an agent's tab: where it goes is yours (a site you keep private makes it a tab of yours),
+    // and you take the tab over (S18 M2e-1), as a reload of yours does.
+    if (command.t === 'tab.navigate') agents?.service?.chords?.takeOver(command.nodeId);
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -353,6 +354,8 @@ function registerIpc(): void {
     const contents = browser!.pageIn(senderWindow(sender));
     if (!contents) return;
     const history = contents.navigationHistory;
+    // The toolbar's buttons: an agent's tab is yours from here (S18 M2e-1).
+    if (action !== 'stop') browser!.userNavigates?.(contents);
     if (action === 'back' && history.canGoBack()) history.goBack();
     else if (action === 'forward' && history.canGoForward()) history.goForward();
     else if (action === 'reload') contents.reload();
@@ -1186,6 +1189,7 @@ if (!app.requestSingleInstanceLock()) {
     // Outside agents' tabs (S18): their pages' wiring, and what they held, go to the agents' chords once there are any.
     browser.agentContents = (contents, nodeId) => agents?.service?.chords?.wire(contents, nodeId);
     browser.agentHeld = (nodeId, what, detail, from) => agents?.service?.chords?.note(nodeId, what, detail, from);
+    browser.userNavigates = (contents) => agents?.service?.chords?.takeOverPage(contents);
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {
       agents?.service?.stopAll();

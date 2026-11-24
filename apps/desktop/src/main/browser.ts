@@ -88,7 +88,7 @@ import { IdleKeeper, type IdleTiming } from './idle';
 import { MiniWindows } from './mini-window';
 import { MediaWatcher } from './media';
 import { liveOf, Peeks } from './peek';
-import { buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH, type AgentShareMenu } from './menu';
+import { buildAgentTabMenu, buildAppMenu, buildChordMenu, buildFavoriteMenu, buildFolderMenu, buildSplitMenu, buildTabMenu, OPTIONS_MENU_WIDTH, type AgentShareMenu } from './menu';
 import type { PermissionBroker } from './permissions';
 import { Previews } from './previews';
 import { Readers, type ReaderLinkTarget } from './reader/service';
@@ -303,6 +303,11 @@ export class Browser {
   agentContents: ((contents: WebContents, nodeId: NodeId) => void) | null = null;
   /** Something an agent's tab held or refused (a dialog, a file picker, a popup, a download), for the agent. */
   agentHeld: ((nodeId: NodeId, what: AgentHeld, detail: string, from?: string) => void) | null = null;
+  /**
+   * Chord's own buttons, keys or menus are about to reload or move this page (S18 M2e-1): if it's an agent's tab, you
+   * take it over (agents/chords.ts' takeOverPage). Never called for a page navigating itself. Set by main.
+   */
+  userNavigates: ((contents: WebContents) => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -548,6 +553,7 @@ export class Browser {
             return owner && bounds ? { window: owner, x: bounds.x, y: bounds.y } : undefined;
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
+          navigates: () => this.userNavigates?.(contents),
           adBlocking: this.blockingMenu(contents),
           screenshot: () => {
             const w = this.windowFor(contents);
@@ -1271,7 +1277,11 @@ export class Browser {
             void this.options.adBlocking.settled().then(() => {
               for (const w of this.windows.values()) {
                 if (chordId ? this.store.state.windows[w.id]?.activeChordId !== chordId : w.isPrivate) continue;
-                for (const contents of w.paneContents) if (!contents.isDestroyed() && isBlockingOff(contents.getURL(), [site])) contents.reload();
+                for (const contents of w.paneContents) {
+                  if (contents.isDestroyed() || !isBlockingOff(contents.getURL(), [site])) continue;
+                  this.userNavigates?.(contents);
+                  contents.reload();
+                }
               }
             }),
           );
@@ -1889,9 +1899,11 @@ export class Browser {
         this.devtools.toggleWindow(nodeId, true);
         return true;
       case 'nav.reload':
+        if (page) this.userNavigates?.(page);
         page?.reload();
         return true;
       case 'nav.hardReload':
+        if (page) this.userNavigates?.(page);
         page?.reloadIgnoringCache();
         return true;
       case 'app.quit':
@@ -2223,7 +2235,9 @@ export class Browser {
   /** A sidebar row's reload button. A tab asleep or not loaded yet has no page to reload. */
   reloadTab(nodeId: string): void {
     const contents = this.tabs.get(nodeId)?.webContents;
-    if (contents && !contents.isDestroyed()) contents.reload();
+    if (!contents || contents.isDestroyed()) return;
+    this.userNavigates?.(contents);
+    contents.reload();
   }
 
   openAppMenu(contents: WebContents, anchor: Rect): void {
@@ -2265,6 +2279,19 @@ export class Browser {
       return;
     }
     const tab: TabNode = node;
+    // An outside agent's tab (S18 M2e-1): copy its link, reload it (you take it over), or close it.
+    if (isAgentChord(this.store.state, tab.chordId)) {
+      w.popupMenu(
+        buildAgentTabMenu({
+          url: tab.url,
+          copyLink: () => clipboard.writeText(tab.url),
+          reload: () => this.reloadTab(nodeId),
+          close: () => this.store.dispatch({ t: 'tab.close', windowId: w.id, nodeId }),
+        }),
+        { ...at, width: 0, height: 0 },
+      );
+      return;
+    }
     const state = this.store.state;
     const from = state.chords[tab.chordId];
     // "Open in split" puts it beside the tab on screen (or in that tab's split, if there's room).
@@ -2283,7 +2310,11 @@ export class Browser {
         togglePin: () => this.store.dispatch({ t: tab.section === 'pinned' ? 'tab.unpin' : 'tab.pin', nodeId }),
         copyLink: () => clipboard.writeText(tab.url),
         copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
-        reload: () => pageOf(this.tabs.get(nodeId))?.reload(),
+        reload: () => {
+          const page = pageOf(this.tabs.get(nodeId));
+          if (page) this.userNavigates?.(page);
+          page?.reload();
+        },
         duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
         muted: Boolean(tab.muted),
         toggleMute: () => this.store.dispatch({ t: 'tab.mute', nodeId, muted: !tab.muted }),
@@ -2752,16 +2783,24 @@ export class Browser {
         this.store.dispatch({ t: 'tab.cycle', windowId: w.id, direction: action === 'tab.next' ? 1 : -1 });
         return true;
       case 'nav.reload':
+        if (pageContents) this.userNavigates?.(pageContents);
         pageContents?.reload();
         return true;
       case 'nav.hardReload':
+        if (pageContents) this.userNavigates?.(pageContents);
         pageContents?.reloadIgnoringCache();
         return true;
       case 'nav.back':
-        if (pageContents?.navigationHistory.canGoBack()) pageContents.navigationHistory.goBack();
+        if (pageContents?.navigationHistory.canGoBack()) {
+          this.userNavigates?.(pageContents);
+          pageContents.navigationHistory.goBack();
+        }
         return true;
       case 'nav.forward':
-        if (pageContents?.navigationHistory.canGoForward()) pageContents.navigationHistory.goForward();
+        if (pageContents?.navigationHistory.canGoForward()) {
+          this.userNavigates?.(pageContents);
+          pageContents.navigationHistory.goForward();
+        }
         return true;
       case 'view.fullscreen':
         w.window.setFullScreen(!w.window.isFullScreen());

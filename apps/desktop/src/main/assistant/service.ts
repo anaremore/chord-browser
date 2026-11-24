@@ -10,7 +10,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  agentChords,
   children,
+  nodesOfChord,
   ASSISTANT_MAX_IMAGES,
   ASSISTANT_MAX_PROCESSES,
   ASSISTANT_PROCESS_IDLE_MS,
@@ -391,11 +393,17 @@ export class AssistantService {
     return null;
   }
 
+  /** The tab on screen: an agent's tab the window shows over its chord's (S18), else the chord's own. */
   private activeTab(windowId: WindowId): TabNode | null {
     const model = this.browser.store.state.windows[windowId];
-    const id = model ? model.activeTab[model.activeChordId] : null;
+    const id = model ? (model.agentTab ?? model.activeTab[model.activeChordId]) : null;
     const node = id ? nodeOf(this.browser.store.state, id) : undefined;
     return node?.kind === 'tab' ? node : null;
+  }
+
+  /** The outside agent whose tab this is, by name (an Agent chord's), or null for a tab of yours. */
+  private agentOf(node: TabNode): string | null {
+    return this.browser.store.state.chords[node.chordId]?.agent?.name ?? null;
   }
 
   private readable(node: TabNode): boolean {
@@ -451,7 +459,15 @@ export class AssistantService {
       : children(this.browser.store.state, chordId, 'pinned', null)
       .concat(children(this.browser.store.state, chordId, 'today', null))
       .filter((n): n is TabNode => n.kind === 'tab' && this.readable(n))
-      .map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url }));
+      .map((n) => ({ nodeId: n.id, title: n.title || n.url, url: n.url }))
+      // Agents' tabs (S18 M2e-1): attaching one is how you point the assistant at it, named with its agent.
+      .concat(
+        agentChords(store).flatMap((c) =>
+          nodesOfChord(store, c.id)
+            .filter((n): n is TabNode => n.kind === 'tab' && this.readable(n))
+            .map((n) => ({ nodeId: n.id, title: `${c.agent?.name ?? 'Agent'} · ${n.title || n.url}`, url: n.url })),
+        ),
+      );
     const current = this.activeTab(windowId);
     return {
       ...base,
@@ -1207,6 +1223,7 @@ export class AssistantService {
       browser: this.browser,
       settings: () => this.settings,
       readable: (node) => this.readable(node),
+      agentOf: (node) => this.agentOf(node),
       activeTab: (windowId) => this.activeTab(windowId),
       activity: (chat, tool, summary, detail, ok) => this.activity(chat as ThreadState, tool, summary, detail, ok),
       search: (chat, tool, query) => this.searchFor(chat as ThreadState, tool, query),

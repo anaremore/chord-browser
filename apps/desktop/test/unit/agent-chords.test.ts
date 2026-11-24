@@ -15,7 +15,7 @@ import { AgentChords } from '../../src/main/agents/chords';
 import { agentConnection } from '../../src/main/agents/connection';
 import { AuthBroker } from '../../src/main/http-auth';
 import { agentScope, NOT_YOURS } from '../../src/main/agents/scope';
-import { ControlAgent } from '../../src/main/control/gate';
+import { ControlAgent, type CardPresenter } from '../../src/main/control/gate';
 import { DownloadManager } from '../../src/main/downloads';
 import { PasswordService } from '../../src/main/passwords/service';
 import { Store } from '../../src/main/store';
@@ -26,7 +26,7 @@ afterEach(() => vi.useRealTimers());
 const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
 
 /** A store with your chord and one window, a tab of yours, and the pages main has made. */
-function setup(neverSites: string[] = []) {
+function setup(neverSites: string[] = [], present: CardPresenter = async () => 'once') {
   const state: State = emptyState();
   state.chords['c1'] = { id: 'c1', profileId: 'default', name: 'Personal', icon: '✦', theme, rank: 'a0', createdAt: 0 };
   state.windows['w1'] = { id: 'w1', activeChordId: 'c1', activeTab: { c1: null }, sidebar: 'docked', sidebarWidth: 248, bounds: null };
@@ -47,7 +47,7 @@ function setup(neverSites: string[] = []) {
     return Object.assign(p, { isDestroyed: () => false, setBackgroundThrottling: (on: boolean) => (p!.throttled = on) }) as unknown as WebContents;
   };
   const chords = new AgentChords({ store, page, lastWindow: () => ({ id: 'w1', toast: (t) => void toasts.push(t) }), neverSites: () => neverSites });
-  const agent = new ControlAgent('agent:1', async () => 'once');
+  const agent = new ControlAgent('agent:1', present);
   const chordId = chords.chordFor(agent, 'Claude Code', null);
   const open = (nodeId: string, url = `https://agent.test/${nodeId}`) => store.dispatch({ t: 'agent.tab.add', chordId, nodeId, url });
   open('a1');
@@ -131,6 +131,48 @@ describe('The bar, throttling and your hands', () => {
     const event = { preventDefault: vi.fn() };
     (contents as unknown as EventEmitter).emit('will-prevent-unload', event);
     expect(event.preventDefault).toHaveBeenCalled();
+  });
+});
+
+describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
+  /** A card no one answers: up until it's taken down. */
+  const unanswered: CardPresenter = (_card, signal) => new Promise((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
+  const card = (tab: string, kind: 'site' | 'step', subject: string) => ({ kind, tool: 'click', description: '', target: [`https://agent.test/${tab}`], tab, subject });
+
+  it('your reload, back, forward or typed address takes the tab over: paused, its own cards down, another tab’s left', async () => {
+    const t = setup([], unanswered);
+    const contents = t.page('a1');
+    t.chords.wire(contents, 'a1');
+    const never = new AbortController().signal;
+    const step = t.agent.ask(card('a1', 'step', 'a1|p1|e4|click'), never);
+    // A site card is the site's: a2 waits on the one a1 opened.
+    const site1 = t.agent.ask(card('a1', 'site', 'agent.test'), never);
+    const site2 = t.agent.ask(card('a2', 'site', 'agent.test'), never);
+    t.chords.takeOverPage(contents);
+    expect(agentLive(t.store, 'a1')?.state).toBe('paused');
+    await expect(step).resolves.toBe('deny');
+    expect(t.agent.hasOpenCard('site', 'agent.test', 'a1') || t.agent.hasOpenCard('site', 'agent.test', 'a2')).toBe(true);
+    // Its other tab isn't paused.
+    expect(agentLive(t.store, 'a2')?.state).not.toBe('paused');
+    t.agent.cancelCards();
+    await Promise.all([site1, site2]);
+  });
+
+  it('the page navigating itself never takes it over (Neon’s B6: a pause makes its sends yours)', () => {
+    const t = setup();
+    const contents = t.page('a1') as unknown as EventEmitter;
+    t.chords.wire(t.page('a1'), 'a1');
+    // A page's own location.reload(), meta refresh or timed redirect: navigation events, no input, no button of Chord's.
+    for (const event of ['did-start-navigation', 'did-navigate', 'did-finish-load', 'did-redirect-navigation']) contents.emit(event, {}, 'https://agent.test/elsewhere', false, true);
+    expect(agentLive(t.store, 'a1')).toBeNull();
+    expect(t.agent.state('a1').paused).toBe(false);
+  });
+
+  it('a tab of yours: nothing', () => {
+    const t = setup();
+    t.chords.takeOver(t.mine);
+    t.chords.takeOverPage(t.page(t.mine));
+    expect(t.agent.state(t.mine).paused).toBe(false);
   });
 });
 

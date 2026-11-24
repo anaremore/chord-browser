@@ -5,20 +5,33 @@
  * private window. What the buttons do happens in main (main/agents).
  */
 import { agentChords, nodesOfChord, type AgentLive, type State, type TabNode } from '@chord/core';
+import type { SystemInfo } from '@chord/ipc';
 import type { Appearance } from '@chord/tokens';
+import { X } from 'lucide-react';
+import type { MouseEvent } from 'react';
 import { Favicon } from '../shared/Favicon';
 import { api } from './api';
+import rows from './App.module.css';
 import styles from './Agents.module.css';
+import { useKeys } from './keys';
 
-/** Each agent's tabs, oldest first, below your chord's (none in a private window). */
-export function AgentSections({ state, windowId, appearance }: { state: State; windowId: string; appearance: Appearance }) {
+/**
+ * Each agent's tabs, oldest first, below your chord's (none in a private window). An agent with no tabs has no section
+ * (the owner, 2026-11-24): Settings → Agents still says it's connected, and its section comes back with its next tab.
+ */
+export function AgentSections({ state, windowId, appearance, info }: { state: State; windowId: string; appearance: Appearance; info: SystemInfo }) {
+  const { withKeys } = useKeys(info);
   const win = state.windows[windowId];
-  const chords = agentChords(state);
+  const tabsOf = (chordId: string) => nodesOfChord(state, chordId).filter((n): n is TabNode => n.kind === 'tab').sort((a, b) => a.createdAt - b.createdAt);
+  const chords = agentChords(state)
+    .map((chord) => ({ chord, own: tabsOf(chord.id) }))
+    .filter(({ own }) => own.length > 0);
   if (!win || win.private || chords.length === 0) return null;
+  // Your own rows' close button, its tooltip with the key (S18 M2e-1: you can always close an agent's tab).
+  const closeTitle = withKeys('Close tab', 'tab.close');
   return (
     <div className={styles.sections}>
-      {chords.map((chord) => {
-        const own = nodesOfChord(state, chord.id).filter((n): n is TabNode => n.kind === 'tab').sort((a, b) => a.createdAt - b.createdAt);
+      {chords.map(({ chord, own }) => {
         return (
           <section key={chord.id} className={styles.section} aria-label={`${chord.name}’s tabs`}>
             <h2 className={styles.header}>
@@ -29,8 +42,26 @@ export function AgentSections({ state, windowId, appearance }: { state: State; w
                 const live = state.live[tab.id];
                 const working = live?.agent?.state === 'working';
                 const shown = win.agentTab === tab.id;
+                // Closing tells the agent the tab is gone, and its cards for the tab come down (main/agents).
+                const close = () => void api.state.dispatch({ t: 'tab.close', windowId, nodeId: tab.id });
                 return (
-                  <li key={tab.id}>
+                  <li
+                    key={tab.id}
+                    className={`${rows.item} ${styles.item}`}
+                    data-agent-tab={tab.id}
+                    onMouseDown={(e: MouseEvent) => {
+                      if (e.button === 1) e.preventDefault(); // no autoscroll
+                    }}
+                    onAuxClick={(e: MouseEvent) => {
+                      if (e.button === 1) close();
+                    }}
+                    onContextMenu={(e: MouseEvent) => {
+                      e.preventDefault();
+                      // At the pointer, or under the row when the keyboard asked (as your own rows' menus).
+                      const r = e.currentTarget.getBoundingClientRect();
+                      void api.menu.tab(tab.id, e.clientX !== 0 || e.clientY !== 0 ? { x: e.clientX, y: e.clientY } : { x: r.left + r.width / 2, y: r.bottom });
+                    }}
+                  >
                     <button
                       type="button"
                       className={styles.row}
@@ -42,6 +73,9 @@ export function AgentSections({ state, windowId, appearance }: { state: State; w
                       <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
                       <span className={styles.title}>{tab.title || tab.url}</span>
                       {working && <span className={styles.dot} role="img" aria-label={`${chord.name} is using this tab`} />}
+                    </button>
+                    <button type="button" tabIndex={-1} aria-hidden className={rows.close} aria-label={`Close ${tab.title || 'tab'}`} title={closeTitle} onClick={close}>
+                      <X size={14} strokeWidth={2} />
                     </button>
                   </li>
                 );

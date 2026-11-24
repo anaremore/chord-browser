@@ -228,6 +228,32 @@ export class AgentChords {
     if (this.chordOfTab(nodeId)) this.userActs.set(nodeId, this.deps.now?.() ?? Date.now());
   }
 
+  /**
+   * You took an agent's tab over (S18 M2e-1): a key or click of yours in its page, or your reload, back, forward or typed
+   * address for it. The agent is paused there (it hears the user is using the tab), what the page held to send for it
+   * fails, and the cards waiting for that tab alone come down. Only ever called from your own input and Chord's own
+   * buttons, keys and menus, never from the page navigating itself (Neon's B6: a pause makes its sends yours, so a
+   * page's own reload or redirect must not be able to turn the hold off). A tab that isn't an agent's: nothing.
+   */
+  takeOver(nodeId: NodeId, contents = this.deps.page(nodeId)): void {
+    const chord = this.chordOfTab(nodeId);
+    if (!chord) return;
+    // Never your keys stopped: an action's guard comes down at once (the action stops at its next check).
+    if (contents && !contents.isDestroyed()) dropAgentGuard(contents);
+    this.userActed(nodeId);
+    if (!chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
+    chord.agent.cancelCardsFor(nodeId);
+    // What the page held to send for the agent fails, and its card comes down: what it sends now is yours.
+    if (contents && !contents.isDestroyed()) failHeld(contents);
+  }
+
+  /** takeOver, for a page Chord's buttons, keys or menus are about to reload or move (a tab of yours: nothing). */
+  takeOverPage(contents: WebContents): void {
+    for (const chord of this.chords.values()) {
+      for (const tab of this.tabsOf(chord.chordId)) if (this.deps.page(tab.id) === contents) return this.takeOver(tab.id, contents);
+    }
+  }
+
   /** The window showing the tab, if you acted in it just now: its going somewhere is yours. */
   private yoursNow(nodeId: NodeId): WindowId | null {
     const at = this.userActs.get(nodeId);
@@ -250,15 +276,7 @@ export class AgentChords {
     if (this.unthrottled.has(nodeId)) contents.setBackgroundThrottling(false);
     // Only your hands: input Chord sends for an agent (control/input.ts) never pauses it or makes a navigation yours.
     // Your hands: a key, or a button pressed (Neon's review of #110: a click is using the tab as much as a key is).
-    const yours = () => {
-      // Never your keys stopped: an action's guard comes down at once (the action stops at its next check).
-      dropAgentGuard(contents);
-      this.userActed(nodeId);
-      const chord = this.chordOfTab(nodeId);
-      if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
-      // What the page held to send for the agent fails, and its card comes down: what it sends now is yours.
-      failHeld(contents);
-    };
+    const yours = () => this.takeOver(nodeId, contents);
     contents.on('before-mouse-event', (_event, mouse) => {
       if (mouse.type === 'mouseDown' && !isAgentInput(contents)) yours();
     });

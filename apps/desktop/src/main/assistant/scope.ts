@@ -30,15 +30,29 @@ export interface DuetHost {
   settings(): { readsNothing: boolean; neverSites: readonly string[] };
   /** Not a private window, a chord where the assistant is off, or a *Never* site. */
   readable(node: TabNode): boolean;
+  /** The outside agent whose tab this is (an Agent chord's: S18), by its name, or null for a tab of yours. */
+  agentOf(node: TabNode): string | null;
   activeTab(windowId: WindowId): TabNode | null;
   activity(chat: DuetChat, tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
   search(chat: DuetChat, tool: 'search_history' | 'search_archive', query: string): Promise<Record<string, string>[]>;
   fills(chat: DuetChat): FillProposals;
 }
 
+/**
+ * An outside agent's tab, for the assistant (S18 M2e-1): read only when the user points at it (it's attached: on screen
+ * when the message was sent, or added to the message), never acted in or filled.
+ */
+export const AGENT_TAB_REFUSALS = {
+  read: (agent: string) => `That tab is ${agent}’s. You read an agent’s tab only when the user points you at it: ask them to attach it, or to switch to it and ask again.`,
+  act: (agent: string) => `That tab is ${agent}’s. Keep it first to make it yours, then I can act in it.`,
+} as const;
+
 export function duetScope(chat: DuetChat, host: DuetHost, actions = false): ControlScope {
   const state = () => host.browser.store.state;
   const granted = (tool: AssistantToolName) => chat.control.granted('read', tool) === 'always';
+  /** An agent's tab the user hasn't pointed at: left out of everything the chat sees. */
+  const unpointed = (node: TabNode) => host.agentOf(node) !== null && !chat.attached.has(node.id);
+  const readable = (node: TabNode) => host.readable(node) && !unpointed(node);
   return {
     agent: chat.control,
     actions,
@@ -47,7 +61,7 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
     off: () => (host.settings().readsNothing ? 'The user set you to read nothing, in Settings → Assistant.' : null),
     tabs: () => {
       const scope: AssistantScope = chat.thread?.scope ?? 'ask';
-      const nodes = nodeList(state()).filter((n): n is TabNode => n.kind === 'tab' && host.readable(n));
+      const nodes = nodeList(state()).filter((n): n is TabNode => n.kind === 'tab' && readable(n));
       return (scope === 'all' ? nodes : nodes.filter((n) => n.chordId === chat.chordId)).map((node) => ({ node, given: chat.attached.has(node.id) }));
     },
     defaultTab: () => {
@@ -57,7 +71,11 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
       }
       return null;
     },
-    readable: (node) => host.readable(node),
+    readable,
+    whyNot: (node) => {
+      const agent = host.agentOf(node);
+      return agent !== null && unpointed(node) ? AGENT_TAB_REFUSALS.read(agent) : null;
+    },
     neverSites: () => host.settings().neverSites,
     // The chat's grants are per tool ("Allow for this chat"), as they always were.
     needsCard: (tool, node) =>
@@ -73,6 +91,9 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
     // The tab on screen is read live, at each check (before the card, after it, after the read), never kept: the user may
     // switch tabs while a card waits, and only what's on screen at that moment may be inspected.
     mayInspect: (node, tool) => {
+      // Filling a form is acting: never in an agent's tab, even one the user pointed at.
+      const agent = host.agentOf(node);
+      if (agent !== null && tool === 'propose_fill') return AGENT_TAB_REFUSALS.act(agent);
       const onScreen = chat.windowId ? host.activeTab(chat.windowId)?.id : undefined;
       if (onScreen === node.id) return null;
       return tool === 'page_diagnostics'

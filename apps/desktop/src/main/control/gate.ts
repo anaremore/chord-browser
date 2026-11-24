@@ -312,6 +312,14 @@ export class ControlAgent {
     this.late.clear();
   }
 
+  /**
+   * Take down the cards waiting for this tab alone (each answers `deny`): you took the tab over (S18 M2e-1). A card
+   * another tab waits on too (a site card is the site's) stays up for that tab.
+   */
+  cancelCardsFor(tab: string): void {
+    for (const open of [...this.open.values()]) if (open.tabs.size === 1 && open.tabs.has(tab)) open.cancel.abort();
+  }
+
   /** Whether a card for this kind, subject and tab (null: none) is up now. */
   hasOpenCard(kind: ApprovalKind, subject: string, tab: string | null = null): boolean {
     return this.open.has(openKey({ kind, subject, tab }));

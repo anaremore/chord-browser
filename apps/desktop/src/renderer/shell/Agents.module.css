@@ -61,6 +61,12 @@
   outline-offset: calc(var(--size-focus-ring) * -1);
 }
 
+/* Each row sits in an App.module.css .item, so its close button is your own rows' (S18 M2e-1): room for it while it shows. */
+.item:hover .row,
+.item:focus-visible .row {
+  padding-inline-end: calc(var(--space-2) + var(--size-hit-min));
+}
+
 .title {
   flex: 1;
   min-inline-size: 0;
