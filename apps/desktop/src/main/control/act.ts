@@ -43,7 +43,7 @@ export type ActOp =
   | { op: 'focus' }
   | { op: 'focused' }
   | { op: 'choose'; option: string }
-  | { op: 'describe'; option?: string };
+  | { op: 'describe'; option?: string; refind?: boolean };
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 /** A form's field, as risk needs it (never its value): its description for sensitiveField, and whether it takes text. */
@@ -97,27 +97,32 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // changed, as before. A node that's still here but says something else is never looked for again.
   let refound = false;
   if (entry && (!el || !el.isConnected)) {
-    if (entry.path === undefined) return { ok: false, why: 'changed' };
+    // Only where the action asks (the review of #117): its first look, the look after a card, the pointer's move and the
+    // hit test. Never once the element is checked and pointed at (the step again, the focus, the text, a choice).
+    if (!(args.refind || args.op === 'point' || args.op === 'hit') || entry.path === undefined) return { ok: false, why: 'changed' };
     const started = performance.now();
     let looked = 0;
     let over = false;
     const found = [];
-    const visit = (root) => {
-      for (const c of root.querySelectorAll('*')) {
-        if (++looked > args.refindScan || (looked % 200 === 0 && performance.now() - started > args.refindMs)) { over = true; return; }
-        if (c.shadowRoot) { visit(c.shadowRoot); if (over || found.length > 1) return; }
-        const r = entry.role === 'generic' ? (!roleNow(c) && getComputedStyle(c).cursor === 'pointer' ? 'generic' : null) : roleNow(c);
-        if (r !== entry.role || nameOf(c, r) !== entry.name) continue;
-        if (refPath(c) !== entry.path || refShape(c) !== entry.shape) continue;
-        if (!(isField(c) ? visibleField(c, typeOf(c)) : shown(c))) continue;
-        found.push(c);
-        if (found.length > 1) return;
+    // Depth first, as the snapshot walks: never into what it skips, what's hidden from assistive tech or not shown, at
+    // most 4 shadow roots deep; the cheap checks (its tag, place and shape) before its name; the clock from the start.
+    const visit = (parent, shadows) => {
+      for (let c = parent.firstElementChild; c; c = c.nextElementSibling) {
+        if (over || found.length > 1) return;
+        looked++;
+        if (looked > args.refindScan || (looked % 16 === 0 && performance.now() - started > args.refindMs)) { over = true; return; }
+        if (SKIP.has(c.localName) || String(c.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(c)) continue;
+        if (refPath(c) === entry.path && refShape(c) === entry.shape) {
+          const r = entry.role === 'generic' ? (!roleNow(c) && pointerGeneric(c) ? 'generic' : null) : roleNow(c);
+          if (r === entry.role && nameOf(c, r) === entry.name && (isField(c) ? visibleField(c, typeOf(c)) : shown(c))) found.push(c);
+        }
+        if (c.shadowRoot && shadows < 4) visit(c.shadowRoot, shadows + 1);
+        visit(c, shadows);
       }
     };
-    visit(document);
+    visit(document.body || document.documentElement, 0);
     if (over || found.length !== 1) return { ok: false, why: 'changed' };
     el = found[0];
-    entry.ref = new WeakRef(el);
     refound = true;
   }
   if (!el || !el.isConnected) return { ok: false, why: 'changed' };
@@ -127,6 +132,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   if (!(isField(el) ? visibleField(el, typeOf(el)) : shown(el))) return { ok: false, why: 'changed' };
   // One that opens a file picker now (the page made it one since): never acted on.
   if (opensFiles(el)) return { ok: false, why: 'file' };
+  // Found again, and as the snapshot described it: the ref is this element from now on.
+  if (refound) entry.ref = new WeakRef(el);
   const disabled = el.matches(':disabled') || String(el.getAttribute('aria-disabled')).toLowerCase() === 'true';
   const editable = el.isContentEditable || (el.localName === 'textarea' && !el.readOnly) || (el.localName === 'input' && !el.readOnly && TEXT_TYPES.has(String(el.type || '').toLowerCase()));
   const select = el.localName === 'select';
@@ -157,21 +164,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const riskOf = () => {
     // What a click on it acts on (#112 review 1): a label's control (a label for a submit button submits), else a
     // submit button or link it's inside (a span in a link goes where the link does), else itself.
-    // closest(), across open shadow roots to their hosts (round 4 of #112: a button in a component, inside a form or a
-    // link, is that form's or that link's), as deep.ts walks them.
-    const closestDeep = (from, selector) => {
-      for (let node = from; node; ) {
-        const found = node.closest(selector);
-        if (found) return found;
-        const root = node.getRootNode();
-        node = root && root.host ? root.host : null;
-      }
-      return null;
-    };
-    const label = closestDeep(el, 'label');
-    const control = label && label.control && label.control !== el ? label.control : null;
-    const inButton = !control && el.localName !== 'button' ? closestDeep(el, 'button') : null;
-    const target = control || inButton || el;
+    // (closestDeep and actTarget: snapshot.ts' SNAPSHOT_LIB, shared with the ref's shape.)
+    const target = actTarget(el);
     const tag = target.localName;
     // The type the browser goes by (a button's invalid or missing type is submit), not the attribute as written.
     const type = tag === 'input' || tag === 'button' ? String(target.type || '').toLowerCase() : '';
@@ -195,7 +189,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     const shownText = clip(String(target.innerText || buttonValue || el.innerText || ''), NAME_MAX);
     const text = shownText && shownText.toLowerCase() !== String(entry.name).toLowerCase() ? shownText : '';
     // A link, or a link it's inside.
-    const link = closestDeep(el, 'a[href]');
+    const link = closestDeep(el, 'a[href], area[href]');
     const linkWords = link ? addressOf(link.getAttribute('href')) : '';
     const multiline = target.localName === 'textarea' || (el.isContentEditable && el.localName !== 'input');
     let form = null;
@@ -237,7 +231,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     }
     // The link's whole address too (its origin: Neon's review 2 of #112), for the step's shape and what an allowed step lets go.
     const hrefUrl = link ? clip(String(link.href || ''), 2048) : '';
-    return { tag: link && !control && !inButton ? 'a' : tag, type, href: linkWords || '', hrefUrl, hrefUnknown: Boolean(link) && linkWords === null, text, multiline, submits, form };
+    // A link's own (not a label's control or a button inside one): the target is the element itself.
+    return { tag: link && target === el ? 'a' : tag, type, href: linkWords || '', hrefUrl, hrefUnknown: Boolean(link) && linkWords === null, text, multiline, submits, form };
   };
   if (args.op === 'describe') {
     if (args.option === undefined) return { ok: true, ...said, disabled, editable, select, risk: riskOf() };

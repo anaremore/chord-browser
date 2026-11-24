@@ -1214,6 +1214,101 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
+test('re-finding, narrowed (the review of #117): never a twin, a field turned sensitive, a changed target, another frame, a huge page; a node still there that changed is never looked for again', async () => {
+  test.setTimeout(180_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/redraws` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const inPage = (code: string) => app.evaluate(({ webContents }, [url, js]) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript(js), [`${site.origin}/redraws`, code] as const);
+    const mode = async (m: string) => {
+      await inPage(`window.mode = ${JSON.stringify(m)}`);
+      await new Promise((r) => setTimeout(r, 700));
+    };
+    const STALE = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    // The site card, once, on a unique button found again (the baseline).
+    let o = await snap();
+    await new Promise((r) => setTimeout(r, 700));
+    const folding = mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Fold"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    expect(JSON.parse((await folding).text)).toMatchObject({ data: { done: 'Clicked “Fold”' } });
+    const refused = async (what: string, call: Promise<{ text: string }>, says = STALE) => expect((await call).text, what).toBe(says);
+    // Duplicates (two Deletes, one per row): never found again, whichever is gone.
+    o = await snap();
+    await mode('gone1');
+    await refused('a Delete of two', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }));
+    // A twin appears: two matches, refused.
+    await mode('');
+    o = await snap();
+    await mode('twin');
+    await refused('a twin', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Check"') }));
+    // Gone (zero matches), or moved into a frame (never looked in).
+    await mode('');
+    o = await snap();
+    await mode('nocall');
+    await refused('gone', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Call"') }));
+    await mode('framed');
+    await refused('in a frame', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Fold"') }));
+    // A field turned sensitive (a password, a one-time code, a card's expiry): its shape differs, refused.
+    await mode('');
+    o = await snap();
+    await mode('pw');
+    await refused('a password now', mcp.call('type', { tab_id: 'a1', ref: refOf(o, 'textbox "Nickname"'), text: 'x' }));
+    await mode('otp');
+    await refused('a one-time code now', mcp.call('type', { tab_id: 'a1', ref: refOf(o, 'textbox "Code"'), text: '123' }));
+    await mode('cc');
+    await refused('a card month now', mcp.call('select_option', { tab_id: 'a1', ref: refOf(o, 'combobox "Month"'), option: '02' }));
+    await refused('a card expiry now', mcp.call('type', { tab_id: 'a1', ref: refOf(o, 'textbox "Day"'), text: '2026-11-23' }));
+    // A closed root added on redraw: found again, then refused by the check on what's inside it.
+    await mode('');
+    o = await snap();
+    await mode('closed!');
+    await refused('a closed root now', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Pass"') }), 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.');
+    // An open root whose link goes elsewhere now: refused.
+    await mode('');
+    o = await snap();
+    await mode('relink');
+    await refused('its link goes elsewhere', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Open the way"') }));
+    // A swap while a risky step's card is up (Delete row into a form that wipes): refused, nothing sent.
+    await mode('');
+    o = await snap();
+    const deleting = mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete row"') });
+    const step = popover.getByRole('alertdialog', { name: /^Delete this on / });
+    await expect(step).toBeVisible({ timeout: 15_000 });
+    await mode('swapdel');
+    await step.getByRole('button', { name: 'Allow', exact: true }).click();
+    expect([STALE, 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.']).toContain((await deleting).text);
+    expect(reached.filter((r) => r.includes('wipe'))).toEqual([]);
+    // A node still there that says something else, with a copy elsewhere: never looked for again.
+    await mode('');
+    o = await snap();
+    await inPage(`document.getElementById('kb').textContent = 'Kept'; document.getElementById('keep').insertAdjacentHTML('beforeend', '<button>Keep</button>')`);
+    await refused('changed, still there', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Keep"') }));
+    // A huge page (30,000 elements before the button): past the budget, refused.
+    o = await snap();
+    await inPage('window.huge()');
+    await new Promise((r) => setTimeout(r, 700));
+    await refused('a huge page', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Call"') }));
+    expect(await inPage('document.getElementById("log").textContent')).not.toMatch(/Delete row|Check|Pass|Keep|Open the way/);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('snapshot: the outline of a tab an agent opened, its refs, and its budgets (M2b)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1309,7 +1404,11 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         // The owner's bug #2: the same step on the element after the page replaced it with a copy (found again, or not:
         // a page of rows named alike is two matches). A report; its cap is act.ts' REFIND_MS.
         const rf = sorted(act.refind);
-        console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${path}: the point step on a replaced element, found again ${act.refound}/${rf.length}, median ${rf[Math.floor(rf.length / 2)]!.toFixed(1)} ms, p95 ${rf[Math.floor(rf.length * 0.95)]!.toFixed(1)} ms`);
+        const refindSeen = `${path}: the point step on a replaced element, found again ${act.refound}/${rf.length}, median ${rf[Math.floor(rf.length / 2)]!.toFixed(1)} ms, p95 ${rf[Math.floor(rf.length * 0.95)]!.toFixed(1)} ms`;
+        console.log(`[act timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${refindSeen}`);
+        // Each row's button is unique there, so each is found again; well within act.ts' REFIND_MS (50 ms).
+        expect(act.refound, refindSeen).toBe(rf.length);
+        expect(rf[Math.floor(rf.length / 2)]!, refindSeen).toBeLessThan(25);
         // Neon's review of #110: the debugger's session a press or typing opens, on this page. The document's first
         // finds Chord's world (Runtime enabled once: the page's stored console replayed, ~1,000 entries at most on
         // /noisy); the rest don't.
@@ -1776,10 +1875,12 @@ test.beforeAll(async () => {
     // and place each time; two buttons named alike in one place; and, after Switch, Raise inside a form that buys.
     '/table':
       '<title>Table</title><main><button id=sw onclick="window.mode = \'buy\'">Switch</button><div id=t></div><p id=log></p><script>' +
-      'const draw = () => { t.innerHTML = \'<div class=row><button>Fold</button> <button>Call</button> \' + (window.mode === \'buy\' ? \'<form method=post action=/buy-chips><button>Raise</button></form>\' : \'<button>Raise</button>\') + \'</div><div class=twins><button>Bet</button> <button>Bet</button></div><div class=danger><button>Delete row</button></div>\'; };' +
+      'const draw = () => { t.innerHTML = \'<div class=row><button>Fold</button> <button>Call</button> \' + \'<form method=post action=\' + (window.mode === \'buy\' ? \'/buy-chips\' : \'/raise\') + \'><button>Raise</button></form>\' + \'</div><div class=twins><button>Bet</button> <button>Bet</button></div><div class=danger><button>Delete row</button></div>\'; };' +
       'draw(); setInterval(draw, 300);' +
-      't.addEventListener(\'click\', (e) => { if (e.target.localName === \'button\') { e.preventDefault(); log.textContent += \' \' + e.target.textContent; } });' +
+      't.addEventListener(\'click\', (e) => { if (e.target.localName === \'button\' && !e.target.form) { e.preventDefault(); log.textContent += \' \' + e.target.textContent; } });' +
       '</script></main>',
+    // The review of #117: a page that redraws every 300 ms by a mode the test sets, one case each.
+    '/redraws': '<title>Redraws</title><div id=big></div><div id=keep><button id=kb>Keep</button></div><main id=m></main><p id=log></p><script src="/redraws.js"></script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
@@ -1806,6 +1907,34 @@ test.beforeAll(async () => {
         ' if (e.data === "putback") { try { delete self.fetch; } catch {} try { self.fetch = () => 0; } catch {} report(fetch("/worker-putback", { method: "POST", body: "x" }), "putback"); }' +
         '};',
       '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
+      '/redraws.js': `
+        window.mode = '';
+        const m = document.getElementById('m');
+        const render = () => {
+          // A mode ending in ! redraws once, then holds still (a case that needs the node found to stay put).
+          if (window.mode.endsWith('!') && window.drawn === window.mode) return;
+          window.drawn = window.mode;
+          const md = window.mode.replace('!', '');
+          let h = '';
+          h += md === 'framed' ? '<div class=row><iframe srcdoc="<button>Fold</button>"></iframe> <button>Call</button></div>' : '<div class=row><button>Fold</button> ' + (md === 'nocall' ? '' : '<button>Call</button>') + '</div>';
+          h += '<ul>' + (md === 'gone1' ? '' : '<li><span>Row one</span> <button>Delete</button></li>') + '<li><span>Row two</span> <button>Delete</button></li></ul>';
+          h += md === 'swapdel' ? '<form method=post action=/wipe><div class=danger><button>Delete row</button></div></form>' : '<div class=danger><button>Delete row</button></div>';
+          h += '<label>Nickname <input type=' + (md === 'pw' ? 'password' : 'text') + '></label>';
+          h += '<label>Code <input type=text' + (md === 'otp' ? ' autocomplete=one-time-code' : '') + '></label>';
+          h += '<label>Month <select' + (md === 'cc' ? ' autocomplete=cc-exp-month' : '') + '><option>01</option><option>02</option></select></label>';
+          h += '<label>Day <input type=date' + (md === 'cc' ? ' autocomplete=cc-exp' : '') + '></label>';
+          h += '<div class=pass><div role=button tabindex=0 id=pass>Pass</div></div>';
+          h += '<a href="' + (md === 'relink' ? '/elsewhere' : '/home') + '"><x-in></x-in></a>';
+          h += '<div class=solo><button>Check</button></div>' + (md === 'twin' ? '<div class=solo><button>Check</button></div>' : '');
+          m.innerHTML = h;
+          if (md === 'closed') document.getElementById('pass').attachShadow({ mode: 'closed' }).innerHTML = '<span>Pass</span>';
+          m.querySelector('x-in').attachShadow({ mode: 'open' }).innerHTML = '<button>Open the way</button>';
+        };
+        render();
+        setInterval(render, 300);
+        window.huge = () => { const big = document.getElementById('big'); for (let i = 0; i < 30000; i++) { const d = document.createElement('span'); d.textContent = 'x'; big.append(d); } };
+        m.addEventListener('click', (e) => { const b = e.target.closest('button, [role=button]'); if (b && !b.closest('form')) { e.preventDefault(); document.getElementById('log').textContent += ' ' + b.textContent; } });
+      `,
       '/sw.js':
         'self.addEventListener("install", () => self.skipWaiting()); self.addEventListener("activate", (e) => e.waitUntil(clients.claim()));' +
         'self.addEventListener("fetch", (e) => { if (e.request.method === "POST") e.respondWith(fetch(e.request)); });' +

@@ -162,26 +162,59 @@ export const SNAPSHOT_LIB = String.raw`
   // field (an editor). The snapshot gives it with each field, and an action checks it again before text or a key goes in.
   // What opens a file picker: a file input, or a label for one (Neon's review of #110). Agents never choose files: no ref.
   const opensFiles = (el) => (el.localName === 'input' && String(el.type).toLowerCase() === 'file') || (el.localName === 'label' && Boolean(el.control) && String(el.control.type).toLowerCase() === 'file');
+  // closest(), across open shadow roots to their hosts (a button in a component, inside a form or a link, is that
+  // form's or that link's), as deep.ts walks them. Shared by act.ts' riskOf and refShape.
+  const closestDeep = (from, selector) => {
+    for (let node = from; node; ) {
+      const found = node.closest(selector);
+      if (found) return found;
+      const root = node.getRootNode();
+      node = root && root.host ? root.host : null;
+    }
+    return null;
+  };
+  // What a click on an element acts on (#112 review 1): a label's control, else a button it's inside, else itself.
+  const actTarget = (el) => {
+    const label = closestDeep(el, 'label');
+    const control = label && label.control && label.control !== el ? label.control : null;
+    const inButton = !control && el.localName !== 'button' ? closestDeep(el, 'button') : null;
+    return control || inButton || el;
+  };
+  // A clickable element by its look (the snapshot's own rule): a pointer cursor, not just inherited from its parent.
+  const pointerGeneric = (el) => getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer');
   // Where a kept element is (the owner's bug #2: a ref whose node the page replaced is found again by it): its ancestors'
-  // tags and roles, out through open shadow roots to their hosts, at most 16 of them.
+  // tags and roles, out through open shadow roots to their hosts, up to the root (at most 64), as JSON (a role's words
+  // can't pass for another ancestor: the review of #117).
   const refPath = (el) => {
     const parts = [];
     let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
-    while (node && parts.length < 16) {
-      parts.push(node.localName + (node.getAttribute('role') ? '[' + node.getAttribute('role') + ']' : ''));
+    while (node && parts.length < 64) {
+      parts.push([node.localName, node.getAttribute('role') || '']);
       node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
     }
-    return parts.join('<');
+    return JSON.stringify(parts);
   };
-  // Where risk lives in it (the same check): its tag and type, its link's address, its form's address and method (read
-  // through the form's prototype: a field named action can't stand in), its own formaction and formmethod.
+  // Where risk lives in it, from what a click acts on (actTarget), as riskOf reads it (the review of #117): the target's
+  // tag, type and id (a label's for), its link's address (a, area, across shadow roots), its form's address and method
+  // (through the form's prototype: a field named action can't stand in), its own formaction and formmethod where it has
+  // them (as resolved: an empty one and a <base> count), what makes a field sensitive (autocomplete, name, id,
+  // placeholder), whether it's disabled or read-only, and its words where an aria-label says otherwise.
   const refShape = (el) => {
-    const link = el.closest('a[href]');
-    const form = el.form || el.closest('form');
+    const t = actTarget(el);
+    const link = closestDeep(el, 'a[href], area[href]');
+    const form = (t.form !== undefined ? t.form : null) || closestDeep(t, 'form');
     const formGet = (f, prop) => {
       try { return String(Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f)); } catch { return ''; }
     };
-    return JSON.stringify([el.localName, String(el.type || ''), link ? String(link.href) : '', form ? [formGet(form, 'action'), formGet(form, 'method')] : null, el.getAttribute('formaction') || '', el.getAttribute('formmethod') || '']);
+    const has = (a) => typeof t.hasAttribute === 'function' && t.hasAttribute(a);
+    const words = el.getAttribute('aria-label') ? clip(String(el.innerText || ''), NAME_MAX) : '';
+    return JSON.stringify([
+      t.localName, String(t.type || ''), t.id || '', el.localName === 'label' ? String(el.htmlFor || '') : '',
+      link ? String(link.href) : '', form ? [formGet(form, 'action'), formGet(form, 'method')] : null,
+      has('formaction') ? String(t.formAction) : '', has('formmethod') ? String(t.formMethod) : '',
+      t.getAttribute('autocomplete') || '', t.getAttribute('name') || '', t.getAttribute('placeholder') || '',
+      Boolean(t.disabled), Boolean(t.readOnly), words,
+    ]);
   };
   const fieldOf = (el) => ({ type: isField(el) ? typeOf(el) : 'text', autocomplete: clip(el.getAttribute('autocomplete'), 80).toLowerCase(), name: clip(el.getAttribute('name'), 60), id: clip(el.id, 60), label: labelOf(el), placeholder: clip(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'), 100) });
   // The role an element has now, editability first (an editor is a typed field whatever its tag or role).
@@ -228,7 +261,7 @@ export function snapshotScript(owner: string, token: string): string {
       // its labels alone, described as a field for sensitiveField, and never walked into (its inside is what's typed).
       let role = roleNow(el);
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
-      if (!role && !keyed && getComputedStyle(el).cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer')) role = 'generic';
+      if (!role && !keyed && pointerGeneric(el)) role = 'generic';
       if (!role) {
         if (el.shadowRoot) walk(el.shadowRoot, depth, keyed, named);
         walk(el, depth, keyed, named);
@@ -275,6 +308,14 @@ export function snapshotScript(owner: string, token: string): string {
     if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name, path: refPath(start), shape: refShape(start) }); }
     nodes.push(node);
   } else walk(start, 0, false, false);
+  // A ref is found again only if nothing else here looked like it (the review of #117): its role, name, place and shape
+  // unique among the snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin).
+  const counts = new Map();
+  for (const k of keep) { k.sig = JSON.stringify([k.role, k.name, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
+  for (const k of keep) {
+    if (cut.refs || cut.elements || cut.time || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
+    delete k.sig;
+  }
   // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
   reads.delete(args.owner);

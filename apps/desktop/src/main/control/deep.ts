@@ -222,7 +222,16 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           return answer && typeof answer === 'object' && typeof answer.ok === 'boolean' ? answer : { ok: false, why: 'no-check', step: `check ${lastError}` };
         },
         open: async () => {
-          const described = await send<{ node: Node }>('DOM.describeNode', { objectId: elementId, depth: -1, pierce: true });
+          // The ref's element as it is now (the review of #117: the node the hit test found and the one checked here are
+          // the same, never one from when this session opened): connected, or stale.
+          const now = await send<{ result: { objectId?: string } }>('Runtime.evaluate', {
+            contextId: worldId,
+            objectGroup: OBJECT_GROUP,
+            expression: `(() => { const r = globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return null; const e = r.keep[${JSON.stringify(key)}]; const el = e && e.ref.deref(); return el && el.isConnected ? el : null; })()`,
+          });
+          const currentId = now?.result.objectId;
+          if (!currentId) return { ok: false, why: 'stale' };
+          const described = await send<{ node: Node }>('DOM.describeNode', { objectId: currentId, depth: -1, pierce: true });
           if (!described) return { ok: false, why: 'no-check' };
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },

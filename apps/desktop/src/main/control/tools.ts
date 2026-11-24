@@ -588,7 +588,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (!site) return refuse(ACT_REFUSALS.noSite);
   // The element as it is now; for select_option, the choice matched against the page's own options before anything is
   // asked, so the card and the bar show the page's label, never the agent's words.
-  const element = await actOn({ op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
+  // Its first look may find a replaced node again (the owner's bug #2); so may the look after a card, the pointer's move
+  // and the hit test, never a later one (the review of #117): once it's checked and pointed at, a replacement refuses.
+  const element = await actOn({ op: 'describe', refind: true, ...(tool === 'select_option' ? { option: asked } : {}) });
   if (!element.ok) return refuse(actRefusal(element));
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
@@ -688,7 +690,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
     // What the card showed is what goes (#112 review 1): described again, the same step, the same name, the same form
     // (where it goes, how, and its fields). A page that changed any of it while the card was up gets nothing.
-    const now = await actOn({ op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
+    const now = await actOn({ op: 'describe', refind: true, ...(tool === 'select_option' ? { option: asked } : {}) });
     if (!now.ok) return refuse(actRefusal(now));
     if (now.field && sensitiveField(now.field)) return refuse(ACT_REFUSALS.sensitive);
     const stepNow = stepOf(tool, args, now);
@@ -890,7 +892,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (valueType) {
         if ((refused = await sameStep())) return;
         if ((refused = halt())) return;
-        await actOn({ op: 'values', mode: 'remember' });
+        // Every field's value, as it is now (a no: the element's gone, and nothing goes in).
+        const remembered = await actOn({ op: 'values', mode: 'remember' });
+        if (!remembered.ok) return void (refused = actRefusal(remembered));
         const set = await actOn({ op: 'setValue', value: value as string });
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;
@@ -935,8 +939,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         if (!selected.ok) return void (refused = actRefusal(selected));
       }
       const typed = await guarded('beforeinput', async () => {
-        // Every field's value remembered first (in the page), to check where the text went.
-        await actOn({ op: 'values', mode: 'remember' });
+        // Every field's value remembered first (in the page), to check where the text went; a no (the element's gone):
+        // nothing goes in (the review of #117).
+        const remembered = await actOn({ op: 'values', mode: 'remember' });
+        if (!remembered.ok) return actRefusal(remembered);
         await page.insertText(text as string);
         return null;
       });
