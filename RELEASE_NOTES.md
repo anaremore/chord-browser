@@ -2,6 +2,10 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.14.1 · security · 2026-11-24
+
+- **Security: Chromium fixes from Electron 45.4.1.** Chord now runs Electron 45.4.1, which brings security fixes from Chromium, V8, ANGLE, Dawn, FFmpeg and PDFium. Update as soon as you can.
+
 ## 0.14.0 · preview · 2026-11-22
 
 - **Agents: the AI agents you run can use Chord.** Claude Code, Codex and Antigravity can open and read pages in Chord for you. Turn it on in Settings → Agents, then copy the line for Claude Code or Codex into your terminal, or press **Add to Antigravity** (Undo puts its settings back).
