@@ -415,6 +415,14 @@ export interface FillWrite {
 }
 
 /**
+ * What propose_fill tells the model once its card is up. The card owns whether the values are in the page (it says
+ * *Filled 29 fields.* once you press Fill, maybe before the reply is done), so the reply says what's in the card,
+ * never whether it's filled: text written before Fill must still hold after it.
+ */
+export const PROPOSED_FILL_NOTE =
+  'The user checks these in a card in this chat, changes or leaves out what they like, and presses Fill there, maybe while you are still writing; the card shows whether they are in the page. Say what you proposed and what you left out, and why; point them to the card; never say whether the form is filled yet. Chord never submits: they send the form with the page’s own button.';
+
+/**
  * The card's fields as you left them, checked again when you press Fill
  * (the panel is trusted no more than the assistant): only fields on the card, each
  * value one the field takes. The problems name each field by its label.

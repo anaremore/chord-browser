@@ -51,6 +51,7 @@ import {
   pageResult,
   pdfText,
   proposedFill,
+  PROPOSED_FILL_NOTE,
   snapshotKeys,
   snapshotNote,
   snapshotOutline,
@@ -1588,7 +1589,8 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
       {
         shown: true,
         fields: card.fields.length,
-        note: 'The user now checks these in a card in this chat, changes or leaves out what they like, and presses Fill themselves. Nothing is in the page yet, and Chord never submits: tell them to check the card, and that they send the form with the page’s own button.',
+        // The card owns whether it's filled: what the model writes holds before Fill and after (the owner's preview).
+        note: PROPOSED_FILL_NOTE,
       },
       false,
     ),

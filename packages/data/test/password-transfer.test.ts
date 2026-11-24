@@ -2,7 +2,8 @@
  * Passwords in and out, chord-data's side (docs/decisions/S17-passwords.md
  * §10, §13 layer 4): a staged file against the vault (open, locked, none),
  * the import as chosen, its Undo, a lock part way, the same file again, the
- * CSV export read back, the `login` records' pages, and 5,000 rows timed.
+ * CSV export read back, and the `login` records' pages. 5,000 rows timed:
+ * password-transfer.perf.test.ts.
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -322,47 +323,5 @@ describe('export', () => {
     await run({ op: 'lock' });
     await run({ op: 'unlock', passphrase: PASSPHRASE });
     expect(db.passwords.transfer.exportPage('', 3, generation)).toBeNull();
-  });
-});
-
-/**
- * The size S17 measures (5,000 rows into a vault of 500) with CHORD_PASSWORD_PERF=1; a tenth of it otherwise, so
- * the suite's other timed tests, running beside it, aren't starved of CPU.
- */
-const BIG = process.env['CHORD_PASSWORD_PERF'] === '1' ? 5000 : 500;
-const SAVED = BIG / 10;
-
-describe(`${BIG} rows`, () => {
-  it('compared and written in slices, none long', { timeout: 60_000 }, async () => {
-    await vault(...Array.from({ length: SAVED }, (_, i): [string, string, string] => [`https://s${i}.example`, 'ada', i % 2 ? `p${i}` : 'old']));
-    const file = Array.from({ length: BIG }, (_, i) => login(`https://s${i}.example`, 'ada', `p${i}`, { note: 'imported' }));
-    const stageId = stage(file);
-    // The longest stretch chord-data's thread is held: the gaps between turns of a loop that yields as often as it can.
-    let longest = 0;
-    let last = performance.now();
-    let watching = true;
-    const watch = () => {
-      const now = performance.now();
-      longest = Math.max(longest, now - last);
-      last = now;
-      if (watching) setImmediate(watch);
-    };
-    setImmediate(watch);
-    const t0 = performance.now();
-    const { importPreview } = await run({ op: 'importPreview', stageId });
-    const t1 = performance.now();
-    const { imported } = await run({ op: 'importRun', stageId, importId: 'big', choices: choose('file') });
-    const t2 = performance.now();
-    watching = false;
-    // The file's note differs from every saved one's: all 500 differ, the half with the same password by their note.
-    expect(importPreview).toMatchObject({ added: BIG - SAVED, same: 0, different: SAVED });
-    expect(imported).toEqual({ added: BIG - SAVED, updated: SAVED, kept: 0, same: 0, stopped: false });
-    console.log(`${BIG} rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms`);
-    // The budget (S17, Phase 2: import and export): CI's own step runs this alone at full size, where a tenfold regression
-    // of the 9.4 ms measured there (10.6 ms on an SSD, 40 ms on a slower drive, on Windows) fails. In the whole suite, beside every other file, only a loose bound.
-    expect(longest).toBeLessThan(process.env['CHORD_PASSWORD_PERF'] === '1' ? 100 : 1000);
-    const undo0 = performance.now();
-    expect((await run({ op: 'importUndo', importId: 'big' })).undone).toEqual({ removed: BIG - SAVED, restored: SAVED, changed: 0 });
-    console.log(`${BIG} rows: undo ${(performance.now() - undo0).toFixed(0)} ms`);
   });
 });
