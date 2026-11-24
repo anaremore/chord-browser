@@ -5,9 +5,15 @@ name: CI
 #   Linux x64 X11 only. Quick feedback while a pull request is in review.
 # - The full tier adds E2E on every other platform and Chord Player. It runs on a pull request labeled `ready`
 #   (and not a draft) and on Renovate's, and on every other event: a push to main, the nightly run, a run by hand.
-# A pull request merges on the full tier only. The `E2E` commit status (posted by the `e2e` job) is its gate:
-# success only when every platform passed, and pending after a fast tier that passed, so a fast-tier green
-# never reads as a full one. See the `e2e` job.
+# The full tier only when it's needed (decided 2026-11-24). The `E2E` commit status (posted by the `e2e` job) is a
+# pull request's merge gate, and the `changes` job also says whether the pull request is platform-sensitive (its
+# list of what counts is there, in one place):
+# - not platform-sensitive: success once the fast tier passes. Every platform still runs on main, after the merge
+#   and each night, and a failure there opens an issue (the `main-failed` job);
+# - platform-sensitive: success only once the full tier passes, and pending after a fast tier that passed, so a
+#   fast-tier green never reads as a full one. Label it `ready`.
+# The `ready` label runs the full tier on any pull request. See the `e2e` job. Before a release is tagged, the last
+# full run on its commit must be green (docs/releasing/patch-runbook.md, §5).
 on:
   # Every push to main runs everything. A pull request that changes only docs or the website skips the slow
   # jobs instead (the `changes` job): no `paths-ignore` here, which would leave such a pull request no status at all.
@@ -37,6 +43,7 @@ jobs:
   # Whether anything but docs changed. Only a pull request can skip anything: the website (site/) is built and
   # deployed by Clank, and no test reads the docs, the mocks or any Markdown file, so a pull request that changes
   # only those skips E2E, Chord Player and the password detector's corpora. Typecheck, lint and unit tests still run.
+  # And whether a pull request is platform-sensitive: whether its `E2E` status needs the full tier (the `e2e` job).
   changes:
     name: What changed
     runs-on: ubuntu-24.04
@@ -44,6 +51,7 @@ jobs:
     outputs:
       code: ${{ steps.diff.outputs.code }}
       tier: ${{ steps.tier.outputs.tier }}
+      platform: ${{ steps.platform.outputs.platform }}
     steps:
       # The fast tier or the full one. A pull request's labels and draft state are the event's: a run re-run by
       # hand keeps the tier it had, so add `ready` (which starts a new run) rather than re-run an old one.
@@ -64,18 +72,7 @@ jobs:
           fi
           echo "Tier: $tier ($why)."
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          {
-            echo "## CI's $tier tier"
-            echo
-            echo "Why: $why."
-            echo
-            echo "- **Fast tier:** typecheck, lint, unit tests, the password detector, E2E on Linux x64 X11."
-            echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, and Chord Player."
-            if [ "$tier" = fast ]; then
-              echo
-              echo "The \`E2E\` status stays pending until the full tier passes: label the pull request \`ready\` (and mark it ready for review) to run it."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "why=$why" >> "$GITHUB_OUTPUT"
       # A pull request's run checks out its merge commit: its first parent is the base branch as it is now,
       # so the diff between the two is exactly what merging the pull request changes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -107,6 +104,139 @@ jobs:
           done < "$RUNNER_TEMP/changed"
           echo "$(wc -l < "$RUNNER_TEMP/changed") files changed; anything but docs: $code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
+      # Whether the pull request is platform-sensitive: whether its diff touches code that behaves differently by
+      # OS. Its `E2E` status then needs the full tier; otherwise the fast tier is enough (the `e2e` job).
+      - name: Platform-sensitive?
+        id: platform
+        if: github.event_name == 'pull_request'
+        run: |
+          base=HEAD^1 head=HEAD
+          # ── What makes a change platform-sensitive ───────────────────────────────────────────────────────
+          # The one list. A change is platform-sensitive when it touches code that behaves differently by OS,
+          # going by where 2026-10-15 to 2026-11-24's platform-only fixes landed (about 40 of 945 commits).
+          # When unsure, a path goes in: a needless full tier costs 11 minutes, a missed platform bug a release.
+          sensitive_path() {
+            case "$1" in
+              # Filter lists the build bundles: data, the same on every OS.
+              apps/desktop/build/ad-blocking/*) ;;
+              # The workflows and CI's own scripts: they pick what runs where.
+              .github/*| scripts/ci/*) echo "CI itself" ;;
+              # Packaging: electron-builder, build resources (icons, entitlements, the installer, window-owner.cs),
+              # the build and packaging scripts, Flatpak.
+              apps/desktop/build/* | apps/desktop/electron-builder.config.ts | apps/desktop/electron.vite.config.ts | \
+              apps/desktop/scripts/* | flatpak/*) echo "packaging" ;;
+              # Native code and helpers, anywhere.
+              *.cs | *.c | *.cc | *.cpp | *.h | *.m | *.mm | *.rs | *.swift | *.ps1 | *.psm1 | *.nsh | *.plist) echo "native code" ;;
+              # Chord Player and the channel to it: castLabs ECS per OS, a window docked by HWND on Windows.
+              apps/player/* | packages/player-protocol/src/* | apps/desktop/src/main/player/*) echo "Chord Player" ;;
+              # Main's windows, views, focus, fullscreen, keyboard and input, and what talks to the OS.
+              apps/desktop/src/main/index.ts | apps/desktop/src/main/browser.ts | apps/desktop/src/main/window.ts | \
+              apps/desktop/src/main/platform.ts | apps/desktop/src/main/bounds.ts | apps/desktop/src/main/view-page.ts | \
+              apps/desktop/src/main/peek.ts | apps/desktop/src/main/mini-window.ts | apps/desktop/src/main/settings-window.ts | \
+              apps/desktop/src/main/devtools.ts | apps/desktop/src/main/auto-pip.ts | apps/desktop/src/main/keyboard.ts | \
+              apps/desktop/src/main/shortcut-overrides.ts | apps/desktop/src/main/menu.ts | apps/desktop/src/main/context-menu.ts | \
+              apps/desktop/src/main/control/input.ts | apps/desktop/src/main/screen-share.ts | apps/desktop/src/main/app-icon.ts | \
+              apps/desktop/src/main/app-badge.ts | apps/desktop/src/main/default-browser.ts | apps/desktop/src/main/os-links.ts | \
+              apps/desktop/src/main/identity.ts | apps/desktop/src/main/drm.ts | apps/desktop/src/main/spellcheck.ts | \
+              apps/desktop/src/main/idle.ts | apps/desktop/src/main/update-installer.ts) echo "main: windows, focus, input or the OS" ;;
+              # Outside agents' transport: the pipe or socket, its DACL, and who's calling (pipe-clients, ss, lsof).
+              apps/desktop/src/main/agents/peer* | apps/desktop/src/main/agents/parent.ts | \
+              apps/desktop/src/main/agents/endpoint.ts | apps/desktop/src/main/agents/relay-folder.ts | \
+              apps/desktop/test/unit/agents.test.ts | apps/desktop/test/unit/agent-peer.test.ts | apps/desktop/test/unit/control.test.ts) echo "agents' transport" ;;
+              # The E2E harness's platform-specific parts: Playwright's configs, the packaged smoke test, bare
+              # Electron, the system pointer, per-runner perf baselines, the Linux container.
+              apps/desktop/playwright.config.ts | apps/desktop/playwright.packaged.config.ts | apps/desktop/test/packaged/* | \
+              apps/desktop/test/fixtures/bare-electron/* | apps/desktop/test/e2e/system-pointer.ts | \
+              apps/desktop/test/e2e/baselines.ts | apps/desktop/test/e2e/perf-baseline.json | apps/desktop/test/run-temp.ts | \
+              scripts/e2e-linux/*) echo "E2E harness" ;;
+              # How packages install: build scripts allowed to run, Electron's download.
+              pnpm-workspace.yaml | .npmrc | */.npmrc) echo "installing" ;;
+            esac
+          }
+          # Electron, Chromium and their tooling: a manifest or the lockfile, when a changed line names electron.
+          electron_re='electron'
+          # Code that branches on the OS or the architecture, in any file: a changed line that names one.
+          os_re="process\.(platform|arch)|os\.platform\(|\bplatform\s*[!=]==|\bis(Mac|Windows|Win|Linux)\b|['\"](darwin|win32|linux|arm64|x64)['\"]|runner\.(os|arch)"
+          # The file's changed lines, without the diff's headers. Each grep reads to the end: no early exit, so
+          # pipefail sees no broken pipe.
+          changed_lines() {
+            git diff --no-renames -U0 "$base" "$head" -- "$1" | { grep -E '^[-+]' || true; } | { grep -vE '^(\+\+\+|---) ' || true; } > "$RUNNER_TEMP/lines"
+          }
+          # ─────────────────────────────────────────────────────────────────────────────────────────────────
+          : > "$RUNNER_TEMP/platform"
+          while IFS= read -r file; do
+            why="$(sensitive_path "$file")"
+            if [ -z "$why" ]; then
+              case "$file" in
+                package.json | */package.json | pnpm-lock.yaml)
+                  changed_lines "$file"
+                  if grep -qiE "$electron_re" "$RUNNER_TEMP/lines"; then why="Electron's version or tooling"; fi ;;
+              esac
+            fi
+            if [ -z "$why" ]; then
+              case "$file" in
+                *.md | docs/* | site/* | mocks/* | spikes/*) ;;
+                *)
+                  changed_lines "$file"
+                  if grep -qE "$os_re" "$RUNNER_TEMP/lines"; then why="a changed line branches on the OS"; fi ;;
+              esac
+            fi
+            if [ -n "$why" ]; then echo "$file ($why)" >> "$RUNNER_TEMP/platform"; fi
+          done < "$RUNNER_TEMP/changed"
+          if [ -s "$RUNNER_TEMP/platform" ]; then platform=true; else platform=false; fi
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          if [ "$platform" = true ]; then
+            echo "Platform-sensitive, because of $(wc -l < "$RUNNER_TEMP/platform") of the changed files:"
+            cat "$RUNNER_TEMP/platform"
+          else
+            echo "Not platform-sensitive: none of the changed files."
+          fi
+      - name: Summary
+        env:
+          EVENT: ${{ github.event_name }}
+          TIER: ${{ steps.tier.outputs.tier }}
+          WHY: ${{ steps.tier.outputs.why }}
+          CODE: ${{ steps.diff.outputs.code }}
+          PLATFORM: ${{ steps.platform.outputs.platform }}
+        run: |
+          {
+            echo "## CI's $TIER tier"
+            echo
+            echo "Why: $WHY."
+            echo
+            echo "- **Fast tier:** typecheck, lint, unit tests, the password detector, E2E on Linux x64 X11."
+            echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, and Chord Player."
+            echo
+            if [ "$EVENT" != pull_request ]; then
+              echo "A $EVENT run: every platform runs. If it fails on main, the \`main-failed\` job opens an issue (or comments on the open one)."
+            elif [ "$CODE" != true ]; then
+              echo "**Docs alone changed:** no E2E to run, and \`E2E\` passes."
+            else
+              echo "### Platform-sensitive: $PLATFORM"
+              echo
+              if [ "$PLATFORM" = true ]; then
+                echo "These changed files touch code that behaves differently by OS (the list is in ci.yml's \`changes\` job):"
+                echo
+                head -n 100 "$RUNNER_TEMP/platform" | sed 's/^/- /'
+                n="$(wc -l < "$RUNNER_TEMP/platform")"
+                if [ "$n" -gt 100 ]; then echo "- … and $((n - 100)) more"; fi
+                echo
+                if [ "$TIER" = full ]; then
+                  echo "The full tier is running, so \`E2E\` passes when every platform does."
+                else
+                  echo "So \`E2E\` stays pending after the fast tier: label the pull request \`ready\` (and mark it ready for review) to run every platform."
+                fi
+              else
+                echo "None of the changed files touch platform code."
+                echo
+                if [ "$TIER" = full ]; then
+                  echo "The full tier is running anyway ($WHY), so \`E2E\` passes when every platform does."
+                else
+                  echo "So \`E2E\` passes with the fast tier. Every platform still runs on main after the merge and each night."
+                fi
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   checks:
     name: Typecheck · lint · unit tests
@@ -441,8 +571,10 @@ jobs:
   # This job passes when every shard of its tier passed, or none had to run (a pull request of docs alone), and
   # fails when any shard failed or was cancelled, or what changed couldn't be told. Its name says which tier ran.
   # The `E2E` status, posted on the pull request's head commit (or the pushed one), is:
-  # - success when the full tier passed, or docs alone changed;
-  # - pending when the fast tier passed: every platform still has to (label the pull request `ready`);
+  # - success when the full tier passed, or docs alone changed, or the fast tier passed on a pull request that
+  #   isn't platform-sensitive (the `changes` job);
+  # - pending when the fast tier passed on a platform-sensitive pull request: every platform still has to (label
+  #   it `ready`);
   # - failure when any shard failed.
   # A commit status, not this job's own check, because a job can only pass or fail: pending is what keeps a
   # fast-tier green from reading as a full one. A fast tier never takes back a full tier's success on the same
@@ -463,10 +595,12 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
           TIER: ${{ needs.changes.outputs.tier }}
+          PLATFORM: ${{ needs.changes.outputs.platform }}
           FAST: ${{ needs.e2e-fast.result }}
           FULL: ${{ needs.e2e-full.result }}
         run: |
-          echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}). Tier: ${TIER:-unknown}. Fast tier's shards: $FAST. Full tier's: $FULL."
+          echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}; platform-sensitive: ${PLATFORM:-n/a}). Tier: ${TIER:-unknown}. Fast tier's shards: $FAST. Full tier's: $FULL."
+          path=''
           pass=false state=failure
           if [ "$CHANGES" != success ]; then
             desc="Couldn't tell what changed ($CHANGES)"
@@ -481,20 +615,26 @@ jobs:
           elif [ "$FAST" != success ]; then
             desc="Fast tier failed: Linux x64 X11 ($FAST)"
           elif [ "$TIER" = full ]; then
+            path='every platform (the full tier)'
             if [ "$FULL" = success ]; then
               pass=true state=success desc="Full tier passed: every platform"
             else
               desc="Full tier failed ($FULL)"
             fi
-          elif [ "$TIER" = fast ] && [ "$FULL" = skipped ]; then
-            pass=true state=pending desc="Fast tier passed (Linux x64 X11). Label the PR ready to run every platform"
+          elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$PLATFORM" = false ]; then
+            path="the fast tier is enough: the pull request isn't platform-sensitive"
+            pass=true state=success desc="Fast tier passed; this change isn't platform-specific (full tier runs nightly on main)"
+          elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$PLATFORM" = true ]; then
+            path="every platform has to pass: the pull request is platform-sensitive"
+            pass=true state=pending desc='Touches platform code: label `ready` to run every platform'
           else
-            desc="Unexpected: tier ${TIER:-unknown}, full tier's shards $FULL"
+            desc="Unexpected: tier ${TIER:-unknown}, platform-sensitive ${PLATFORM:-unknown}, full tier's shards $FULL"
           fi
           echo "$desc"
           {
             echo "## E2E: ${TIER:-unknown} tier"
             echo
+            if [ -n "$path" ]; then echo "Path: $path. The \`What changed\` job's summary lists the files that decided it."; echo; fi
             echo "| Shards | Result |"
             echo "| --- | --- |"
             echo "| Fast tier: Linux x64 X11 | $FAST |"
@@ -539,3 +679,50 @@ jobs:
         run: |
           echo "::error::$DESCRIPTION"
           exit 1
+
+  # A failed run on main (a push, the nightly run, or a run by hand) opens an issue, or comments on the open one:
+  # a pull request that isn't platform-sensitive merges on the fast tier, so this is where a platform bug it
+  # missed shows up. One open issue at a time, by its exact title; close it once main is green again.
+  main-failed:
+    name: Report a failure on main
+    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e]
+    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # This job's alone: no other job can write issues.
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          TITLE: Nightly full tier failed on main
+        run: |
+          case "$EVENT" in
+            schedule) what="The nightly run" ;;
+            push) what="The push to main" ;;
+            *) what="A $EVENT run on main" ;;
+          esac
+          # Every failed job of this run, with its link. This job is still running, so it isn't one of them.
+          failed="$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"')"
+          failed="${failed:-- (none listed: see the run)}"
+          body="$what failed at ${SHA:0:7}: $RUN_URL
+
+          Failed jobs:
+          $failed
+
+          Rerun the failed jobs to tell a flake from a bug. Close this issue once main is green again: the next failure opens a new one."
+          # An API error fails the job rather than open a second issue.
+          number="$(gh issue list --repo "$REPO" --state open --limit 200 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // ""')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+            echo "Commented on #$number."
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$body"
+          fi

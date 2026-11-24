@@ -539,7 +539,7 @@ function treeItem({ depth, pos, size: count }: Pick<RowBase, 'depth' | 'pos' | '
 
 
 /** Where a row's menu opens: at the pointer, or under the row when the keyboard asked for it. */
-function menuPoint(e: MouseEvent): { x: number; y: number } {
+export function menuPoint(e: MouseEvent): { x: number; y: number } {
   if (e.clientX !== 0 || e.clientY !== 0) return { x: e.clientX, y: e.clientY };
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.bottom };
