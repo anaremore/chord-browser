@@ -400,15 +400,20 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
   it('a message sent while the panel is closed, or the assistant hidden, gets no tab to act in (Neon’s B2, round 3)', async () => {
     const t = setup();
     t.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } });
-    const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown };
+    const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown; streaming: unknown; queuedTab: unknown[] };
     (t.service as unknown as { sessionFor(state: unknown): Promise<unknown> }).sessionFor = async () => ({ send: () => undefined, alive: true, busy: false, provider: 'claude' });
     await t.service.act('w1', { do: 'toggle', open: false } as never);
     await t.inner.send('w1', s, 'click reset');
     expect(s.actTab).toBeNull();
     await t.service.act('w1', { do: 'toggle', open: true } as never);
     t.store.dispatch({ t: 'settings.set', settings: { assistant: { enabled: false } } });
+    // Its turn over (else the next one queues and never recomputes its tab): sent with the assistant hidden, no tab.
+    s.streaming = null;
     await t.inner.send('w1', s, 'click reset');
     expect(s.actTab).toBeNull();
+    // Queued behind a reply with the assistant hidden: no tab either.
+    await t.inner.send('w1', s, 'and again');
+    expect(s.queuedTab).toEqual([null]);
   });
 
   it('a model switch, closing the chat, Clear all and quit latch acting off and stop its tool calls (Neon’s S2, round 3)', async () => {
