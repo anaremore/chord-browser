@@ -36,7 +36,7 @@ const OBJECT_GROUP = 'chord-acting';
 /** Each command's limit. */
 const DEEP_COMMAND_MS = 3000;
 
-export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
+export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'replaced' | 'changed' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
 
 export interface DeepSession {
   /** What's under (x, y), in the document's CSS pixels (the view's point plus the scroll: DOM.getNodeForLocation's), is the element's own. */
@@ -61,9 +61,11 @@ const CHECK_FN = String.raw`function (owner, token, key) {
   const hit = this;
   const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner);
   if (!read || read.token !== token) return { ok: false, why: 'stale' };
+  if (read.finish) read.finish();
   const entry = read.keep[key];
   const el = entry && entry.ref.deref();
-  if (!el || !el.isConnected) return { ok: false, why: 'stale' };
+  // Replaced since the action pointed at it (a page that re-renders): said so, and the action starts over (tools.ts).
+  if (!el || !el.isConnected) return { ok: false, why: entry && entry.path !== undefined ? 'replaced' : 'stale' };
   const FRAMES = new Set(['iframe', 'frame', 'embed', 'object', 'fencedframe']);
   const up = (n) => n.parentNode ? (n.parentNode.nodeType === 11 ? n.parentNode.host : n.parentNode) : null;
   const coverOf = (cover) => {
@@ -222,7 +224,22 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           return answer && typeof answer === 'object' && typeof answer.ok === 'boolean' ? answer : { ok: false, why: 'no-check', step: `check ${lastError}` };
         },
         open: async () => {
-          const described = await send<{ node: Node }>('DOM.describeNode', { objectId: elementId, depth: -1, pierce: true });
+          // The ref's element as it is now (the review of #117: the node the hit test found and the one checked here are
+          // the same, never one from when this session opened). Not there: the snapshot gone (stale), the node replaced
+          // since (replaced, when it could be found again: the action starts over, tools.ts; else changed), or no answer
+          // (no-check). Only replaced is tried again (the review of #117, round 3).
+          const now = await send<{ result: { objectId?: string; value?: unknown } }>('Runtime.evaluate', {
+            contextId: worldId,
+            objectGroup: OBJECT_GROUP,
+            expression: `(() => { const r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return 'stale'; if (r.finish) r.finish(); const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.path !== undefined ? 'replaced' : 'changed'; })()`,
+          });
+          if (!now) return { ok: false, why: 'no-check', step: `open ${lastError}` };
+          const currentId = now.result.objectId;
+          if (!currentId) {
+            const why = now.result.value;
+            return { ok: false, why: why === 'stale' || why === 'replaced' || why === 'changed' ? why : 'no-check' };
+          }
+          const described = await send<{ node: Node }>('DOM.describeNode', { objectId: currentId, depth: -1, pierce: true });
           if (!described) return { ok: false, why: 'no-check' };
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },
