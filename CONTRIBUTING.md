@@ -4,7 +4,7 @@ Thanks for helping. Chord is early, so expect things to move quickly.
 
 ## Before you start
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md). Every UI change is reviewed against DESIGN.md, and every library or API choice against ARCHITECTURE.md.
+Read [AGENTS.md](AGENTS.md) first: the commands, the rules that are never broken, and which sections of [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md) to read for what you're changing. Every UI change is reviewed against DESIGN.md, and every library or API choice against ARCHITECTURE.md.
 
 ## Setup
 
@@ -55,6 +55,19 @@ What the container can't tell you is how Chord behaves on Windows or macOS. It r
 | `player.spec.ts` (Chord Player) | runs | runs | Linux x64 only, and it needs the network: it packages the player on castLabs ECS (its checked zip is kept in the Electron volume), and the Widevine CDM, the test stream and its licence come from the internet. Windows and macOS builds are checked by the player's own smoke test (`.github/workflows/player.yml`) |
 
 Checks inside tests that only run on Windows: downloads carry the mark of the web (`Zone.Identifier`, in `launch.spec.ts`), and `perf.spec.ts` notes whether the session is locked. Anything about Windows itself (window materials and chrome, focus and activation, keys the OS delivers, updates, the installer) still needs a Windows run: locally, where it opens windows, or CI's Windows jobs on a branch, with `git push origin HEAD:<branch>` and then `gh workflow run ci.yml --ref <branch>`. Only the maintainer, or agents allowed to push, do that.
+
+## What CI runs on a pull request
+
+Every push gets the fast tier: typecheck, lint, unit tests, the password detector, and E2E on Linux x64 X11 (about 16 minutes). The full tier adds E2E on Windows, macOS, Linux Wayland and Linux arm64, and Chord Player (about 27 minutes). The `E2E` commit status is the merge gate:
+
+| The pull request | Runs | `E2E` |
+|---|---|---|
+| Docs, the site or mocks only | typecheck, lint, unit tests | success |
+| Not platform-sensitive | the fast tier | success once it passes |
+| Platform-sensitive | the fast tier | pending once it passes, until it's labeled `ready` |
+| Labeled `ready` (and not a draft), or Renovate's | the full tier | success once every platform passes |
+
+Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Every push to `main`, and a run each night, run the full tier; a failure there opens (or comments on) the issue *Nightly full tier failed on main*.
 
 ## Ground rules
 
