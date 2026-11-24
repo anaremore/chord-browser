@@ -28,5 +28,6 @@ flatpak/.flatpak-builder/
 flatpak/build-dir/
 flatpak/repo/
 
-# Agent worktrees and local Claude Code state
-.claude/
+# Agent worktrees and local Claude Code state; the repo's skills are shared (.claude/skills, AGENTS.md)
+.claude/*
+!.claude/skills/
