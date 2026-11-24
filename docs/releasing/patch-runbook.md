@@ -76,7 +76,7 @@ git commit -am "fix(deps): update electron to X (security)"
 git push -u origin HEAD                           # then open a PR
 ```
 
-- **Patch and minor updates** automerge once every CI check passes. With main's merge queue on, Renovate has to queue them through GitHub's auto-merge (`platformAutomerge: true`, turned on right after the ruleset), where the merge group runs every platform (an Electron change gets the full tier). If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
+- **Patch and minor updates** automerge once every CI check passes. With main's merge queue on, Renovate has to queue them through GitHub's auto-merge (`platformAutomerge: true`), where the merge group runs every platform (an Electron change gets the full tier). If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
 - **A new major** (our major reached end of life) is a manual PR. Read Electron's breaking changes for the jump; the same suites must pass.
 - After the merge, check the Chromium version. The issue names it; `releases.electronjs.org` lists it per Electron version. In a running Chord, Settings → About shows both.
 
@@ -199,7 +199,7 @@ electron-updater has no rollback ✅, and package repositories don't either, so 
 - [ ] *Settings → Advanced Security:* turn on **Dependency graph** and **Dependabot alerts** (Renovate's vulnerability-alert PRs need them ✅). Leave *Dependabot security updates* off.
 - [ ] Optional: repository variable `SECURITY_ONCALL` (comma-separated GitHub logins). The default assignee is the owner.
 - [ ] Optional: request Mend's **Community (OSS)** plan ([Mend Hosted Request](https://github.com/renovatebot/renovate/discussions/new?category=mend-hosted-request)) for more runner memory and 2 concurrent jobs ✅.
-- [ ] Optional, for faster merges: a branch ruleset on `main` that requires the CI checks, *Allow auto-merge*, then `platformAutomerge: true` in `renovate.json`. Don't flip `platformAutomerge` without the ruleset, or GitHub may merge before tests finish ✅ ([docs](https://docs.renovatebot.com/configuration-options/#platformautomerge)).
+- [x] The `main` ruleset (merge queue, `E2E` required) and *Allow auto-merge*, then `platformAutomerge: true` in `renovate.json` (2026-11-24). Never turn the ruleset off with `platformAutomerge` on, or GitHub may merge before tests finish ✅ ([docs](https://docs.renovatebot.com/configuration-options/#platformautomerge)).
 - [ ] apt and dnf: [linux-repos.md](linux-repos.md#switching-it-on).
 - [ ] Flathub: [flathub.md](flathub.md#submitting-to-flathub).
 - [ ] Code signing certificates, when you have them: [signing.md](signing.md).

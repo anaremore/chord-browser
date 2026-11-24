@@ -6,7 +6,7 @@
   "rangeStrategy": "pin",
   "minimumReleaseAge": "7 days",
   "ignoreTests": false,
-  "platformAutomerge": false,
+  "platformAutomerge": true,
   "prConcurrentLimit": 3,
   "lockFileMaintenance": {
     "enabled": true,

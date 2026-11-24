@@ -1365,7 +1365,7 @@ interface PlatformServices {
   - It's a group of its own, so a tooling update still in its 7-day wait can't hold it back.
 - **Electron patch and minor updates automerge** once every CI check passes. Majors get a manual PR.
   - Renovate's own automerge treats any failed check as red, and no checks at all as pending ✅.
-  - `platformAutomerge` is off. Without a ruleset that requires the CI checks, GitHub's native auto-merge could merge before tests finish ✅.
+  - `platformAutomerge` is on: Renovate queues its PRs through GitHub's auto-merge, the only way into main's merge queue. It's safe only because main's ruleset requires the `E2E` check; without it, auto-merge could merge before tests finish ✅.
 - **Everything else waits `minimumReleaseAge: 7 days`** (supply-chain buffer).
   - Vulnerability-alert PRs bypass the wait: the `vulnerabilityAlerts` default sets `minimumReleaseAge: null` ✅. They need Dependabot alerts turned on for the repo.
   - Renovate can't check release age for some update types (`pin`, `pinDigest`, `lockFileMaintenance`, …), so those are exempt. Otherwise they'd wait forever ✅.
