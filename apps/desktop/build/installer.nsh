@@ -29,20 +29,9 @@ Var /GLOBAL chordRunning
 Var /GLOBAL chordPowerShell ; "0" when PowerShell can run (electron-builder's IsPowerShellAvailable)
 
 ; The folder goes to PowerShell through the environment, never inside its command (a ' in a user's
-; name would end the string). nsExec's processes inherit setup's environment. In its long form:
-; $INSTDIR can come with a short (8.3) name in it (C:\Users\RUNNER~1\... on CI's runners), and a
-; process's path never does, so matching the short form finds nothing (electron-builder's check too).
+; name would end the string). nsExec's processes inherit setup's environment.
 !macro chordPassFolder
-  Push $0
-  Push $1
-  System::Call 'kernel32::GetLongPathName(t "$INSTDIR", t .r0, i ${NSIS_MAX_STRLEN}) i .r1'
-  ${if} $1 == 0
-    StrCpy $0 "$INSTDIR"
-  ${endIf}
-  System::Call 'kernel32::SetEnvironmentVariable(t "CHORD_INSTDIR", t "$0\")'
-  DetailPrint `Chord's folder, as running processes show it: $0`
-  Pop $1
-  Pop $0
+  System::Call 'kernel32::SetEnvironmentVariable(t "CHORD_INSTDIR", t "$INSTDIR\")'
 !macroend
 
 ; Ends the relays running from this folder. $chordRelays: how many there were.
@@ -92,9 +81,12 @@ Var /GLOBAL chordPowerShell ; "0" when PowerShell can run (electron-builder's Is
 !macroend
 
 !macro customCheckAppRunning
-  !insertmacro IS_POWERSHELL_AVAILABLE
-  StrCpy $chordPowerShell $IsPowerShellAvailable
   !insertmacro chordPassFolder
+  ; electron-builder's own probe sets $IsPowerShellAvailable, which its fallback check reads. Chord's runs the
+  ; very query it depends on instead: on CI's runner electron-builder's said no while this one works.
+  !insertmacro IS_POWERSHELL_AVAILABLE
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -C "Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + $$PID) -ErrorAction Stop | Out-Null; exit 0"`
+  Pop $chordPowerShell
   ${if} $chordPowerShell != 0
     ; Without PowerShell: electron-builder's own check (tasklist and taskkill by name), then the entry.
     !insertmacro _CHECK_APP_RUNNING
