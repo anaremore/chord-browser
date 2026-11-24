@@ -1712,6 +1712,31 @@ describe('acting through the gate (S18 M2c)', () => {
     }
   });
 
+  it('a value: a node replaced before it’s set is looked for again; the user taking the tab while the step is checked: nothing set, nothing chosen (round 4 of #117)', async () => {
+    ELEMENTS.push({ role: 'textbox', name: 'Delivery time', editable: true, field: field({ type: 'time' }), risk: { tag: 'input', type: 'time' } });
+    try {
+      const ref = `e${ELEMENTS.length}`;
+      const t = await acting({ twist: { replaced: { describe: 1 } } });
+      expect(result(await t.call('type', { tab_id: t.tab, ref, text: '18:30' })).data).toMatchObject({ done: 'Typed in “Delivery time”' });
+      expect(t.steps.slice(0, 7)).toEqual(['describe', 'point', 'describe', 'point', 'describe', 'values', 'setValue']);
+      // The user taking the tab during the step's last check (stepNow): nothing set, nothing chosen.
+      let stop = () => undefined as void;
+      const onAct = (_events: EventEmitter, op: string) => void (op === 'describe' && stop());
+      const u = await acting({ onAct });
+      let describes = 0;
+      stop = () => void (++describes === 2 && u.agent.pause('n1', true));
+      expect(refusal(await u.call('type', { tab_id: u.tab, ref, text: '18:30' })).refused).toBe(CONTROL_REFUSALS.paused);
+      expect(u.steps).not.toContain('setValue');
+      const v = await acting({ onAct });
+      describes = 0;
+      stop = () => void (++describes === 2 && v.agent.pause('n1', true));
+      expect(refusal(await v.call('select_option', { tab_id: v.tab, ref: 'e3', option: 'Express' })).refused).toBe(CONTROL_REFUSALS.paused);
+      expect(v.steps).not.toContain('choose');
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
   // ---------- Review 1 of #110 ----------
 
   it('Stop during an action: nothing more goes in (the text, the Enter), though the action had started', async () => {

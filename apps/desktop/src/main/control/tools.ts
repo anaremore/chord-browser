@@ -735,12 +735,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      */
     let enterMovedFocus = false;
     /**
-     * Text or keys in, with the page preload's guard up (the window's first listener): the guard takes what has the
-     * focus as the element; the focus is then checked to be this element's (in this document, so not in a frame), its
-     * insides all to be seen (no closed shadow root), and Stop and a pause too. A key or an insertion the page would get
-     * anywhere else is stopped there, and the action ends. False then.
+     * Under the guard, before each input: the focus the element's (in this document, so not in a frame; the check marks
+     * it for the guard, which takes no input until then), its insides all to be seen (no closed shadow root), the
+     * file picker hold, Stop and a pause.
      */
-    /** Under the guard, before each input: the focus the element's, its insides all to be seen, Stop and a pause. */
     const stillOk = async (): Promise<string | null> => {
       // The tab's file picker hold, still on (it can be lost between steps: the debugger let go).
       if (!deep!.held()) return ACT_REFUSALS.noCheck;
@@ -751,10 +749,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       return halt();
     };
     /**
-     * Text or keys in, with the page preload's guard up (the window's first listener; every frame's too): the guard
-     * takes what has the focus as the element, then stillOk checks it's this element's. `input` sends, and may check
-     * again between its events (a key's keydown, then its character); it says why it stopped, if it did. A key or an
-     * insertion the page would get anywhere else is stopped there, and the action ends. The guard always comes down.
+     * Text or keys in, with the page preload's guard up (the window's first listener; every frame's too), armed with a
+     * mark only main knows: it takes no input until stillOk's focus check marks the element, then only for it. `input`
+     * sends, and may check again between its events (a key's keydown, then its character); it says why it stopped, if
+     * it did. A key or an insertion the page would get anywhere else is stopped there, and the action ends. The guard
+     * always comes down.
      */
     const guarded = async (until: 'keyup' | 'beforeinput', input: () => Promise<string | null>, typesNothing = false): Promise<boolean> => {
       guardMark = `chord-guard-${randomBytes(16).toString('hex')}`;
@@ -820,7 +819,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           }
         }
         const changed = await stepNow();
-        if (!changed) return null;
+        // Stop, the user taking the tab, the page gone on while the step was checked: nothing goes in (Neon, round 4).
+        if (!changed) return halt();
         if (changed.why === 'replaced' && attempt < PRESS_TRIES) continue;
         return changed.refused;
       }
@@ -943,6 +943,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // Every field's value, as it is now (a no: the element's gone, and nothing goes in).
         const remembered = await actOn({ op: 'values', mode: 'remember' });
         if (!remembered.ok) return void (refused = actRefusal(remembered));
+        if ((refused = halt())) return;
         const set = await actOn({ op: 'setValue', value: value as string });
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;

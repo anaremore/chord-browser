@@ -6,10 +6,10 @@
  * Main (control/page.ts) arms it, through this world (Electron's preload world, 999), with an event name only main
  * knows; its focus check (act.ts, in Chord's world) then fires that event at the element, and that element is the one
  * input may reach (the review of #117: never what had the focus when it was armed, which the page could have moved
- * there and back). Until then, and once it's another, a trusted key or insertion is stopped before the page sees it. Disarming waits for the input's last event (the key's keyup, the text's
- * beforeinput), at most `waitMs`, and says whether anything was stopped (`moved`) or that last event never came
- * here (`lost`: the focus went where this document doesn't see, into a frame). keyup is watched, not stopped: a key
- * may move the focus on purpose (Tab).
+ * there and back). Until then, and once it's another, a trusted key or insertion is stopped before the page sees it.
+ * Disarming waits for the input's last event (the key's keyup, the text's beforeinput), at most `waitMs`, and says
+ * whether anything was stopped (`moved`) or that last event never came here (`lost`: the focus went where this
+ * document doesn't see, into a frame). keyup is watched, not stopped: a key may move the focus on purpose (Tab).
  */
 type GuardEvent = { type: string; isTrusted: boolean; preventDefault(): void; stopImmediatePropagation(): void; composedPath?(): unknown[] };
 type Focusable = { shadowRoot?: { activeElement?: Focusable | null } | null };
@@ -43,7 +43,8 @@ export function installAgentGuard(win: GuardWindow): void {
       guard.done = true;
       guard.finished?.();
     }
-    if (event.type === 'keyup' || deepFocus() === guard.expected) return;
+    // Nothing marked yet (null): nothing passes, even with no focus anywhere (Neon, round 4).
+    if (event.type === 'keyup' || (guard.expected !== null && deepFocus() === guard.expected)) return;
     guard.moved = true;
     event.preventDefault();
     event.stopImmediatePropagation();

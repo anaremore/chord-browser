@@ -72,6 +72,14 @@ describe('the agent guard (preload/agent-guard.ts)', () => {
     expect(await guard.disarm(0)).toEqual({ moved: true, lost: false });
   });
 
+  it('nothing marked and no focus anywhere: still nothing passes (Neon, round 4 of #117)', async () => {
+    const { win, guard, send } = guardWindow();
+    win.document.activeElement = null;
+    guard.arm('keyup', MARK);
+    expect(send('keydown')).toBe(false);
+    expect(await guard.disarm(0)).toEqual({ moved: true, lost: true });
+  });
+
   it('a mark that isn’t Chord’s shape arms nothing, and the mark’s listener goes when the guard comes down', async () => {
     const { win, guard, send, listeners } = guardWindow();
     expect(guard.arm('keyup', 'keydown')).toBe(false);
