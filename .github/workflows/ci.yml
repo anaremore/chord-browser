@@ -57,7 +57,8 @@ jobs:
   changes:
     name: What changed
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # Renovate's pull requests can wait here for others' runs (the `Renovate waits its turn` step).
+    timeout-minutes: ${{ github.event.pull_request.user.login == 'renovate[bot]' && 150 || 5 }}
     permissions:
       contents: read
       # Whether a merge group already tested a commit pushed to main.
@@ -228,6 +229,31 @@ jobs:
           else
             echo "Not platform-sensitive: none of the changed files."
           fi
+      # Renovate waits its turn: while anyone else's pull request or merge group has a CI run queued or running,
+      # a run of Renovate's waits here (one Linux runner, polling each minute) before its shards take ~9 runners.
+      # Not Electron (its security patches go first: ARCHITECTURE.md §14.3) and not a vulnerability fix (labeled
+      # `security`). After two hours it goes ahead anyway.
+      - name: Renovate waits its turn
+        if: >-
+          github.event_name == 'pull_request' && github.event.pull_request.user.login == 'renovate[bot]' &&
+          steps.platform.outputs.electron != 'true' && !contains(github.event.pull_request.labels.*.name, 'security')
+        timeout-minutes: 125
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          for minute in $(seq 1 120); do
+            others="$(for status in queued in_progress waiting pending; do
+                gh api "repos/$REPO/actions/workflows/ci.yml/runs?status=$status&per_page=100" \
+                  --jq '.workflow_runs[] | select(.event == "pull_request" or .event == "merge_group")
+                    | select(.head_branch | startswith("renovate/") | not) | "\(.id) \(.head_branch)"'
+              done | grep -v "^$RUN_ID " | sort -u || true)"
+            if [ -z "$others" ]; then echo "No one else's CI is queued or running: going ahead."; exit 0; fi
+            [ "$minute" = 1 ] && { echo "Waiting for others' runs:"; echo "$others"; }
+            sleep 60
+          done
+          echo "::warning::Waited two hours for others' CI runs; going ahead."
       # The tier. A pull request's labels and draft state are the event's: a run re-run by hand keeps the tier it had.
       # With a merge queue, a pull request always gets the fast tier, except the run the `ready` label itself starts
       # (the escape hatch: the full tier now, once). Without one, as before: `ready` (and not a draft) runs the full

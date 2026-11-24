@@ -71,7 +71,7 @@ Until main's merge queue is turned on, a platform-sensitive pull request's `E2E`
 
 Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Each night the full tier runs on `main`; a failure there opens (or comments on) the issue *Nightly full tier failed on main*, naming each failed platform's job and its failing tests.
 
-The *E2E* job's summary shows how even the shards were, and warns past 1.5×. To rebalance them, refresh the weights from a passing run on `main` and commit the map: `node scripts/ci/e2e-shard-weights.mjs <run-id>` (it needs `gh`). A new spec file runs before it's in the map, dealt to a shard in turn. Renovate opens at most 3 pull requests at a time, on Monday mornings, apart from Electron and security fixes, which come at once.
+The *E2E* job's summary shows how even the shards were, and warns past 1.5×. To rebalance them, refresh the weights from a passing run on `main` and commit the map: `node scripts/ci/e2e-shard-weights.mjs <run-id>` (it needs `gh`). A new spec file runs before it's in the map, dealt to a shard in turn. Renovate opens its updates on weekends (UTC), grouped, at most 3 pull requests at a time, and its CI runs wait while anyone else's are queued or running. Electron and security fixes come at once and don't wait.
 
 ## Ground rules
 

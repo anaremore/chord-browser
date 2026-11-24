@@ -2,23 +2,31 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Dependency policy: ARCHITECTURE.md §14.2. Electron security process: §14.3 and docs/releasing/patch-runbook.md.",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":configMigration", ":maintainLockFilesWeekly"],
-  "dependencyDashboard": {
-    "enabled": true
-  },
+  "dependencyDashboard": true,
   "rangeStrategy": "pin",
   "minimumReleaseAge": "7 days",
   "ignoreTests": false,
   "platformAutomerge": false,
   "prConcurrentLimit": 3,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["* * * * 0,6"]
+  },
   "vulnerabilityAlerts": {
     "labels": ["security"],
     "schedule": ["at any time"]
   },
   "packageRules": [
     {
-      "description": "Everything waits for Monday morning, once a week, so a burst of updates doesn't fill CI's free runners while pull requests wait. Electron (below) and security fixes (vulnerabilityAlerts) don't wait.",
+      "description": "Everything waits for the weekend (UTC), and comes in groups, so updates don't fill CI's free runners while people's pull requests wait; CI also holds Renovate's runs while anyone else's are queued or running (ci.yml, `changes`). Electron (below) and security fixes (vulnerabilityAlerts) don't wait.",
       "matchPackageNames": ["*"],
-      "schedule": ["before 6am on monday"]
+      "schedule": ["* * * * 0,6"]
+    },
+    {
+      "description": "Minor and patch updates in one weekly pull request, apart from the groups below (later rules win) and Electron.",
+      "matchPackageNames": ["*", "!electron"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "minor and patch updates"
     },
     {
       "description": "Renovate can't check release age for these update types, so 7 days would hold them back forever. Pins only freeze what we already use; lock file maintenance PRs are reviewed by a person.",
