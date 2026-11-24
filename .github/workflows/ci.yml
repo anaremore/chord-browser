@@ -372,6 +372,12 @@ jobs:
         if: runner.os != 'Linux'
         run: pnpm --filter @chord/desktop test:e2e --shard=${{ matrix.shard }}/${{ matrix.shards }}
 
+      # A test that passed only on its retry (Playwright's "flaky": the job stays green) goes in the job's summary,
+      # with a warning on the run, so a repeat flake shows before it fails twice in one run and blocks a merge.
+      - name: Flaky tests
+        if: always()
+        run: node scripts/ci/flaky-summary.mjs apps/desktop/playwright-report/results.json "${{ env.ARTIFACT_SUFFIX }}"
+
       - name: Upload design QA captures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
