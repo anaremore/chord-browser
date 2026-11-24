@@ -242,7 +242,16 @@ export function snapshotScript(owner: string, token: string): string {
   let stopped = false;
   // depth: the outline's depth here; keyed: inside an element with a key (a pointer cursor there is its own); named:
   // inside an element its words name (an acted-on one, a heading), whose text is its name already.
-  const walk = (parent, depth, keyed, named) => {
+  // Each element's ancestors as the walk passes them (a linked list, from the parent up): a kept ref's place (refPath's
+  // JSON, the same) is built from it, never by climbing again for each (the review of #117: measured, it cost the
+  // snapshot ~4 ms on the typical page).
+  const link = (el, up) => ({ part: [el.localName, el.getAttribute('role') || ''], up, n: up ? up.n + 1 : 1 });
+  const placeOf = (chain) => {
+    const parts = [];
+    for (let c = chain; c && parts.length < 64; c = c.up) parts.push(c.part);
+    return JSON.stringify(parts);
+  };
+  const walk = (parent, depth, keyed, named, chain) => {
     for (const child of parent.childNodes) {
       if (stopped) return;
       if (child.nodeType === 3) {
@@ -263,8 +272,9 @@ export function snapshotScript(owner: string, token: string): string {
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
       if (!role && !keyed && pointerGeneric(el)) role = 'generic';
       if (!role) {
-        if (el.shadowRoot) walk(el.shadowRoot, depth, keyed, named);
-        walk(el, depth, keyed, named);
+        const inner = link(el, chain);
+        if (el.shadowRoot) walk(el.shadowRoot, depth, keyed, named, inner);
+        walk(el, depth, keyed, named, inner);
         continue;
       }
       const acted = ACTED.has(role) || role === 'generic';
@@ -286,15 +296,16 @@ export function snapshotScript(owner: string, token: string): string {
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, path: refPath(el), shape: refShape(el) }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, path: placeOf(chain), shape: refShape(el) }); }
       }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
       // element's words are its name.
       if (role === 'iframe' || isField(el) || TYPED.has(role)) continue;
       const inside = named || acted || role === 'heading';
-      if (el.shadowRoot) walk(el.shadowRoot, depth + 1, keyed || acted, inside);
-      walk(el, depth + 1, keyed || acted, inside);
+      const inner = link(el, chain);
+      if (el.shadowRoot) walk(el.shadowRoot, depth + 1, keyed || acted, inside, inner);
+      walk(el, depth + 1, keyed || acted, inside, inner);
     }
   };
   // The walk's start, checked as every element is: a page that's all editor (<body contenteditable>, <html
@@ -307,7 +318,14 @@ export function snapshotScript(owner: string, token: string): string {
     node.field = fieldOf(start);
     if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name, path: refPath(start), shape: refShape(start) }); }
     nodes.push(node);
-  } else walk(start, 0, false, false);
+  } else {
+    // The start's own ancestors, and itself, as its children's place.
+    let chain = null;
+    const above = [];
+    for (let n = start; n; n = n.parentElement) above.push(n);
+    for (const n of above.reverse()) chain = link(n, chain);
+    walk(start, 0, false, false, chain);
+  }
   // A ref is found again only if nothing else here looked like it (the review of #117): its role, name, place and shape
   // unique among the snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin).
   const counts = new Map();
