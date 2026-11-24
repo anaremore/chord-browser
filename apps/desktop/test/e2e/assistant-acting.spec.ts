@@ -162,6 +162,17 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(4);
     expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('The user said no to this step');
     expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
+
+    // Once more, and the bar over the tab says what it's doing; its Stop (every agent and reply, as Ctrl+.) ends it:
+    // the card comes down, nothing is sent (round 2 of #147: the bar and its Stop).
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Place order' }]));
+    await expect(pay.last()).toBeVisible({ timeout: 20_000 });
+    const bar = shell.getByRole('status').filter({ hasText: /^✳?The assistant / });
+    await expect(bar).toBeVisible();
+    await bar.getByRole('button', { name: 'Stop' }).click();
+    await expect(panel.getByRole('group', { name: /^Place the order/ })).toHaveCount(0);
+    await expect(bar).toHaveCount(0);
+    expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

@@ -6,16 +6,31 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emptyState, type State } from '@chord/core';
+import { emptyState, splitOf, type State } from '@chord/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
-const leases = vi.hoisted(() => ({ ended: [] as unknown[] }));
+/** The lease module, as the service sees it: whose lease is on where, and what was ended (by whom). */
+const leases = vi.hoisted(() => ({ ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on' }));
 vi.mock('../../src/main/control/user-watch', () => ({
-  beginUserAction: async () => 'on',
+  beginUserAction: async (contents: unknown, owner: string) => {
+    const begun = await leases.begin();
+    if (begun === 'on') leases.owners.set(contents, owner);
+    return begun;
+  },
   endUserAction: () => undefined,
-  endUserLease: (contents: unknown) => void leases.ended.push(contents),
+  endUserLease: (contents: unknown, owner?: string) => {
+    const now = leases.owners.get(contents);
+    if (owner !== undefined && now !== undefined && now !== owner) return;
+    leases.ended.push(contents);
+    leases.owners.delete(contents);
+  },
+  onUserLeaseEnd: () => () => undefined,
+  userLeaseOwner: (contents: unknown) => leases.owners.get(contents) ?? null,
+  userTabActing: (contents: unknown) => leases.owners.has(contents),
 }));
+const guards = vi.hoisted(() => ({ dropped: [] as unknown[] }));
+vi.mock('../../src/main/control/page', async (actual) => ({ ...(await actual<Record<string, unknown>>()), dropAgentGuard: (contents: unknown) => void guards.dropped.push(contents) }));
 const { AssistantService } = await import('../../src/main/assistant/service');
 const { USER_TAB_REFUSALS } = await import('../../src/main/assistant/scope');
 const { actCard } = await import('../../src/main/assistant/service');
@@ -25,6 +40,9 @@ const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: '
 const dirs: string[] = [];
 afterEach(() => {
   leases.ended.length = 0;
+  leases.owners.clear();
+  leases.begin = async () => 'on';
+  guards.dropped.length = 0;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -58,7 +76,7 @@ function setup(acting = true) {
     // No shell here: the panel's pushes skip the window (isDestroyed); what acting asks (isMinimized) answers.
     allWindows: [{ id: 'w1', window: { isMinimized: () => false, isDestroyed: () => true } }],
     peeks: { isOpen: () => false },
-    tabs: { get: (id: string) => ({ webContents: page(id) }) },
+    tabs: { get: (id: string) => ({ webContents: page(id) }), nodeFor: (contents: unknown) => [...pages].find(([, p]) => p === contents)?.[0] },
     assistantBars: false,
   };
   const service = new AssistantService(browser as never, { assistant: async () => ({ threads: [] }) } as never, dir);
@@ -71,7 +89,7 @@ function setup(acting = true) {
     s.actEnded = null;
     return s;
   };
-  return { store, service, inner, mine, other, page, turn };
+  return { store, service, inner, mine, other, page, turn, browser };
 }
 
 describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () => {
@@ -161,7 +179,11 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       const s = await t.inner.stateFor('c1');
       s.sendGrants.set(t.mine, new Set(['https://game.example']));
       s.sendGrants.set(t.other, new Set(['https://shop.example']));
-      if (end === 'used') t.service.userUsedTab(t.mine);
+      // Taken from it mid-action (its lease on there): Allow for this chat ends there.
+      if (end === 'used') {
+        leases.owners.set(t.page(t.mine), (s as unknown as { control: { id: string } }).control.id);
+        t.service.userUsedTab(t.mine);
+      }
       else if (end === 'new') await t.service.act('w1', { do: 'new' } as never);
       else t.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [] } } });
       expect(s.sendGrants.get(t.mine)?.size ?? 0, end).toBe(0);
@@ -184,5 +206,105 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       await inner.finishTurn(s, { status: 'done' });
     }
     expect(sent).toEqual([{ nodeId: t.mine, windowId: 'w1' }, null]);
+  });
+
+  it('one chat ending never ends another chat’s lease, its guard or its bar (Claude’s B1, round 2)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    s.leased.add(t.mine);
+    leases.owners.set(t.page(t.mine), 'another chat');
+    t.inner.barFor(t.mine, 'clicking “Raise”');
+    await t.service.act('w1', { do: 'stop' } as never);
+    expect(leases.ended).toEqual([]);
+    expect(guards.dropped).toEqual([]);
+    expect(t.store.state.live[t.mine]?.agent?.name).toBe('The assistant');
+    expect(s.leased.size).toBe(0);
+  });
+
+  it('a click in a tab no lease of the assistant’s is on leaves its typing guard (an outside agent’s, G4) and Allow for this chat (Neon’s B3, Claude’s S3, round 2)', async () => {
+    const t = setup();
+    const s = await t.inner.stateFor('c1');
+    s.sendGrants.set(t.mine, new Set(['https://game.example']));
+    t.service.userUsedTab(t.mine);
+    t.service.userMovedPage(t.page(t.mine) as never);
+    expect(guards.dropped).toEqual([]);
+    expect(s.sendGrants.get(t.mine)?.size).toBe(1);
+    // Its own lease on: dropped, and the grant ends.
+    leases.owners.set(t.page(t.mine), (s as unknown as { control: { id: string } }).control.id);
+    t.service.userMovedPage(t.page(t.mine) as never);
+    expect(guards.dropped).toEqual([t.page(t.mine)]);
+    expect(s.sendGrants.get(t.mine)?.size).toBe(0);
+  });
+
+  it('acting ended (your Stop, your click) while the lease was being had: let go of at once, never tracked (Neon’s B2, round 2)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> } } }).actingHost(s);
+    let go: (v: string) => void = () => undefined;
+    leases.begin = () => new Promise((done) => (go = done));
+    const begun = host.lease.begin({ id: t.mine });
+    t.service.userUsedTab(t.mine);
+    go('on');
+    expect(await begun).toBe(USER_TAB_REFUSALS.tookOver);
+    expect(leases.owners.has(t.page(t.mine))).toBe(false);
+    expect(s.leased.has(t.mine)).toBe(false);
+  });
+
+  it('every way out of a chat latches: opening another, continuing, the panel closed, the assistant hidden (E6; Neon’s B4, round 2)', async () => {
+    for (const end of ['open', 'continue', 'toggle', 'hidden'] as const) {
+      const t = setup();
+      const s = await t.turn();
+      if (end === 'open') await t.service.act('w1', { do: 'open', threadId: 'nope' } as never).catch(() => undefined);
+      else if (end === 'continue') await t.service.act('w1', { do: 'continue' } as never);
+      else if (end === 'toggle') await t.service.act('w1', { do: 'toggle', open: false } as never);
+      else t.store.dispatch({ t: 'settings.set', settings: { assistant: { enabled: false } } });
+      expect(s.actEnded, end).toBe(USER_TAB_REFUSALS.left);
+    }
+  });
+
+  it('Peek over the tab, or the window minimized, ends acting at once (Neon’s S1, round 2); a split doesn’t latch (mayAct refuses it)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    let peek = false;
+    (t.browser as unknown as { peeks: { isOpen: () => boolean } }).peeks.isOpen = () => peek;
+    peek = true;
+    t.service.screenChanged();
+    expect(s.actEnded).toBe(USER_TAB_REFUSALS.switched);
+    const u = setup();
+    const v = await u.turn();
+    u.store.dispatch({ t: 'split.add', windowId: 'w1', withId: u.mine, nodeId: u.other });
+    expect(splitOf(u.store.state, u.mine)).not.toBeNull();
+    u.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: u.mine });
+    u.service.screenChanged();
+    expect(v.actEnded).toBeNull();
+  });
+
+  it('a closed tab’s bar leaves the list, so the bars aren’t kept in step for nothing (Claude’s S2, round 2)', async () => {
+    const t = setup();
+    t.inner.barFor(t.mine, 'clicking “Raise”');
+    expect(t.browser.assistantBars).toBe(true);
+    t.store.dispatch({ t: 'tab.close', nodeId: t.mine } as never);
+    t.inner.barFor(t.mine, null);
+    expect(t.browser.assistantBars).toBe(false);
+  });
+
+  it('a message queued while acting is off has no tab; acted is cleared for each message (Neon’s S4 and Claude’s nit, round 2)', async () => {
+    const t = setup(false);
+    const s = (await t.inner.stateFor('c1')) as unknown as { streaming: unknown; queuedTab: unknown[] };
+    s.streaming = { id: 'reply' };
+    await t.inner.send('w1', s, 'and raise');
+    expect(s.queuedTab).toEqual([null]);
+  });
+
+  it('Retry acts in the tab its message was sent from, never the one on screen now (Claude’s S8 on #147)', async () => {
+    const t = setup();
+    const s = (await t.inner.stateFor('c1')) as unknown as { messages: unknown[]; sentTabs: Map<string, unknown> };
+    s.messages.push({ id: 'm1', threadId: 't', createdAt: 0, body: { role: 'user', text: 'raise', attachments: [] } });
+    s.sentTabs.set('m1', { nodeId: t.mine, windowId: 'w1' });
+    t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other });
+    const sent: unknown[] = [];
+    (t.service as unknown as { send: (...args: unknown[]) => Promise<void> }).send = async (...args) => void sent.push(args[5]);
+    await t.service.act('w1', { do: 'retry' } as never);
+    expect(sent).toEqual([{ nodeId: t.mine, windowId: 'w1' }]);
   });
 });

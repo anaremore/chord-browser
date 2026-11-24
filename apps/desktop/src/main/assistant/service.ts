@@ -16,6 +16,7 @@ import {
   CONTROL_WAIT_MS,
   sendTitle,
   splitOf,
+  shownTabs,
   stepDanger,
   stepTitle,
   type AssistantActCard,
@@ -87,12 +88,12 @@ import type { ControlScope } from '../control/scope';
 import { runControlTool } from '../control/tools';
 import { AssistantImages, imageInfo, newImageId } from './images';
 import { asWslTarget, defaultWslDistro, removeInWsl, wslClaudeSessionPaths, type WslTarget } from './launch';
-import { duetScope, USER_TAB_REFUSALS, type DuetChat } from './scope';
+import { duetScope, USER_TAB_REFUSALS, type DuetChat, type DuetHost } from './scope';
 import { siteOfUrl } from '../agents/shares';
 import { shownOrigin, type SendHoldDeps } from '../control/sends';
 import { buildActs } from './preview';
 import { dropAgentGuard } from '../control/page';
-import { beginUserAction, endUserAction, endUserLease } from '../control/user-watch';
+import { beginUserAction, endUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing } from '../control/user-watch';
 
 type Decision = 'once' | 'thread' | 'always' | 'denied';
 
@@ -263,6 +264,8 @@ export class AssistantService {
       // tools; a site taken off the list asks again, in every chat, mid-task too.
       const before = change.before.settings.assistant;
       const now = change.state.settings.assistant;
+      // Show the assistant turned off: acting stops everywhere (E6; Neon's B4, round 2).
+      if (before.enabled !== now.enabled && !now.enabled) for (const state of this.threads.values()) this.endActing(state, USER_TAB_REFUSALS.left);
       if (before.acting !== now.acting) {
         for (const threadId of [...this.live.keys()]) this.drop(threadId);
         if (!now.acting) for (const state of this.threads.values()) this.endActing(state, USER_TAB_REFUSALS.off);
@@ -270,17 +273,12 @@ export class AssistantService {
       if (before.readsNothing !== now.readsNothing || before.offChords !== now.offChords) {
         for (const state of this.threads.values()) if (now.readsNothing || now.offChords.includes(state.chordId)) this.endActing(state, USER_TAB_REFUSALS.off);
       }
-      // The message's tab off screen (another tab, a split, Peek, another window, closed): acting ends for the message,
-      // with no coming back to it (A1; Neon's B6 on #147). Minimizing is heard in mayAct, at the next step.
-      if (change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'nodes')) {
-        for (const state of this.threads.values()) {
-          if (state.streaming && state.actTab && !state.actEnded && !this.actShown(state.actTab)) this.endActing(state, USER_TAB_REFUSALS.switched);
-        }
-      }
+      if (change.patches.some((p) => p.path[0] === 'windows' || p.path[0] === 'nodes')) this.screenChanged();
       if (before.actSites !== now.actSites) {
         const removed = before.actSites.filter((x) => !now.actSites.includes(x));
         for (const site of removed) for (const state of this.threads.values()) state.control.forget('site', site);
-        // A site removed in Settings: what any chat was allowed to send (Allow for this chat) ends with it.
+        // A site removed in Settings: every chat's *Allow for this chat* ends, whatever site it names (simpler; the worst
+        // it does is ask again: the record's owner's answer 1).
         if (removed.length) for (const state of this.threads.values()) this.endGrants(state);
       }
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'assistant' && p.path[2] === 'readsNothing')) {
@@ -291,6 +289,13 @@ export class AssistantService {
             for (const m of state.messages) if (m.body.role === 'tool' && m.body.fill?.status === 'pending') void this.endFill(state, m, 'expired', 'What it can read is set to Nothing, so nothing was filled.');
           }
         }
+      }
+    });
+    // A lease that ended (its tail, your hands, lost): its chat forgets the tab (Claude's B1, round 2).
+    onUserLeaseEnd((contents, owner) => {
+      for (const state of this.threads.values()) {
+        if (state.control.id !== owner) continue;
+        for (const nodeId of [...state.leased]) if (this.browser.tabs.get(nodeId)?.webContents === contents) state.leased.delete(nodeId);
       }
     });
     this.opened = this.init();
@@ -475,9 +480,14 @@ export class AssistantService {
     for (const nodeId of new Set([...state.leased, ...(at ? [at.nodeId] : [])])) {
       state.control.cancelCardsFor(nodeId);
       const contents = this.browser.tabs.get(nodeId)?.webContents;
-      if (contents && !contents.isDestroyed()) {
-        dropAgentGuard(contents);
-        endUserLease(contents);
+      const live = contents && !contents.isDestroyed() ? contents : null;
+      const owner = live ? userLeaseOwner(live) : null;
+      // Another chat's lease there now: its lease, its guard and its bar are left alone (Claude's B1, round 2).
+      if (owner !== null && owner !== state.control.id) continue;
+      if (live) {
+        if (owner !== null) dropAgentGuard(live);
+        // Its own begins under way there too.
+        endUserLease(live, state.control.id);
       }
       this.barFor(nodeId, null);
     }
@@ -491,14 +501,18 @@ export class AssistantService {
    */
   userUsedTab(nodeId: NodeId): void {
     const contents = this.browser.tabs.get(nodeId)?.webContents;
+    const acting = Boolean(contents && !contents.isDestroyed() && userTabActing(contents));
     if (contents && !contents.isDestroyed()) {
+      // The typing guard is the assistant's to drop only while it acts there: an outside agent's (G4) is left alone
+      // (Neon's B3, round 2).
+      if (acting) dropAgentGuard(contents);
       endUserLease(contents);
-      dropAgentGuard(contents);
     }
     for (const state of this.threads.values()) {
       state.leased.delete(nodeId);
-      // You took the tab: *Allow for this chat* there ends (F1).
-      state.sendGrants.get(nodeId)?.clear();
+      // You took the tab from it mid-action (or in its moment after): *Allow for this chat* there ends (F1). A click
+      // between turns is yours, and leaves it (the record's *Allow for this chat*).
+      if (acting) state.sendGrants.get(nodeId)?.clear();
       if (!state.streaming || state.actTab?.nodeId !== nodeId || state.actEnded) continue;
       this.endActing(state, USER_TAB_REFUSALS.tookOver);
       if (this.acted.has(state)) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
@@ -507,10 +521,12 @@ export class AssistantService {
 
   /** Your reload, back, forward, Stop or address for a page (browser.ts' userNavigates): as your key or click there. */
   userMovedPage(contents: WebContents): void {
-    if (!contents.isDestroyed()) {
-      endUserLease(contents);
-      dropAgentGuard(contents);
+    if (!contents.isDestroyed() && userTabActing(contents)) {
+      // As userUsedTab: its grants end there, its guard comes down, its lease ends.
+      const nodeId = this.browser.tabs.nodeFor(contents);
+      if (nodeId) return this.userUsedTab(nodeId);
     }
+    if (!contents.isDestroyed()) endUserLease(contents);
     for (const state of this.threads.values()) {
       for (const nodeId of new Set([...state.leased, ...(state.actTab ? [state.actTab.nodeId] : [])])) {
         if (this.browser.tabs.get(nodeId)?.webContents === contents) this.userUsedTab(nodeId);
@@ -563,6 +579,27 @@ export class AssistantService {
     for (const kept of state.sendGrants.values()) kept.clear();
   }
 
+  /**
+   * What's on screen changed (the store, Peek, a window minimized: browser.screenChanged): the message's tab off screen
+   * (another tab, Peek over it, another window, minimized, closed) ends acting for the message, with no coming back to
+   * it (A1; Neon's B6 on #147, S1 of round 2). A split isn't latched: mayAct refuses it (USER_TAB_REFUSALS.split) until
+   * the tab is shown alone again.
+   */
+  screenChanged(): void {
+    for (const state of this.threads.values()) {
+      const at = state.actTab;
+      if (!state.streaming || !at || state.actEnded || this.actShown(at)) continue;
+      if (splitOf(this.browser.store.state, at.nodeId) && shownTabs(this.browser.store.state, at.windowId).includes(at.nodeId) && this.windowShown(at.windowId)) continue;
+      this.endActing(state, USER_TAB_REFUSALS.switched);
+    }
+  }
+
+  /** The window is there, not minimized, with no Peek over its page. */
+  private windowShown(windowId: WindowId): boolean {
+    const w = this.browser.allWindows.find((x) => x.id === windowId);
+    return Boolean(w && !w.window.isMinimized() && !this.browser.peeks.isOpen(w));
+  }
+
   /** Chats that acted this turn: your using the tab says it stopped them. */
   private readonly acted = new WeakSet<ThreadState>();
 
@@ -580,12 +617,14 @@ export class AssistantService {
 
   /** The bar over a tab of yours while the assistant acts there (M2c's words: *The assistant is clicking “Raise”*). */
   private barFor(nodeId: NodeId, text: string | null): void {
-    const node = nodeOf(this.browser.store.state, nodeId);
-    if (node?.kind !== 'tab') return;
+    // Only its own bars are cleared (never an agent's); off the list first, so a closed tab's never keeps the bars in
+    // step for nothing (Claude's S2, round 2).
     if (!text && !this.bars.has(nodeId)) return;
-    if (text) this.bars.add(nodeId);
-    else this.bars.delete(nodeId);
+    if (!text) this.bars.delete(nodeId);
+    const node = nodeOf(this.browser.store.state, nodeId);
+    if (node?.kind === 'tab' && text) this.bars.add(nodeId);
     this.browser.assistantBars = this.bars.size > 0;
+    if (node?.kind !== 'tab') return;
     const agent = text ? { state: 'working' as const, name: 'The assistant', chordId: node.chordId, doing: text } : null;
     this.browser.store.dispatch({ t: 'tab.live', nodeId, live: { agent } });
   }
@@ -944,6 +983,8 @@ export class AssistantService {
         const open = action.open ?? !panel.open;
         if (open !== panel.open) this.toggled.add(windowId);
         panel.open = open;
+        // The panel closed: acting from its window stops, its cards with it (E6; Neon's B4, round 2).
+        if (!open) for (const state of this.threads.values()) if (state.actTab?.windowId === windowId || state.windowId === windowId) this.endActing(state, USER_TAB_REFUSALS.left);
         if (panel.open) void this.refreshProviders('if-needed');
         break;
       }
@@ -1028,19 +1069,19 @@ export class AssistantService {
         return;
       }
       case 'new':
-        this.endActing(state, null);
+        this.endActing(state, USER_TAB_REFUSALS.left);
         this.endGrants(state);
         this.close(state);
         this.continueFrom.set(chordId, state.thread ? { id: state.thread.id, title: state.thread.title } : (this.continueFrom.get(chordId) ?? null));
         this.fresh(chordId);
         return;
       case 'open':
-        this.endActing(state, null);
+        this.endActing(state, USER_TAB_REFUSALS.left);
         this.endGrants(state);
         await this.load(action.threadId, chordId);
         return;
       case 'continue': {
-        this.endActing(state, null);
+        this.endActing(state, USER_TAB_REFUSALS.left);
         this.endGrants(state);
         const from = this.continueFrom.get(chordId);
         if (from) await this.load(from.id, chordId);
@@ -1145,7 +1186,7 @@ export class AssistantService {
       // sent: a tab you look at while they wait (an agent's) is never theirs (S18 M2e-1).
       state.queue.push(trimmed);
       state.queuedWith.push(reuse ?? (this.settings.readsNothing ? [] : this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url }))));
-      state.queuedTab.push(tab !== undefined ? tab : this.tabOnScreen(windowId));
+      state.queuedTab.push(this.acting() ? (tab !== undefined ? tab : this.tabOnScreen(windowId)) : null);
       return;
     }
     // A new message lets the chat go on after Stop (the gate refused its tools until now).
@@ -1181,6 +1222,7 @@ export class AssistantService {
     // The message's tab (S18 M2e-2a, A1): the tab on screen as it was sent (a queued one's, when it was queued).
     state.actTab = this.acting() ? (tab !== undefined ? tab : this.tabOnScreen(windowId)) : null;
     state.actEnded = null;
+    this.acted.delete(state);
 
     const nothing = this.settings.readsNothing;
     const attachments: AssistantAttachment[] = nothing ? [] : (reuse ?? this.attachments(windowId).map((node) => ({ ref: state.refs.refFor(node.id), url: node.url, title: node.title || node.url })));
@@ -1223,7 +1265,10 @@ export class AssistantService {
       return;
     }
     const earlier = unseen ? earlierTurns(state.messages.filter((m) => m !== sent)) : '';
-    session.send(earlier + userTurnText(trimmed, attachments), await this.imagesToSend(images, pending));
+    const toSend = await this.imagesToSend(images, pending);
+    // Its tab may have left the screen while the message was saved and its session started (Neon's S4, round 2).
+    this.screenChanged();
+    session.send(earlier + userTurnText(trimmed, attachments), toSend);
   }
 
   /** The message's images for the model, base64-encoded: from the composer, or from disk for a retry. */
@@ -1442,6 +1487,41 @@ export class AssistantService {
 
   /* ---------- Tools: the shared control layer (main/control/), with this chat as its agent ---------- */
 
+  /** The acting host for a chat (S18 M2e-2a): what assistant/scope.ts asks before and during each action. */
+  private actingHost(s: ThreadState): ReturnType<NonNullable<DuetHost['acting']>> {
+    return {
+      on: () => this.acting(),
+      shownAlone: (node, windowId) => this.actShown({ nodeId: node.id, windowId }),
+      siteOf: siteOfUrl,
+      siteAllowed: (site) => this.settings.actSites.includes(site),
+      keepSite: (site) => this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [...this.settings.actSites, site] } } }),
+      doing: (nodeId, doing) => {
+        if (doing) this.acted.add(s);
+        this.barFor(nodeId, doing ? barDoing(doing) : null);
+      },
+      lease: {
+        begin: async (node) => {
+          const contents = this.browser.tabs.get(node.id)?.webContents;
+          if (!contents || contents.isDestroyed()) return 'That tab could not be loaded.';
+          const begun = await beginUserAction(contents, s.control.id, { siteOf: originOf, ask: this.tailCard(s, node.id, contents), kept: this.sendGrantsFor(s, node.id) });
+          if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
+          // Acting ended, or Stop, while the lease was being had: let go of at once, never tracked (Neon's B2, round 2).
+          if (begun === 'on' && (s.actEnded || s.control.isStopped)) {
+            endUserLease(contents, s.control.id);
+            return s.actEnded ?? 'The user stopped this. Stop, and tell them what you did and what’s left.';
+          }
+          if (begun === 'no') return s.actEnded ?? 'Chord can’t check this page now (its developer tools may have it). Ask the user to close them, then to ask again.';
+          s.leased.add(node.id);
+          return null;
+        },
+        end: (node) => {
+          const contents = this.browser.tabs.get(node.id)?.webContents;
+          if (contents && !contents.isDestroyed()) endUserAction(contents);
+        },
+      },
+    };
+  }
+
   /** A tool call from the chat's provider: the control layer answers it, within the chat's scope. */
   private async runTool(state: ThreadState, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
     if (!state.thread) return { text: toolResult({ error: `Unknown tool ${name}` }, false), isError: true };
@@ -1457,35 +1537,7 @@ export class AssistantService {
       agentOf: (node) => this.agentOf(node),
       activeTab: (windowId) => this.activeTab(windowId),
       activity: (chat, tool, summary, detail, ok) => this.activity(chat as ThreadState, tool, summary, detail, ok),
-      acting: (chat) => {
-        const s = chat as ThreadState;
-        return {
-          on: () => this.acting(),
-          shownAlone: (node, windowId) => this.actShown({ nodeId: node.id, windowId }),
-          siteOf: siteOfUrl,
-          siteAllowed: (site) => this.settings.actSites.includes(site),
-          keepSite: (site) => this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [...this.settings.actSites, site] } } }),
-          doing: (nodeId, doing) => {
-            if (doing) this.acted.add(s);
-            this.barFor(nodeId, doing ? barDoing(doing) : null);
-          },
-          lease: {
-            begin: async (node) => {
-              const contents = this.browser.tabs.get(node.id)?.webContents;
-              if (!contents || contents.isDestroyed()) return 'That tab could not be loaded.';
-              const begun = await beginUserAction(contents, s.control.id, { siteOf: originOf, ask: this.tailCard(s, node.id, contents), kept: this.sendGrantsFor(s, node.id) });
-              if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
-              if (begun === 'no') return 'Chord can’t check this page now (its developer tools may have it). Ask the user to close them, then to ask again.';
-              s.leased.add(node.id);
-              return null;
-            },
-            end: (node) => {
-              const contents = this.browser.tabs.get(node.id)?.webContents;
-              if (contents && !contents.isDestroyed()) endUserAction(contents);
-            },
-          },
-        };
-      },
+      ...(buildActs() ? { acting: (chat: DuetChat) => this.actingHost(chat as ThreadState) } : {}),
       search: (chat, tool, query) => this.searchFor(chat as ThreadState, tool, query),
       fills: (chat) => {
         const s = chat as ThreadState;
@@ -1921,6 +1973,12 @@ export class AssistantService {
   /** Open a thread found by @chats in this window, on its chord. */
   async openHit(windowId: WindowId, chordId: string, threadId: string): Promise<void> {
     if (!this.browser.store.state.chords[chordId]) return;
+    // Another chat opened over this one: its acting ends (E6; Neon's B4, round 2).
+    const was = this.threads.get(chordId);
+    if (was) {
+      this.endActing(was, USER_TAB_REFUSALS.left);
+      this.endGrants(was);
+    }
     this.browser.store.dispatch({ t: 'chord.activate', windowId, chordId });
     await this.load(threadId, chordId);
     this.panel(windowId).open = true;
@@ -1984,7 +2042,14 @@ export function actCard(card: ControlCard): AssistantActCard | null {
   return {
     kind: 'step',
     title: stepTitle(step.why, step.site),
-    note: step.going ? `The assistant ${did}, and the page is going to ${step.going}.` : `The assistant is about to ${card.description}.`,
+    // A tail card (idle): the page's own doing after the last action, never the assistant's next step (round 2 of #147).
+    note: step.idle
+      ? step.going
+        ? `After the assistant’s last step, the page is going to ${step.going}.`
+        : 'After the assistant’s last step, the page is doing this on its own.'
+      : step.going
+        ? `The assistant ${did}, and the page is going to ${step.going}.`
+        : `The assistant is about to ${card.description}.`,
     lines,
     danger: stepDanger(step.why) || Boolean(step.to),
     showable: Boolean(card.show),

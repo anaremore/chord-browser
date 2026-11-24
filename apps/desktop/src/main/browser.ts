@@ -314,6 +314,8 @@ export class Browser {
   assistantBars = false;
   /** Your key or click in a tab's page (never input Chord sends): the assistant stops acting there (S18 M2e-2a). Set by main. */
   userInput: ((nodeId: NodeId) => void) | null = null;
+  /** What's on screen changed outside the store (Peek, a window minimized): the assistant checks its acting. Set by main. */
+  screenChanged: (() => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -655,7 +657,11 @@ export class Browser {
         this.extensions.tabCreated(contents, nodeId);
         this.readers.detect(nodeId);
       },
-      changed: () => this.syncPopovers(),
+      changed: () => {
+        this.syncPopovers();
+        // Peek over the assistant's tab: its acting ends at once (Neon's S1, round 2 of #147).
+        this.screenChanged?.();
+      },
     });
     this.readers = new Readers({
       workerPath: join(import.meta.dirname, 'reader.js'),
@@ -1092,7 +1098,11 @@ export class Browser {
     });
     this.windows.set(windowId, w);
     // Chord Player docked in a tab follows the window and whatever covers its pages (player/dock.ts).
-    w.onPlacement = () => this.player?.placementChanged();
+    w.onPlacement = () => {
+      this.player?.placementChanged();
+      // Minimized, hidden: the assistant's acting there ends at once (Neon's S1, round 2 of #147).
+      this.screenChanged?.();
+    };
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
     // A load can finish after its window has closed (quitting right after launch): only an open window syncs.
     w.popover.webContents.on('did-finish-load', () => {

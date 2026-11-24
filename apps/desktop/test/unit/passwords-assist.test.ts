@@ -17,7 +17,10 @@ import type { AccountsAnswer, CandidateAnswer, SaveAnswer } from '../../src/main
 const assistant = vi.hoisted(() => ({ acting: false, sendsKey: false, leases: [] as ((contents: unknown) => void)[] }));
 vi.mock('../../src/main/control/user-watch', () => ({
   userTabActing: () => assistant.acting,
-  onUserLease: (listener: (contents: unknown) => void) => void assistant.leases.push(listener),
+  onUserLease: (listener: (contents: unknown) => void) => {
+    assistant.leases.push(listener);
+    return () => void assistant.leases.splice(assistant.leases.indexOf(listener), 1);
+  },
 }));
 vi.mock('../../src/main/control/input', () => ({ isAgentInput: () => assistant.sendsKey }));
 
@@ -286,6 +289,10 @@ describe('the assistant acting in the tab (S18 M2e-2a, A4; Neon’s B2 on the M2
     expect(t.assist.menuFor('w1')).not.toBeNull();
     for (const listener of assistant.leases) listener(t.contents);
     expect(t.assist.menuFor('w1')).toBeNull();
+    // Disposed, it stops hearing leases (round 2 of #147: the unsubscribe was dropped).
+    const heard = assistant.leases.length;
+    t.assist.dispose();
+    expect(assistant.leases.length).toBe(heard - 1);
     // The focus came first, the vault's answer after the lease began: no menu.
     const u = setup();
     const focusing = u.focus();

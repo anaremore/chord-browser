@@ -19,6 +19,10 @@ import { siteOfUrl } from '../../src/main/agents/shares';
 
 afterEach(() => vi.useRealTimers());
 
+/** Tabs of yours whose lease was lost (control/user-watch.ts: a detach, the renderer gone), as page.lost() and deep.held() ask. */
+const leaseLost = vi.hoisted(() => new WeakSet<object>());
+vi.mock('../../src/main/control/user-watch', async (actual) => ({ ...(await actual<Record<string, unknown>>()), userLeaseLost: (contents: object) => leaseLost.has(contents) }));
+
 const card = (over: Partial<Omit<ControlCard, 'id'>> = {}): Omit<ControlCard, 'id'> => ({ kind: 'read', tool: 'read_tab', description: 'Read “A”', target: [], tab: 'n1', subject: 'read_tab', ...over });
 
 /** A presenter that keeps each card's answer for the test to give. */
@@ -1424,6 +1428,14 @@ describe('acting through the gate (S18 M2c)', () => {
       const t: Awaited<ReturnType<typeof acting>> = await acting({ deep: { posts: true }, answer: 'hold', act: { siteAllowed: () => true }, onCard: () => void queueMicrotask(() => t.agent.cancelCardsFor('n1')) });
       expect(t.agent.state('n1').paused).toBe(false);
       expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.takenOver);
+      expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+    });
+
+    it('the lease lost while its send card was up (a detach, the renderer gone): Allow lets nothing go, and the action isn’t done (Neon’s B5, round 2 of #147)', async () => {
+      const box: { contents?: object } = {};
+      const t = await acting({ deep: { posts: true }, act: { siteAllowed: () => true }, onCard: () => void (box.contents && leaseLost.add(box.contents)) });
+      box.contents = t.pages.get('n1')!.contents;
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.noCheck);
       expect(t.at.debugging).not.toContain('Fetch.continueRequest');
     });
 

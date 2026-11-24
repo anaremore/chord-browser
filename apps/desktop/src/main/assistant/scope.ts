@@ -77,6 +77,7 @@ export const USER_TAB_REFUSALS = {
   switched: 'The user switched away from that tab. Stop, and tell them what you did and what’s left.',
   split: 'Acting works on a tab shown alone, not in a split. Ask the user to show the tab on its own.',
   tookOver: 'The user took over the tab. Stop, and tell them what you did and what’s left.',
+  left: 'The user left this chat or closed the assistant, so acting stopped. Stop, and tell them what you did and what’s left.',
 } as const;
 
 export function duetScope(chat: DuetChat, host: DuetHost, actions = false): ControlScope {

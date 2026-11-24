@@ -364,9 +364,12 @@ export class PasswordAssist {
   private readonly cards = new Map<string, Card>();
   private readonly guards = new Map<WebContents, KeyGuard>();
 
+  /** Stops hearing the assistant's leases (dispose). */
+  private readonly offLease: () => void;
+
   constructor(private readonly options: PasswordAssistOptions) {
     // The assistant beginning to act in a tab of yours (S18 M2e-2a): a menu open there closes (Neon's B7 on #147).
-    onUserLease((contents) => {
+    this.offLease = onUserLease((contents) => {
       for (const menu of [...this.menus.values()]) if (menu.contents === contents) this.close(menu);
     });
     this.now = options.now ?? Date.now;
@@ -1633,6 +1636,11 @@ export class PasswordAssist {
   }
 
   /** A window closed: its menu and its tabs' cards go. */
+  /** Done with it (a test's, or one made again): it stops hearing the assistant's leases. */
+  dispose(): void {
+    this.offLease();
+  }
+
   windowClosed(windowId: WindowId): void {
     const menu = this.menus.get(windowId);
     if (menu) this.close(menu);

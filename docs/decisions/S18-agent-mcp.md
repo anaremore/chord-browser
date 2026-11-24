@@ -616,7 +616,7 @@ One quiet line per action, consecutive ones on a page folded (*Clicked “Raise�
 
 The owner answered every open question, each as recommended. Settled:
 
-1. **The *Send data* card's lasting answer:** **Allow for this chat**. It covers exactly the origins it names, in that tab, and ends when the chat ends, when you take the tab over mid-action (F1), or when the site is removed in Settings. A click of yours between turns doesn't end it.
+1. **The *Send data* card's lasting answer:** **Allow for this chat**. It covers exactly the origins it names, in that tab, and ends when the chat ends, when you take the tab over mid-action or in its moment after (F1), or when a site is removed in Settings (then every chat's grants end, whatever site they name: simpler, and the worst it does is ask again). A click of yours between turns doesn't end it.
 2. **Leaving the site:** asks every time, with the whole address shown, including when a same-site address redirects to another site (B3).
 3. **Money words in games:** no new words. *Bet*, *Wager* and *All in* are ordinary clicks, as *Raise*, *Call* and *Fold* are; real payments ask through the pay words and payment-card fields (D3).
 4. **What your tab can't hold** (C4–C6, E5): the assistant acts anyway, and the limits are stated (Settings → Assistant's line, DESIGN.md §7.17 in M2f).
