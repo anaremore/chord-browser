@@ -929,6 +929,7 @@ The owner, on a web game whose table redraws every second (a turn timer): every 
     - No disarm wait when nothing was sent.
     - The retry for typing focuses with the select op.
   - **Nothing sent, the element replaced before it** (the table on Wayland): tried again too, found again and checked again (`refocus`), as when the focus was taken first.
+  - **The snapshot budget on arm64:** the full tier's arm64 runners measured main at 22.6–23.5 ms (1.5–2.4 ms under the 25 ms budget) and this PR at 24.4–25.1 ms. Timed in one page against main, keeping each ref's item chain and its shape's parts in the walk (so a page that redraws before the task after can't take re-finding away) costs 0.6–1.5 ms (3–6%). The arm64 runners get a budget of their own, 28 ms (macOS has had its own since M2b); every other runner keeps 25.
   - **Invariant 9** (X11, the round trip through the relay, 25 runs each, taking turns, twice):
     - `press_key` median 298.9 / 306.8 ms at 5200372 → 285.1 / 290.3 ms now.
     - `type` 325.6 / 327.4 → 311.3 / 313.7 ms.

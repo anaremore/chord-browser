@@ -1656,6 +1656,11 @@ const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = {
   default: { median: 25, worst: 60 },
   'darwin/x64': { median: 45, worst: 90 },
   'darwin/arm64': { median: 40, worst: 90 },
+  // The arm64 runners (#117): main measured 22.6–23.5 ms there (1.5–2.4 ms under 25); keeping each ref's item chain
+  // and its shape's parts in the walk (so a page that redraws can't take re-finding away) adds about 0.6–1.5 ms
+  // (3–6%, timed in one page against main), which put them at 24.4–25.1 ms.
+  'linux/arm64': { median: 28, worst: 60 },
+  'win32/arm64': { median: 28, worst: 60 },
 };
 /** The huge pages' budget, on the median of five runs (a single pause can take one run far past it). */
 const SNAPSHOT_HUGE_MS = 300;
