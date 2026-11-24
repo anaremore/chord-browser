@@ -14,7 +14,7 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
-import { holdFilePickers, bypassServiceWorkers, setFirstLoadPending } from './agents/pickers';
+import { holdFilePickers, bypassServiceWorkers, holdFailed, setFirstLoadPending } from './agents/pickers';
 import { agentGuardUp } from './control/page';
 import { heldFromFrame } from './agents/held';
 
@@ -260,8 +260,11 @@ export class TabManager {
       await contents.loadURL('about:blank').catch(() => undefined);
       const bypassed = await bypassServiceWorkers(contents);
       this.priming.delete(contents);
-      // No bypass, no page (fail closed): what waits on it stops waiting, and finds the tab blank.
-      if (!bypassed || contents.isDestroyed()) return setFirstLoadPending(contents, false);
+      // No bypass, no page (fail closed): the hold is failed (nothing acts there), and what waits on it stops waiting.
+      if (!bypassed || contents.isDestroyed()) {
+        holdFailed(contents);
+        return setFirstLoadPending(contents, false);
+      }
       const arrived = () => {
         setFirstLoadPending(contents, false);
         contents.off('did-fail-load', arrived);
@@ -521,8 +524,10 @@ export class TabManager {
 
     contents.on('render-process-gone', (_event, details) => {
       if (details.reason === 'clean-exit' || !current()) return;
-      // Reload automatically at most twice, then show "This page stopped" (borrowed from Crest).
-      const attempts = this.crashReloads.get(nodeId) ?? 0;
+      // Reload automatically at most twice, then show "This page stopped" (borrowed from Crest). Never an agent's tab:
+      // reloaded at once, it would load before its hold is armed again (round 4 of #112); it shows "This page stopped",
+      // and its hold, lost, refuses acting there until it's armed again.
+      const attempts = this.deps.agentTab?.(nodeId) ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
       if (attempts < MAX_CRASH_RELOADS) {
         this.crashReloads.set(nodeId, attempts + 1);
         contents.reload();
@@ -532,7 +537,9 @@ export class TabManager {
       if (this.badges.delete(nodeId)) live({ badge: null });
     });
 
-    contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details));
+    // Whether it's an agent's page, decided once (Neon's nit, round 4 of #112): an agent's page is never another's.
+    const agentPage = Boolean(this.deps.agentTab?.(nodeId));
+    contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details, agentPage));
     contents.on('did-create-window', (popup) => this.wirePopup(popup, nodeId));
 
     // Peek (DESIGN.md §8.5): following a link in a pinned tab to another site opens it in Peek, so
@@ -570,9 +577,9 @@ export class TabManager {
    * keeping window.opener so they can report back. Everything else becomes a
    * tab in the opener's Chord window.
    */
-  private openFrom(openerNodeId: NodeId, { url, disposition, features }: HandlerDetails): WindowOpenHandlerResponse {
+  private openFrom(openerNodeId: NodeId, { url, disposition, features }: HandlerDetails, agentPage = Boolean(this.deps.agentTab?.(openerNodeId))): WindowOpenHandlerResponse {
     // An agent's tab (S18) opens nothing: no window, no tab of yours. The agent hears of it.
-    if (this.deps.agentTab?.(openerNodeId)) {
+    if (agentPage) {
       this.deps.onAgentRefused?.(openerNodeId, 'popup', url);
       return { action: 'deny' };
     }

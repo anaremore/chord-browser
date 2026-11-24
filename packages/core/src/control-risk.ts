@@ -166,8 +166,8 @@ const CJK = /[\u3040-\u30ff\u3400-\u9fff]/u;
 function wordsOf(text: string): string[] {
   return text
     // Format and control characters first: `P\u200Bay` is pay (#112 review 1).
-    // Stray combining marks too (U+034F, Neon's review 2 of #112), after composing what composes.
-    .normalize('NFC')
+    // Stray combining marks too (U+034F, Neon's review 2 of #112), after composing what composes (NFKC: full-width and other compatibility forms read as plain letters).
+    .normalize('NFKC')
     .replace(/[\p{Cc}\p{Cf}\p{Mn}]/gu, '')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .toLowerCase()
@@ -185,7 +185,7 @@ function has(words: readonly string[], phrase: string): boolean {
 /** The costliest why the words of `text` name, or null. `only`: the whys to look for. */
 export function riskWordsWhy(text: string, only: readonly (keyof typeof RISK_WORDS)[] = ['pay', 'delete', 'sign-out', 'sign-up', 'send', 'confirm']): RiskWhy | null {
   const words = wordsOf(text);
-  const lower = text.normalize('NFC').replace(/[\p{Cc}\p{Cf}\p{Mn}]/gu, '').toLowerCase();
+  const lower = text.normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Mn}]/gu, '').toLowerCase();
   for (const why of ORDER) {
     if (!(only as readonly string[]).includes(why)) continue;
     if (RISK_WORDS[why as keyof typeof RISK_WORDS].some((w) => (CJK.test(w) ? lower.includes(w) : has(words, w)))) return why;
@@ -316,6 +316,30 @@ export function addressWhy(url: string): RiskWhy | null {
   } catch {
     return 'confirm';
   }
+}
+
+/**
+ * An address a page sends to or goes to itself (control/sends.ts: a request, a frame, a redirect): its words for
+ * deleting and signing out, as addressWhy's, but never *unknown*. Pages load long and oddly escaped addresses all the
+ * time (an ad frame's), and asking for each would be noise (Claude's review 4 of #112): one too long is read up to
+ * its first 2,048 characters, one that can't be decoded is read as written. Only the agent's own addresses (navigate,
+ * back, open_tab) ask when they can't be read (addressWhy).
+ */
+export function pageAddressWhy(url: string): RiskWhy | null {
+  let u: { pathname: string; search: string };
+  try {
+    u = new URL(url.slice(0, 2048));
+  } catch {
+    return null;
+  }
+  const decoded = (text: string) => {
+    try {
+      return decodeURIComponent(text);
+    } catch {
+      return text;
+    }
+  };
+  return riskWordsWhy(`${decoded(u.pathname)} ${decoded(u.search)}`, ['delete', 'sign-out']);
 }
 
 /** How long an Allow given after the agent heard *waiting* counts for that same step (tab, page, ref, action). */

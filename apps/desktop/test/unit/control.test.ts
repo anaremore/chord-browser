@@ -183,6 +183,8 @@ function fakePage(url: string, read: Answer) {
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
     /** The page's requests went (deep.ping, deep.posts): once per page. */
     sent?: boolean;
+    /** Every debugger command, with its parameters. */
+    commands?: [string, unknown][];
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
   let attached = false;
@@ -202,7 +204,7 @@ function fakePage(url: string, read: Answer) {
       if (!at.sent && (at.deep.ping || at.deep.posts)) {
         at.sent = true;
         if (at.deep.ping) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'b1', request: { method: 'POST', url: 'https://stats.test/collect' }, resourceType: 'Ping' }), 0);
-        if (at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/delete' }, resourceType: 'Document' }), 0);
+        if (at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Document' }), 0);
       }
     },
     setIgnoreMenuShortcuts: () => undefined,
@@ -245,6 +247,7 @@ function fakePage(url: string, read: Answer) {
       off: (e: string, f: (...a: unknown[]) => void) => debugEvents.off(e, f),
       sendCommand: async (method: string, params?: { expression?: string }) => {
         at.debugging.push(method);
+        (at.commands ??= []).push([method, params]);
         if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } };
         if (method === 'Runtime.enable') debugEvents.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, auxData: { frameId: 'F', type: 'isolated' } } });
         if (method === 'Runtime.evaluate') return params?.expression?.includes('instanceof Map') ? { result: { value: true } } : { result: { objectId: 'el' } };
@@ -892,7 +895,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -900,6 +903,7 @@ describe('acting through the gate (S18 M2c)', () => {
       read: page(steps, opts.onAct, opts.twist),
       actions: true,
       answer: opts.answer ?? 'once',
+      ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
       ...(opts.onCard ? { onCard: opts.onCard } : {}),
       act: { doing: (_n, d) => void doings.push(d), keepSite: (site) => void kept.push(site), ...opts.act },
     });
@@ -1361,6 +1365,80 @@ describe('acting through the gate (S18 M2c)', () => {
     await paused('next', next);
     expect(asked.length - 1).toBe(more);
     if (more) expect(asked[1]).toEqual([new URL(next).origin]);
+  });
+
+  // Round 4 of #112 (Claude and Neon), each confirmed failing first.
+  describe('round 4: what still went unasked', () => {
+    /** A tab between actions, its chord asking: what each card named, and what it said. */
+    const between = async (answers: SendAnswer[] = []) => {
+      const t = await acting();
+      const contents = t.pages.get('n1')!.contents;
+      const asked: { sites: string[]; why: string | null }[] = [];
+      sendHoldDeps(contents, { whose: () => 'agent', ask: async (sites, why) => (asked.push({ sites, why }), answers.shift() ?? 'deny'), siteOf: (u) => new URL(u).origin });
+      const paused = async (id: string, url: string, method = 'POST', extra: Record<string, unknown> = {}) => {
+        t.at.emitDebug!('Fetch.requestPaused', { requestId: id, request: { method, url, ...extra }, resourceType: 'XHR' });
+        await new Promise((r) => setTimeout(r, 0));
+      };
+      const continued = (id: string) => (t.at.commands ?? []).some(([m, p]) => m === 'Fetch.continueRequest' && (p as { requestId?: string }).requestId === id);
+      return { t, asked, paused, continued };
+    };
+
+    it('a risky step that doesn’t submit never lets its form’s address go: the page’s own POST there asks (Neon’s S9)', async () => {
+      const f = (label: string) => ({ ...field({ type: 'text', label }), text: true });
+      ELEMENTS.push({ role: 'button', name: 'Delete draft', risk: { tag: 'button', type: 'button', submits: false, form: { method: 'post', search: false, action: '/form', url: 'https://news.test/form', fields: [f('Title')] } } });
+      try {
+        const t = await acting({ act: { siteAllowed: () => true } });
+        const clicking = t.call('click', { tab_id: t.tab, ref: `e${ELEMENTS.length}` });
+        await vi.waitFor(() => expect(t.at.input.length).toBeGreaterThan(0));
+        t.at.emitDebug!('Fetch.requestPaused', { requestId: 'f1', request: { method: 'POST', url: 'https://news.test/form' }, resourceType: 'XHR' });
+        await clicking;
+        expect(t.cards.filter((c) => c.step?.sends).map((c) => c.step?.sends)).toEqual([['news.test']]);
+      } finally {
+        ELEMENTS.pop();
+      }
+    });
+
+    it('a send card no one answers in an action comes down (Neon’s S11): no card left at the head of the queue', async () => {
+      const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 30, act: { siteAllowed: () => true } });
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(t.agent.state('n1').cards).toEqual([]);
+    });
+
+    it('an OPTIONS with a body is a send; a real preflight (no body) is a read', async () => {
+      const { asked, paused, continued } = await between();
+      await paused('pre', 'https://news.test/api', 'OPTIONS');
+      expect(continued('pre')).toBe(true);
+      await paused('body', 'https://news.test/api', 'OPTIONS', { hasPostData: true });
+      expect(continued('body')).toBe(false);
+      expect(asked.map((a) => a.sites)).toEqual([['https://news.test']]);
+    });
+
+    it('Allow until done never covers a delete or sign-out: a POST to such an address, or a DELETE, asks as its step', async () => {
+      const { asked, paused } = await between(['until']);
+      await paused('p1', 'https://news.test/save');
+      await paused('d1', 'https://news.test/account/delete');
+      await paused('d2', 'https://news.test/items/7', 'DELETE');
+      await paused('o1', 'https://news.test/account/logout');
+      expect(asked.map((a) => a.why)).toEqual([null, 'delete', 'delete', 'sign-out']);
+    });
+
+    it('a card names at most 8 origins, and Allow covers only those: the rest wait for the next card', async () => {
+      const { t, asked } = await between(['once', 'once', 'once']);
+      // Ten sends at once, while the first card is still being asked.
+      for (let i = 0; i < 10; i++) t.at.emitDebug!('Fetch.requestPaused', { requestId: `m${i}`, request: { method: 'POST', url: `https://s${i}.example/x` }, resourceType: 'XHR' });
+      for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+      expect(asked.length).toBeGreaterThanOrEqual(2);
+      for (const a of asked) expect(a.sites.length).toBeLessThanOrEqual(8);
+      expect(asked.flatMap((a) => a.sites).length).toBe(10);
+    });
+
+    it('an opaque origin (a data: address) is never allowed until done: it asks every time', async () => {
+      const { asked, paused } = await between(['until', 'deny']);
+      await paused('n1', 'data:text/plain,a');
+      await paused('n2', 'data:text/plain,b');
+      expect(asked.length).toBe(2);
+    });
   });
 
   it('a risky step’s Allow lets go its own address only: a POST beside its location = /logout still asks (Claude’s review 3 of #112)', async () => {

@@ -6,12 +6,20 @@
  */
 export function holdForAgent(held: (kind: 'dialog' | 'file', detail: string) => void): void {
   const page = globalThis as unknown as Record<string, unknown> & { HTMLInputElement?: { prototype: object }; DOMException: new (m: string, n: string) => unknown };
-  // No shared workers (#112 review 3): one is the site's, shared with your own tabs there, so what it sends couldn't
-  // be told apart from what they send. A page that checks for them finds none, as in a browser without them.
+  // No shared workers, deferred sends or service workers (#112 reviews 3 and 4: what they send goes out of the hold's
+  // sight). The hold's new-document script removes them in every frame (agents/agent-scripts.ts' PAGE_LACKS, which
+  // also reaches the frames this preload never runs in); this is the same, where it runs first.
+  for (const name of ['SharedWorker', 'fetchLater']) {
+    try {
+      delete page[name];
+    } catch {
+      // Not configurable here: the hold's script has the last word.
+    }
+  }
   try {
-    delete page['SharedWorker'];
+    delete (page['Navigator'] as { prototype: Record<string, unknown> } | undefined)?.prototype['serviceWorker'];
   } catch {
-    // Not configurable here: left as it is (its requests would be the page's, held as such).
+    // As above.
   }
   const answers: Record<string, unknown> = { alert: undefined, confirm: false, prompt: null };
   for (const name of Object.keys(answers)) {

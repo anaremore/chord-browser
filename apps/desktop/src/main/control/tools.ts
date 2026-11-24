@@ -66,7 +66,7 @@ import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import type { ActAnswer } from './act';
 import type { DeepAnswer, DeepSession } from './deep';
-import type { Allowed, SendWatch } from './sends';
+import { CARD_ORIGINS, shownOrigin, type Allowed, type SendWatch } from './sends';
 import type { PageRead } from './extract';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
@@ -511,7 +511,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       // What its load sends, or a redirect to an address that deletes or signs out, is held as an action's is: only what
       // the card named goes (the address itself, when it asked).
-      const w = page.watchSends(goingWhy ? { urls: new Set([goingTo]) } : null);
+      const w = page.watchSends(goingWhy ? { urls: new Set(), documents: new Set([goingTo]) } : null);
       if (!w) return refuse(ACT_REFUSALS.noCheck);
       let went: { loading: boolean } | null;
       let sent: string | null;
@@ -521,7 +521,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         sent = await askHeld(
           w,
           going,
-          (held, sites, why) =>
+          (held, sites, why, takeDown) =>
             scope.agent.ask(
               {
                 kind: 'step',
@@ -530,8 +530,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
                 target: [page.url()],
                 tab: node.id,
                 subject: `${node.id}|${tool}|sends|${randomBytes(4).toString('hex')}`,
-                step: why ? { why, site: hostOf(sites[0] ?? '') || goingSite, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: hostOf(page.url()), fields: [], more: 0, sends: sites.map(hostOf) },
-                takeDown: w.cancelled,
+                step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
+                takeDown,
               },
               AbortSignal.any([call.signal, w.cancelled]),
               scope.cardWaitMs,
@@ -815,7 +815,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       return null;
     };
     /** The card for what an action's page held: its sites, or the step a document's address is (askHeld). */
-    const askSendCard = (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, w: SendWatch) =>
+    const askSendCard = (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, w: SendWatch, takeDown: AbortSignal) =>
       scope.agent.ask(
         {
           kind: 'step',
@@ -826,10 +826,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           tab: node.id,
           // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
           subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
-          // By host: the origins are exact (the owner, 2026-11-23), and the card names each one's host.
-          step: why ? { why, site: hostOf(sites[0] ?? '') || site, fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: hostOf(page.url()), fields: [], more: 0, sends: sites.map(hostOf) },
+          // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or isn't the page's.
+          step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
           show: () => void page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true }),
-          takeDown: w.cancelled,
+          takeDown,
         },
         AbortSignal.any([call.signal, w.cancelled]),
         scope.cardWaitMs,
@@ -837,6 +837,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     /** Once the watch is on: what's held from then is asked about (below). */
     let watchOn: () => void = () => undefined;
     const watching = new Promise<void>((done) => (watchOn = done));
+    /** The page's document when the action began: a send card's Allow counts only while it's still this one. */
+    const markAtStart = page.mark;
     const acting = page.afterActing(async () => {
       const pointed = await page.act(owner, lookup.token, lookup.key, { op: 'point', highlight: true });
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
@@ -848,7 +850,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // (beacons, pings) are dropped either way.
       deep = await page.deep(owner, lookup.token, lookup.key);
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
-      watch = page.watchSends(step.class === 'risky' ? allowedBy(element) : null);
+      watch = page.watchSends(step.class === 'risky' ? allowedBy(element, tool === 'press_key' || args['submit'] === true || element.risk?.submits === true) : null);
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
       watchOn();
       if ((refused = halt())) return;
@@ -934,7 +936,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     // for it, naming its sites, before the action is done (it waits on what's held): askHeld.
     if ((await Promise.race([acting.then(() => 'acted' as const), watching.then(() => 'on' as const)])) === 'on' && watch) {
       const w = watch as SendWatch;
-      const sent = await askHeld(w, acting, (held, sites, why) => askSendCard(held, sites, why, w), halt, originOf(page.url()));
+      // Allow lets go only if Stop, your taking the tab, or another document since the input (never the action's own
+      // pushState, Neon's S16) haven't come between.
+      const sendHalt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : page.mark.document !== markAtStart.document ? ELEMENT_REFUSALS.stale : null);
+      const sent = await askHeld(w, acting, (held, sites, why, takeDown) => askSendCard(held, sites, why, w, takeDown), sendHalt, originOf(page.url()));
       refused ??= sent;
     }
     const { navigated, loading } = await acting;
@@ -1007,7 +1012,7 @@ const SEND_CARDS = 3;
 async function askHeld(
   w: SendWatch,
   acting: Promise<unknown>,
-  ask: (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null) => Promise<Grant | 'waiting'>,
+  ask: (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => Promise<Grant | 'waiting'>,
   halt: () => string | null,
   own: string,
 ): Promise<string | null> {
@@ -1028,11 +1033,15 @@ async function askHeld(
       w.deny();
       return ACT_REFUSALS.sendsTooMany;
     }
-    // A step an address is gets a card of its own; otherwise what's held now, by site (the page's own first).
+    // A step an address is gets a card of its own; otherwise what's held now, by origin (the page's own first), at most
+    // CARD_ORIGINS of them (the card lists that many: round 4 of #112), the rest on the next card.
     const step = held.find((h) => h.why);
     const found = w.sitesOf(step ? [step.url] : held.map((h) => h.url));
-    const sites = found.includes(own) ? [own, ...found.filter((s) => s !== own)] : found;
-    const answer = await ask(held, sites, step?.why ?? null);
+    const sites = (found.includes(own) ? [own, ...found.filter((s) => s !== own)] : found).slice(0, CARD_ORIGINS);
+    // Each card its own: one no one answers comes down (Neon's S11), never left at the head of the queue.
+    const down = new AbortController();
+    const answer = await ask(held, sites, step?.why ?? null, AbortSignal.any([w.cancelled, down.signal]));
+    if (answer === 'waiting') down.abort();
     if (answer === 'once' || answer === 'always') {
       const halted = halt();
       if (halted) {
@@ -1062,9 +1071,14 @@ function targetOf(element: Extract<ActAnswer, { ok: true }>, site: string, siteO
  * origin: anything else its page sends meanwhile still asks (Claude's review 3 of #112: a POST next to the click's own
  * `location = '/logout'`).
  */
-function allowedBy(element: Extract<ActAnswer, { ok: true }>): Allowed {
-  return { urls: new Set([element.risk?.form?.url ?? '', element.risk?.hrefUrl ?? ''].filter(Boolean)) };
+function allowedBy(element: Extract<ActAnswer, { ok: true }>, submits: boolean): Allowed {
+  // Its form's address only when the step submits it (Neon's S9); its link's only as a page going there, each once.
+  return {
+    urls: new Set(submits && element.risk?.form?.url ? [element.risk.form.url] : []),
+    documents: new Set(element.risk?.hrefUrl ? [element.risk.hrefUrl] : []),
+  };
 }
+
 
 /** An address's origin (scheme, host and port), or empty. */
 function originOf(url: string): string {
@@ -1079,7 +1093,7 @@ function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
   const risk = element.risk;
   if (!risk) return '';
   const form = risk.form;
-  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.text, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
+  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
 }
 
 

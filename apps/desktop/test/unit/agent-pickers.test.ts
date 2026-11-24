@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { holdFilePickers, pickersLost, pickersUnsecured, retryPickers } from '../../src/main/agents/pickers';
+import { holdFailed, holdFilePickers, pickersLost, pickersUnsecured, retryPickers } from '../../src/main/agents/pickers';
 
 // Neon's review of #110: an agent's tab holds file pickers for its whole life, in its page and its frames' targets.
 describe('holdFilePickers', () => {
@@ -53,7 +53,7 @@ describe('holdFilePickers', () => {
     events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
     await settle();
     // Its interception on, and only then let go on.
-    expect(names(sent.slice(4))).toEqual(['Target.setAutoAttach@s1', 'Network.enable@s1', 'Network.setBypassServiceWorker@s1', 'Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Fetch.enable@s1', 'Runtime.runIfWaitingForDebugger@s1']);
+    expect(names(sent.slice(4))).toEqual(['Target.setAutoAttach@s1', 'Network.enable@s1', 'Network.setBypassServiceWorker@s1', 'Page.enable@s1', 'Page.addScriptToEvaluateOnNewDocument@s1', 'Page.setInterceptFileChooserDialog@s1', 'Fetch.enable@s1', 'Runtime.runIfWaitingForDebugger@s1']);
     events.emit('message', {}, 'Page.fileChooserOpened', { mode: 'selectSingle' }, 's1');
     expect(held).toEqual(['a file picker']);
     expect(pickersLost(contents)).toBe(false);
@@ -102,6 +102,16 @@ describe('holdFilePickers', () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(loaded).toBe(true);
     expect(pickersLost(contents)).toBe(false);
+  });
+
+  it('a hold that couldn’t be finished (its service workers not bypassed): lost and unsecured, so nothing acts and open_tab refuses (round 4 of #112)', async () => {
+    const { contents } = fake();
+    holdFilePickers(contents, () => undefined);
+    await settle();
+    expect(pickersLost(contents)).toBe(false);
+    holdFailed(contents);
+    expect(pickersLost(contents)).toBe(true);
+    expect(pickersUnsecured(contents)).toBe(true);
   });
 
   it('let go of: the hold is lost (acting refused) until it’s attached and armed again', async () => {
@@ -158,7 +168,7 @@ describe('holdFilePickers', () => {
     expect(pickersLost(contents)).toBe(true);
     events.emit('message', {}, 'Target.attachedToTarget', { sessionId: 's1', targetInfo: { type: 'iframe' } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(names(sent).filter((n) => n.endsWith('@s1'))).toEqual(['Target.setAutoAttach@s1', 'Network.enable@s1', 'Network.setBypassServiceWorker@s1', 'Page.enable@s1', 'Page.setInterceptFileChooserDialog@s1', 'Page.setInterceptFileChooserDialog@s1']);
+    expect(names(sent).filter((n) => n.endsWith('@s1'))).toEqual(['Target.setAutoAttach@s1', 'Network.enable@s1', 'Network.setBypassServiceWorker@s1', 'Page.enable@s1', 'Page.addScriptToEvaluateOnNewDocument@s1', 'Page.setInterceptFileChooserDialog@s1', 'Page.setInterceptFileChooserDialog@s1']);
     // An action tries once more, and it's on once the interception answers.
     state.fail.clear();
     await expect(retryPickers(contents)).resolves.toBe(true);

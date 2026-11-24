@@ -26,9 +26,9 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { dropAgentGuard } from '../control/page';
-import { endUntil, failHeld, sendHoldDeps } from '../control/sends';
+import { endUntil, failHeld, sendHoldDeps, shownOrigin } from '../control/sends';
 import { randomBytes } from 'node:crypto';
-import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -271,21 +271,24 @@ export class AgentChords {
     sendHoldDeps(contents, {
       whose: () => {
         const chord = this.chordOfTab(nodeId);
-        if (!chord) return 'user';
+        // An agent's page never becomes yours (a tab you keep gets a new one): with its chord gone (closed, Close all, a
+        // site you keep private), what it sends on its way out is no one's to ask about, and fails (round 4 of #112).
+        if (!chord) return 'none';
         // Paused: you have the tab. Holding goes on once the agent continues (the owner, 2026-11-23).
         if (chord.agent.state(nodeId).paused) return 'user';
         // A done agent's tab: only what follows your own key or click there goes.
         if (chord.done) return this.yoursNow(nodeId) !== null ? 'user' : 'none';
         return 'agent';
       },
-      ask: async (sites, why, signal) => {
+      ask: async (sites, why, signal, going) => {
         const chord = this.chordOfTab(nodeId);
         if (!chord || chord.done) return 'deny';
         const takeDown = new AbortController();
         signal.addEventListener('abort', () => takeDown.abort(), { once: true });
-        // The card names each origin by its host (the owner, 2026-11-23: exactly that origin), the page's own too.
-        const site = hostOf(contents.getURL()) || hostOf(sites[0] ?? '');
-        const hosts = sites.map(hostOf);
+        // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or the page's.
+        const page = contents.getURL();
+        const site = shownOrigin(originOf(page), page);
+        const hosts = sites.map((o) => shownOrigin(o, page));
         const answer = await chord.agent.ask(
           {
             kind: 'step',
@@ -294,7 +297,7 @@ export class AgentChords {
             target: [contents.getURL()],
             tab: nodeId,
             subject: `${nodeId}|idle|${randomBytes(4).toString('hex')}`,
-            step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
+            step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
             takeDown: takeDown.signal,
           },
           signal,
@@ -451,14 +454,6 @@ export class AgentChords {
   }
 }
 
-/** An address's host, or empty. */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return '';
-  }
-}
 
 /** An address's origin (scheme, host and port), or empty. */
 function originOf(url: string): string {

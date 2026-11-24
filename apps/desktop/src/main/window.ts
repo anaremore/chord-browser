@@ -609,7 +609,10 @@ export class AppWindow {
     if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
     const now = webContents?.getFocusedWebContents?.() ?? null;
     if (now && !this.isParkedOnly(now)) return;
-    const own = this.ownFocus && !this.ownFocus.isDestroyed() && !this.isParkedOnly(this.ownFocus) ? this.ownFocus : null;
+    // The page of yours that had it (or the window's own), only while it's one you see (Claude's S7, round 4 of #112:
+    // after a tab switch it isn't, and focusing it would put your keys in a tab you left).
+    const seen = (c: WebContents) => c === this.shell.webContents || this.panes.some((v) => v.webContents === c);
+    const own = this.ownFocus && !this.ownFocus.isDestroyed() && !this.isParkedOnly(this.ownFocus) && seen(this.ownFocus) ? this.ownFocus : null;
     // No page has it: only where pages are parked, and only back to the page that had it (a window with none parked
     // is the OS's to give focus back to, as ever).
     if (!now) return void (this.parked.length > 0 && own?.focus());

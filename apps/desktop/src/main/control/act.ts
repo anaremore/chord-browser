@@ -122,14 +122,26 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const riskOf = () => {
     // What a click on it acts on (#112 review 1): a label's control (a label for a submit button submits), else a
     // submit button or link it's inside (a span in a link goes where the link does), else itself.
-    const label = el.closest('label');
+    // closest(), across open shadow roots to their hosts (round 4 of #112: a button in a component, inside a form or a
+    // link, is that form's or that link's), as deep.ts walks them.
+    const closestDeep = (from, selector) => {
+      for (let node = from; node; ) {
+        const found = node.closest(selector);
+        if (found) return found;
+        const root = node.getRootNode();
+        node = root && root.host ? root.host : null;
+      }
+      return null;
+    };
+    const label = closestDeep(el, 'label');
     const control = label && label.control && label.control !== el ? label.control : null;
-    const inButton = !control && el.localName !== 'button' ? el.closest('button') : null;
+    const inButton = !control && el.localName !== 'button' ? closestDeep(el, 'button') : null;
     const target = control || inButton || el;
     const tag = target.localName;
     // The type the browser goes by (a button's invalid or missing type is submit), not the attribute as written.
     const type = tag === 'input' || tag === 'button' ? String(target.type || '').toLowerCase() : '';
-    const formOf = target.form !== undefined ? target.form : target.closest('form');
+    // Its form owner; a control in a shadow root has none, so the form around its host (it may submit it by script).
+    const formOf = (target.form !== undefined ? target.form : null) || closestDeep(target, 'form');
     // A submit button submits only in a form (a button outside one, the default type or not, is a page's own button).
     const submits = Boolean(formOf) && ((tag === 'button' && type === 'submit') || (tag === 'input' && (type === 'submit' || type === 'image')));
     // An address's words; null when it can't be read (too long, not decodable): unknown, so it asks.
@@ -148,7 +160,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     const shownText = clip(String(target.innerText || buttonValue || el.innerText || ''), NAME_MAX);
     const text = shownText && shownText.toLowerCase() !== String(entry.name).toLowerCase() ? shownText : '';
     // A link, or a link it's inside.
-    const link = el.closest('a[href]');
+    const link = closestDeep(el, 'a[href]');
     const linkWords = link ? addressOf(link.getAttribute('href')) : '';
     const multiline = target.localName === 'textarea' || (el.isContentEditable && el.localName !== 'input');
     let form = null;

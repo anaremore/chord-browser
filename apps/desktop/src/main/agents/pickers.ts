@@ -19,6 +19,7 @@
  */
 import type { WebContents } from 'electron';
 import { holdSends, sendsOn } from '../control/sends';
+import { PAGE_LACKS, WORKER_READS_ONLY } from './agent-scripts';
 import { withDebugger } from '../debugger-queue';
 
 type Message = { method: string; params: unknown; sessionId?: string };
@@ -83,10 +84,14 @@ export function setFirstLoadPending(contents: object, pending: boolean): void {
  */
 export async function bypassServiceWorkers(contents: WebContents): Promise<boolean> {
   if (contents.isDestroyed() || !contents.debugger.isAttached()) return false;
+  const debug = contents.debugger;
   return Promise.race([
-    contents.debugger
+    debug
       .sendCommand('Network.enable', {})
-      .then(() => contents.debugger.sendCommand('Network.setBypassServiceWorker', { bypass: true }))
+      .then(() => debug.sendCommand('Network.setBypassServiceWorker', { bypass: true }))
+      // And every document it loads from now without what could send out of the hold's sight (PAGE_LACKS).
+      .then(() => debug.sendCommand('Page.enable'))
+      .then(() => debug.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: PAGE_LACKS, runImmediately: true }))
       .then(
         () => true,
         () => false,
@@ -96,44 +101,13 @@ export async function bypassServiceWorkers(contents: WebContents): Promise<boole
 }
 
 /**
- * Run in a dedicated worker of an agent's tab before it starts: it can read (GET, HEAD), never send. Its `fetch` and
- * XHR are replaced where they're defined, for good (not writable, not configurable: its own script can't put them
- * back). `fetch` takes the method from a `Request` it makes first (fixed once made, so a tricky `init` can't change
- * it after the check); XHR from `open`'s method, as a string made once. What it would send, it can hand its page,
- * whose sends are held and asked about. Live connections (WebSocket, WebTransport) are a stated limit here too.
+ * A new agent tab's hold couldn't be finished (its service workers not bypassed: tabs.ts): lost and unsecured, so
+ * nothing acts there and open_tab says it couldn't be opened (round 4 of #112: never a page loaded unheld).
  */
-const WORKER_READS_ONLY = String.raw`(() => {
-  const READS = new Set(['GET', 'HEAD']);
-  const no = () => new TypeError('A worker can’t send data from a tab an agent is using.');
-  let owner = self;
-  while (owner && !Object.prototype.hasOwnProperty.call(owner, 'fetch')) owner = Object.getPrototypeOf(owner);
-  const realFetch = owner && owner.fetch;
-  const RealRequest = self.Request;
-  if (realFetch) {
-    Object.defineProperty(owner, 'fetch', {
-      value: function fetch(input, init) {
-        let request;
-        try { request = new RealRequest(input, init); } catch (e) { return Promise.reject(e); }
-        if (!READS.has(String(request.method).toUpperCase())) return Promise.reject(no());
-        return realFetch.call(self, request);
-      },
-      writable: false, configurable: false, enumerable: true,
-    });
-  }
-  const X = self.XMLHttpRequest;
-  if (X) {
-    const open = X.prototype.open, send = X.prototype.send, methods = new WeakMap();
-    Object.defineProperty(X.prototype, 'open', {
-      value: function open_(method, ...rest) { const m = String(method).toUpperCase(); methods.set(this, m); return open.call(this, m, ...rest); },
-      writable: false, configurable: false,
-    });
-    Object.defineProperty(X.prototype, 'send', {
-      value: function send_(...args) { if (!READS.has(methods.get(this) || 'GET')) throw no(); return send.apply(this, args); },
-      writable: false, configurable: false,
-    });
-  }
-  return true;
-})()`;
+export function holdFailed(contents: object): void {
+  lost.add(contents);
+  unsecured.add(contents);
+}
 
 /** An action found the hold lost: one try now (never more than one per action), and whether it's on. */
 export async function retryPickers(contents: object): Promise<boolean> {
@@ -198,11 +172,14 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     const sendingFirst = sessionId ? true : await sendsOn(contents);
     if (!sessionId && attached && bypassed && sendingFirst) framesOn();
     await send('Page.enable', undefined, sessionId);
+    // Each new document without what could send out of the hold's sight (PAGE_LACKS): a frame's before it runs, a page
+    // armed again; a new page's comes with its bypass (tabs.ts, bypassServiceWorkers).
+    const lacking = sessionId || contents.getURL() ? await send('Page.addScriptToEvaluateOnNewDocument', { source: PAGE_LACKS, runImmediately: true }, sessionId) : true;
     const intercepted =
       (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId)) || (await send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId));
     // What it sends held from its start too (control/sends.ts): in the page, and in a frame before it runs.
     const sending = intercepted && attached && (sessionId ? await sendsOn(contents, sessionId) : sendingFirst);
-    const on = intercepted && attached && bypassed && sending;
+    const on = intercepted && attached && bypassed && lacking && sending;
     if (sessionId && on) void send('Runtime.runIfWaitingForDebugger', undefined, sessionId);
     if (sessionId && !on) unsecured.add(contents);
     return on;

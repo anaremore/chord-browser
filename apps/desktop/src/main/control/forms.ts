@@ -55,7 +55,7 @@ export const FORM_LIB = String.raw`
   const byId = (el, id) => { const root = el.getRootNode(); return typeof root.getElementById === 'function' ? root.getElementById(id) : null; };
   // Control characters as spaces, format characters and stray combining marks gone, before the cut (Neon's review 2 of
   // #112: padding that pushes a word past the cut, or splits it, never hides it).
-  const clip = (s, n) => { s = String(s || '').normalize('NFC').replace(/\p{Cc}/gu, ' ').replace(/[\p{Cf}\p{Mn}]/gu, '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  const clip = (s, n) => { s = String(s || '').normalize('NFKC').replace(/\p{Cc}/gu, ' ').replace(/[\p{Cf}\p{Mn}]/gu, '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
   // On screen: not hidden by CSS, at least a few pixels, and not put off the page's top or left (scrolled past is fine).
   const shown = (el) => {
     if (el.hidden || el.closest('[inert]')) return false;

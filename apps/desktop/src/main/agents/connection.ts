@@ -39,6 +39,8 @@ import { runControlTool, type ControlBrowser, pageLoaded } from '../control/tool
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
 import { siteOfUrl, type AgentShares } from './shares';
+import { allowFirstLoad } from '../control/sends';
+import { pickersUnsecured } from './pickers';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
 
@@ -176,6 +178,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       async (signal) => {
         const contents = pageOf(deps.browser.tabs.ensure(nodeId));
         if (!contents) return { text: 'That tab couldn’t be opened.', isError: true };
+        // Its own address already asked about (the step card above): not asked again as it loads.
+        if (why) allowFirstLoad(contents, url);
         const page = controlPage(contents);
         // Followed from the start, so page_id names the page it loads.
         void page.id;
@@ -183,6 +187,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         await pageLoaded(contents, deps.loadMs ?? LOAD_MS, signal);
         if (signal.aborted) return refused('stopped');
         if (contents.isDestroyed()) return { text: 'That tab closed while it loaded.', isError: true };
+        // Its hold couldn't be finished (round 4 of #112): never a tab that would send unheld; it stays blank.
+        if (pickersUnsecured(contents) || contents.getURL() === 'about:blank') return { text: 'That tab couldn’t be opened safely, so it was left blank. Try again, or ask the user.', isError: true };
         // Redirected to a site the user keeps private: the tab goes, and nothing of where it ended up is said.
         // (Only a web address counts: a page still loading at the wait's end may show none yet.)
         const landed = page.url();

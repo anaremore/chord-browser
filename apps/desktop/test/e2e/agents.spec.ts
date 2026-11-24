@@ -375,6 +375,29 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     await inFront(true);
     await expect.soft.poll(focused, { message: 'coming back to Chord', timeout: 3000 }).toBe(yours);
 
+    // A tab switch (Claude's S7, round 4 of #112): your tab had the focus when the agent's was parked; you go to
+    // another tab; the agent acts. The focus goes to the page you see, never back to the one you left.
+    {
+      const { windowId } = await where(shell);
+      await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/notes` });
+      const left = `${site.origin}/notes`;
+      await pageWhere(app, (url) => url.startsWith(left));
+      await expect
+        .poll(async () => {
+          await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.focus(), left);
+          return focused();
+        })
+        .toBe(left);
+      await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') });
+      await expect.soft.poll(focused, { message: 'your tab, before the switch', timeout: 2000 }).toBe(left);
+      await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/act` });
+      const seen = `${site.origin}/act`;
+      await pageWhere(app, (url) => url.startsWith(seen));
+      await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') });
+      await new Promise((r) => setTimeout(r, 500));
+      expect(await focused(), 'after a tab switch, never the tab you left').not.toBe(left);
+    }
+
     // Your click in its tab pauses it there, as a key does (shown over your chord, so its bar shows).
     await shell.getByRole('region', { name: 'Codex’s tabs' }).getByRole('button', { name: /Neon/ }).click();
     await app.evaluate(({ webContents }, url) => {
@@ -428,7 +451,7 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
       return call;
     };
     const STEP_NO = 'The user said no to this step. Don’t try it another way; ask the user what to do.';
-    const sendsTo = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    const sendsTo = new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`);
 
     // The first action on the site: the site card (it still asks before risky steps, it says), then the step card.
     let outline = await snap();
@@ -481,6 +504,8 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
     await expect(stepCardOf(popover, /^Place the order on /)).toContainText('It reads “Pay $500”.', { timeout: 15_000 });
     expect((await withStep(draft, /^Place the order on /, 'Don’t')).text).toBe(STEP_NO);
     expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Jetzt kaufen"') }), /^Place the order on /, 'Don’t')).text).toBe(STEP_NO);
+    // Round 4: a button inside an open shadow root, in a form that posts: asks as its submit.
+    expect((await withStep(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Next step"') }), /^Submit this form on /, 'Don’t')).text).toBe(STEP_NO);
     expect(reached).toEqual(['POST /order']);
 
     // A search: reading, no card; it goes.
@@ -573,14 +598,14 @@ test('what an action sends asks first: held, one card, Allow sends and Don’t d
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
     expect(JSON.parse((await first).text)).toMatchObject({ data: { done: 'Clicked “Details”' } });
     // A toggle that saves (a same-site POST): held, one card; Allow sends it.
-    const ownSite = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    const ownSite = new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`);
     const toggled = await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'checkbox "Dark mode"') }), ownSite, 'Allow');
     expect(JSON.parse(toggled.text)).toMatchObject({ data: { done: 'Clicked “Dark mode”' } });
     await expect.poll(() => reached.includes('POST /prefs')).toBe(true);
     // Like: Don't drops it.
     expect((await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Like"') }), ownSite, 'Don’t')).text).toBe(STEP_NO);
     // A frame of another site that sends on the page's word: held from its own process, and the card says where.
-    const frameSends = await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Sync"') }), /^Send data to 2 sites\?$|^Send data to localhost/, 'Don’t');
+    const frameSends = await withCard(mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Sync"') }), /^Send data to 2 sites\?$|^Send data to (http:\/\/)?localhost/, 'Don’t');
     expect(frameSends.text).toBe(STEP_NO);
     await expect(sendCard(/^Send data to /)).toHaveCount(0);
     // Show more (a GET) and a link with ping: no card.
@@ -725,7 +750,6 @@ test('workers, redirects and scripts: what a worker sends asks too; a 307 to ano
     const host = new URL(site.origin).host;
     const third = `localhost:${new URL(site.origin).port}`;
     const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
-    await expect.poll(read, { timeout: 15_000 }).toContain('controlled');
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const STEP_NO = 'The user said no to this step. Don’t try it another way; ask the user what to do.';
     const card = (title: RegExp) => popover.getByRole('alertdialog', { name: title });
@@ -735,7 +759,7 @@ test('workers, redirects and scripts: what a worker sends asks too; a 307 to ano
       await card(title).getByRole('button', { name: button, exact: true }).click();
       return call;
     };
-    const ownSite = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    const ownSite = new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`);
     // The site card first, on a click that sends nothing.
     const first = mcp.call('snapshot', { tab_id: 'a1' });
     await first;
@@ -751,45 +775,37 @@ test('workers, redirects and scripts: what a worker sends asks too; a 307 to ano
     }
     expect(JSON.parse((await working).text)).toMatchObject({ data: { done: 'Clicked “Worker”' } });
     await expect.poll(read).toContain('worker: A worker can’t send data from a tab an agent is using.');
-    // The page's own send through the site's service worker (an agent's tab bypasses it, so it's the page's): held,
-    // one card, Don't drops it. (#112 review 3: no service worker is held; it's the site's.)
-    for (const name of ['Through the service worker']) {
+    // In a real worker too (round 4): its XHR, a worker it starts, and its trying to put fetch back: none sends.
+    for (const [button, says] of [
+      ['Worker XHR', 'xhr: A worker can’t send data'],
+      ['Nested worker', 'nested worker: A worker can’t send data'],
+      ['Worker puts fetch back', 'putback: A worker can’t send data'],
+    ] as const) {
+      expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${button}"`) })).text)).toMatchObject({ data: { done: `Clicked “${button}”` } });
+      await expect.poll(read, { message: button }).toContain(says);
+    }
+    // An OPTIONS that carries a body, by fetch and by XHR: held, its card, Don't drops it.
+    for (const name of ['Options with a body', 'Options XHR with a body']) {
       const clicking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${name}"`) });
-      if (name === 'Worker') {
-        const siteCard = siteCardOf(popover, 'Codex');
-        // The click's own answer, if it comes before the card (a refusal), says why.
-        const early = await Promise.race([clicking.then((r) => r.text), siteCard.waitFor({ timeout: 15_000 }).then(() => null)]);
-        expect(early, 'the site card, not an answer').toBeNull();
-        await popover.waitForTimeout(600);
-        await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
-      }
       await expect(card(ownSite), `${name}'s send card`).toBeVisible({ timeout: 15_000 });
       expect((await withCard(clicking, ownSite, 'Don’t')).text, name).toBe(STEP_NO);
     }
     await new Promise((r) => setTimeout(r, 500));
-    expect(reached.filter((r) => r.startsWith('POST'))).toEqual([]);
+    expect(reached.filter((r) => !r.startsWith('GET'))).toEqual([]);
     // No shared workers in an agent's tab (one is the site's, shared with your tabs): the page finds none.
     expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Shared worker"') })).text)).toMatchObject({ data: { done: 'Clicked “Shared worker”' } });
     expect(await read()).toContain('no shared worker');
-    // The stated limit: what the site's service worker sends on its own when the page asks it to (postMessage) isn't
-    // held (holding it would hold your own tabs' sends there too).
-    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Service worker"') })).text)).toMatchObject({ data: { done: 'Clicked “Service worker”' } });
-    await expect.poll(() => reached.includes('POST /sw-own')).toBe(true);
-    reached.length = 0;
-    // A 307 to another site, from the page (the worker bypassed), is held again.
-    const otherSiteSw = new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`);
-    const viaSw = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Redirected through the service worker"') });
-    await withCard(Promise.resolve({ text: '' }), ownSite, 'Allow');
-    await withCard(Promise.resolve({ text: '' }), otherSiteSw, 'Don’t');
-    await viaSw;
-    await new Promise((r) => setTimeout(r, 300));
-    expect(reached.filter((r) => r.startsWith('POST'))).toEqual(['POST /redir307']);
+    // A click that moves the app's address (pushState) and saves: the Allow given counts (Neon's S16).
+    expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/spa` })).text)).toMatchObject({ data: { navigated: true } });
+    const saving = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Save and go on"') });
+    expect(JSON.parse((await withCard(saving, ownSite, 'Allow')).text)).toMatchObject({ data: { done: 'Clicked “Save and go on”' } });
+    await expect.poll(() => reached.includes('POST /spa-save')).toBe(true);
     reached.length = 0;
     // An allowed POST that a 307 sends to another site: asked again, for that site; Don't keeps it from there.
     expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/redirects` })).text)).toMatchObject({ data: { navigated: true } });
     const redirected = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Redirected"') });
     await withCard(Promise.resolve({ text: '' }), ownSite, 'Allow');
-    const otherSite = new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`);
+    const otherSite = new RegExp(`^Send data to http://${third.replace(/\./g, '\\.')}\\?$`);
     // The redirect's response can come after the action settled: then the tab's card asks, not the action's. Either
     // way it's held for its own site, and Don't keeps it from there.
     const after = (await withCard(redirected, otherSite, 'Don’t')).text;
@@ -833,7 +849,7 @@ test('between actions: what the tab sends asks (“Codex’s tab wants to send d
     expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
     const popover = await pageWhere(app, isPopover);
     const host = new URL(site.origin).host;
-    const ownSite = new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`);
+    const ownSite = new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`);
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const clicking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Edit later"') });
     const siteCard = siteCardOf(popover, 'Codex');
@@ -867,7 +883,60 @@ test('between actions: what the tab sends asks (“Codex’s tab wants to send d
   }
 });
 
-test('your own tab on a site whose service worker an agent’s tab shares: what you send never asks (Claude’s review 3 of #112)', async () => {
+test('round 4 of #112: a page closed by the agent sends nothing on its way out; an agent’s tab has no shared workers, deferred sends or service workers, in any frame', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/leaving` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    // Closed by the agent: its pagehide's keepalive POST and beacon never arrive.
+    expect((await mcp.call('close_tab', { tab_id: 'a1' })).isError).toBeFalsy();
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(reached.filter((r) => r.includes('/bye'))).toEqual([]);
+    // What the page, a frame its script made, and a sandboxed frame find.
+    expect((await mcp.call('open_tab', { url: `${site.origin}/lookout` })).text).toMatch(/^\{/);
+    const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a2' })).text) as { content: string }).content;
+    await expect.poll(read, { timeout: 10_000 }).toContain('sandboxed:');
+    const content = await read();
+    for (const where of ['page', 'blank']) expect(content, where).toContain(`${where}:undefined/undefined/false`);
+    expect(content, 'sandboxed').toMatch(/sandboxed:[A-Za-z]+\/SecurityError\/SecurityError/);
+    // Whatever fetchLater did there, nothing it queued arrives once the agent closes the tab.
+    expect((await mcp.call('close_tab', { tab_id: 'a2' })).isError).toBeFalsy();
+    await new Promise((r) => setTimeout(r, 1500));
+    console.log(`[round 4] sandboxed frame: ${/sandboxed:[^ ]+/.exec(content)?.[0]}; reached: ${JSON.stringify(reached)}`);
+    expect(reached.filter((r) => r.includes('later'))).toEqual([]);
+    // open_tab to an address that deletes: asked once, as that step, and its load isn't asked again (Neon's S12).
+    const popover = await pageWhere(app, isPopover);
+    const deleting = mcp.call('open_tab', { url: `${site.origin}/items/9/delete` });
+    const step = popover.getByRole('alertdialog', { name: /^Delete this on / });
+    await expect(step).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await step.getByRole('button', { name: 'Allow', exact: true }).click();
+    expect((await deleting).text, 'open_tab opened it').toMatch(/^\{/);
+    await popover.waitForTimeout(1000);
+    await expect(popover.getByRole('alertdialog')).toHaveCount(0);
+    expect(reached.filter((r) => r.includes('/items/9/delete'))).toEqual(['GET /items/9/delete']);
+    // A crashed agent tab isn't reloaded (Neon's 4): its hold would be armed again only after its page loaded.
+    const crashed = `${site.origin}/items/9/delete`;
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.forcefullyCrashRenderer(), crashed);
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)?.isCrashed() ?? null, crashed)).toBe(true);
+    expect(reached.filter((r) => r.includes('/items/9/delete'))).toEqual(['GET /items/9/delete']);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('your own tab on a site with a service worker, and an agent’s tab there: what you send never asks; what it sends is held, never sent through the worker (Claude’s review 3 of #112)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const app = await launch(profile, { CHORD_AGENTS: '1' });
@@ -875,23 +944,37 @@ test('your own tab on a site whose service worker an agent’s tab shares: what 
   try {
     const shell = await pageWhere(app, isShell);
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
-    const mcp = relay(profile);
-    await mcp.request('initialize', CODEX);
-    // The agent's tab registers the site's service worker.
-    const opening = mcp.call('open_tab', { url: `${site.origin}/workers` });
-    await answer(app, 'Codex', 'Allow once');
-    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
-    await expect.poll(async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content, { timeout: 15_000 }).toContain('controlled');
-    // Your own tab on that site, controlled by the same worker.
+    // Your own tab registers the site's service worker (which sends every POST on for its pages), and is controlled.
     const { windowId } = await where(shell);
     await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/mailbox` });
     const mailbox = await pageWhere(app, (url) => url.startsWith(`${site.origin}/mailbox`));
+    await mailbox.evaluate(() => navigator.serviceWorker.register('/sw.js').then(() => undefined));
     await expect.poll(() => mailbox.evaluate(() => Boolean(navigator.serviceWorker.controller)), { timeout: 15_000 }).toBe(true);
-    // You send mail: it goes, through the worker, and no card asks.
+    // An agent's tab on that site.
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/noise` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    // You send mail, through the worker: it goes, and no card asks.
     await mailbox.evaluate(() => fetch('/user-mail', { method: 'POST', body: 'hello' }).then((r) => r.status));
     expect(reached).toContain('POST /user-mail');
-    const popover = await pageWhere(app, isPopover);
     await expect(popover.getByRole('alertdialog', { name: /^Send data to / })).toHaveCount(0);
+    // The agent's page sends: never through the worker (bypassed), so held, its card; Don't keeps it from the site.
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const liking = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Like"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const sendCard = popover.getByRole('alertdialog', { name: /^Send data to / });
+    await expect(sendCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await sendCard.getByRole('button', { name: 'Don’t', exact: true }).click();
+    expect((await liking).text).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(reached).not.toContain('POST /posts/1/like');
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -916,7 +999,7 @@ test('Allow until done: no more cards for that site from this tab; a new site st
     const popover = await pageWhere(app, isPopover);
     const host = new URL(site.origin).host;
     const third = `localhost:${new URL(site.origin).port}`;
-    const ownSite = popover.getByRole('alertdialog', { name: new RegExp(`^Send data to ${host.replace(/\./g, '\\.')}\\?$`) });
+    const ownSite = popover.getByRole('alertdialog', { name: new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`) });
     const polls = () => reached.filter((r) => r === 'POST /poll').length;
     // The poll's card: Allow until done.
     await expect(ownSite).toBeVisible({ timeout: 15_000 });
@@ -944,7 +1027,7 @@ test('Allow until done: no more cards for that site from this tab; a new site st
     await expect(siteCard).toBeVisible({ timeout: 15_000 });
     await popover.waitForTimeout(600);
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
-    const other = popover.getByRole('alertdialog', { name: new RegExp(`^Send data to ${third.replace(/\./g, '\\.')}\\?$`) });
+    const other = popover.getByRole('alertdialog', { name: new RegExp(`^Send data to http://${third.replace(/\./g, '\\.')}\\?$`) });
     await expect(other).toBeVisible({ timeout: 15_000 });
     await expect(other.getByRole('button', { name: 'Allow until done', exact: true })).toBeVisible();
     await popover.waitForTimeout(600);
@@ -1510,6 +1593,8 @@ test.beforeAll(async () => {
       '<form method=post action=/notes-bogus><label>Title <input name=t></label><button type=bogus>Save</button></form>' +
       '<button aria-label="Save draft" onclick="0">Pay $500</button>' +
       '<button onclick="0">Jetzt kaufen</button>' +
+      // Round 4 of #112: a button in an open shadow root, inside a form that posts: the form counts.
+      '<form method=post action=/shadow-next><x-next></x-next></form><script>document.querySelector("x-next").attachShadow({ mode: "open" }).innerHTML = "<button>Next step</button>";</script>' +
       '</main>',
     // The owner's hand test of #112 (bug 1): a text field, then fields that take a value in a format (a time typed in
     // after the text field had the focus went into the text field, and was reported done).
@@ -1522,16 +1607,30 @@ test.beforeAll(async () => {
     // address, and what a page sends between actions.
     '/workers':
       '<title>Workers</title><main>' +
-      '<button onclick="w.postMessage(1)">Worker</button> <button onclick="sh ? sh.port.postMessage(1) : (log.textContent += \' no shared worker\')">Shared worker</button> ' +
-      '<button onclick="fetch(\'/sw-save\', { method: \'POST\', body: \'x\' }).catch(() => {})">Through the service worker</button> ' +
-      '<button onclick="navigator.serviceWorker.controller.postMessage(1)">Service worker</button>' +
-      '<button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected through the service worker</button>' +
+      '<button onclick="w.postMessage(\'fetch\')">Worker</button> <button onclick="w.postMessage(\'xhr\')">Worker XHR</button> ' +
+      '<button onclick="w.postMessage(\'nested\')">Nested worker</button> <button onclick="w.postMessage(\'putback\')">Worker puts fetch back</button> ' +
+      '<button onclick="sh ? sh.port.postMessage(1) : (log.textContent += \' no shared worker\')">Shared worker</button> ' +
+      // Round 4: an OPTIONS that carries a body sends it.
+      '<button onclick="fetch(\'/options-fetch\', { method: \'OPTIONS\', body: \'x\' }).catch(() => {})">Options with a body</button> ' +
+      '<button onclick="const x = new XMLHttpRequest(); x.open(\'OPTIONS\', \'/options-xhr\'); x.send(\'x\')">Options XHR with a body</button>' +
       '<p id=log></p>' +
-      '<script>const w = new Worker("/w.js"); w.onmessage = (e) => { log.textContent += " " + e.data; }; const sh = window.SharedWorker ? new SharedWorker("/shared.js") : null; if (sh) sh.port.start();' +
-      'navigator.serviceWorker.register("/sw.js"); navigator.serviceWorker.addEventListener("controllerchange", () => { log.textContent = "controlled"; });' +
-      'if (navigator.serviceWorker.controller) log.textContent = "controlled";</script></main>',
+      '<script>const w = new Worker("/w.js"); w.onmessage = (e) => { log.textContent += " " + e.data; }; const sh = window.SharedWorker ? new SharedWorker("/shared.js") : null; if (sh) sh.port.start();</script></main>',
+    // A single-page app: a click that moves its address (pushState) and saves (round 4: the Allow still counts).
+    '/spa': '<title>App</title><main><button onclick="history.pushState({}, \'\', \'/spa/next\'); fetch(\'/spa-save\', { method: \'POST\', body: \'x\' })">Save and go on</button></main>',
     // A page of yours on the same site as an agent's tab: the site's service worker controls both (#112 review 3).
     '/mailbox': '<title>Mailbox</title><main><h1>Mailbox</h1></main>',
+    // Round 4 of #112: a page that sends as it's closed (pagehide, keepalive), and one that looks for what an agent's
+    // tab never has (shared workers, deferred sends, service workers), in itself and in frames a script makes.
+    '/leaving': '<title>Leaving</title><main><p>Bye.</p><script>addEventListener("pagehide", () => { fetch("/bye", { method: "POST", body: "x", keepalive: true }); navigator.sendBeacon("/bye-beacon", "x"); });</script></main>',
+    '/lookout':
+      '<title>Lookout</title><main><p id=log></p><script>' +
+      'const what = (w) => [typeof w.SharedWorker, typeof w.fetchLater, String("serviceWorker" in w.navigator)].join("/");' +
+      'log.textContent += " page:" + what(window);' +
+      'const f = document.createElement("iframe"); document.body.append(f); log.textContent += " blank:" + what(f.contentWindow);' +
+      'addEventListener("message", (e) => { log.textContent += " " + e.data; });' +
+      // A sandboxed frame's origin is opaque: a shared worker or a service worker can't be had there (each throws or is
+      // refused), and fetchLater is off in an agent's tab. What each attempt came to.
+      '</script><iframe sandbox="allow-scripts" srcdoc="<script>(async () => { const r = []; try { fetchLater(&quot;/later-sandboxed&quot;, { method: &quot;POST&quot;, body: &quot;x&quot; }); r.push(&quot;queued&quot;); } catch (e) { r.push(typeof fetchLater === &quot;function&quot; ? e.name : &quot;undefined&quot;); } try { new SharedWorker(&quot;/shared.js&quot;); r.push(&quot;shared&quot;); } catch (e) { r.push(e.name); } try { await navigator.serviceWorker.register(&quot;/sw.js&quot;); r.push(&quot;registered&quot;); } catch (e) { r.push(e.name); } parent.postMessage(&quot;sandboxed:&quot; + r.join(&quot;/&quot;), &quot;*&quot;); })()</script>"></iframe></main>',
     // No worker here: a page's own redirects and navigations.
     '/redirects':
       '<title>Redirects</title><main><button onclick="fetch(\'/redir307\', { method: \'POST\', body: \'x\' }).catch(() => {})">Redirected</button>' +
@@ -1567,7 +1666,14 @@ test.beforeAll(async () => {
     }
     // Workers' scripts (#112 review 2): a dedicated, a shared and a service worker, each sending when told.
     const scripts: Record<string, string> = {
-      '/w.js': 'onmessage = () => fetch("/worker-save", { method: "POST", body: "x" }).then(() => postMessage("worker sent"), (e) => postMessage("worker: " + e.message));',
+      '/w.js':
+        'const report = (p, what) => p.then(() => postMessage(what + " sent"), (e) => postMessage(what + ": " + e.message));' +
+        'onmessage = (e) => {' +
+        ' if (e.data === "fetch") report(fetch("/worker-save", { method: "POST", body: "x" }), "worker");' +
+        ' if (e.data === "xhr") { try { const x = new XMLHttpRequest(); x.open("POST", "/worker-xhr"); x.send("x"); postMessage("xhr sent"); } catch (err) { postMessage("xhr: " + err.message); } }' +
+        ' if (e.data === "nested") { const n = new Worker("/w.js"); n.onmessage = (m) => postMessage("nested " + m.data); n.postMessage("fetch"); }' +
+        ' if (e.data === "putback") { try { delete self.fetch; } catch {} try { self.fetch = () => 0; } catch {} report(fetch("/worker-putback", { method: "POST", body: "x" }), "putback"); }' +
+        '};',
       '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
       '/sw.js':
         'self.addEventListener("install", () => self.skipWaiting()); self.addEventListener("activate", (e) => e.waitUntil(clients.claim()));' +
@@ -1580,7 +1686,9 @@ test.beforeAll(async () => {
       return;
     }
     // M2d: a form posted, or a delete address asked for, is recorded: the step card's journeys check what reached it.
-    if (req.method === 'POST' || /\/delete(\b|$)/.test(req.url ?? '')) {
+    // Any method but a read (a preflight without a body is one: round 4 of #112).
+    const sends = req.method !== 'GET' && req.method !== 'HEAD' && !(req.method === 'OPTIONS' && !Number(req.headers['content-length'] ?? 0));
+    if (sends || /\/delete(\b|$)/.test(req.url ?? '')) {
       reached.push(`${req.method} ${req.url}`);
       req.resume();
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
