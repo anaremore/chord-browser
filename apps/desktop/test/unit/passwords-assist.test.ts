@@ -14,8 +14,11 @@ import type { PasswordDetectorEvents } from '../../src/main/passwords/detector';
 import type { AccountsAnswer, CandidateAnswer, SaveAnswer } from '../../src/main/passwords/service';
 
 /** The assistant acting in the tab (control/user-watch.ts), and a key Chord sends for it (control/input.ts), as a test sets them. */
-const assistant = vi.hoisted(() => ({ acting: false, sendsKey: false }));
-vi.mock('../../src/main/control/user-watch', () => ({ userTabActing: () => assistant.acting }));
+const assistant = vi.hoisted(() => ({ acting: false, sendsKey: false, leases: [] as ((contents: unknown) => void)[] }));
+vi.mock('../../src/main/control/user-watch', () => ({
+  userTabActing: () => assistant.acting,
+  onUserLease: (listener: (contents: unknown) => void) => void assistant.leases.push(listener),
+}));
 vi.mock('../../src/main/control/input', () => ({ isAgentInput: () => assistant.sendsKey }));
 
 const ORIGIN = 'https://github.com';
@@ -272,6 +275,25 @@ describe('the assistant acting in the tab (S18 M2e-2a, A4; Neon’s B2 on the M2
       expect(t.assist.menuFor('w1')).toBeNull();
       await t.focus();
       expect(t.assist.menuFor('w1')).toBeNull();
+    } finally {
+      assistant.acting = false;
+    }
+  });
+
+  it('a menu already open closes as a lease begins in its tab; one the vault answers after the lease began never opens (Neon’s B7 on #147)', async () => {
+    const t = setup();
+    await t.focus();
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    for (const listener of assistant.leases) listener(t.contents);
+    expect(t.assist.menuFor('w1')).toBeNull();
+    // The focus came first, the vault's answer after the lease began: no menu.
+    const u = setup();
+    const focusing = u.focus();
+    assistant.acting = true;
+    try {
+      await focusing;
+      await flush();
+      expect(u.assist.menuFor('w1')).toBeNull();
     } finally {
       assistant.acting = false;
     }

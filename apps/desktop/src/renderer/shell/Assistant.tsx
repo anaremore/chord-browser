@@ -361,6 +361,8 @@ function ActApproval({ message, act: card }: { message: AssistantMessage; act: A
             { label: 'Don’t', look: 'secondary', decision: 'denied' },
             { label: 'Show me', look: 'quiet', show: true },
           ];
+  // Show me only where there's something to point at (a tail's or a load's card has none).
+  const shown = buttons.filter((b) => !b.show || card.showable);
   const looks = { primary: styles.primary, secondary: styles.secondary, quiet: styles.quiet, danger: `${styles.primary} ${styles.allowDanger}` };
   return (
     <div className={styles.approval} data-pending={pending || undefined} data-act={card.kind} role={pending ? 'group' : undefined} aria-label={pending ? card.title : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
@@ -376,7 +378,7 @@ function ActApproval({ message, act: card }: { message: AssistantMessage; act: A
       </p>
       {pending ? (
         <div className={styles.approvalActions}>
-          {buttons.map((b) => (
+          {shown.map((b) => (
             <button
               key={b.label}
               type="button"

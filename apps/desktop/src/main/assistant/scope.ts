@@ -4,7 +4,7 @@
  * the chat's scope (Settings → Assistant, or the panel's menu), the tabs
  * attached to its messages, and readNeedsApproval, as they always were.
  */
-import { nodeList, nodeOf, readNeedsApproval, type AssistantScope, type AssistantThread, type AssistantToolName, type NodeId, type TabNode, type TabRefs, type WindowId } from '@chord/core';
+import { nodeList, nodeOf, readNeedsApproval, splitOf, type AssistantScope, type AssistantThread, type AssistantToolName, type NodeId, type TabNode, type TabRefs, type WindowId } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
 import type { ActHost, ControlScope, FillProposals, ToolMemory } from '../control/scope';
 import type { ControlBrowser } from '../control/tools';
@@ -139,8 +139,10 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
                 return USER_TAB_REFUSALS.notThatTab(named?.kind === 'tab' ? named.title || named.url : 'it was closed');
               }
               // Off screen once (switched away, a popup took the screen, another window): for the rest of this message.
+              // In a split: said, not latched (you may close the split). Anything else off screen (another tab, Peek,
+              // minimized, another window): over for this message (Neon's B6 on #147).
+              if (splitOf(state(), node.id)) return USER_TAB_REFUSALS.split;
               if (!acting.shownAlone(node, at.windowId)) {
-                if (host.activeTab(at.windowId)?.id === node.id) return USER_TAB_REFUSALS.split;
                 chat.actEnded = USER_TAB_REFUSALS.switched;
                 return chat.actEnded;
               }

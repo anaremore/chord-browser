@@ -210,8 +210,10 @@ export const isNeverOffered = (toolName: string): boolean => CONTROL_NEVER_OFFER
 export function cleanActSites(sites: readonly string[]): string[] {
   const out: string[] = [];
   for (const raw of sites) {
-    const site = raw.trim().toLowerCase().replace(/\.$/, '');
-    if (!site || site.length > 253 || !/^[a-z0-9.-]+$/.test(site)) continue;
+    // As a site is written (core's normalHost, model.ts' actSitesOf): a host, with its port when it has one, an IPv6
+    // address in brackets; lowercase, without a fully qualified name's trailing dot.
+    const site = raw.trim().toLowerCase().replace(/\.+(?=$|:)/, '');
+    if (!site || site.length > 253 || !/^[a-z0-9.:[\]-]+$/.test(site)) continue;
     const at = out.indexOf(site);
     if (at >= 0) out.splice(at, 1);
     out.push(site);

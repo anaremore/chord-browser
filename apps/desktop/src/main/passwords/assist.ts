@@ -56,7 +56,7 @@ import type { Input, WebContents, WebFrameMain } from 'electron';
 import type { PasswordDetectorEvents, PasswordsFocusEvent } from './detector';
 import { keyIdOf, routeMenuKey, routeTakenKey, TAKEN_KEY_PATIENCE } from './menu-keys';
 import { isAgentInput } from '../control/input';
-import { userTabActing } from '../control/user-watch';
+import { onUserLease, userTabActing } from '../control/user-watch';
 import { generatePasswordFor, type Generated } from './generator';
 import { HOLD_MS, type CandidateValues } from './saving';
 import type { PasswordService } from './service';
@@ -365,6 +365,10 @@ export class PasswordAssist {
   private readonly guards = new Map<WebContents, KeyGuard>();
 
   constructor(private readonly options: PasswordAssistOptions) {
+    // The assistant beginning to act in a tab of yours (S18 M2e-2a): a menu open there closes (Neon's B7 on #147).
+    onUserLease((contents) => {
+      for (const menu of [...this.menus.values()]) if (menu.contents === contents) this.close(menu);
+    });
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimeout ?? ((run, ms) => setTimeout(run, ms));
     this.clearTimer = options.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
@@ -544,6 +548,9 @@ export class PasswordAssist {
   }
 
   private openMenu(made: Omit<Menu, 'openedAt'>): void {
+    // Asked again right here, after the vault's answer: the assistant may have begun acting in the tab meanwhile
+    // (Neon's B7 on #147). Its focus never opens your passwords.
+    if (userTabActing(made.contents)) return;
     const menu: Menu = { ...made, openedAt: this.now() };
     // One menu a window: another pane's, still open, closes first (its keys with it).
     const replaced = this.menus.get(menu.tab.windowId);

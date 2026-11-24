@@ -368,7 +368,11 @@ function registerIpc(): void {
       browser!.userNavigates?.(contents);
       contents.reload();
     }
-    else if (action === 'stop') contents.stop();
+    else if (action === 'stop') {
+      // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
+      assistant?.userMovedPage(contents);
+      contents.stop();
+    }
   });
   handle('overlay:open', ({ mode, anchor }, sender) => {
     const w = senderWindow(sender);
