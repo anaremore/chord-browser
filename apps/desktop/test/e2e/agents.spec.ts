@@ -1221,6 +1221,73 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
+test('a timed table, as an agent plays it today: a snapshot until it’s its turn, then a click; where each move’s time goes (M2g-1, measure first)', async () => {
+  test.setTimeout(240_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/timed` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text).toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const inPage = (code: string) => app.evaluate(({ webContents }, [prefix, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(prefix))!.executeJavaScript(js), [`${site.origin}/timed`, code] as const);
+    const phases = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { agentPhaseTimes(): Promise<{ tool: string; phase: string; ms: number }[]> } }).chordTestHooks.agentPhaseTimes());
+    const timed = async <T,>(f: () => Promise<T>) => {
+      const t0 = Date.now();
+      const out = await f();
+      return { out, ms: Date.now() - t0 };
+    };
+    const snaps: number[] = [];
+    const clicks: number[] = [];
+    const moves: number[] = [];
+    let siteAllowed = false;
+    await phases();
+    // Five turns: no wait_for yet, so a snapshot each 500 ms until the controls show (what an agent does with no way
+    // to wait), then Call.
+    for (let turn = 0; turn < 5; turn++) {
+      let outline = '';
+      for (;;) {
+        const snap = await timed(() => mcp.call('snapshot', { tab_id: 'a1' }));
+        snaps.push(snap.ms);
+        outline = (JSON.parse(snap.out.text) as { content: string }).content;
+        if (outline.includes('generic "Call"')) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const clicking = timed(() => mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'generic "Call"') }));
+      if (!siteAllowed) {
+        const siteCard = siteCardOf(popover, 'Codex');
+        await expect(siteCard).toBeVisible({ timeout: 15_000 });
+        await popover.waitForTimeout(600);
+        await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+        siteAllowed = true;
+      }
+      const click = await clicking;
+      expect(click.out.text, `turn ${turn}`).toMatch(/^\{/);
+      if (turn > 0) clicks.push(click.ms);
+      const turnAt = Number(await inPage('window.turnAt'));
+      if (turn > 0) moves.push(Date.now() - turnAt);
+      await expect.poll(() => inPage('document.getElementById("log").textContent')).toContain(`Call after`);
+      await inPage('document.getElementById("log").textContent = ""');
+    }
+    const log = String(await inPage('document.getElementById("log").textContent'));
+    expect(log).not.toContain('auto-folded');
+    const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
+    const laps = await phases();
+    const byPhase = new Map<string, number[]>();
+    for (const l of laps) byPhase.set(`${l.tool}:${l.phase}`, [...(byPhase.get(`${l.tool}:${l.phase}`) ?? []), l.ms]);
+    const breakdown = [...byPhase].map(([k, v]) => `${k} ${med(v).toFixed(0)}`).join(', ');
+    console.log(`[timed table] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} snapshot median ${med(snaps)} ms (${snaps.length}); click median ${med(clicks)} ms; turn start to Chord's click done, median ${med(moves)} ms (no model thinking: the 15 s clock's rest is the agent's); phases (median ms): ${breakdown}`);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('a game whose action controls are pointer divs, re-rendered every 100 ms and every frame; a bet field the page takes the focus from (the owner’s retest of #117)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -2083,6 +2150,9 @@ test.beforeAll(async () => {
     // The owner's retest of #117 (2026-11-24): a game's action controls are divs with a pointer cursor, rebuilt by a
     // framework-style render every 100 ms (or every frame, ?raf), in a named table; a bet field the page takes the focus
     // from on its tick; a real button beside them.
+    // A timed table (M2g-1's acceptance journey): your turn comes after the others', a shot clock of 15 s then, and
+    // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
+    '/timed': '<title>Timed table</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div role=region aria-label="Table 9"><p id=status>Waiting for the others</p><div id=controls></div></div><p id=log></p></main><script src="/timed.js"></script>',
     '/game': '<title>Game</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div id=table role=region aria-label="Table 3" tabindex=-1><div id=controls></div><label>Bet <input id=bet></label> <button id=rankings>Hand rankings</button></div><p id=log></p></main><script src="/game.js"></script>',
     // The press tried again (the review of #117, round 3): the page replaces its button as the pointer arrives, once
     // armed (window.arm), in the way ?m= says.
@@ -2114,6 +2184,41 @@ test.beforeAll(async () => {
         ' if (e.data === "putback") { try { delete self.fetch; } catch {} try { self.fetch = () => 0; } catch {} report(fetch("/worker-putback", { method: "POST", body: "x" }), "putback"); }' +
         '};',
       '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
+      '/timed.js': `
+        const status = document.getElementById('status');
+        const c = document.getElementById('controls');
+        const log = document.getElementById('log');
+        const OTHERS_MS = Number(new URLSearchParams(location.search).get('others') || 3000);
+        const CLOCK_MS = 15000;
+        let turn = null;
+        const render = () => {
+          if (!turn) { c.innerHTML = ''; return; }
+          const left = Math.max(0, Math.ceil((CLOCK_MS - (performance.now() - turn.at)) / 1000));
+          c.innerHTML = '<div class=act>Fold</div><div class=act>Call</div><div class=act>Raise</div>';
+          status.textContent = 'Your turn: ' + left + ' s';
+        };
+        const yourTurn = () => {
+          turn = { at: performance.now(), n: (turn ? turn.n : 0) + 1 };
+          window.turnAt = Date.now();
+          turn.clock = setTimeout(() => { log.textContent += ' auto-folded'; others(); }, CLOCK_MS);
+          render();
+        };
+        const others = () => {
+          if (turn) clearTimeout(turn.clock);
+          turn = null;
+          status.textContent = 'Waiting for the others';
+          render();
+          setTimeout(yourTurn, OTHERS_MS);
+        };
+        setInterval(render, 100);
+        c.addEventListener('click', (e) => {
+          const a = e.target.closest('.act');
+          if (!a || !turn) return;
+          log.textContent += ' ' + a.textContent + ' after ' + Math.round(performance.now() - turn.at) + ' ms';
+          others();
+        });
+        others();
+      `,
       '/game.js': `
         const c = document.getElementById('controls');
         const log = document.getElementById('log');

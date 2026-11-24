@@ -67,6 +67,26 @@ Each claim checked against the code; what was decided, and where Neon's reading 
 - `wait_for`'s CPU cost and wake-up latency on a page mutating every frame.
 - An end-to-end move budget against a 15 s turn clock: snapshot, the agent's thinking (not ours), an action, its settle, and the next state.
 
+## Measured (slice a, 2026-11-24)
+
+The owner's preview (main plus #117) played a full hand at a bot table. At a live table with a shot clock it was folded: each move took several seconds, and the agent polled with `Start-Sleep 10` in a shell between turns, having no way to wait for its turn.
+
+**The acceptance journey:** agents.spec's *a timed table…* has a fixture with a 15 s shot clock. Your turn comes after the others' (3 s); the action controls are pointer `div`s re-rendered every 100 ms, shown only on your turn; out of time, you're folded. It plays five turns as an agent does today (a snapshot every 500 ms until the controls show, then Call) and reports where each move's time goes, from `control/phases.ts` (laps kept only with the E2E hooks on, read by `agentPhaseTimes`). With `wait_for` (slice b), the same journey waits instead of polling, with no sleeps.
+
+**Chord's share of a move** (Linux container, X11, medians):
+
+| | Before | After the settle change |
+|---|---|---|
+| Snapshot | 4 ms | 4 ms |
+| Click | 279 ms | 179 ms |
+| …its look, point, debugger and checks | 2, 4, 1, 20 ms | the same |
+| …the settle after it | 251 ms | 151 ms |
+| Turn start to Chord's click done (no model thinking) | 570 ms | 369 ms |
+
+- *Where the seconds go:* not in Chord. A move costs Chord about 0.2 s. The rest of the clock is the agent's own turns: a model round trip for each snapshot it polls with, the thinking, and a shell sleep between. `wait_for` with `snapshot: true` takes the polling out: one call returns when it's the agent's turn, with the outline.
+- *The settle change:* the page's quiet is now waited for alongside the 150 ms wait for a navigation to start, not after it: 100 ms off every action.
+- *Still to measure:* the agent's real round trip through Claude Code and Codex (the model's own time, separate from Chord's), `wait_for`'s CPU cost and how fast it wakes, and `tab_screenshot`.
+
 ## #143: what the clients do (looked up 2026-11-24, to check in slice (a))
 
 - **Codex:** each MCP tool call times out after `tool_timeout_sec`, 60 s by default, per server in `config.toml`.

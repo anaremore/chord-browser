@@ -96,7 +96,8 @@ export interface ControlPage {
    * Runs `act` (the input), then waits for what it set off: a navigation's load (at most ACT_LOAD_MS), or the page
    * quiet for a moment. Says whether the page went somewhere else (its page id changed).
    */
-  afterActing(act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }>;
+  /** `acted`: told when the action itself is done, before the page settles (phases.ts). */
+  afterActing(act: () => void | Promise<void>, acted?: () => void): Promise<{ navigated: boolean; loading: boolean }>;
   /** Goes to an address and waits for the load (at most ACT_LOAD_MS). */
   navigate(url: string): Promise<{ loading: boolean }>;
   /**
@@ -278,7 +279,7 @@ export function controlPage(contents: WebContents): ControlPage {
     insertText: async (text) => {
       if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
     },
-    afterActing: (act) => afterActing(contents, act),
+    afterActing: (act, acted) => afterActing(contents, act, acted),
     navigate: async (url) => {
       const yours = await focusedPage();
       try {
@@ -349,7 +350,7 @@ function loaded(contents: WebContents, start: () => unknown): Promise<{ loading:
 const NAVIGATION_START_MS = 150;
 
 /** The input, then a navigation it set off (to its load) or the page settling. */
-async function afterActing(contents: WebContents, act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }> {
+async function afterActing(contents: WebContents, act: () => void | Promise<void>, acted?: () => void): Promise<{ navigated: boolean; loading: boolean }> {
   if (contents.isDestroyed()) return { navigated: false, loading: false };
   const before = pageIdOf(contents);
   // Where your focus is: an agent's tab never keeps it after its action (a page it took somewhere can take it).
@@ -361,10 +362,14 @@ async function afterActing(contents: WebContents, act: () => void | Promise<void
   contents.on('did-start-navigation', onStart);
   try {
     await act();
+    acted?.();
+    // The page's quiet is waited for from now, alongside the wait for a navigation to start (M2g-1, measured: one after
+    // the other, 251 ms of a click's 279 on a table that redraws every 100 ms).
+    const quiet = settle(contents);
     await new Promise((r) => setTimeout(r, NAVIGATION_START_MS));
     let loading = false;
     if (started && !contents.isDestroyed() && contents.isLoading()) loading = (await loaded(contents, () => undefined)).loading;
-    else await settle(contents);
+    else await quiet;
     return { navigated: contents.isDestroyed() || pageIdOf(contents) !== before, loading };
   } finally {
     if (!contents.isDestroyed()) contents.off('did-start-navigation', onStart);

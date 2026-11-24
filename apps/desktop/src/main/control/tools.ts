@@ -5,6 +5,7 @@
  * (page.ts), and asks the scope what this agent may see and when it must ask.
  * The refusals are one sentence each, as the assistant has always said them.
  */
+import { phaseClock } from './phases';
 import { firstLoadPending, pickersUnsecured } from '../agents/pickers';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -113,7 +114,9 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
   if (off) return refuse(off);
   const ref = args['tab_id'];
   const tab = typeof ref === 'string' ? (scope.refs.get(ref) ?? null) : null;
-  return scope.agent.call(
+  // The whole call's time, by tool (M2g-1's measurement: phases.ts), from here to its answer.
+  const clock = phaseClock(spec.name);
+  const answered = scope.agent.call(
     tab,
     async (signal) => {
       const call: Call = {
@@ -144,6 +147,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
     },
     (why) => refuse(CONTROL_REFUSALS[why]),
   );
+  return answered.finally(() => clock.lap('total'));
 }
 
 const isTab = (browser: ControlBrowser) => (id: NodeId) => nodeOf(browser.store.state, id)?.kind === 'tab';
@@ -616,7 +620,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   // asked, so the card and the bar show the page's label, never the agent's words.
   // Its first look may find a replaced node again (the owner's bug #2); so may the look after a card, the pointer's move
   // and the hit test, never a later one (the review of #117): once it's checked and pointed at, a replacement refuses.
+  // Where this action's time goes (phases.ts): its first look, its cards, its pointing, the debugger's session, the
+  // checks to the press, the press or the input, and the page settling after.
+  const phases = phaseClock(tool);
   const element = await actOn({ op: 'describe', refind: true, ...(tool === 'select_option' ? { option: asked } : {}) });
+  phases.lap('look');
   if (!element.ok) return refuse(actRefusal(element));
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
@@ -747,6 +755,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
 
   // It runs: a late Allow given on this tab for another step is spent (Neon's review of M2g-1, B1).
   scope.agent.dropLateSteps(node.id);
+  phases.lap('cards');
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
   let deep: DeepSession | null = null;
@@ -1008,6 +1017,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     const markAtStart = page.mark;
     const acting = page.afterActing(async () => {
       const pointed = await actOn({ op: 'point', highlight: true });
+      phases.lap('point');
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
       // The field as it is now, after any card's wait: never one the page made a password, code or card field.
       if (pointed.field && sensitiveField(pointed.field)) return void (refused = ACT_REFUSALS.sensitive);
@@ -1016,6 +1026,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // `act` step anything that sends data is held for the card; a step the user allowed sends as it does. Reports
       // (beacons, pings) are dropped either way.
       deep = await page.deep(owner, lookup.token, lookup.key);
+      phases.lap('debugger');
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
       watch = page.watchSends(step.class === 'risky' ? allowedBy(element, stepSubmits(tool, args, element)) : null);
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
@@ -1117,6 +1128,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       }
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
+      phases.lap('checks');
       page.press(at.x!, at.y!);
       if (tool !== 'type') return;
       // Typing waits for the page to have seen its click (the caret goes where the click put it): only then the select
@@ -1149,7 +1161,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // The step again right before Enter (Neon's review 2 of #112): what typing did to the page counts.
       if ((refused = await sameStep())) return;
       await guardedTries('keyup', pressKey('Enter'), refocus);
-    });
+    },
+    // Its input done (phases.ts).
+    () => phases.lap('input'));
     // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and a card asks
     // for it, naming its sites, before the action is done (it waits on what's held): askHeld.
     if ((await Promise.race([acting.then(() => 'acted' as const), watching.then(() => 'on' as const)])) === 'on' && watch) {
@@ -1164,6 +1178,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       refused ??= sent;
     }
     const { navigated, loading } = await acting;
+    phases.lap('settle');
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
