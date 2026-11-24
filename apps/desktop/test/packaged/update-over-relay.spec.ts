@@ -4,13 +4,15 @@
  * An agent's relay (`Chord.exe mcp`, started by Claude Code, Codex or Antigravity) runs from the install folder and
  * keeps Chord's files in use after Chord's window closes. Ending it once isn't enough: the agent starts it again on
  * its next tool call (Claude Code does, measured 2026-11-24), so a relay can come back at any moment during setup.
- * This test's agent restarts its relay as soon as it ends, the hardest case.
+ * This test's agent restarts its relay 100 ms after it ends, the hardest case.
  *
- * It installs the last release (CHORD_PREVIOUS_INSTALLER, whose uninstaller is the one an update runs first), starts
- * the agent, then runs this build's setup over it twice: as a person does (`/S`), and as the in-app updater does
- * (`--updated /S`, electron-updater's NsisUpdater). Each must succeed, put this build's files in place, and leave the
- * agent able to start its relay again. It installs into the real per-user folder, so it runs only where
- * CHORD_INSTALLER says to: CI's Windows installer job, on a throwaway runner.
+ * Both ways an update arrives go from the last release (CHORD_PREVIOUS_INSTALLER, whose uninstaller is the one an
+ * update runs first) to this build, with the agent connected throughout:
+ * - as a person runs setup (`/S`);
+ * - as the in-app updater runs it (`--updated /S --force-run`: electron-updater's `quitAndInstall(true, true)`).
+ * Each must succeed, put this build's files in place (its version and its app archive), and leave the agent able to
+ * start its relay again. It installs into the real per-user folder, so it runs only where CHORD_INSTALLER says to:
+ * CI's Windows installer job, on a throwaway runner.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -25,10 +27,12 @@ test.skip(process.platform !== 'win32' || !installer, 'Windows only, with CHORD_
 
 const installed = join(process.env['LOCALAPPDATA'] ?? '', 'Programs', 'chord');
 const exe = join(installed, 'Chord.exe');
-/** This build's unpacked app archive: after setup, the installed one must be the same bytes. */
+/** This build's unpacked app archive and version: after setup, the installed ones must be these. */
 const built = resolve(import.meta.dirname, '../../release/win-unpacked/resources/app.asar');
+const version = (JSON.parse(readFileSync(resolve(import.meta.dirname, '../../package.json'), 'utf8')) as { version: string }).version;
 
 const sha = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const powershell = (command: string) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', env: { ...process.env, CHORD_INSTDIR: `${installed}\\` } }).trim();
 
 /** Runs setup and waits for it. NSIS exits 0 when it installed, 1 when cancelled, 2 when it gave up. */
 function setup(file: string, args: string[]): number {
@@ -40,14 +44,14 @@ function setup(file: string, args: string[]): number {
   }
 }
 
-/** The relays from the install folder that are running now. */
-function relays(): number[] {
-  const ps = `@(Get-CimInstance Win32_Process -Filter "Name='Chord.exe'" | ? { $_.CommandLine -match '\\smcp(\\s|$)' }) | % { $_.ProcessId }`;
-  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8' })
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(Number);
-}
+/** The installed Chord.exe's version (electron-builder writes the app's version as its file version). */
+const installedVersion = () => powershell(`(Get-Item -LiteralPath (Join-Path $env:CHORD_INSTDIR 'Chord.exe')).VersionInfo.FileVersion`);
+
+/** Relays running from the install folder. */
+const relays = () => Number(powershell(`@(Get-CimInstance Win32_Process | ? { $_.Path -and $_.Path.StartsWith($env:CHORD_INSTDIR, 'OrdinalIgnoreCase') -and $_.CommandLine -match '\\smcp(\\s|$)' }).Count`));
+
+/** Ends everything running from the install folder (Chord, reopened by --force-run, and relays). */
+const endAll = () => powershell(`Get-CimInstance Win32_Process | ? { $_.Path -and $_.Path.StartsWith($env:CHORD_INSTDIR, 'OrdinalIgnoreCase') } | % { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`);
 
 /**
  * An agent with Chord connected: it starts `Chord.exe mcp` and says hello, and whenever the relay ends (or can't
@@ -64,7 +68,7 @@ function agent(profile: string) {
     try {
       relay = spawn(exe, [`--user-data-dir=${profile}`, 'mcp'], { stdio: ['pipe', 'pipe', 'ignore'] });
     } catch (error) {
-      // Windows refuses to start it at once (EPERM) while setup keeps the folder from running anything.
+      // Windows refuses at once (EPERM) while setup keeps the folder from running anything, or ENOENT mid-update.
       events.push(`couldn't start: ${(error as NodeJS.ErrnoException).code}`);
       setTimeout(run, 100);
       return;
@@ -106,32 +110,50 @@ function agent(profile: string) {
   };
 }
 
-test('setup updates Chord while an agent keeps its relay running, and the agent starts it again after', async () => {
+test('setup updates Chord from the last release while an agent keeps its relay running, by hand and in-app', async () => {
   test.setTimeout(900_000);
   expect(existsSync(installer!), `${installer} exists`).toBe(true);
   expect(existsSync(built), `${built} exists (pnpm package --win first)`).toBe(true);
+  const from = previous ?? installer!;
   const profile = mkdtempSync(join(tmpdir(), 'chord-relay-'));
-  // The release people have now; without one, this build stands in for it.
-  expect(setup(previous ?? installer!, ['/S']), 'the first install').toBe(0);
-  expect(existsSync(exe), `${exe} is installed`).toBe(true);
 
-  const connected = agent(profile);
+  /** Installs the last release with no agent running, then connects one. */
+  const lastRelease = async () => {
+    expect(setup(from, ['/S']), 'installing the last release').toBe(0);
+    const connected = agent(profile);
+    await connected.answers();
+    expect(relays(), 'a relay runs from the install folder').toBeGreaterThan(0);
+    return connected;
+  };
+  const isThisBuild = (how: string) => {
+    expect(installedVersion(), `${how}: this build's version`).toBe(version);
+    expect(sha(join(installed, 'resources', 'app.asar')), `${how}: this build's files`).toBe(sha(built));
+  };
+
   try {
-    await connected.answers();
-    expect(relays().length, 'a relay runs from the install folder').toBeGreaterThan(0);
+    let connected = await lastRelease();
+    const fromVersion = installedVersion();
+    // The last release can be newer than this branch's version number (main says 0.14.0 while 0.14.1 is out): the
+    // version and the app archive both have to change to this build's, whichever way the numbers go.
+    console.log(`Updating ${fromVersion} (${previous ? 'the last release' : 'this build, no release given'}) to this build, ${version}`);
+    if (previous) expect(sha(join(installed, 'resources', 'app.asar')), 'the last release is installed, not this build').not.toBe(sha(built));
 
-    // As a person runs setup: the old version's uninstaller first, then this build's files.
+    // As a person runs setup.
     expect(setup(installer!, ['/S']), 'setup over a running relay').toBe(0);
-    expect(sha(join(installed, 'resources', 'app.asar')), "this build's files are installed").toBe(sha(built));
+    isThisBuild('by hand');
     await connected.answers();
+    connected.stop();
+    endAll();
 
-    // As the in-app updater runs it, over this build's own uninstaller.
-    expect(setup(installer!, ['--updated', '/S']), 'an in-app update over a running relay').toBe(0);
-    expect(sha(join(installed, 'resources', 'app.asar'))).toBe(sha(built));
+    // As the in-app updater runs it.
+    connected = await lastRelease();
+    expect(setup(installer!, ['--updated', '/S', '--force-run']), 'an in-app update over a running relay').toBe(0);
+    isThisBuild('in-app');
     await connected.answers();
     console.log(`The agent's relay, through both updates: ${connected.events.length} restarts (${[...new Set(connected.events)].join(', ')})`);
-  } finally {
     connected.stop();
+  } finally {
+    endAll();
     rmSync(profile, { recursive: true, force: true });
   }
 });

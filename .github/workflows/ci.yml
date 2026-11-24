@@ -608,7 +608,7 @@ jobs:
   # token, so it can't post one: the maintainer runs the full tier from a branch of this repository instead.
   e2e:
     name: E2E · ${{ needs.changes.outputs.tier || 'unknown' }} tier
-    needs: [changes, e2e-fast, e2e-full]
+    needs: [changes, e2e-fast, e2e-full, installer]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -624,7 +624,10 @@ jobs:
           PLATFORM: ${{ needs.changes.outputs.platform }}
           FAST: ${{ needs.e2e-fast.result }}
           FULL: ${{ needs.e2e-full.result }}
+          INSTALLER: ${{ needs.installer.result }}
         run: |
+          # The full tier's Windows setup check (the `installer` job) counts as one of its shards.
+          if [ "$FULL" = success ] && [ "$INSTALLER" != success ]; then echo "Windows setup (the installer job): $INSTALLER"; FULL="$INSTALLER"; fi
           echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}; platform-sensitive: ${PLATFORM:-n/a}). Tier: ${TIER:-unknown}. Fast tier's shards: $FAST. Full tier's: $FULL."
           path=''
           pass=false state=failure
@@ -711,7 +714,7 @@ jobs:
   # missed shows up. One open issue at a time, by its exact title; close it once main is green again.
   main-failed:
     name: Report a failure on main
-    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e]
+    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, installer, e2e]
     if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 5

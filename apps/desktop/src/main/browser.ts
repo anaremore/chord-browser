@@ -2665,10 +2665,10 @@ export class Browser {
   }
 
   /** A note for the window used last, with a link that opens as a tab there (a new Chord version, for one). */
-  announce(id: string, message: string, link: { label: string; url: string }): void {
+  announce(id: string, message: string, link?: { label: string; url: string }): void {
     const w = this.lastNormalWindow();
     if (!w) return;
-    w.toast({ id, message, action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } });
+    w.toast({ id, message, ...(link && { action: { label: link.label, command: { t: 'tab.open', windowId: w.id, url: link.url } } }) });
   }
 
   /**
