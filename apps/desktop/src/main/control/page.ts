@@ -53,19 +53,31 @@ export interface ControlPage {
   pointer(x: number, y: number): void;
   /** The button pressed and let go there (after pointer, and a last hit test). */
   press(x: number, y: number): void;
+  /**
+   * A press about to be sent, watched for by the page preload's guard (its first listener): the presses seen so far,
+   * or null with no guard; then whether one more was seen (its handlers ran), at most `waitMs`.
+   */
+  watchPress(): Promise<number | null>;
+  pressSeen(mark: number, waitMs: number): Promise<boolean>;
   /** Keys, as the agent's (control/input.ts refuses anything off its list). */
   keys(events: readonly AgentInputEvent[]): void;
   /**
    * The page preload's guard (preload/agent-guard.ts) up, before text or keys: whatever has the focus now is all
    * input may reach. False if there's no guard to arm (then nothing is sent).
    */
-  guard(until: 'keyup' | 'beforeinput'): Promise<boolean>;
+  /** Up, armed with `mark` (an event name only main knows: act.ts's focus check fires it at the element). */
+  guard(until: 'keyup' | 'beforeinput', mark: string): Promise<boolean>;
   /**
    * The guard down, once the input's last event came (at most 250 ms): what it (or a frame's) stopped. `gone`: no
    * guard was ever up in that document (another document: the page went); `expired`: it was, and ran out or was
    * dropped (the user took the tab); `timeout`: the page didn't answer.
    */
-  unguard(): Promise<{ moved: boolean; lost: boolean } | 'gone' | 'expired' | 'timeout'>;
+  unguard(waitMs?: number): Promise<{ moved: boolean; lost: boolean; keydownPassed: boolean; passed: number } | 'gone' | 'expired' | 'timeout'>;
+  /**
+   * Whether `count` keydowns sent have reached the page and its handlers have run (the guard's count), at most `waitMs`:
+   * a key's check comes after its keydown is handled, never before (the review of #117, round 5).
+   */
+  keySeen(count: number, waitMs: number): Promise<boolean>;
   /** A frame of the page couldn't be held (agents/pickers.ts): no acting here, said at once. */
   unsecured(): boolean;
   /** An agent's tab whose hold isn't on now (agents/pickers.ts): nothing goes there until it is. */
@@ -222,6 +234,12 @@ export function controlPage(contents: WebContents): ControlPage {
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),
     act: (owner, token, key, op) => actOnPage(contents, owner, token, key, op),
     pointer: (x, y) => sendAgentInput(contents, [{ type: 'mouseMove', ...viewPoint(contents, x, y) }]),
+    watchPress: async () => {
+      const mark = await inPreload(contents, 'globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.pressMark ? globalThis.__chordAgentGuard.pressMark() : null');
+      return typeof mark === 'number' ? mark : null;
+    },
+    pressSeen: async (mark, waitMs) =>
+      (await inPreload(contents, `globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.pressSeen ? globalThis.__chordAgentGuard.pressSeen(${Number(mark)}, ${Number(waitMs)}) : false`)) === true,
     press: (x, y) => {
       const at = viewPoint(contents, x, y);
       sendAgentInput(contents, [
@@ -230,23 +248,26 @@ export function controlPage(contents: WebContents): ControlPage {
       ]);
     },
     keys: (events) => sendAgentInput(contents, events),
-    guard: async (until) => {
+    guard: async (until, mark) => {
       // The frames' guards first (agent-guard.ts's installFrameGuard): whatever they stop meanwhile is heard here.
       frameStopped = false;
       contents.ipc?.on('page:agentGuardStopped', onFrameStopped);
       toFrames(contents, true);
-      return (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}) : false`)) === true;
+      return (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}, ${JSON.stringify(mark)}) : false`)) === true;
     },
-    unguard: async () => {
-      const answer = await inPreload(contents, 'globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(250) : null');
+    unguard: async (waitMs = 250) => {
+      const answer = await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(${Number(waitMs)}) : null`);
       toFrames(contents, false);
       contents.ipc?.off('page:agentGuardStopped', onFrameStopped);
       if (answer === PRELOAD_TIMEOUT) return 'timeout';
       if (!answer || typeof answer !== 'object') return 'gone';
       if ((answer as { expired?: unknown }).expired === true) return 'expired';
-      const { moved, lost } = answer as { moved?: unknown; lost?: unknown };
-      return { moved: moved === true || frameStopped, lost: lost === true };
+      const { moved, lost, keydownPassed, passed } = answer as { moved?: unknown; lost?: unknown; keydownPassed?: unknown; passed?: unknown };
+      // A frame that stopped something: as if something reached the page (never taken for nothing having gone).
+      return { moved: moved === true || frameStopped, lost: lost === true, keydownPassed: keydownPassed === true, passed: (typeof passed === 'number' ? passed : 0) + (frameStopped ? 1 : 0) };
     },
+    keySeen: async (count, waitMs) =>
+      (await inPreload(contents, `globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.seen ? globalThis.__chordAgentGuard.seen(${Number(count)}, ${Number(waitMs)}) : false`)) === true,
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
     unsecured: () => pickersUnsecured(contents),
     lost: () => pickersLost(contents),
