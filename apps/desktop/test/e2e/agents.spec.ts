@@ -409,7 +409,8 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     mcp.child.stdin!.end();
     await mcp.exited;
     // Kept: its page is made again as a tab of yours (core's keepAgentTab), with none of the agent's settings: no held
-    // dialogs (alert shows Chord's own, not answered at once), the preload's agent guard gone, no debugger.
+    // dialogs (alert shows Chord's own, not answered at once), no debugger, and the typing guard only as every tab of
+    // yours has it, dormant until the assistant types there (S18 M2e-2a).
     await shell.getByRole('button', { name: 'Keep', exact: true }).click();
     const settingsOf = () =>
       app.evaluate(async ({ webContents }, url) => {
@@ -417,7 +418,7 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
         if (!c) return null;
         return { guard: await c.executeJavaScriptInIsolatedWorld(999, [{ code: 'typeof globalThis.__chordAgentGuard' }]), debugger: c.debugger.isAttached() };
       }, `${site.origin}/neon`);
-    await expect.poll(settingsOf, { timeout: 15_000 }).toEqual({ guard: 'undefined', debugger: false });
+    await expect.poll(settingsOf, { timeout: 15_000 }).toEqual({ guard: 'object', debugger: false });
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
