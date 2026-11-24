@@ -353,14 +353,23 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
   it('a page closed while an action waits on its load: the wait ends at once, not at its limit', async () => {
     let destroyed = false;
     const contents = Object.assign(new EventEmitter(), { isDestroyed: () => destroyed, isLoading: () => true }) as unknown as WebContents;
-    const started = Date.now();
-    const waiting = pageLoaded(contents, 10_000);
-    setTimeout(() => {
-      destroyed = true;
-      (contents as unknown as EventEmitter).emit('destroyed');
-    }, 20);
-    await waiting;
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // On fake timers, so no wall clock decides it (issue #85): the wait ends as the page goes, 20 ms in, not at 10 s.
+    vi.useFakeTimers();
+    try {
+      let ended = false;
+      const waiting = pageLoaded(contents, 10_000).then(() => (ended = true));
+      setTimeout(() => {
+        destroyed = true;
+        (contents as unknown as EventEmitter).emit('destroyed');
+      }, 20);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(ended).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ended).toBe(true);
+      await waiting;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a tab of yours: nothing', () => {

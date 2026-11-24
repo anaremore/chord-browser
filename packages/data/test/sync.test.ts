@@ -279,12 +279,9 @@ describe('merging another computer’s records', () => {
     setUp();
     db.atomically(() => db.sync.merge([{ type: 'widget', id: 'big', at: at(1), set: { blob: 'x'.repeat(1024 * 1024) } }], Date.now()));
     const small = Array.from({ length: 100 }, (_, i): DataRecord => ({ type: 'widget', id: 'big', at: at(i + 2), set: { tick: i } }));
-    const started = performance.now();
     const result = db.atomically(() => db.sync.merge(small, Date.now(), 512 * 1024));
-    const ms = performance.now() - started;
     expect(result.consumed).toBe(100);
-    // First built, each record rewrote the thing: about 470 ms for this slice.
-    expect(ms).toBeLessThan(150);
+    // How long the slice takes: sync.perf.test.ts.
     expect(db.sync.snapshot().find((r) => r.id === 'big' && 'tick' in r.set)!.set['tick']).toBe(99);
   });
 

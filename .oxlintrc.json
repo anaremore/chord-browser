@@ -130,15 +130,15 @@
     "react/globals": "warn",
     "react/immutability": "warn",
     "react/incompatible-library": "warn",
-    "react/jsx-key": "warn",
+    "react/jsx-key": "error",
     "react/jsx-no-duplicate-props": "warn",
-    "react/jsx-no-undef": "warn",
+    "react/jsx-no-undef": "error",
     "react/jsx-props-no-spread-multi": "warn",
     "react/no-children-prop": "warn",
     "react/no-danger-with-children": "warn",
     "react/no-did-mount-set-state": "warn",
     "react/no-did-update-set-state": "warn",
-    "react/no-direct-mutation-state": "warn",
+    "react/no-direct-mutation-state": "error",
     "react/no-find-dom-node": "warn",
     "react/no-is-mounted": "warn",
     "react/no-render-return-value": "warn",
@@ -149,12 +149,12 @@
     "react/preserve-manual-memoization": "warn",
     "react/purity": "warn",
     "react/refs": "warn",
-    "react/rules-of-hooks": "warn",
+    "react/rules-of-hooks": "error",
     "react/set-state-in-effect": "warn",
     "react/set-state-in-render": "warn",
     "react/static-components": "warn",
     "react/use-memo": "warn",
-    "react/void-dom-elements-no-children": "warn",
+    "react/void-dom-elements-no-children": "error",
     "react/void-use-memo": "warn",
     "no-useless-assignment": "error"
   },
@@ -206,6 +206,136 @@
             ]
           }
         ]
+      }
+    },
+    {
+      "files": [
+        "apps/desktop/src/renderer/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "electron",
+                "message": "The renderer is a web page: it talks to main through packages/ipc, never Electron."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "electron/*"
+                ],
+                "message": "The renderer is a web page: it talks to main through packages/ipc, never Electron."
+              },
+              {
+                "group": [
+                  "node:*"
+                ],
+                "message": "The renderer is a web page: no Node modules."
+              },
+              {
+                "regex": "^(\\.\\./)+(main|preload)(/|$)",
+                "message": "The renderer never imports main's or preload's code: shared code goes in packages/core, channels in packages/ipc."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // The React Compiler rules that already fire, turned off only in the files where they do (77 warnings on
+    // 2026-11-24, before `--deny-warnings`). The compiler skips a component that breaks one, so it runs as plain React
+    // (correct, just not memoized automatically). New files get every rule. Take a file out of a list once it is clean.
+    // react/exhaustive-deps: effects meant to run once or on one key (focus on open, reset when a thread or prompt changes).
+    {
+      "files": [
+        "apps/desktop/src/renderer/overlay/CommandBar.tsx",
+        "apps/desktop/src/renderer/popover/Popover.tsx",
+        "apps/desktop/src/renderer/reader/Reader.tsx",
+        "apps/desktop/src/renderer/settings/Appearance.tsx",
+        "apps/desktop/src/renderer/settings/PasswordTransfer.tsx",
+        "apps/desktop/src/renderer/shared/a11y.ts",
+        "apps/desktop/src/renderer/shell/App.tsx",
+        "apps/desktop/src/renderer/shell/Assistant.tsx",
+        "apps/desktop/src/renderer/shell/Tabs.tsx",
+        "apps/desktop/src/renderer/shell/Toasts.tsx"
+      ],
+      "rules": {
+        "react/exhaustive-deps": "off"
+      }
+    },
+    // react/immutability: a scroll position or a presence object set imperatively, and setters a callback reads before they are declared.
+    {
+      "files": [
+        "apps/desktop/src/renderer/overlay/CommandBar.tsx",
+        "apps/desktop/src/renderer/shell/Tabs.tsx",
+        "apps/desktop/src/renderer/shell/useListWindow.ts"
+      ],
+      "rules": {
+        "react/immutability": "off"
+      }
+    },
+    // react/purity: Date.now() for a relative time ("5 min ago") or a timestamp taken at first render.
+    {
+      "files": [
+        "apps/desktop/src/renderer/archive/Archive.tsx",
+        "apps/desktop/src/renderer/overlay/CommandBar.tsx",
+        "apps/desktop/src/renderer/overlay/DownloadsPanel.tsx",
+        "apps/desktop/src/renderer/shared/AgentCard.tsx",
+        "apps/desktop/src/renderer/shell/Assistant.tsx"
+      ],
+      "rules": {
+        "react/purity": "off"
+      }
+    },
+    // react/refs: latest-value refs written during render, and ref={x.ref} from the roving-focus and menu hooks.
+    {
+      "files": [
+        "apps/desktop/src/renderer/overlay/Peek.tsx",
+        "apps/desktop/src/renderer/popover/EffectsCard.tsx",
+        "apps/desktop/src/renderer/popover/Popover.tsx",
+        "apps/desktop/src/renderer/reader/Reader.tsx",
+        "apps/desktop/src/renderer/settings/Shortcuts.tsx",
+        "apps/desktop/src/renderer/settings/controls.tsx",
+        "apps/desktop/src/renderer/shared/ImportPanel.tsx",
+        "apps/desktop/src/renderer/shell/App.tsx",
+        "apps/desktop/src/renderer/shell/Assistant.tsx",
+        "apps/desktop/src/renderer/shell/Onboarding.tsx",
+        "apps/desktop/src/renderer/shell/Tabs.tsx",
+        "apps/desktop/src/renderer/shell/useChordSwipe.ts",
+        "apps/desktop/src/renderer/shell/useListWindow.ts"
+      ],
+      "rules": {
+        "react/refs": "off"
+      }
+    },
+    // react/set-state-in-effect: state reset when a prop or key changes (an edited login, a new prompt, a closed panel).
+    {
+      "files": [
+        "apps/desktop/src/renderer/overlay/CommandBar.tsx",
+        "apps/desktop/src/renderer/popover/Popover.tsx",
+        "apps/desktop/src/renderer/settings/Appearance.tsx",
+        "apps/desktop/src/renderer/settings/PasswordTransfer.tsx",
+        "apps/desktop/src/renderer/settings/Passwords.tsx",
+        "apps/desktop/src/renderer/settings/Proxy.tsx",
+        "apps/desktop/src/renderer/shared/ImportPanel.tsx",
+        "apps/desktop/src/renderer/shell/App.tsx",
+        "apps/desktop/src/renderer/shell/Assistant.tsx",
+        "apps/desktop/src/renderer/shell/Onboarding.tsx",
+        "apps/desktop/src/renderer/shell/Tabs.tsx"
+      ],
+      "rules": {
+        "react/set-state-in-effect": "off"
+      }
+    },
+    // react/static-components: the command bar picks its scope icon component during render.
+    {
+      "files": [
+        "apps/desktop/src/renderer/overlay/CommandBar.tsx"
+      ],
+      "rules": {
+        "react/static-components": "off"
       }
     }
   ]
