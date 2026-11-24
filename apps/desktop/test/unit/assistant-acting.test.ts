@@ -13,7 +13,17 @@ vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shel
 const { AGENT_TAB_REFUSALS, duetScope, USER_TAB_REFUSALS } = await import('../../src/main/assistant/scope');
 const { ControlAgent } = await import('../../src/main/control/gate');
 const { Store } = await import('../../src/main/store');
-const { AFTER_MS, beginUserAction, COMMAND_MS, endUserAction, endUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, userTabCatching, TAIL_MS } = await import('../../src/main/control/user-watch');
+const watch = await import('../../src/main/control/user-watch');
+const { AFTER_MS, COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, userTabCatching, TAIL_MS } = watch;
+/** Each action's own end, by tab, as its begin handed it (round 3 of #147: an end belongs to its own lease). */
+const actionEnds = new Map<object, (() => void)[]>();
+const beginUserAction = async (...args: Parameters<typeof watch.beginUserAction>) => {
+  const action = await watch.beginUserAction(...args);
+  if (action.begun === 'on') actionEnds.set(args[0], [...(actionEnds.get(args[0]) ?? []), action.end]);
+  return action.begun;
+};
+/** The oldest action still under way in the tab, ended. */
+const endUserAction = (contents: object) => actionEnds.get(contents)?.shift()?.();
 const { actCard } = await import('../../src/main/assistant/service');
 
 afterEach(() => vi.useRealTimers());
@@ -422,6 +432,53 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     expect(t.sent.filter(([m]) => m === 'Fetch.disable').map(([, , s]) => s)).toEqual(['f2', undefined]);
     // Someone else's attachment stays.
     expect(t.attached()).toBe(true);
+  });
+
+  it('an action’s end belongs to its own lease: one ending late, after its lease was replaced, leaves the new lease alone (Neon’s B3, round 3)', async () => {
+    vi.useFakeTimers();
+    const t = yourTab();
+    const first = await watch.beginUserAction(t.contents, 'chat:1', deps());
+    endUserLease(t.contents);
+    await vi.advanceTimersByTimeAsync(0);
+    const second = await watch.beginUserAction(t.contents, 'chat:1', deps());
+    expect(second.begun).toBe('on');
+    // Action 1's late finally: nothing happens to lease 2 (no tail started, its action still counted).
+    first.end();
+    first.end();
+    await vi.advanceTimersByTimeAsync(TAIL_MS * 4);
+    expect(userTabActing(t.contents)).toBe(true);
+    expect(t.attached()).toBe(true);
+    // Its own end, once: the tail, then off.
+    second.end();
+    second.end();
+    await vi.advanceTimersByTimeAsync(TAIL_MS + 100);
+    expect(userTabActing(t.contents)).toBe(false);
+  });
+
+  it('a lease’s cleanup that runs after the next lease was set up leaves the next one alone, and hands it Chord’s attachment (Neon’s B4, round 3)', async () => {
+    const t = yourTab();
+    // The first lease ends the moment it's handed out, while the second's set-up is already waiting in the queue.
+    let first = true;
+    const off = onUserLease((contents) => {
+      if (contents !== t.contents || !first) return;
+      first = false;
+      // Its own chat's Stop: the other chat's begin goes on.
+      endUserLease(t.contents, 'chat:1');
+    });
+    const [one, two] = await Promise.all([beginUserAction(t.contents, 'chat:1', deps()), beginUserAction(t.contents, 'chat:2', deps(() => new Promise(() => undefined)))]);
+    off();
+    for (let i = 0; i < 6; i++) await tick();
+    expect([one, two]).toEqual(['on', 'on']);
+    // The second lease is whole: attached, its hold on (what the page sends is held for it).
+    expect(userTabActing(t.contents)).toBe(true);
+    expect(t.attached()).toBe(true);
+    t.post('r1');
+    await tick();
+    expect(t.how('r1')).toBe('held');
+    // Ended, it lets go of the attachment it was handed.
+    endUserLease(t.contents);
+    for (let i = 0; i < 6; i++) await tick();
+    expect(t.attached()).toBe(false);
   });
 
   it('a debugger it can’t have (your DevTools): no lease, nothing pressed or typed', async () => {

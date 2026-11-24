@@ -16,9 +16,8 @@ vi.mock('../../src/main/control/user-watch', () => ({
   beginUserAction: async (contents: unknown, owner: string) => {
     const begun = await leases.begin();
     if (begun === 'on') leases.owners.set(contents, owner);
-    return begun;
+    return { begun, end: () => undefined };
   },
-  endUserAction: () => undefined,
   endUserLease: (contents: unknown, owner?: string) => {
     const now = leases.owners.get(contents);
     if (owner !== undefined && now !== undefined && now !== owner) return;
@@ -253,14 +252,18 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
   });
 
   it('every way out of a chat latches: opening another, continuing, the panel closed, the assistant hidden (E6; Neon’s B4, round 2)', async () => {
-    for (const end of ['open', 'continue', 'toggle', 'hidden'] as const) {
+    for (const end of ['open', 'continue', 'toggle', 'hidden', 'search hit'] as const) {
       const t = setup();
-      const s = await t.turn();
+      const s = (await t.turn()) as Awaited<ReturnType<typeof t.turn>> & { queuedTab: unknown[] };
+      // A message queued behind the reply, with its tab: it never acts once you've left (Neon's B2, round 3).
+      s.queuedTab = [{ nodeId: t.mine, windowId: 'w1' }];
       if (end === 'open') await t.service.act('w1', { do: 'open', threadId: 'nope' } as never).catch(() => undefined);
       else if (end === 'continue') await t.service.act('w1', { do: 'continue' } as never);
       else if (end === 'toggle') await t.service.act('w1', { do: 'toggle', open: false } as never);
-      else t.store.dispatch({ t: 'settings.set', settings: { assistant: { enabled: false } } });
+      else if (end === 'hidden') t.store.dispatch({ t: 'settings.set', settings: { assistant: { enabled: false } } });
+      else await t.service.openHit('w1', 'c1', 'another-thread').catch(() => undefined);
       expect(s.actEnded, end).toBe(USER_TAB_REFUSALS.left);
+      expect(s.queuedTab, end).toEqual([null]);
     }
   });
 
@@ -308,11 +311,19 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     (t.service as unknown as { send: (...args: unknown[]) => Promise<void> }).send = async (...args) => void sent.push(args[5]);
     await t.service.act('w1', { do: 'retry' } as never);
     expect(sent).toEqual([{ nodeId: t.mine, windowId: 'w1' }]);
+    // Make with Codex: the same (Claude's round 3).
+    const inner = t.service as unknown as { codexMakesImages(): boolean; setModel(...args: unknown[]): Promise<void> };
+    inner.codexMakesImages = () => true;
+    inner.setModel = async () => undefined;
+    await t.service.act('w1', { do: 'makeWithCodex' } as never);
+    expect(sent).toEqual([{ nodeId: t.mine, windowId: 'w1' }, { nodeId: t.mine, windowId: 'w1' }]);
   });
 
   it('a read-only turn (its card answered), then an acting message in the same chat and tab with no switch: it may act there (the owner’s preview, 2026-11-24)', async () => {
     const t = setup();
     t.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } });
+    // Sent from the panel, open, showing this chat.
+    await t.service.act('w1', { do: 'toggle', open: true } as never);
     const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown; actEnded: string | null; streaming: unknown; messages: unknown[] };
     const inner = t.service as unknown as {
       sessionFor(state: unknown): Promise<unknown>;
@@ -334,21 +345,33 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     expect(inner.scopeOf(s).act!.mayAct(node())).toBeNull();
   });
 
-  it('your key or click in the tab during a reply ends its acting there, and the chat always says so (the owner’s answer 5; never a silent refusal)', async () => {
-    const t = setup();
-    const s = (await t.inner.stateFor('c1')) as unknown as { actEnded: string | null; streaming: unknown; actTab: unknown; thread: unknown; messages: { body: { role: string; summary?: string } }[] };
-    s.thread = { id: 'th1', chordId: 'c1', title: 't', provider: 'claude', model: null, scope: 'ask', createdAt: 0, updatedAt: 0, lastUsedAt: 0, providerSessionId: null };
-    s.streaming = { id: 'reply' };
-    s.actTab = { nodeId: t.mine, windowId: 'w1' };
-    t.service.userUsedTab(t.mine);
-    expect(s.actEnded).toBe(USER_TAB_REFUSALS.tookOver);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(s.messages.some((m) => m.body.role === 'tool' && /Stopped: you used the tab/.test(m.body.summary ?? ''))).toBe(true);
+  it('your key or click in the tab during a reply ends its acting there; the chat says Stopped now if it was acting there, else at the first step it refuses (the owner’s answer 5; Claude’s S1, round 3)', async () => {
+    const stopped = (s: { messages: { body: { role: string; summary?: string } }[] }) => s.messages.filter((m) => m.body.role === 'tool' && /Stopped: you used the tab/.test(m.body.summary ?? '')).length;
+    for (const acting of [true, false]) {
+      const t = setup();
+      const s = (await t.inner.stateFor('c1')) as unknown as { actEnded: string | null; streaming: unknown; actTab: unknown; thread: unknown; messages: { body: { role: string; summary?: string } }[] };
+      s.thread = { id: 'th1', chordId: 'c1', title: 't', provider: 'claude', model: null, scope: 'ask', createdAt: 0, updatedAt: 0, lastUsedAt: 0, providerSessionId: null };
+      s.streaming = { id: 'reply' };
+      s.actTab = { nodeId: t.mine, windowId: 'w1' };
+      if (acting) (t.service as unknown as { acted: WeakSet<object> }).acted.add(s);
+      t.service.userUsedTab(t.mine);
+      expect(s.actEnded).toBe(USER_TAB_REFUSALS.tookOver);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(stopped(s), `acting ${acting}`).toBe(acting ? 1 : 0);
+      // Its next step is refused for it: said then, once.
+      const scope = (t.service as unknown as { scopeOf(state: unknown): { act?: { mayAct(node: unknown): string | null } } }).scopeOf(s);
+      expect(scope.act!.mayAct(nodeOf(t.store.state, t.mine))).toBe(USER_TAB_REFUSALS.tookOver);
+      expect(scope.act!.mayAct(nodeOf(t.store.state, t.mine))).toBe(USER_TAB_REFUSALS.tookOver);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(stopped(s), `acting ${acting}, refused`).toBe(1);
+    }
   });
 
   it('you switch away and back between turns, then send: the new message acts in the tab on screen (the owner’s preview, 2026-11-24); a switch during a turn still ends that turn’s acting', async () => {
     const t = setup();
     t.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } });
+    // Sent from the panel, open, showing this chat.
+    await t.service.act('w1', { do: 'toggle', open: true } as never);
     const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown; actEnded: string | null; streaming: unknown };
     const inner = t.service as unknown as {
       sessionFor(state: unknown): Promise<unknown>;
@@ -372,5 +395,31 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     away();
     back();
     expect(inner.scopeOf(s).act!.mayAct(node())).toBe(USER_TAB_REFUSALS.switched('another tab is on screen in its window'));
+  });
+
+  it('a message sent while the panel is closed, or the assistant hidden, gets no tab to act in (Neon’s B2, round 3)', async () => {
+    const t = setup();
+    t.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } });
+    const s = (await t.inner.stateFor('c1')) as unknown as { actTab: unknown };
+    (t.service as unknown as { sessionFor(state: unknown): Promise<unknown> }).sessionFor = async () => ({ send: () => undefined, alive: true, busy: false, provider: 'claude' });
+    await t.service.act('w1', { do: 'toggle', open: false } as never);
+    await t.inner.send('w1', s, 'click reset');
+    expect(s.actTab).toBeNull();
+    await t.service.act('w1', { do: 'toggle', open: true } as never);
+    t.store.dispatch({ t: 'settings.set', settings: { assistant: { enabled: false } } });
+    await t.inner.send('w1', s, 'click reset');
+    expect(s.actTab).toBeNull();
+  });
+
+  it('a model switch, closing the chat, Clear all and quit latch acting off and stop its tool calls (Neon’s S2, round 3)', async () => {
+    for (const end of ['model', 'clearAll', 'quit'] as const) {
+      const t = setup();
+      const s = (await t.turn()) as Awaited<ReturnType<typeof t.turn>> & { control: { isStopped: boolean } };
+      if (end === 'model') await t.service.act('w1', { do: 'model', provider: 'claude', model: 'sonnet' } as never).catch(() => undefined);
+      else if (end === 'clearAll') await t.service.clearAll().catch(() => undefined);
+      else await t.service.quit().catch(() => undefined);
+      expect(s.actEnded, end).toBe(USER_TAB_REFUSALS.left);
+      expect(s.control.isStopped, end).toBe(true);
+    }
   });
 });

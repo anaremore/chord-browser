@@ -57,6 +57,17 @@ export interface UserTabDeps extends Omit<SendHoldDeps, 'whose'> {
 /** Whether a lease could be had: on (or joined), another chat's (E8), or not (the debugger can't be had, Fetch failed). */
 export type UserLeaseBegin = 'on' | 'busy' | 'no';
 
+/**
+ * One action's hold on the lease: `end` once it's done (its tail starts after the last one). It belongs to the lease it
+ * began on: once that lease is gone, or ended once already, it does nothing (Neon's B3, round 3 of #147).
+ */
+export interface UserAction {
+  begun: UserLeaseBegin;
+  end(): void;
+}
+
+const NOT_ON = (begun: Exclude<UserLeaseBegin, 'on'>): UserAction => ({ begun, end: () => undefined });
+
 interface Lease {
   /** Whose: the chat's gate id. */
   owner: string;
@@ -154,19 +165,19 @@ export function command(debug: Electron.Debugger, method: string, params: object
  * tab's debugger can't be had (someone's DevTools), Fetch can't be turned on, a frame can't be held, the debugger went
  * meanwhile, or the lease was ended meanwhile: nothing is pressed or typed then.
  */
-export async function beginUserAction(contents: WebContents, owner: string, deps: UserTabDeps): Promise<UserLeaseBegin> {
-  if (contents.isDestroyed()) return 'no';
-  const join = (lease: Lease): UserLeaseBegin => {
-    if (lease.owner !== owner) return 'busy';
+export async function beginUserAction(contents: WebContents, owner: string, deps: UserTabDeps): Promise<UserAction> {
+  if (contents.isDestroyed()) return NOT_ON('no');
+  const join = (lease: Lease): UserAction => {
+    if (lease.owner !== owner) return NOT_ON('busy');
     // A lease whose debugger or hold is gone isn't joined: it's lost (Neon's B1).
     if (!contents.debugger.isAttached()) {
       lose(contents, lease);
-      return 'no';
+      return NOT_ON('no');
     }
     lease.actions++;
     if (lease.timer) clearTimeout(lease.timer);
     lease.timer = null;
-    return 'on';
+    return { begun: 'on', end: actionEnd(contents, lease) };
   };
   const was = leases.get(contents);
   if (was && !was.ended) return join(was);
@@ -181,8 +192,8 @@ export async function beginUserAction(contents: WebContents, owner: string, deps
   }
 }
 
-async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me: { cancelled: boolean }, join: (lease: Lease) => UserLeaseBegin): Promise<UserLeaseBegin> {
-  if (contents.isDestroyed() || me.cancelled) return 'no';
+async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me: { cancelled: boolean }, join: (lease: Lease) => UserAction): Promise<UserAction> {
+  if (contents.isDestroyed() || me.cancelled) return NOT_ON('no');
   // Asked again in the queue: another begin may have got there first (Neon's B3 on #147).
   const again = leases.get(contents);
   if (again && !again.ended) return join(again);
@@ -191,7 +202,7 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   try {
     if (mine) debug.attach('1.3');
   } catch {
-    return 'no';
+    return NOT_ON('no');
   }
   const lease: Lease = {
     owner,
@@ -254,9 +265,10 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     lease.pending.add(ready);
     void ready.finally(() => lease.pending.delete(ready));
   };
-  // The debugger let go (DevTools took it, a detach) or the page's renderer went: lost, never failing open.
-  lease.onDetach = () => lose(contents, lease);
-  lease.onGone = () => lose(contents, lease);
+  // The debugger let go (DevTools took it, a detach) or the page's renderer went: lost, never failing open. While it's
+  // still being set up, only ended: the set-up gives up and cleans up itself (Neon's B4, round 3 of #147).
+  lease.onDetach = () => (handedOut ? lose(contents, lease) : void (lease.ended = true));
+  lease.onGone = lease.onDetach;
   debug.on('detach', lease.onDetach);
   contents.on('render-process-gone', lease.onGone);
   // The hold listens before Fetch is on: nothing paused in between is left without an answer (Neon's B1, round 2).
@@ -266,12 +278,12 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   // the lease ends (your hands, Stop), yours.
   sendHoldDeps(contents, { ...deps, whose: () => (!lease.ended && handedOut && (lease.actions > 0 || Date.now() < lease.sendsUntil) ? 'agent' : 'user') });
   debug.on('message', lease.onMessage);
-  const giveUp = async (): Promise<UserLeaseBegin> => {
+  const giveUp = async (): Promise<UserAction> => {
     lease.ended = true;
     debugOff(contents, lease);
     await turnOff(contents, lease);
     unholdSends(contents);
-    return 'no';
+    return NOT_ON('no');
   };
   try {
     await command(debug, 'Fetch.enable', { patterns: PATTERNS });
@@ -290,7 +302,18 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   // A page with unsaved changes stays put: the action hears it (its move didn't happen).
   contents.on('will-prevent-unload', onUnload);
   for (const listener of beginning) listener(contents);
-  return 'on';
+  return { begun: 'on', end: actionEnd(contents, lease) };
+}
+
+/** One action's end, for the lease it began on only, once (Neon's B3, round 3 of #147). */
+function actionEnd(contents: WebContents, lease: Lease): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    if (leases.get(contents) !== lease || lease.ended) return;
+    endAction(contents, lease);
+  };
 }
 
 function onUnload(this: WebContents): void {
@@ -306,9 +329,7 @@ async function readClipboard(deps: UserTabDeps): Promise<string | null> {
 }
 
 /** The action's done: the lease ends AFTER_MS after the last one, once nothing's held (or CARD_WAIT_MS on). */
-export function endUserAction(contents: WebContents): void {
-  const lease = leases.get(contents);
-  if (!lease || lease.ended) return;
+function endAction(contents: WebContents, lease: Lease): void {
   lease.actions = Math.max(0, lease.actions - 1);
   if (lease.actions > 0) return;
   const started = Date.now();
@@ -356,6 +377,7 @@ function lose(contents: WebContents, lease: Lease): void {
   // The renderer gone with the debugger still on: Fetch off (Chord's attachment let go of), or the reloaded tab's
   // requests would wait on a hold no one answers (Claude's S1, round 2). The listener stays until then.
   void withDebugger(contents, async () => {
+    if (superseded(contents, lease)) return debugOff(contents, lease);
     try {
       if (!contents.isDestroyed()) contents.debugger.off('detach', lease.onDetach);
       await turnOff(contents, lease);
@@ -375,6 +397,17 @@ function debugOff(contents: WebContents, lease: Lease): void {
 
 function ended(contents: WebContents, lease: Lease): void {
   for (const listener of ending) listener(contents, lease.owner);
+}
+
+/**
+ * A lease's cleanup that runs once the next lease is already on (it was set up in the queue first): the next one is
+ * left alone, and takes over Chord's attachment, to let go of when it ends (Neon's B4, round 3 of #147).
+ */
+function superseded(contents: WebContents, lease: Lease): boolean {
+  const now = leases.get(contents);
+  if (!now || now === lease || now.ended) return false;
+  now.mine ||= lease.mine;
+  return true;
 }
 
 /** Everything the lease turned on, off: Chord's own attachment detached, someone else's left as it was. */
@@ -420,6 +453,7 @@ async function release(contents: WebContents, lease: Lease, byTime: boolean): Pr
   if (contents.isDestroyed()) return void debugOff(contents, lease);
   contents.off('will-prevent-unload', onUnload);
   await withDebugger(contents, async () => {
+    if (superseded(contents, lease)) return debugOff(contents, lease);
     try {
       // Taken off only now: a detach from here on is this release's own.
       if (!contents.isDestroyed()) contents.debugger.off('detach', lease.onDetach);
