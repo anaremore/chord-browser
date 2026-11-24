@@ -8,6 +8,7 @@ import {
   SYSTEM_SHARE_SOURCE,
   type AgentConnectCard,
   type AgentSiteCard,
+  type AgentStepCard,
   type AuthPrompt,
   type DrmNotice,
   type FindState,
@@ -549,13 +550,85 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
     <div className={styles.card} role="alertdialog" aria-label={title}>
       <AgentCardBody
         title={title}
-        note={`It wants to ${card.action}.`}
+        note={
+          <>
+            It wants to {card.action}.
+            <br />
+            It asks before it submits, pays, sends or deletes, and when its pages post data.
+          </>
+        }
         closeLabel="Close"
         onClose={() => respond('deny')}
         actions={[
           { label: 'Deny', look: 'link', onClick: () => respond('deny') },
           { label: 'Allow for now', look: card.always ? 'quiet' : 'primary', onClick: () => respond('once') },
           ...(card.always ? [{ label: 'Always on this site', look: 'primary' as const, onClick: () => respond('always') }] : []),
+        ]}
+      />
+    </div>
+  );
+}
+
+/**
+ * A risky step (S18 M2d; mocks/agents-s18-m2.html §3), every time: where the site card shows, never taking the
+ * keyboard. The title says what will happen, the note what Chord sees it about to do (never the agent's words), the
+ * list what goes with it by label. Show me leaves the card up; Don't (or ×) says no; Allow is red for paying and deleting.
+ */
+function AgentStepCardView({ card }: { card: AgentStepCard }) {
+  const respond = (answer: 'deny' | 'once' | 'always' | 'show') => void api.agents.respond(card.id, answer);
+  const goes = card.sends
+    ? `Goes to: ${card.sends.sites.join(', ')}`
+    : card.fields.length
+      ? `Goes with it: ${card.fields.join(', ')}${card.more ? ` and ${card.more} more` : ''}`
+      : null;
+  // An action that's sending data: what it did, and where it's going (mocks/agents-s18-m2.html §2b).
+  const where = card.sends ? (card.sends.sites.length > 1 ? `${card.sends.sites.length} sites` : card.sends.other ? 'another site' : 'its site') : '';
+  const did = card.action.charAt(0).toLowerCase() + card.action.slice(1);
+  return (
+    <div className={styles.card} role="alertdialog" aria-label={card.title}>
+      <AgentCardBody
+        title={card.title}
+        note={
+          <>
+            {card.idle
+              ? card.sends
+                ? `${card.name}’s tab wants to send data to ${where}.`
+                : `${card.name}’s tab wants to go to ${card.going ?? 'another page'}.`
+              : card.sends
+                ? `${card.name} ${did}, and the page is sending something to ${where}.`
+                : card.going
+                  ? `${card.name} ${did}, and the page is going to ${card.going}.`
+                  : `${card.name} is about to ${card.action}.`}
+            {card.to && (
+              <>
+                <br />
+                It goes to {card.to}.
+              </>
+            )}
+            {card.shows && (
+              <>
+                <br />
+                It reads “{card.shows}”.
+              </>
+            )}
+            {card.typed !== undefined && (
+              <>
+                <br />
+                It types: “{card.typed}”
+              </>
+            )}
+            {goes && <br />}
+            {goes}
+          </>
+        }
+        closeLabel="Close"
+        onClose={() => respond('deny')}
+        actions={[
+          { label: 'Show me', look: 'link', left: true, onClick: () => respond('show') },
+          { label: 'Don’t', look: 'quiet', onClick: () => respond('deny') },
+          // Those sites, from this tab, until the agent's done (the owner, 2026-11-23): never on a risky step's card.
+          ...(card.untilDone ? [{ label: 'Allow until done', look: 'quiet' as const, onClick: () => respond('always') }] : []),
+          { label: 'Allow', look: card.danger ? 'danger' : 'primary', onClick: () => respond('once') },
         ]}
       />
     </div>
@@ -1235,7 +1308,8 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
     let current = true;
     const { width, height } = el.getBoundingClientRect();
     void api.popover.size(width, height).then(() => {
-      if (current) setAnnounced(`${card.name} wants to use Chord`);
+      // What the card asks, by its own title: a site card's and a step card's are their questions (#112).
+      if (current) setAnnounced(card.kind === 'step' ? card.title : card.kind === 'site' ? `Let ${card.name} click and type on ${card.site}?` : `${card.name} wants to use Chord`);
     });
     return () => {
       current = false;
@@ -1256,7 +1330,14 @@ export function Popover({ info: infoSource, state: stateSource, menuOnly = false
         {announced}
       </p>
       {state.find && <FindBar find={state.find} />}
-      {state.agentCard && (state.agentCard.kind === 'site' ? <AgentSiteCardView key={state.agentCard.id} card={state.agentCard} /> : <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />)}
+      {state.agentCard &&
+        (state.agentCard.kind === 'site' ? (
+          <AgentSiteCardView key={state.agentCard.id} card={state.agentCard} />
+        ) : state.agentCard.kind === 'step' ? (
+          <AgentStepCardView key={state.agentCard.id} card={state.agentCard} />
+        ) : (
+          <AgentConnectCardView key={state.agentCard.id} card={state.agentCard} />
+        ))}
       {state.permission && <PermissionCard key={state.permission.id} prompt={state.permission} />}
       {state.share && <ShareCard key={state.share.id} prompt={state.share} appearance={appearance} platform={info.platform} />}
       {state.auth && <AuthCard key={state.auth.id} prompt={state.auth} />}

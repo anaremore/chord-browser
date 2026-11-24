@@ -81,6 +81,8 @@ const CHECK_FN = String.raw`function (owner, token, key) {
     if (n.nodeType === 1 && FRAMES.has(n.localName)) return { ok: false, why: 'covered', cover: coverOf(n) };
     if (n.nodeType === 1 && opensFiles(n)) return { ok: false, why: 'file' };
     if (n === el) { ours = true; break; }
+    // Inside a closed shadow root (Neon's review of #112): what it is can't be classified there, so it isn't clicked.
+    if (n.parentNode && n.parentNode.nodeType === 11 && n.parentNode.mode === 'closed') return { ok: false, why: 'closed' };
   }
   if (!ours) return { ok: false, why: 'covered', cover: coverOf(hit.nodeType === 1 ? hit : up(hit)) };
   for (let n = el; n; n = up(n)) if (n.nodeType === 1 && n.localName === 'label' && opensFiles(n)) return { ok: false, why: 'file' };
@@ -113,7 +115,8 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
     const mine = !debug.isAttached();
     const contexts: { id: number; frameId?: string; type?: string }[] = [];
     const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
-      if (sessionId || method !== 'Runtime.executionContextCreated') return;
+      if (sessionId) return;
+      if (method !== 'Runtime.executionContextCreated') return;
       const c = (params as { context?: { id?: number; auxData?: { frameId?: string; type?: string } } }).context;
       if (typeof c?.id === 'number') contexts.push({ id: c.id, ...(c.auxData?.frameId ? { frameId: c.auxData.frameId } : {}), ...(c.auxData?.type ? { type: c.auxData.type } : {}) });
     };

@@ -533,7 +533,8 @@ function registerIpc(): void {
   // The connect card (S18 M1d): only the popover of the window it shows in answers it.
   handle('agents:card', ({ id, answer }, sender) => {
     const windowId = browser?.popoverWindow(sender, 'cards');
-    if (windowId && !siteCards?.answer(id, answer, windowId)) connectCards?.answer(id, answer, windowId);
+    if (!windowId || siteCards?.answer(id, answer, windowId) || answer === 'show') return;
+    connectCards?.answer(id, answer, windowId);
   });
   // Settings → Agents (S18 M1d): its view, Remove an allowed agent, let a stopped one continue.
   handle('settings:agents', async (request) => {
@@ -1159,6 +1160,8 @@ if (!app.requestSingleInstanceLock()) {
           browser: agentBrowser,
           ask: (who, signal) => cards.ask(who, signal),
           askSite: (question, signal) => sites.ask(question, signal),
+          askStep: (question, signal) => sites.askStep(question, signal),
+          showTab: (windowId, nodeId) => agentBrowser.store.dispatch({ t: 'tab.activate', nodeId, windowId }),
           allowances: { list: () => agentBrowser.store.state.settings.agentsAllowed, set: (agentsAllowed) => agentBrowser.store.dispatch({ t: 'settings.set', settings: { agentsAllowed } }) },
           changed: () => agentBrowser.agentsChanged(),
           helper: helper && existsSync(helper) ? helper : null,
@@ -1405,6 +1408,32 @@ if (!app.requestSingleInstanceLock()) {
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
          * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
          */
+        /**
+         * The send hold's cost (control/sends.ts): the agent's tab at `url` loaded again `runs` times with the Fetch domain
+         * off in its page and on (every request then passes through the hold), in turns. Milliseconds to the load's end.
+         */
+        agentWatchTimes: async (url: string, runs: number) => {
+          const { sendsOn } = await import('./control/sends');
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return null;
+          // A fresh address each time (nothing cached, no reload's own work).
+          let n = 0;
+          const load = () =>
+            new Promise<number>((done) => {
+              const started = performance.now();
+              contents.once('did-stop-loading', () => done(performance.now() - started));
+              void contents.loadURL(`${url}?run=${++n}`).catch(() => undefined);
+            });
+          const off: number[] = [];
+          const on: number[] = [];
+          for (let i = 0; i < runs; i++) {
+            await contents.debugger.sendCommand('Fetch.disable').catch(() => undefined);
+            off.push(await load());
+            if (!(await sendsOn(contents))) return { off, on, failed: 'no hold' };
+            on.push(await load());
+          }
+          return { off, on };
+        },
         agentActTimes: async (url: string, runs: number) => {
           const [{ snapshotPage }, { actOnPage }, { openDeep }] = await Promise.all([import('./control/snapshot'), import('./control/act'), import('./control/deep')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];

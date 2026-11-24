@@ -26,8 +26,9 @@
  * Made with the first connection's chord, so with no agent nothing here runs.
  */
 import { dropAgentGuard } from '../control/page';
+import { endUntil, failHeld, sendHoldDeps, shownOrigin } from '../control/sends';
 import { randomBytes } from 'node:crypto';
-import { ACT_BAR_MIN_MS, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { ACT_BAR_MIN_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -45,6 +46,8 @@ export interface AgentChordsDeps {
   /** The *Never* list: an agent's tab that goes to one of its sites closes. */
   neverSites?(): readonly string[];
   now?(): number;
+  /** How long a card between actions waits (what an agent's tab sends: control/sends.ts); CONTROL_WAIT_MS unless a test says. */
+  waitMs?: number;
 }
 
 /** Something an agent's tab held or refused, for its next result. */
@@ -167,6 +170,11 @@ export class AgentChords {
   /** The agent's state changed: each of its tabs' bars, and whether each runs at full speed. */
   private update(chord: AgentChord): void {
     for (const tab of this.tabsOf(chord.chordId)) {
+      // Stop: what its tabs held to send fails, and their cards come down (control/sends.ts).
+      if (chord.agent.isStopped) {
+        const page = this.deps.page(tab.id);
+        if (page && !page.isDestroyed()) failHeld(page);
+      }
       const live = this.live(chord, tab.id);
       const key = live ? `${live.state}${live.waiting ? ':waiting' : ''}${live.doing ? `:${live.doing}` : ''}` : '';
       if ((this.shown.get(tab.id) ?? '') !== key) {
@@ -248,6 +256,8 @@ export class AgentChords {
       this.userActed(nodeId);
       const chord = this.chordOfTab(nodeId);
       if (chord && !chord.done && !chord.agent.state(nodeId).paused) chord.agent.pause(nodeId, true);
+      // What the page held to send for the agent fails, and its card comes down: what it sends now is yours.
+      failHeld(contents);
     };
     contents.on('before-mouse-event', (_event, mouse) => {
       if (mouse.type === 'mouseDown' && !isAgentInput(contents)) yours();
@@ -256,6 +266,51 @@ export class AgentChords {
       if (input.type === 'keyDown' && !isAgentInput(contents)) yours();
     });
     contents.on('will-prevent-unload', (event) => event.preventDefault());
+    // What it sends (control/sends.ts): the agent's (held, asked) unless you have the tab (it's paused); once the agent is
+    // done, only what follows your own key or click goes, the rest no one is there to ask about.
+    sendHoldDeps(contents, {
+      whose: () => {
+        const chord = this.chordOfTab(nodeId);
+        // An agent's page never becomes yours (a tab you keep gets a new one): with its chord gone (closed, Close all, a
+        // site you keep private), what it sends on its way out is no one's to ask about, and fails (round 4 of #112).
+        if (!chord) return 'none';
+        // Paused: you have the tab. Holding goes on once the agent continues (the owner, 2026-11-23).
+        if (chord.agent.state(nodeId).paused) return 'user';
+        // A done agent's tab: only what follows your own key or click there goes.
+        if (chord.done) return this.yoursNow(nodeId) !== null ? 'user' : 'none';
+        return 'agent';
+      },
+      ask: async (sites, why, signal, going) => {
+        const chord = this.chordOfTab(nodeId);
+        if (!chord || chord.done) return 'deny';
+        const takeDown = new AbortController();
+        signal.addEventListener('abort', () => takeDown.abort(), { once: true });
+        // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or the page's.
+        const page = contents.getURL();
+        const site = shownOrigin(originOf(page), page);
+        const hosts = sites.map((o) => shownOrigin(o, page));
+        const answer = await chord.agent.ask(
+          {
+            kind: 'step',
+            tool: 'tab',
+            description: '',
+            target: [contents.getURL()],
+            tab: nodeId,
+            subject: `${nodeId}|idle|${randomBytes(4).toString('hex')}`,
+            step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
+            takeDown: takeDown.signal,
+          },
+          signal,
+          this.deps.waitMs ?? CONTROL_WAIT_MS,
+        );
+        // No answer in time: the card comes down, and what it held fails.
+        if (answer === 'waiting') takeDown.abort();
+        // A send card's `always` is *Allow until done* (never remembered: a step card's answers aren't).
+        return answer === 'always' && !why ? 'until' : answer === 'once' || answer === 'always' ? 'once' : 'deny';
+      },
+      // Exactly an origin (the owner, 2026-11-23): another subdomain, port or scheme is another card.
+      siteOf: (url) => originOf(url),
+    });
   }
 
   private chordOfTab(nodeId: NodeId): AgentChord | null {
@@ -316,6 +371,14 @@ export class AgentChords {
 
   /** The agent's connection ended: its chord stays, and you're asked what becomes of its tabs. */
   done(agent: ControlAgent): void {
+    // *Allow until done* ends with the agent (control/sends.ts).
+    const ended = this.chordOf(agent);
+    if (ended) {
+      for (const tab of this.tabsOf(ended)) {
+        const page = this.deps.page(tab.id);
+        if (page && !page.isDestroyed()) endUntil(page);
+      }
+    }
     const chordId = this.chordOf(agent);
     const chord = chordId ? this.chords.get(chordId) : undefined;
     if (!chord) return;
@@ -388,5 +451,15 @@ export class AgentChords {
   dispose(): void {
     this.unsubscribe();
     for (const chord of [...this.chords.values()]) this.forget(chord);
+  }
+}
+
+
+/** An address's origin (scheme, host and port), or empty. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
   }
 }

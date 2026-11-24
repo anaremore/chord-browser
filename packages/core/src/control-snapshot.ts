@@ -159,7 +159,7 @@ const clipName = (text: string): string => {
   return clean.length > SNAPSHOT_NAME_MAX ? `${clean.slice(0, SNAPSHOT_NAME_MAX - 1)}…` : clean;
 };
 const quoted = (text: string) => JSON.stringify(text);
-const STATE = /^(checked|mixed|selected|expanded|collapsed|pressed|disabled|required|empty|filled|readonly)$/;
+const STATE = /^(checked|mixed|selected|expanded|collapsed|pressed|disabled|required|empty|filled|readonly|other-site)$/;
 
 /**
  * The keys that get refs: every keyed node but a field Chord never lets an agent touch (forms' `sensitiveField`). A
@@ -191,7 +191,11 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
       count++;
     }
     if (node.level && node.level >= 1 && node.level <= 6) parts.push(`[level=${node.level}]`);
-    for (const state of node.states ?? []) if (STATE.test(state) && !(sensitive && (state === 'empty' || state === 'filled'))) parts.push(`[${state}]`);
+    for (const state of node.states ?? []) {
+      if (!STATE.test(state) || (sensitive && (state === 'empty' || state === 'filled'))) continue;
+      // A frame of another site: what's in it can't be read (#112: never an empty node).
+      parts.push(state === 'other-site' ? '[contents not accessible: another site]' : `[${state}]`);
+    }
     if (node.choice && !sensitive) parts.push(`[choice=${quoted(clipName(node.choice))}]`);
     if (sensitive) parts.push(`[${SENSITIVE_NOTE[sensitive]}]`);
     lines.push(parts.join(' '));

@@ -219,6 +219,12 @@ export function snapshotScript(owner: string, token: string): string {
       const node = { depth, role, name: nameOf(el, role) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
+      // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
+      if (role === 'iframe') {
+        let other = false;
+        try { other = !el.contentDocument; } catch { other = true; }
+        if (other) states.push('other-site');
+      }
       if (states.length) node.states = states;
       if (el.localName === 'select' && !el.multiple) { const o = el.options[el.selectedIndex]; if (o) node.choice = clip(o.label || o.text, args.nameMax); }
       // Described as a field, for core's sensitiveField: inputs, text areas, selects (a card's expiry month), and any

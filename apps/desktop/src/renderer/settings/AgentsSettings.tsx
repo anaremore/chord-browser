@@ -127,6 +127,8 @@ export function AgentsSettings({ snapshot }: { snapshot: SettingsSnapshot }) {
           control={<Switch label="Let agents connect" checked={enabled} onChange={(agentsEnabled) => void api.settings.set({ agentsEnabled })} />}
         />
       </div>
+      {/* A stated limit (the owner, 2026-11-23): extensions' content scripts run in agents' tabs too. */}
+      <p className={styles.groupNote}>Your extensions still run in agents’ tabs, so a password manager’s extension could fill in a page an agent is working on.</p>
 
       {view && (
         <>

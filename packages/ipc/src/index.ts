@@ -941,7 +941,7 @@ export interface PopoverState {
   /** The Effects card for the site on screen (DESIGN.md §7.15); `opened` changes each time it opens, and it takes the keyboard. */
   effects: { host: string; opened: number } | null;
   /** An outside agent asks to use Chord (S18 M1d): centered at the top of the page, never taking the keyboard. */
-  agentCard: AgentConnectCard | AgentSiteCard | null;
+  agentCard: AgentConnectCard | AgentSiteCard | AgentStepCard | null;
 }
 
 /** The connect card (S18 M1d; mocks/agents-s18-m1.html §1). */
@@ -973,6 +973,44 @@ export interface AgentSiteCard {
   action: string;
   /** *Always on this site* is offered: only to an agent you always allow. */
   always: boolean;
+}
+
+/**
+ * The risky-step card (S18 M2d; mocks/agents-s18-m2.html §3): every time an agent is about to submit, pay, send,
+ * delete, sign out or make an account. Never the agent's words: the title says what will happen, the note what Chord
+ * sees it about to do, and the fields what goes with it, by label only.
+ */
+export interface AgentStepCard {
+  kind: 'step';
+  id: string;
+  /** The name the agent gives. */
+  name: string;
+  /** *Place the order on shop.example?* (core's stepTitle). */
+  title: string;
+  /** What it's about to do, in Chord's words: `click “Place order”`. */
+  action: string;
+  /** What goes with it: up to 6 fields' labels, then how many more. */
+  fields: string[];
+  more: number;
+  /** What the element shows, when its name says otherwise (both are on the card). */
+  shows?: string;
+  /** What type will put in (and send), cut: the user is allowing that text. */
+  typed?: string;
+  /**
+   * An action that's sending data (the owner's default, 2026-11-23): the sites it goes to (the page's own first), and
+   * whether any is another site. The action's done; `action` is what it did: `Clicked “Mark as read”`.
+   */
+  sends?: { sites: string[]; other: boolean };
+  /** Sent between actions: the tab's, not an action's (*Codex’s tab wants to send data to its site.*). */
+  idle?: boolean;
+  /** *Allow until done* offered (a send card's: never a risky step's): its answer is `always`. */
+  untilDone?: boolean;
+  /** Where the page itself is going, when that's the step (a script sending it to an address that deletes). */
+  going?: string;
+  /** Where a form or link goes, when that's another site than the page's. */
+  to?: string;
+  /** Allow in the danger color (paying, deleting). */
+  danger: boolean;
 }
 
 /** Settings → Agents (S18 M1d; mocks/agents-s18-m1.html §4). */
@@ -1760,7 +1798,8 @@ export const invokeChannels = {
     response: z.custom<AntigravityAnswer>(),
   },
   /** The connect card's answer (S18 M1d): Deny (or ×), Allow once, Always allow. */
-  'agents:card': { roles: ['popover'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{16}$/), answer: z.enum(['deny', 'once', 'always']) }), response: z.void() },
+  // `show`: a step card's Show me (the card stays up).
+  'agents:card': { roles: ['popover'], request: z.strictObject({ id: z.string().regex(/^[0-9a-f]{16}$/), answer: z.enum(['deny', 'once', 'always', 'show']) }), response: z.void() },
   'settings:assistant': {
     roles: ['internal'],
     request: z.discriminatedUnion('do', [z.object({ do: z.literal('detect') }), z.object({ do: z.literal('signIn'), provider: AssistantProviderSchema }), z.object({ do: z.literal('clearAll') })]),
@@ -2544,7 +2583,7 @@ export interface PopoverApi {
   /** Choosing a passkey: one the prompt offered, or null to decline. */
   passkey: { respond(id: number, credentialId: string | null): Promise<void> };
   /** The connect card (S18 M1d). */
-  agents: { respond(id: string, answer: 'deny' | 'once' | 'always'): Promise<void> };
+  agents: { respond(id: string, answer: 'deny' | 'once' | 'always' | 'show'): Promise<void> };
   /** Unlock passwords: the passphrase, or null to cancel. The menu under a field, and the save card. */
   passwords: {
     unlock(id: number, passphrase: string | null, keep: boolean): Promise<void>;

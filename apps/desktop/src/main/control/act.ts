@@ -38,15 +38,41 @@ export type ActOp =
   | { op: 'point'; highlight: boolean }
   | { op: 'hit'; x: number; y: number; onlyMove?: boolean }
   | { op: 'select' }
+  | { op: 'setValue'; value: string }
+  | { op: 'values'; mode: 'remember' | 'compare'; text?: string }
   | { op: 'focus' }
   | { op: 'focused' }
   | { op: 'choose'; option: string }
   | { op: 'describe'; option?: string };
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
+/** A form's field, as risk needs it (never its value): its description for sensitiveField, and whether it takes text. */
+export type ActFormField = SnapshotField & { text: boolean };
+
+/** What the step is, from the page (S18 M2d): main builds core's RiskElement from it (control-risk.ts). */
+export interface ActRisk {
+  tag: string;
+  type: string;
+  href: string;
+  /** The link's whole address (its origin too), or empty. */
+  hrefUrl: string;
+  /** What it shows, when that isn't its name (an aria-label over other words): both count, and the card shows both. */
+  text: string;
+  multiline: boolean;
+  submits: boolean;
+  /** A link (or one it's inside) whose address couldn't be read: asks, as unknown. */
+  hrefUnknown: boolean;
+  /**
+   * Its form as it would be sent: the submitter's own `formaction` and `formmethod` first; `url`, the whole address;
+   * `search`, inside (or itself) `role=search`; its visible search fields and its hidden ones counted; `overflow`, more
+   * fields than are listed (or an address that can't be read).
+   */
+  form: { method: string; search: boolean; searchFields: number; hidden: number; overflow: boolean; action: string; url: string; fields: ActFormField[] } | null;
+}
+
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number }
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -90,8 +116,96 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     return found.length === 1 ? found[0] : found.length ? -2 : -1;
   };
   const noChoice = (index) => ({ ok: false, why: index === -2 ? 'two-choices' : 'no-choice' });
+  // What the step is (S18 M2d), for core's classifyStep: the element, its link's address, its form and the form's fields
+  // (each described as the snapshot describes a field: never a value). Only the page's structure: its words for a
+  // button are the snapshot's name, already checked above.
+  const riskOf = () => {
+    // What a click on it acts on (#112 review 1): a label's control (a label for a submit button submits), else a
+    // submit button or link it's inside (a span in a link goes where the link does), else itself.
+    // closest(), across open shadow roots to their hosts (round 4 of #112: a button in a component, inside a form or a
+    // link, is that form's or that link's), as deep.ts walks them.
+    const closestDeep = (from, selector) => {
+      for (let node = from; node; ) {
+        const found = node.closest(selector);
+        if (found) return found;
+        const root = node.getRootNode();
+        node = root && root.host ? root.host : null;
+      }
+      return null;
+    };
+    const label = closestDeep(el, 'label');
+    const control = label && label.control && label.control !== el ? label.control : null;
+    const inButton = !control && el.localName !== 'button' ? closestDeep(el, 'button') : null;
+    const target = control || inButton || el;
+    const tag = target.localName;
+    // The type the browser goes by (a button's invalid or missing type is submit), not the attribute as written.
+    const type = tag === 'input' || tag === 'button' ? String(target.type || '').toLowerCase() : '';
+    // Its form owner; a control in a shadow root has none, so the form around its host (it may submit it by script).
+    const formOf = (target.form !== undefined ? target.form : null) || closestDeep(target, 'form');
+    // A submit button submits only in a form (a button outside one, the default type or not, is a page's own button).
+    const submits = Boolean(formOf) && ((tag === 'button' && type === 'submit') || (tag === 'input' && (type === 'submit' || type === 'image')));
+    // An address's words; null when it can't be read (too long, not decodable): unknown, so it asks.
+    const addressOf = (url) => {
+      try {
+        const u = new URL(url, location.href);
+        if (u.href.length > 2048) return null;
+        return clip(decodeURIComponent(u.pathname + ' ' + u.search), 2048);
+      } catch {
+        return null;
+      }
+    };
+    // What it shows, when its name says otherwise (an aria-label over other words).
+    // A button's words (an input button's are its value); never a field's value, which is what's typed in it.
+    const buttonValue = target.localName === 'input' && ['submit', 'button', 'reset'].includes(String(target.type).toLowerCase()) ? target.value : '';
+    const shownText = clip(String(target.innerText || buttonValue || el.innerText || ''), NAME_MAX);
+    const text = shownText && shownText.toLowerCase() !== String(entry.name).toLowerCase() ? shownText : '';
+    // A link, or a link it's inside.
+    const link = closestDeep(el, 'a[href]');
+    const linkWords = link ? addressOf(link.getAttribute('href')) : '';
+    const multiline = target.localName === 'textarea' || (el.isContentEditable && el.localName !== 'input');
+    let form = null;
+    // A form's own properties, never what a field named action, method or elements puts in their place (clobbering).
+    const formGet = (f, prop) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f);
+    if (formOf) {
+      const SKIPPED = new Set(['submit', 'button', 'reset', 'image', 'file']);
+      const TEXTY = new Set(['text', 'email', 'search', 'url', 'tel', 'number', 'password', '']);
+      const fields = [];
+      let hidden = 0, searchFields = 0, overflow = false;
+      for (const f of formGet(formOf, 'elements')) {
+        if (!isField(f)) continue;
+        const t = typeOf(f);
+        if (SKIPPED.has(t)) continue;
+        // Hidden fields go with it unseen: counted (a one-field GET form with one is no search), never listed.
+        if (t === 'hidden') { hidden++; continue; }
+        if (fields.length >= 50) { overflow = true; break; }
+        const seen = visibleField(f, t);
+        if (seen && t === 'search') searchFields++;
+        fields.push({ ...fieldOf(f), text: seen && (f.localName === 'textarea' || (f.localName === 'input' && TEXTY.has(t))) });
+      }
+      // As it would be sent: a submit button's own formaction and formmethod win over its form's (a GET to a delete
+      // address is no search).
+      const own = submits && target.hasAttribute('formaction') ? target.formAction : '';
+      const method = submits && target.hasAttribute('formmethod') && target.formMethod ? target.formMethod : formGet(formOf, 'method') || 'get';
+      const url = own || formGet(formOf, 'action') || location.href;
+      const action = addressOf(url);
+      form = {
+        method: String(method).toLowerCase(),
+        search: Boolean(Element.prototype.closest.call(formOf, '[role=search]')),
+        searchFields,
+        hidden,
+        // A form described only in part, or whose address can't be read, is never a search.
+        overflow: overflow || action === null,
+        action: action || '',
+        url: clip(String(url), 2048),
+        fields,
+      };
+    }
+    // The link's whole address too (its origin: Neon's review 2 of #112), for the step's shape and what an allowed step lets go.
+    const hrefUrl = link ? clip(String(link.href || ''), 2048) : '';
+    return { tag: link && !control && !inButton ? 'a' : tag, type, href: linkWords || '', hrefUrl, hrefUnknown: Boolean(link) && linkWords === null, text, multiline, submits, form };
+  };
   if (args.op === 'describe') {
-    if (args.option === undefined) return { ok: true, ...said, disabled, editable, select };
+    if (args.option === undefined) return { ok: true, ...said, disabled, editable, select, risk: riskOf() };
     if (!select) return { ok: false, why: 'not-select' };
     const index = optionIndex(args.option);
     if (index < 0) return noChoice(index);
@@ -99,6 +213,58 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   }
   if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
   if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
+  // setValue (#112, the owner's hand test): a field that isn't text (a time, a date, a color, a range) set to a value,
+  // as the fill sets one (the native setter, then input and change); one the browser won't take (out of range, not its
+  // format) is refused, and nothing is changed.
+  if (args.op === 'setValue') {
+    if (el.localName !== 'input') return { ok: false, why: 'changed' };
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    const before = el.value;
+    setter.call(el, String(args.value));
+    if (el.value !== String(args.value)) {
+      setter.call(el, before);
+      return { ok: false, why: 'bad-value' };
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true, ...said };
+  }
+  // values (#112): every field's value in the page, remembered before text goes in, then compared: whether this field
+  // changed (or now holds the text), and how many others did. The values never leave the page; only the counts do.
+  if (args.op === 'values') {
+    const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
+    // Every field the text could have gone to: in the document, in its open shadow roots and its same-origin frames
+    // (each walked as deepFocus walks the focus), and every editing host, plaintext-only ones too (#112 review 2).
+    const fields = [];
+    const walk = (root, depth) => {
+      if (depth > 8) return;
+      for (const f of root.querySelectorAll('*')) {
+        if (f.shadowRoot) walk(f.shadowRoot, depth + 1);
+        if (f.localName === 'iframe' || f.localName === 'frame') {
+          let inner = null;
+          try { inner = f.contentDocument; } catch { inner = null; }
+          if (inner) walk(inner, depth + 1);
+        }
+        if (f.localName === 'input') { if (!SKIP_TYPES.has(String(f.type).toLowerCase())) fields.push(f); }
+        else if (f.localName === 'textarea' || f.localName === 'select') fields.push(f);
+        else if (f.isContentEditable && !(f.parentElement && f.parentElement.isContentEditable)) fields.push(f);
+      }
+    };
+    walk(document, 0);
+    const valueOf = (f) => (f.localName === 'input' || f.localName === 'textarea' || f.localName === 'select' ? String(f.value) : String(f.textContent));
+    if (args.mode === 'remember') {
+      globalThis.__chordValues = new Map(fields.map((f) => [f, valueOf(f)]));
+      if (!globalThis.__chordValues.has(el)) globalThis.__chordValues.set(el, valueOf(el));
+      return { ok: true, ...said };
+    }
+    const kept = globalThis.__chordValues;
+    globalThis.__chordValues = null;
+    if (!kept) return { ok: false, why: 'no-values' };
+    let others = 0;
+    for (const f of fields) if (f !== el && kept.has(f) && kept.get(f) !== valueOf(f)) others++;
+    const now = valueOf(el);
+    return { ok: true, ...said, changed: kept.get(el) !== now, has: typeof args.text === 'string' && args.text !== '' && now.includes(args.text), others };
+  }
   if (args.op === 'select') {
     el.focus({ preventScroll: true });
     if (isField(el)) el.select();

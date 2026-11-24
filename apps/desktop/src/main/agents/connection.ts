@@ -14,8 +14,11 @@
  * arrives.
  */
 import {
+  ACT_REFUSALS,
   CONTROL_REFUSALS,
   CONTROL_WAIT_MS,
+  addressWhy,
+  barAddress,
   agentToolList,
   agentTools,
   agentToolsVersion,
@@ -32,10 +35,12 @@ import {
 import { ControlAgent, type CardPresenter, type ControlCard } from '../control/gate';
 import { controlPage } from '../control/page';
 import type { ToolOutput } from '../control/scope';
-import { runControlTool, type ControlBrowser } from '../control/tools';
+import { runControlTool, type ControlBrowser, pageLoaded } from '../control/tools';
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
-import type { AgentShares } from './shares';
+import { siteOfUrl, type AgentShares } from './shares';
+import { allowFirstLoad, forgetFirstLoad } from '../control/sends';
+import { firstLoadPending, pickersUnsecured } from './pickers';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
 
@@ -142,11 +147,27 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** open_tab: a tab in its Agent chord, signed in as the user, once its page has loaded (at most LOAD_MS). */
-  const openTab = async (args: Record<string, unknown>): Promise<ToolOutput> => {
+  const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal): Promise<ToolOutput> => {
     const url = typeof args['url'] === 'string' ? args['url'].trim() : '';
-    if (!deps.chords || !deps.dispatch) return { text: 'This Chord can’t open tabs for agents.', isError: true };
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
     if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
+    // Still a read (no site card), but an address that deletes or signs out asks first, as navigate's does (the owner,
+    // 2026-11-23): opening it would do it.
+    const why = actions ? addressWhy(url) : null;
+    if (why) {
+      const site = siteOfUrl(url) ?? barAddress(url);
+      const answer = await agent.ask(
+        { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: `open|${url}`, step: { why, site, fields: [], more: 0 } },
+        // The call's own signal (Neon's review 2 of #112): Stop or the agent cancelling takes the card down for it.
+        callSignal,
+        waitMs,
+      );
+      if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
+      if (answer === 'deny') return { text: ACT_REFUSALS.stepDenied, isError: true };
+    }
+    // Stopped while the card was up: no tab.
+    if (callSignal.aborted || agent.isStopped) return refused('stopped');
+    if (!deps.chords || !deps.dispatch) return { text: 'This Chord can’t open tabs for agents.', isError: true };
     const chord = deps.chords.chordFor(agent, name, profile);
     deps.shares?.()?.chordMade(agent.id, chord);
     const nodeId = uuidv7();
@@ -157,24 +178,25 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       async (signal) => {
         const contents = pageOf(deps.browser.tabs.ensure(nodeId));
         if (!contents) return { text: 'That tab couldn’t be opened.', isError: true };
+        // Its own address already asked about (the step card above): not asked again as it loads.
+        if (why) allowFirstLoad(contents, url);
         const page = controlPage(contents);
         // Followed from the start, so page_id names the page it loads.
         void page.id;
-        if (contents.isLoading() || !contents.getURL()) {
-          await new Promise<void>((done) => {
-            const finish = () => {
-              clearTimeout(timer);
-              signal.removeEventListener('abort', finish);
-              contents.off('did-stop-loading', finish);
-              done();
-            };
-            const timer = setTimeout(finish, deps.loadMs ?? LOAD_MS);
-            signal.addEventListener('abort', finish, { once: true });
-            contents.once('did-stop-loading', finish);
-          });
-        }
+        // Past its blank first page too (tabs.ts: service workers bypassed in it), at most LOAD_MS.
+        await pageLoaded(contents, deps.loadMs ?? LOAD_MS, signal);
+        // Its own address allowed for its first load only: whether that came or not, never after (the final pass).
+        if (why) forgetFirstLoad(contents, url);
         if (signal.aborted) return refused('stopped');
         if (contents.isDestroyed()) return { text: 'That tab closed while it loaded.', isError: true };
+        // Its hold couldn't be finished, or its page never came (round 4 and the final pass of #112): never a tab that
+        // would send unheld, nor a blank one reported as opened. The blank tab goes.
+        // (A slow page still loading is let be: it's reported loading, at the address asked for.)
+        const loadingStill = contents.isLoading();
+        if (pickersUnsecured(contents) || (!loadingStill && (firstLoadPending(contents) || !WEB_ADDRESS.test(contents.getURL())))) {
+          deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
+          return { text: 'That tab couldn’t be opened safely, so it was closed. Try again, or ask the user.', isError: true };
+        }
         // Redirected to a site the user keeps private: the tab goes, and nothing of where it ended up is said.
         // (Only a web address counts: a page still loading at the wait's end may show none yet.)
         const landed = page.url();
@@ -184,7 +206,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
           return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
         }
-        return { text: toolResult({ tab_id: ref, url: page.url(), title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
+        return { text: toolResult({ tab_id: ref, url: WEB_ADDRESS.test(page.url()) ? page.url() : url, title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
       },
       refused,
     );
@@ -232,7 +254,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
-          if (tool === 'open_tab') return openTab(args);
+          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]));
           if (tool === 'close_tab') return closeTab(args);
           return toPlain(await runControlTool(scope, deps.browser, tool, args));
         },

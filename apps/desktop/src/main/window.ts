@@ -608,17 +608,37 @@ export class AppWindow {
   keepFocusOffParked(): void {
     if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
     const now = webContents?.getFocusedWebContents?.() ?? null;
-    if (!now || !this.parked.some((v) => v.webContents === now && !this.panes.includes(v))) return;
+    if (now && !this.isParkedOnly(now)) return;
+    // The page of yours that had it (or the window's own), only while it's one you see (Claude's S7, round 4 of #112:
+    // after a tab switch it isn't, and focusing it would put your keys in a tab you left).
+    const seen = (c: WebContents) => c === this.shell.webContents || this.panes.some((v) => v.webContents === c);
+    const own = this.ownFocus && !this.ownFocus.isDestroyed() && !this.isParkedOnly(this.ownFocus) && seen(this.ownFocus) ? this.ownFocus : null;
+    // No page has it: only where pages are parked, and only back to the page that had it (a window with none parked
+    // is the OS's to give focus back to, as ever).
+    if (!now) return void (this.parked.length > 0 && own?.focus());
     const page = this.activeTabContents;
-    (page && !page.isDestroyed() && page !== now ? page : this.shell.webContents).focus();
+    (own ?? (page && !page.isDestroyed() ? page : this.shell.webContents)).focus();
   }
+
+  /** A page parked here and not shown (an agent's tab working behind your page). */
+  private isParkedOnly(contents: WebContents): boolean {
+    return this.parked.some((v) => v.webContents === contents && !this.panes.includes(v));
+  }
+
+  /** The page of this window's that had the focus last, never a parked one: where the focus goes back to. */
+  private ownFocus: WebContents | null = null;
+  /** Parked pages whose taking the focus is watched. */
+  private readonly watchedFocus = new WeakSet<WebContents>();
 
   park(views: readonly WebContentsView[]): void {
     if (this.window.isDestroyed()) return;
-    // Your focus stays where it is: adding or taking away a parked page (an agent's tab) mustn't leave it nowhere
-    // (Neon's review of #110, seen in agents.spec when an agent opened a tab).
-    // Only a page of this window's, while it's in front (one in another window is that window's business).
+    // Your focus stays where it is (Neon's review of #110, seen in agents.spec): a page parked here (an agent's tab)
+    // that takes it (the OS handing a view just shown its window's focus, a page it loads, the agent's input) gives it
+    // back at once, to the page of yours that had it, or the page you see, or this window's own. Only while this
+    // window is in front: focusing a page brings its window forward (Electron's Focus activates the app); when it
+    // isn't, coming back to it does the same (keepFocusOffParked).
     const focused = BaseWindow.getFocusedWindow?.() === this.window ? (webContents?.getFocusedWebContents?.() ?? null) : null;
+    if (focused && !this.isParkedOnly(focused)) this.ownFocus = focused;
     const root = this.window.contentView;
     for (const view of this.parked) if (!views.includes(view) && !this.panes.includes(view) && root.children.includes(view)) root.removeChildView(view);
     this.parked = views.filter((view) => Boolean(pageOf(view)));
@@ -627,22 +647,15 @@ export class AppWindow {
       // Just above the shell, where the pages go.
       if (!root.children.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
       view.setVisible(true);
+      const contents = view.webContents;
+      if (!this.watchedFocus.has(contents)) {
+        this.watchedFocus.add(contents);
+        contents.on('focus', () => setTimeout(() => this.keepFocusOffParked(), 0));
+      }
     }
     this.layout();
-    // Now, and again once the page just parked is on screen (the OS can hand it the window's focus then): back to the
-    // page that had it, if no page has it now.
-    if (!focused || this.parked.some((v) => v.webContents === focused)) return;
-    // From no page, or a page just parked here (macOS makes a view just shown its window's first responder). Only
-    // while this window is in front: focusing a page brings its window forward on every platform (Electron's Focus
-    // activates the app); when it isn't, coming back to it does (keepFocusOffParked).
-    const giveBack = () => {
-      if (this.window.isDestroyed() || focused.isDestroyed() || focused.isFocused()) return;
-      if (BaseWindow.getFocusedWindow?.() !== this.window) return;
-      const now = webContents?.getFocusedWebContents?.() ?? null;
-      if (!now || this.parked.some((v) => v.webContents === now)) focused.focus();
-    };
-    giveBack();
-    for (const ms of [50, 200, 500]) setTimeout(giveBack, ms).unref?.();
+    // And now: no page has it, or a page just parked does.
+    this.keepFocusOffParked();
   }
 
   /**

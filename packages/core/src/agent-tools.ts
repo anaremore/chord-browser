@@ -51,12 +51,12 @@ export interface AgentHello {
 export const AGENTS_RELEASED = true as boolean;
 
 /**
- * Whether M2 (agents and the assistant act on pages; docs/decisions/S18-agent-mcp.md, "M2: plan") ships in release
- * builds: false until a release turns it on, so its slices (M2a–M2f) land one by one without a packaged build seeing
- * a half. Development and E2E builds have each slice as it lands. With it false, packaged builds keep M1's ways:
- * no acting tools, and the connect card's *Started by* from the hello's word (M2a's peer lookup waits too).
+ * Whether M2 (agents act on pages; docs/decisions/S18-agent-mcp.md, "M2: plan") ships in release builds. On since M2d
+ * (risky steps ask every time): outside agents get the acting tools, and the connect card's *Started by* comes from
+ * the peer lookup. The assistant's acting is M2e's, gated by its own scope (no `act` host until then). Off, packaged
+ * builds keep M1's ways: no acting tools, and *Started by* from the hello's word.
  */
-export const AGENT_ACTIONS_RELEASED = false as boolean;
+export const AGENT_ACTIONS_RELEASED = true as boolean;
 
 /** Whether this build has M2's slices (AGENT_ACTIONS_RELEASED, or any build that isn't packaged). */
 export const agentActions = (build: { packaged: boolean }, released = AGENT_ACTIONS_RELEASED): boolean => !build.packaged || released;

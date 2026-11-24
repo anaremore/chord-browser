@@ -133,6 +133,33 @@ export function barAddress(url: string): string {
 }
 
 /** What an agent hears when an action can't be done, one sentence each, as the plan has them. */
+/**
+ * Fields that aren't text (the owner's hand test, #112): a time, a date, a month, a week. Typed into, their parts are
+ * the browser's own (hour, minute) and text can land in the field that had the focus before; so `type` sets their value
+ * in the page's own format (validated), as the fill does, and never types. (A color or a range field takes no text at
+ * all: the snapshot names them a button and a slider, and `type` refuses them, Neon's review 2 of #112.)
+ */
+export const VALUE_TYPES: ReadonlySet<string> = new Set(['date', 'time', 'datetime-local', 'month', 'week']);
+const VALUE_FORMAT: Record<string, RegExp> = {
+  date: /^\d{4}-\d{2}-\d{2}$/,
+  time: /^\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/,
+  'datetime-local': /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/,
+  month: /^\d{4}-\d{2}$/,
+  week: /^\d{4}-W\d{2}$/,
+};
+const VALUE_EXAMPLE: Record<string, string> = {
+  date: '2026-11-23',
+  time: '18:30',
+  'datetime-local': '2026-11-23T18:30',
+  month: '2026-11',
+  week: '2026-W48',
+};
+
+/** Whether `text` is a value a field of `type` takes (VALUE_TYPES), in its format. */
+export function valueFits(type: string, text: string): boolean {
+  return VALUE_FORMAT[type]?.test(text) ?? false;
+}
+
 export const ACT_REFUSALS = {
   changed: 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.',
   covered: (what: string) => `Something is covering that element: ${what}. Deal with it first, or call snapshot again.`,
@@ -146,7 +173,16 @@ export const ACT_REFUSALS = {
   focusMoved: 'The page moved the focus away from that field, so nothing was typed. Call snapshot again.',
   // The focus went where Chord can't see (into a frame) while text or a key went in: some of it may have gone there.
   focusLost: 'The focus moved while that went in, so some of it may not have reached the field. Call snapshot and check it.',
-  closed: 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t type or press keys in it. Ask the user to.',
+  closed: 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.',
+  // S18 M2d: risky steps.
+  // The owner's hand test (#112): what typing did is checked, and fields that aren't text are set, not typed into.
+  notTyped: 'That field didn’t change, so the text didn’t go in. Call snapshot and check the field.',
+  typedElsewhere: 'Another field changed while typing, so the text may have gone there instead. Nothing more was done: call snapshot and check the fields.',
+  badValue: (type: string) => `A ${type} field takes a value like ${VALUE_EXAMPLE[type] ?? 'the page’s own format'}; nothing was put in it.`,
+  stepDenied: 'The user said no to this step. Don’t try it another way; ask the user what to do.',
+  stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
+  sendsDropped: 'The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.',
+  sendsTooMany: 'The page kept sending data to more sites, so Chord dropped the rest and stopped. Ask the user what to do.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',

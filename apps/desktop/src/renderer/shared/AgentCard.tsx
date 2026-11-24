@@ -11,8 +11,10 @@ import styles from './AgentCard.module.css';
 
 export interface AgentCardAction {
   label: string;
-  /** link: a quiet word (Deny); quiet: an outlined pill (Allow once); primary: the filled one (Always allow). */
-  look: 'link' | 'quiet' | 'primary';
+  /** link: a quiet word (Deny); quiet: an outlined pill (Allow once); primary: the filled one (Always allow); danger: filled, for paying or deleting. */
+  look: 'link' | 'quiet' | 'primary' | 'danger';
+  /** Set apart on the left (a step card's Show me). */
+  left?: boolean;
   onClick(): void;
 }
 
@@ -47,7 +49,7 @@ export function AgentCardBody({ title, note, list, actions, onClose, closeLabel 
       )}
       <div className={styles.actions}>
         {actions.map((a) => (
-          <button key={a.label} type="button" className={styles[a.look]} onClick={ready(a.onClick)}>
+          <button key={a.label} type="button" className={a.left ? `${styles[a.look]} ${styles.left}` : styles[a.look]} onClick={ready(a.onClick)}>
             {a.label}
           </button>
         ))}

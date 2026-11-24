@@ -14,7 +14,7 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
-import { holdFilePickers } from './agents/pickers';
+import { holdFilePickers, bypassServiceWorkers, holdFailed, setFirstLoadPending } from './agents/pickers';
 import { agentGuardUp } from './control/page';
 import { heldFromFrame } from './agents/held';
 
@@ -81,6 +81,8 @@ interface FloatingPage {
 }
 
 export class TabManager {
+  /** Agent tabs loading their blank first page (createView): its navigation is never the tab's. */
+  private readonly priming = new WeakSet<WebContents>();
   private readonly views = new Map<NodeId, WebContentsView>();
   private readonly crashReloads = new Map<NodeId, number>();
   /** Tabs playing audio or video right now (muted video counts). */
@@ -219,8 +221,11 @@ export class TabManager {
             ...(this.deps.agentTab?.(nodeId) ? { disableDialogs: true, additionalArguments: [AGENT_TAB_ARG], nodeIntegrationInSubFrames: true } : {}),
           },
         });
-    // And its file pickers held for its whole life, at a layer no page reaches (agents/pickers.ts).
-    if (!internal && this.deps.agentTab?.(nodeId)) holdFilePickers(view.webContents, (detail) => this.deps.onAgentRefused?.(nodeId, 'file', detail));
+    // And its file pickers held for its whole life, at a layer no page reaches (agents/pickers.ts), armed before its
+    // page loads (a frame already on its way when the hold starts would be held without the hold hearing of it).
+    // Only an agent's tab waits: any other loads at once, as before (a load asked for right after, an image search's
+    // POST, must come after this one, never be overtaken by it).
+    const armed = !internal && this.deps.agentTab?.(nodeId) ? holdFilePickers(view.webContents, (detail) => this.deps.onAgentRefused?.(nodeId, 'file', detail)) : null;
     view.setBorderRadius(frameRadius[platform]);
     this.views.set(nodeId, view);
     if (internal) this.internal.add(nodeId);
@@ -234,7 +239,8 @@ export class TabManager {
     // Muted stays muted: after sleeping, a restart, or a move to other sign-ins (a new page each time).
     if (node.muted) contents.setAudioMuted(true);
     const url = node.url;
-    this.whenProxied(contents, () => {
+    const load = () => {
+      if (contents.isDestroyed()) return;
       if (nav) {
         // Back where it was: same page, same back/forward list, same scroll position.
         contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
@@ -245,7 +251,33 @@ export class TabManager {
           // Load failures surface through did-fail-load; nothing to do here.
         });
       }
-    });
+    };
+    // An agent's tab: a blank page first, for a renderer to bypass service workers in (agents/pickers.ts), then its
+    // address, only if that answered (fail closed: a service worker would send out of the hold's sight). The blank
+    // page is never the tab's: not its address, nor in its back list.
+    const primed = async () => {
+      this.priming.add(contents);
+      await contents.loadURL('about:blank').catch(() => undefined);
+      const bypassed = await bypassServiceWorkers(contents);
+      this.priming.delete(contents);
+      // No bypass, no page (fail closed): the hold is failed (nothing acts there), and what waits on it stops waiting.
+      if (!bypassed || contents.isDestroyed()) {
+        holdFailed(contents);
+        return setFirstLoadPending(contents, false);
+      }
+      const arrived = () => {
+        setFirstLoadPending(contents, false);
+        contents.off('did-fail-load', arrived);
+        const history = contents.navigationHistory;
+        if (history.getActiveIndex() > 0 && history.getEntryAtIndex(0)?.url === 'about:blank') history.removeEntryAtIndex(0);
+      };
+      contents.once('did-navigate', arrived);
+      contents.once('did-fail-load', arrived);
+      load();
+    };
+    // Its first page is on its way from now (a read or open_tab waits for it, never the blank page before it).
+    if (armed) setFirstLoadPending(contents, true);
+    this.whenProxied(contents, () => (armed ? void armed.then(primed) : load()));
     return view;
   }
 
@@ -385,6 +417,9 @@ export class TabManager {
   }
 
   private wire(nodeId: NodeId, contents: WebContents, internal: boolean): void {
+    // Whether it's an agent's page, decided once (Neon's nits, round 4 and the final pass of #112): an agent's page is
+    // never another's (a tab you keep gets a new page).
+    const agentPage = Boolean(this.deps.agentTab?.(nodeId));
     // A page being closed (a pinned tab unloading) still fires a few events on its way out.
     // Only the tab's current page may report, or a late event would mark it loaded again.
     const current = () => !contents.isDestroyed() && this.views.get(nodeId)?.webContents === contents;
@@ -422,6 +457,8 @@ export class TabManager {
       this.deps.onVisit(url, '', nodeId);
     };
     contents.on('did-navigate', (_event, url, code) => {
+      // An agent's tab's blank first page (createView): never its address.
+      if (this.priming.has(contents)) return;
       // A new page: the last one's count goes with it.
       const had = this.badges.delete(nodeId);
       const shown = this.shownBadge(nodeId, url);
@@ -446,7 +483,7 @@ export class TabManager {
       visit(url);
     });
     contents.on('did-start-navigation', (details) => {
-      if (!details.isMainFrame || details.isSameDocument) return;
+      if (!details.isMainFrame || details.isSameDocument || this.priming.has(contents)) return;
       // The icon waits for the page to commit (did-navigate): a navigation can still be cancelled, or download.
       live({ error: null });
     });
@@ -463,14 +500,14 @@ export class TabManager {
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
     // An agent's tab (S18): a dialog or file picker its preload held, for the agent's next result. Any frame's.
     contents.ipc.on('page:agentHeld', (event, raw: unknown) => {
-      if (!this.deps.agentTab?.(nodeId) || !raw || typeof raw !== 'object') return;
+      if (!agentPage || !raw || typeof raw !== 'object') return;
       const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
       if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
       this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame));
     });
     // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
     contents.ipc.on('page:agentGuardState', (event) => {
-      event.returnValue = Boolean(this.deps.agentTab?.(nodeId)) && agentGuardUp(contents);
+      event.returnValue = agentPage && agentGuardUp(contents);
     });
     // The count the page gives itself (counts on tabs, ARCHITECTURE.md §9), from Chord's page preload: its top frame's only.
     contents.ipc.on('page:badge', (event, raw: unknown) => {
@@ -490,8 +527,10 @@ export class TabManager {
 
     contents.on('render-process-gone', (_event, details) => {
       if (details.reason === 'clean-exit' || !current()) return;
-      // Reload automatically at most twice, then show "This page stopped" (borrowed from Crest).
-      const attempts = this.crashReloads.get(nodeId) ?? 0;
+      // Reload automatically at most twice, then show "This page stopped" (borrowed from Crest). Never an agent's tab:
+      // reloaded at once, it would load before its hold is armed again (round 4 of #112); it shows "This page stopped",
+      // and its hold, lost, refuses acting there until it's armed again.
+      const attempts = agentPage ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
       if (attempts < MAX_CRASH_RELOADS) {
         this.crashReloads.set(nodeId, attempts + 1);
         contents.reload();
@@ -501,7 +540,7 @@ export class TabManager {
       if (this.badges.delete(nodeId)) live({ badge: null });
     });
 
-    contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details));
+    contents.setWindowOpenHandler((details) => this.openFrom(nodeId, details, agentPage));
     contents.on('did-create-window', (popup) => this.wirePopup(popup, nodeId));
 
     // Peek (DESIGN.md §8.5): following a link in a pinned tab to another site opens it in Peek, so
@@ -539,9 +578,9 @@ export class TabManager {
    * keeping window.opener so they can report back. Everything else becomes a
    * tab in the opener's Chord window.
    */
-  private openFrom(openerNodeId: NodeId, { url, disposition, features }: HandlerDetails): WindowOpenHandlerResponse {
+  private openFrom(openerNodeId: NodeId, { url, disposition, features }: HandlerDetails, agentPage = Boolean(this.deps.agentTab?.(openerNodeId))): WindowOpenHandlerResponse {
     // An agent's tab (S18) opens nothing: no window, no tab of yours. The agent hears of it.
-    if (this.deps.agentTab?.(openerNodeId)) {
+    if (agentPage) {
       this.deps.onAgentRefused?.(openerNodeId, 'popup', url);
       return { action: 'deny' };
     }

@@ -17,7 +17,8 @@ import { fetchPdf } from './pdf';
 import { ACT_LOAD_MS, type FillWrite, type SnapshotRead } from '@chord/core';
 import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
 import { openDeep, type DeepSession } from './deep';
-import { pickersUnsecured } from '../agents/pickers';
+import { pickersLost, pickersUnsecured, retryPickers } from '../agents/pickers';
+import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
 import { snapshotPage } from './snapshot';
@@ -67,6 +68,14 @@ export interface ControlPage {
   unguard(): Promise<{ moved: boolean; lost: boolean } | 'gone' | 'expired' | 'timeout'>;
   /** A frame of the page couldn't be held (agents/pickers.ts): no acting here, said at once. */
   unsecured(): boolean;
+  /** An agent's tab whose hold isn't on now (agents/pickers.ts): nothing goes there until it is. */
+  lost(): boolean;
+  /** One try to put a lost hold back on (an action's); whether it's on. */
+  retryHold(): Promise<boolean>;
+  /** Watches what one action sends (control/sends.ts): held, or let go for a step already allowed; null if it can't. */
+  watchSends(allowed: Allowed | null): SendWatch | null;
+  /** What the page sent after the last action, dropped (taken: the count goes back to 0). */
+  droppedAfter(): number;
   /** The debugger's checks for one action (control/deep.ts); null if it can't be had. */
   deep(owner: string, token: string, key: number): Promise<DeepSession | null>;
   /** Text put in where the focus is, as one insertion (never as keys). */
@@ -240,6 +249,10 @@ export function controlPage(contents: WebContents): ControlPage {
     },
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
     unsecured: () => pickersUnsecured(contents),
+    lost: () => pickersLost(contents),
+    retryHold: () => retryPickers(contents),
+    watchSends: (allowed) => watchSends(contents, allowed),
+    droppedAfter: () => takeDroppedAfter(contents),
     // Within a moment, as every step: a hung page doesn't hold the action (the guard comes down after it anyway).
     insertText: async (text) => {
       if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
