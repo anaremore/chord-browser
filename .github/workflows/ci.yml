@@ -1,11 +1,26 @@
 name: CI
 
+# Two tiers (the `changes` job picks one):
+# - The fast tier, on every pull request push: typecheck, lint, unit tests, the password detector, and E2E on
+#   Linux x64 X11 only. Quick feedback while a pull request is in review.
+# - The full tier adds E2E on every other platform and Chord Player. It runs on a pull request labeled `ready`
+#   (and not a draft) and on Renovate's, and on every other event: a push to main, the nightly run, a run by hand.
+# A pull request merges on the full tier only. The `E2E` commit status (posted by the `e2e` job) is its gate:
+# success only when every platform passed, and pending after a fast tier that passed, so a fast-tier green
+# never reads as a full one. See the `e2e` job.
 on:
   # Every push to main runs everything. A pull request that changes only docs or the website skips the slow
   # jobs instead (the `changes` job): no `paths-ignore` here, which would leave such a pull request no status at all.
   push:
     branches: [main]
   pull_request:
+    # `labeled`: adding `ready` starts the full tier with no new push. Any other label reruns the tier the pull
+    # request already gets (Actions can't filter labels before a run starts, and a run that skipped its jobs
+    # would post skipped checks over the real ones). `ready_for_review`: a draft that's already labeled.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  # Every platform on main each night, whatever merged during the day.
+  schedule:
+    - cron: '0 8 * * *'
   # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>).
   workflow_dispatch:
 
@@ -28,7 +43,39 @@ jobs:
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      tier: ${{ steps.tier.outputs.tier }}
     steps:
+      # The fast tier or the full one. A pull request's labels and draft state are the event's: a run re-run by
+      # hand keeps the tier it had, so add `ready` (which starts a new run) rather than re-run an old one.
+      # Renovate's pull requests get the full tier: Electron's automerge once every check passes.
+      - name: Which tier?
+        id: tier
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          READY: ${{ contains(github.event.pull_request.labels.*.name, 'ready') }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
+          elif [ "$AUTHOR" = 'renovate[bot]' ]; then tier=full; why="Renovate's pull request"
+          elif [ "$READY" = true ] && [ "$DRAFT" != true ]; then tier=full; why="labeled ready"
+          elif [ "$READY" = true ]; then tier=fast; why="labeled ready, but still a draft"
+          else tier=fast; why="not labeled ready"
+          fi
+          echo "Tier: $tier ($why)."
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          {
+            echo "## CI's $tier tier"
+            echo
+            echo "Why: $why."
+            echo
+            echo "- **Fast tier:** typecheck, lint, unit tests, the password detector, E2E on Linux x64 X11."
+            echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, and Chord Player."
+            if [ "$tier" = fast ]; then
+              echo
+              echo "The \`E2E\` status stays pending until the full tier passes: label the pull request \`ready\` (and mark it ready for review) to run it."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       # A pull request's run checks out its merge commit: its first parent is the base branch as it is now,
       # so the diff between the two is exactly what merging the pull request changes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,7 +181,7 @@ jobs:
   # - Playwright's Chromium is restored, never saved;
   # - the one cache it saves, `.cache/ttw-*` (the built site), is read by this job alone.
   # If the site can't be fetched or built it skips with a warning on pull requests, and fails on a push to
-  # main or a run by hand (CHORD_TTW_REQUIRED), where a skip would hide a lasting breakage.
+  # main, the nightly run or a run by hand (CHORD_TTW_REQUIRED), where a skip would hide a lasting breakage.
   forms-ttw:
     name: Password detector · test-the-web
     needs: changes
@@ -164,7 +211,7 @@ jobs:
       - run: pnpm --filter @chord/desktop exec playwright install --only-shell chromium
       - run: pnpm --filter @chord/desktop test:forms --project ttw
         env:
-          CHORD_TTW_REQUIRED: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && '1' || '0' }}
+          CHORD_TTW_REQUIRED: ${{ github.event_name != 'pull_request' && '1' || '0' }}
       - name: Upload the test-the-web score
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -174,54 +221,37 @@ jobs:
           if-no-files-found: ignore
 
   # Chord Player (apps/player): packaged on castLabs ECS per OS and smoke-tested, with ECS's
-  # development signature. Only a player release is VMP-signed (player-release.yml).
+  # development signature. Only a player release is VMP-signed (player-release.yml). Full tier only.
   player:
-    name: Chord Player
+    name: Chord Player · full tier
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
     uses: ./.github/workflows/player.yml
 
   # E2E on every OS, each split into shards (Playwright's --shard, which splits by file, keeping each file's tests
   # together and in order) that run side by side on their own runners. Each shard sets its runner up in full.
   # macOS has 2 shards, the rest 3: GitHub's free plan runs 5 macOS jobs at a time (and 20 jobs in all), and Chord
   # Player takes 2 of those 5, so a third macOS shard would wait for a whole shard to finish.
-  # The `E2E` job below is the one status that says whether they all passed.
-  e2e-shard:
-    name: E2E · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
+  # Two jobs with the same steps (the YAML anchors below): the fast tier's Linux x64 X11 shards, which always run,
+  # and every other platform's, the full tier's. The `e2e` job below says whether they all passed.
+  e2e-fast:
+    name: E2E · fast tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
-    # A whole suite took 30 to 46 minutes. --shard splits by test count, not time, so a macOS shard can hold
-    # well over half of it (28 minutes on Intel, 2026-11-22), and Intel varies most. Elsewhere a shard took up to
-    # 17 minutes. These limits only have to catch a hung job.
-    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
+    # A Linux shard took up to 18 minutes. The limit only has to catch a hung job.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: Windows x64, os: windows-latest, shard: 1, shards: 3 }
-          - { name: Windows x64, os: windows-latest, shard: 2, shards: 3 }
-          - { name: Windows x64, os: windows-latest, shard: 3, shards: 3 }
-          - { name: Windows arm64, os: windows-11-arm, shard: 1, shards: 3 }
-          - { name: Windows arm64, os: windows-11-arm, shard: 2, shards: 3 }
-          - { name: Windows arm64, os: windows-11-arm, shard: 3, shards: 3 }
-          - { name: macOS arm64, os: macos-26, shard: 1, shards: 2 }
-          - { name: macOS arm64, os: macos-26, shard: 2, shards: 2 }
-          - { name: macOS x64, os: macos-15-intel, shard: 1, shards: 2 }
-          - { name: macOS x64, os: macos-15-intel, shard: 2, shards: 2 }
           - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 1, shards: 3 }
           - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 2, shards: 3 }
           - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 3, shards: 3 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 1, shards: 3 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 2, shards: 3 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 3, shards: 3 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 1, shards: 3 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 2, shards: 3 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 3, shards: 3 }
-    env:
+    env: &e2e-env
       # Names this shard's artifacts: captures-, perf- and e2e-failures-<runner>[-display]-<shard>of<shards>.
       ARTIFACT_SUFFIX: ${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}-${{ matrix.shard }}of${{ matrix.shards }}
-    steps:
+    steps: &e2e-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -368,25 +398,138 @@ jobs:
           name: e2e-failures-${{ env.ARTIFACT_SUFFIX }}
           path: apps/desktop/test-results/
 
-  # The one E2E status for a pull request: it passes when every shard passed, or when none had to run (a pull
-  # request of docs alone), and fails when any shard failed or was cancelled, or what changed couldn't be told.
+  e2e-full:
+    name: E2E · full tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
+    runs-on: ${{ matrix.os }}
+    # A whole suite took 30 to 46 minutes. --shard splits by test count, not time, so a macOS shard can hold
+    # well over half of it (28 minutes on Intel, 2026-11-22), and Intel varies most. Elsewhere a shard took up to
+    # 21 minutes. These limits only have to catch a hung job.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x64, os: windows-latest, shard: 1, shards: 3 }
+          - { name: Windows x64, os: windows-latest, shard: 2, shards: 3 }
+          - { name: Windows x64, os: windows-latest, shard: 3, shards: 3 }
+          - { name: Windows arm64, os: windows-11-arm, shard: 1, shards: 3 }
+          - { name: Windows arm64, os: windows-11-arm, shard: 2, shards: 3 }
+          - { name: Windows arm64, os: windows-11-arm, shard: 3, shards: 3 }
+          - { name: macOS arm64, os: macos-26, shard: 1, shards: 2 }
+          - { name: macOS arm64, os: macos-26, shard: 2, shards: 2 }
+          - { name: macOS x64, os: macos-15-intel, shard: 1, shards: 2 }
+          - { name: macOS x64, os: macos-15-intel, shard: 2, shards: 2 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 1, shards: 3 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 2, shards: 3 }
+          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 3, shards: 3 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 1, shards: 3 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 2, shards: 3 }
+          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 3, shards: 3 }
+    env: *e2e-env
+    steps: *e2e-steps
+
+
+  # The tier's E2E verdict, and the `E2E` commit status: the one status that says a pull request can merge.
+  # This job passes when every shard of its tier passed, or none had to run (a pull request of docs alone), and
+  # fails when any shard failed or was cancelled, or what changed couldn't be told. Its name says which tier ran.
+  # The `E2E` status, posted on the pull request's head commit (or the pushed one), is:
+  # - success when the full tier passed, or docs alone changed;
+  # - pending when the fast tier passed: every platform still has to (label the pull request `ready`);
+  # - failure when any shard failed.
+  # A commit status, not this job's own check, because a job can only pass or fail: pending is what keeps a
+  # fast-tier green from reading as a full one. A fast tier never takes back a full tier's success on the same
+  # commit. A cancelled run posts nothing: the run that replaced it will. A fork's pull request gets a read-only
+  # token, so it can't post one: the maintainer runs the full tier from a branch of this repository instead.
   e2e:
-    name: E2E
-    needs: [changes, e2e-shard]
+    name: E2E · ${{ needs.changes.outputs.tier || 'unknown' }} tier
+    needs: [changes, e2e-fast, e2e-full]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      statuses: write
     steps:
-      - name: Every shard passed, or none had to run
+      - name: Every shard of the tier passed, or none had to run
+        id: verdict
         env:
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
-          SHARDS: ${{ needs.e2e-shard.result }}
+          TIER: ${{ needs.changes.outputs.tier }}
+          FAST: ${{ needs.e2e-fast.result }}
+          FULL: ${{ needs.e2e-full.result }}
         run: |
-          echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}). Shards: $SHARDS."
-          if [ "$CHANGES" != success ]; then echo "::error::Couldn't tell what changed ($CHANGES)"; exit 1; fi
-          if [ "$CODE" = true ]; then
-            if [ "$SHARDS" != success ]; then echo "::error::E2E shards: $SHARDS"; exit 1; fi
-          elif [ "$SHARDS" != skipped ]; then
-            echo "::error::Docs alone changed, but the shards were $SHARDS"; exit 1
+          echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}). Tier: ${TIER:-unknown}. Fast tier's shards: $FAST. Full tier's: $FULL."
+          pass=false state=failure
+          if [ "$CHANGES" != success ]; then
+            desc="Couldn't tell what changed ($CHANGES)"
+          elif [ "$CODE" != true ]; then
+            if [ "$FAST" = skipped ] && [ "$FULL" = skipped ]; then
+              pass=true state=success desc="Docs alone changed: no E2E to run"
+            else
+              desc="Docs alone changed, but the shards were $FAST and $FULL"
+            fi
+          elif [ "$FAST" = cancelled ] || [ "$FULL" = cancelled ]; then
+            state='' desc="Cancelled (fast tier: $FAST, full tier: $FULL)"
+          elif [ "$FAST" != success ]; then
+            desc="Fast tier failed: Linux x64 X11 ($FAST)"
+          elif [ "$TIER" = full ]; then
+            if [ "$FULL" = success ]; then
+              pass=true state=success desc="Full tier passed: every platform"
+            else
+              desc="Full tier failed ($FULL)"
+            fi
+          elif [ "$TIER" = fast ] && [ "$FULL" = skipped ]; then
+            pass=true state=pending desc="Fast tier passed (Linux x64 X11). Label the PR ready to run every platform"
+          else
+            desc="Unexpected: tier ${TIER:-unknown}, full tier's shards $FULL"
           fi
+          echo "$desc"
+          {
+            echo "## E2E: ${TIER:-unknown} tier"
+            echo
+            echo "| Shards | Result |"
+            echo "| --- | --- |"
+            echo "| Fast tier: Linux x64 X11 | $FAST |"
+            echo "| Full tier: every other platform | $FULL |"
+            echo
+            echo "**$desc.** The \`E2E\` status: ${state:-unchanged (cancelled)}."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "pass=$pass" >> "$GITHUB_OUTPUT"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "description=$desc" >> "$GITHUB_OUTPUT"
+
+      - name: Post the E2E status
+        if: steps.verdict.outputs.state != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          STATE: ${{ steps.verdict.outputs.state }}
+          DESCRIPTION: ${{ steps.verdict.outputs.description }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$FORK" = true ]; then
+            echo "::warning::A fork's pull request can't post the E2E status ($STATE: $DESCRIPTION)"
+            exit 0
+          fi
+          if [ "$STATE" = pending ]; then
+            # Statuses come newest first.
+            now="$(gh api "repos/$REPO/commits/$SHA/statuses" --jq '[.[] | select(.context == "E2E")][0].state // ""')"
+            if [ "$now" = success ]; then
+              echo "E2E already passed on $SHA: a fast tier leaves it."
+              exit 0
+            fi
+          fi
+          gh api "repos/$REPO/statuses/$SHA" -f state="$STATE" -f context=E2E -f description="$DESCRIPTION" -f target_url="$RUN_URL" --silent
+          echo "E2E on $SHA: $STATE ($DESCRIPTION)."
+
+      - name: The tier's verdict
+        if: steps.verdict.outputs.pass != 'true'
+        env:
+          DESCRIPTION: ${{ steps.verdict.outputs.description }}
+        run: |
+          echo "::error::$DESCRIPTION"
+          exit 1
