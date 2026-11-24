@@ -1221,6 +1221,45 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
+test('the first look at a tab just opened: a page that draws itself after it loads gives its outline and its picture, never an empty one (the owner, 2026-11-24)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    /** The share of a PNG's pixels that are near black (0 to 1). */
+    const dark = (b64: string) =>
+      app.evaluate(({ nativeImage }, data) => {
+        const img = nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
+        const px = img.toBitmap();
+        let black = 0;
+        for (let i = 0; i < px.length; i += 4) if (px[i]! < 16 && px[i + 1]! < 16 && px[i + 2]! < 16) black++;
+        return px.length ? black / (px.length / 4) : 1;
+      }, b64);
+    for (const round of [0, 1, 2]) {
+      const opening = mcp.call('open_tab', { url: `${site.origin}/lobby?r=${round}` });
+      if (round === 0) await answer(app, 'Codex', 'Allow once');
+      const opened = JSON.parse((await opening).text) as { data: { tab_id: string } };
+      const tab = opened.data.tab_id;
+      const began = Date.now();
+      const shot = (await mcp.request('tools/call', { name: 'tab_screenshot', arguments: { tab_id: tab } })).result as { content: { type: string; data?: string; text?: string }[] };
+      const image = shot.content.find((c) => c.type === 'image');
+      const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as { content: string }).content;
+      console.log(`[first look] round ${round}: picture ${image ? `${Math.round((await dark(image.data!)) * 100)}% black` : shot.content[0]?.text}, outline ${JSON.stringify(outline.slice(0, 120))}, ${Date.now() - began} ms`);
+      expect(image, 'a picture').toBeDefined();
+      expect(await dark(image!.data!), 'not black').toBeLessThan(0.5);
+      expect(outline).toContain('button "Join table"');
+    }
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('a game whose action controls are pointer divs, re-rendered every 100 ms and every frame; a bet field the page takes the focus from (the owner’s retest of #117)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -2073,6 +2112,8 @@ test.beforeAll(async () => {
     // The owner's retest of #117 (2026-11-24): a game's action controls are divs with a pointer cursor, rebuilt by a
     // framework-style render every 100 ms (or every frame, ?raf), in a named table; a bet field the page takes the focus
     // from on its tick; a real button beside them.
+    // A page that draws itself after it loads (an app's lobby: the owner's first look at a new tab, 2026-11-24).
+    '/lobby': '<title>Lobby</title><style>body{margin:0;background:#fff}</style><div id=app></div><script>setTimeout(() => { document.getElementById("app").innerHTML = "<h1>Lobby</h1><button>Join table</button><div style=\\"background:#e33;width:600px;height:400px\\"></div>"; }, 600)</script>',
     '/game': '<title>Game</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div id=table role=region aria-label="Table 3" tabindex=-1><div id=controls></div><label>Bet <input id=bet></label> <button id=rankings>Hand rankings</button></div><p id=log></p></main><script src="/game.js"></script>',
     // The press tried again (the review of #117, round 3): the page replaces its button as the pointer arrives, once
     // armed (window.arm), in the way ?m= says.

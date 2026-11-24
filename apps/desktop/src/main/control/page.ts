@@ -21,7 +21,7 @@ import { pickersLost, pickersUnsecured, retryPickers } from '../agents/pickers';
 import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
-import { snapshotPage } from './snapshot';
+import { pageShows, snapshotPage } from './snapshot';
 
 export interface ControlPage {
   /** The page id now (see above). */
@@ -40,6 +40,8 @@ export interface ControlPage {
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */
   snapshot(owner: string, token: string): Promise<SnapshotRead | null>;
+  /** Whether the page shows anything yet, waiting for it at most `waitMs` (snapshot.ts' pageShows). */
+  shows(waitMs: number): Promise<boolean>;
   fillForm(args: { token: string; writes: FillWrite[]; undo: string; highlight: FillHighlight }): Promise<FillOutcome>;
   undoFill(undo: string): Promise<{ restored: number; kept: number } | null>;
   /** A PDF's bytes through the page's own session; `readable` checks each address it ends up at. */
@@ -229,6 +231,7 @@ export function controlPage(contents: WebContents): ControlPage {
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
     snapshot: (owner, token) => snapshotPage(contents, owner, token),
+    shows: (waitMs) => pageShows(contents, waitMs),
     fillForm: (args) => fillFormPage(contents, args),
     undoFill: (undo) => undoFillPage(contents, undo),
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),
