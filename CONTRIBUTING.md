@@ -4,7 +4,7 @@ Thanks for helping. Chord is early, so expect things to move quickly.
 
 ## Before you start
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md). Every UI change is reviewed against DESIGN.md, and every library or API choice against ARCHITECTURE.md.
+Read [AGENTS.md](AGENTS.md) first: the commands, the rules that are never broken, and which sections of [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md) to read for what you're changing. Every UI change is reviewed against DESIGN.md, and every library or API choice against ARCHITECTURE.md.
 
 ## Setup
 

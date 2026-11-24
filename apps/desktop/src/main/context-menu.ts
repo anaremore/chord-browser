@@ -26,6 +26,8 @@ export interface ContextMenuDeps {
   peek?: { available(): boolean; open(url: string, at: { x: number; y: number }): void };
   /** The window showing this contents, and the view's offset in it, to place the menu where the click was. */
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
+  /** Back, Forward or Reload chosen here: about to move the page (an agent's tab: you take it over, S18 M2e-1). */
+  navigates?(going: 'back' | 'forward' | 'reload'): void;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
   extensionItems?(params: ContextMenuParams): MenuItem[];
   /**
@@ -114,9 +116,30 @@ export function buildContextMenu(contents: WebContents, params: ContextMenuParam
     const blocking = deps.adBlocking?.on(params.pageURL) ?? null;
     const effects = deps.effects?.available() ? deps.effects : null;
     section(
-      { label: 'Back', enabled: history.canGoBack(), click: () => history.goBack() },
-      { label: 'Forward', enabled: history.canGoForward(), click: () => history.goForward() },
-      { label: 'Reload', accelerator: accel('nav.reload'), click: () => contents.reload() },
+      {
+        label: 'Back',
+        enabled: history.canGoBack(),
+        click: () => {
+          deps.navigates?.('back');
+          history.goBack();
+        },
+      },
+      {
+        label: 'Forward',
+        enabled: history.canGoForward(),
+        click: () => {
+          deps.navigates?.('forward');
+          history.goForward();
+        },
+      },
+      {
+        label: 'Reload',
+        accelerator: accel('nav.reload'),
+        click: () => {
+          deps.navigates?.('reload');
+          contents.reload();
+        },
+      },
       { type: 'separator' },
       { label: 'Print…', accelerator: accel('page.print'), click: () => contents.print() },
       ...(deps.screenshot ? [{ label: 'Take a screenshot', accelerator: accel('page.screenshot'), click: () => deps.screenshot?.() }] : []),

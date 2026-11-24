@@ -1,527 +1,81 @@
 # Chord — Roadmap
 
-Status: **draft for review** · Last updated 2026-11-17 · Companions: [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md)
+Last updated 2026-11-24 · Latest preview: **0.14.0** (2026-11-22) · Companions: [README.md](README.md), [RELEASE_NOTES.md](RELEASE_NOTES.md), [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md)
 
-Every milestone ends with something you can actually use, on all three operating systems. Dates are targets, not promises. The one hard date is Arc's shutdown on **Tue 2026-12-22**, and Phase 1 is sized to ship a public preview eight days before it.
-
----
-
-## How we work (agreed 2026-10-22)
-
-- **Windows first.** Windows is your daily driver. Every feature is built and verified by hand on Windows first; macOS and Linux stay green in CI throughout.
-- **Parity at the end of each phase.** Full parity on all three OSes (the brief's rule) is required before each phase closes, so M1.6 includes a parity pass.
-- **Push to `main` after each significant change.** CI runs the full OS matrix on every push.
-- **Hands-on testing:**
-  - Windows: on this machine, with its 144 Hz display.
-  - macOS: on your Apple Silicon MacBook.
-  - Linux: in your VM, plus WSLg and CI (X11 and Wayland).
-
-## Definition of done (every milestone)
-
-A milestone is done when all of these hold:
-
-1. **It works on every target.**
-   - macOS: arm64 and x64.
-   - Windows: x64 and arm64.
-   - Linux: x64 and arm64, on both **X11 and Wayland**.
-   - CI is green across that whole matrix.
-2. **It's tested.** Unit tests cover the logic; E2E tests cover the milestone's flows.
-3. **The UI passed design QA** (DESIGN.md §12):
-   - Captures from every OS × light/dark × 3 themes.
-   - I critique those captures against DESIGN.md and fix what fails before you see anything.
-   - New interactions get trace tests and a 144 Hz screen recording.
-4. **Performance budgets are checked** (ARCHITECTURE.md §1) for every surface the milestone touches.
-5. **The basics are respected in new UI:**
-   - Undo for destructive actions.
-   - Keyboard access, with a registered shortcut where DESIGN.md §14 lists one.
-   - Reduced motion and reduced transparency.
-   - Every new animation has its switch in Settings → Motion (DESIGN.md §6.8).
-6. **You get a handoff note**:
-   - What to try.
-   - What to verify by hand, split by platform where behavior differs.
-   - What's known to be missing.
+Chord is a calm, fast, private desktop browser for Windows, macOS, and Linux (X11 and Wayland). Every milestone here is framed as what changes for the person using Chord. For release-by-release history, see [RELEASE_NOTES.md](RELEASE_NOTES.md); for technical background and spikes, see [docs/decisions/](docs/decisions/).
 
 ---
 
-## At a glance
+## Done
 
-| Phase | Milestone | Target | When it's done, you can… |
-|---|---|---|---|
-| **1 · Daily driver** | M1.0 Foundations | Oct 23 → Oct 30 | launch a themed Chord window that browses one page, on all three OSes |
-| | M1.1 Browsing shell | → Nov 6 | browse with real tabs, search Google from ⌘T, quit and find your tabs again |
-| | M1.2 Sidebar | → Nov 16 | pin, fold, drag, close, and undo the Arc way; collapse to the Dia-style bar |
-| | M1.3 Chords | → Nov 23 | keep separate colorful chords, optionally with separate sign-ins, and swipe between them |
-| | M1.4 Command bar + archive | → Nov 30 | find any tab, page, or action from ⌘T; idle tabs tidy themselves away |
-| | M1.5 Extensions + essentials | → Dec 7 | use your password manager and Chrome extensions; videos pop out when you switch away; Chord is your default browser |
-| | M1.6 First run + preview | → **Mon Dec 14** | install Chord 0.1 from GitHub on any machine and switch from Arc |
-| **2 · Side by side** | — | Jan 2027 | work in splits, open links from other apps in a mini window, Peek from pinned tabs, hover-preview pinned tabs and folders, and chat with the assistant about your tabs |
-| **3 · Links from everywhere** | — | Feb 2027 | send a site's links to the right chord, install from Flathub or apt/dnf, update in place, go Google-free |
-| **4 · Deeper** | — | Mar 2027 + | install signed builds that update themselves on every OS |
-| **After 0.1** | 0.1.x | Nov 2026 | sign in to sites that ask for a password in a box, and trust that a force-quit loses nothing |
-| | 0.2 · Cleaner pages | Dec 2026 | browse without ads or trackers, and bring your bookmarks and history from Chrome, Edge, Brave, Firefox or Safari |
-| | 0.3 · Effects | next, after the performance plan (moved up 2026-10-25); Effects and form filling built 2026-10-25 | restyle a site by hand or by asking the assistant, with a Dry/Wet switch; have the assistant fill a form you check first |
-| | Your data | right after Effects (moved up 2026-10-25): export shipped in 0.5.0, import and sync in 0.6.0 | export everything and bring it back, and sync your setup through a folder you already sync, end-to-end encrypted |
+Everything below is shipped in a preview release or merged on `main`.
 
-## Where we are (updated 2026-11-17)
-
-Released, all previews: **0.1.0** (2026-10-24) and **0.2.1** (2026-10-25), then 0.3 to 0.6 (Effects, form filling, Your data: export, import and sync; 2026-10-25 to 10-31), **0.6.1** (security, Electron 45.2.3), **0.7.0** and **0.8.0** (Chord Player, and play in the tab on Windows; 2026-11-06), **0.9.0** and **0.9.1** (Favorites per chord, address-bar fixes; 2026-11-09), **0.10.0** (Back, Forward and Reload beside the address; 2026-11-12) and **0.11.0** (passwords phase 1, huge sidebars, the windowed Pinned, Electron 45.3.2; 2026-11-16). 0.2.0, 0.8.0, 0.8.1, 0.10.1, 0.10.2 and 0.11.1 were tagged but never published (0.8.0's release run was cancelled; 0.9.0 carried its changes, 0.11.0 carried 0.10.1's and 0.10.2's, and 0.12.0 carries 0.11.1's: HTTP sign-in, the sign-in sweep's fixes and Peek right after launch). 0.12.0 (passwords phase 2) was tagged but never published: **0.13.0** (2026-11-20) carried it with passwords phase 3, **0.13.1** (2026-11-21, security) followed, and **0.14.0** (2026-11-22) turned on outside agents (S18 M1). Chord Player: 0.1.1, 0.1.2, 0.2.0 and 0.3.0 (ECS 45.2.1) released. 0.2.1 is the first build signed on Windows and the first that updates itself (Windows and the AppImage). RELEASE_NOTES.md has each release. chordbrowser.com's download links follow each published release. Every item marked done has unit and E2E tests, and the six release targets build and pass their smoke tests.
-
-**Under way (2026-11-22):** outside agents shipped in 0.14.0 ([S18](docs/decisions/S18-agent-mcp.md) M1: Claude Code, Codex and Antigravity). Next: a spike on Antigravity as the assistant's third app (`agy acp`, API key or Enterprise sign-in only), and Electron 46 when it lands.
-
-**Renovate isn't running** (found 2026-11-15): `renovate.json` is in place, but no Dependency Dashboard exists and no Renovate pull request has ever opened; Electron's last two bumps were made by hand. Until the Renovate app is installed on the repository (the maintainer's step), electron-watch's P0 issue is the signal and the planning thread makes the bump.
-
-| Area | Done | In progress | Left |
-|---|---|---|---|
-| Phase 1 (M1.0–M1.6) | all of it | | by hand: the trackpad swipe on a Mac, password-manager sign-ins, screen readers |
-| Phase 2 | The assistant, split view, mini window, Peek (opening right after launch since 0.11.1), hover previews | | The assistant's slide-in; Codex's live-turn checks (S5, after its usage limit resets Nov 16); Electron 46 (2027-01-05) |
-| Phase 3 | link routes, in-app updates (live since 0.2.1), Google-free mode, D7 Safe Browsing, a Flatpak built from source, the apt/dnf upload workflow (off until Cloudsmith is set up), the 72-hour runbook | | yours: the Flathub manifest and submission, the Cloudsmith repository and key, Safe Browsing checked by hand |
-| Phase 4 | Windows signing (live since 0.2.1); macOS signing and notarization, built and off | | yours: an Apple Developer account, then Mac in-app updates; a Store submission; Electron 47 |
-| After 0.1 | 0.1.x's gaps, 0.2's cleaner pages, Effects, form filling, Chord Player (released; play in the tab on Windows), DevTools in the window, counts on tabs, battery, CI checks for launch time and memory, a lighter launch, a proxy per chord, Your data (export, import from a Chord file and sync), Favorites per chord, 5,000 pinned tabs (the store, the sidebar), the assistant reading a page's problems, passwords phases 1 and 2 (S17: 0.11.0, 0.11.1's HTTP sign-in, 0.12.0) | 0.12.0's release | Clear Today's slow frames; the back/forward cache (Electron upstream); Your data's hand checks with real sync apps; S16 upstream (below) |
-
-**Next, in order:** Electron 46 first, as soon as it's stable (January 5, 2027), on the 72-hour clock, whatever else is under way; then, as the planning thread recommends (not yet confirmed by the owner), passwords phase 3, the harder forms ([S17](docs/decisions/S17-passwords.md) §15: saving on formless sign-ups, open shadow roots, same-origin frames, recipes for named sites); then sync's hand checks with real sync apps. Passwords phase 1 (the vault, the detector, the menu, filling and the save cards) shipped in 0.11.0; HTTP sign-in and the sign-in sweep's detector fixes came in 0.11.1, never published and folded into 0.12.0; phase 2 (import and export, the generator, sign-up and change-password forms) is in 0.12.0.
+- **Daily-driver browsing shell (0.1.0–0.10.0).** Vertical sidebar with pinned tabs, nestable folders, per-chord Favorites, auto-archiving unpinned tabs, and minimal mode; color-themed chords with optional separate sign-ins and per-chord proxies; instant command bar (`⌘T` / `Ctrl+T`); split view (up to four panes); Peek, mini windows, and link routes; Chrome extensions; built-in ad and tracker blocking ([S11](docs/decisions/S11-ad-blocking.md)), Google Safe Browsing, and Google-free mode ([S10](docs/decisions/S10-google-free.md)); reader view, built-in screenshots, media controls and auto picture-in-picture ([S7](docs/decisions/S7-auto-pip.md)), single-tab screen sharing with presenting mode, docked DevTools, and crash resilience; signed Windows builds and differential in-app updates on Windows and AppImage. See [RELEASE_NOTES.md](RELEASE_NOTES.md).
+- **Effects and assistant form filling (0.3.0–0.4.0).** Restyle any site with your own CSS, hidden elements, presets, or assistant-written styles behind a Dry/Wet toggle; ask the assistant to fill a form after you review each field ([ARCHITECTURE.md §9](ARCHITECTURE.md#9-browser-engine-services), [§11](ARCHITECTURE.md#11-the-assistant-panel)).
+- **Your data: import, export, and encrypted sync (0.2.0, 0.5.0–0.6.0).** Bring bookmarks, history, and Firefox open tabs in from Chrome, Edge, Brave, Firefox, and Safari; export everything to one plain or passphrase-encrypted file ([docs/data-format.md](docs/data-format.md)); sync your chords, pinned tabs, Favorites, themes, settings, link routes, and Effects end-to-end encrypted through a folder you already sync ([S15](docs/decisions/S15-your-data.md)).
+- **Widevine streaming through Chord Player (0.7.0–0.8.0, Chord Player 0.1.1–0.3.0).** Optional companion app for Netflix, Spotify, and other DRM services—playing right inside the tab on Windows and in its own window on macOS and Linux—so Chord itself stays on stock Electron for fast security updates ([S12](docs/decisions/S12-widevine.md), [S14](docs/decisions/S14-widevine-player.md)).
+- **Built-in passwords vault (0.11.0–0.13.0).** Local passphrase-locked vault with click-to-fill menus, save and update cards, HTTP sign-in prompts, CSV and encrypted Chord-file import/export, site-rule password generation, sign-up and change-password flows, and support for two-step sign-ins, single-page apps, open shadow roots, same-origin frames, and major identity providers ([S17](docs/decisions/S17-passwords.md)).
+- **Outside agents reading pages (0.14.0).** Connect Claude Code, Codex, or Antigravity over Chord's local MCP endpoint so agents open and read pages in their own sidebar tabs, or read a tab you explicitly share, with connect cards and one-key Stop ([S18](docs/decisions/S18-agent-mcp.md), [#98](https://github.com/anaremore/chord-browser/pull/98), [#99](https://github.com/anaremore/chord-browser/pull/99)).
+- **Outside agents acting on pages (merged on `main`, shipping in the next release).** Agents click, type, choose options, navigate, and press safe keys from page snapshots—with per-site approval cards, always-ask cards for risky steps and outgoing data sends, and peer-process checks ([S18](docs/decisions/S18-agent-mcp.md), [#103](https://github.com/anaremore/chord-browser/pull/103), [#104](https://github.com/anaremore/chord-browser/pull/104), [#110](https://github.com/anaremore/chord-browser/pull/110), [#112](https://github.com/anaremore/chord-browser/pull/112)).
+- **Faster checks and tiered CI (merged on `main`).** Oxlint ([#105](https://github.com/anaremore/chord-browser/pull/105)), TypeScript 7 ([#106](https://github.com/anaremore/chord-browser/pull/106)), sharded end-to-end suites ([#108](https://github.com/anaremore/chord-browser/pull/108)), on-demand Knip ([#111](https://github.com/anaremore/chord-browser/pull/111)), and tiered CI ([#113](https://github.com/anaremore/chord-browser/pull/113)).
 
 ---
 
-## Before we start
+## Now
 
-**Answered 2026-10-22:**
-- **Q1:** Push to `main` after each significant change.
-- **Q2:** App ID `com.chordbrowser.Chord`.
-- **Q3:** You test on an Apple Silicon MacBook and a Linux VM; Windows is the primary platform (see *How we work*).
+Work actively in flight on open branches and pull requests.
 
-**Needed by a specific milestone:**
-
-| # | Question | Needed by | My default |
-|---|---|---|---|
-| Q4 | Google search suggestions while typing. They make the command bar feel faster, but every keystroke goes to Google. | M1.1 | **Decided:** on, with the switch in Settings → General (built) |
-| Q5 | Favorites: the row of app tiles at the top of the sidebar, shared across chords. Arc had them and your Dia screenshot shows them. | M1.2 | **Decided:** yes (built) |
-| Q6 | Sidebar toggle shortcut: ⌘S / Ctrl+S (matches Arc, shadows "Save page") or ⌘⇧S / Ctrl+Shift+S | M1.2 | **Decided:** ⌘S; Save page on ⌘⇧S (built; Save page itself is still to come) |
-| D1 | Extension library license (ARCHITECTURE.md §16) | M1.5 | **Decided:** GPL-3 combined binaries; source is MIT |
-| D4 | DRM for Netflix and Spotify (ARCHITECTURE.md §16) | M1.6 | Stock Electron in v1, no DRM |
-
-**Defaults I'll use from DESIGN.md §13 unless you object:**
-- The assistant on ⌘E / Ctrl+E.
-- Domain-only top strip on Windows/Linux.
-- Grain at 0.35.
-- Compact density deferred.
-- No sounds.
-- Peek-on-hover on in minimal mode.
+- **Electron 45.4.1 security update.** Ship upstream Chromium, V8, ANGLE, Dawn, FFmpeg, and PDFium security fixes on Chord's 72-hour patch clock ([#63](https://github.com/anaremore/chord-browser/issues/63)).
+- **Your hand on an agent's tabs (S18 M2e-1).** Close agent tabs with the same `×` button and middle-click as your own, reload or navigate them to pause the agent immediately, and keep the built-in assistant from reading an agent's tab unless you point it there ([#116](https://github.com/anaremore/chord-browser/pull/116), [S18](docs/decisions/S18-agent-mcp.md#m2e-plan-the-assistant-acts-in-your-tab)).
+- **Reliable clicks on live, redrawn pages.** Automatically re-find buttons and controls when a page replaces their DOM nodes between snapshot and click, while still refusing ambiguous or changed targets ([#117](https://github.com/anaremore/chord-browser/pull/117), [S18](docs/decisions/S18-agent-mcp.md)).
+- **Faster pull-request checks and repo guardrails.** Run full cross-platform E2E only when a PR touches platform-sensitive code (keeping nightly full runs on `main`) ([#118](https://github.com/anaremore/chord-browser/pull/118)), alongside contributor/agent guidelines (`AGENTS.md`), invariant tests, and balanced CI shards.
 
 ---
 
-## Phase 1 — Daily driver
+## Next
 
-**Goal:** a browser an Arc user can switch to and live in every day, on macOS, Windows, and Linux, before Arc goes dark.
+Planned in order after the work in flight lands.
 
-### M1.0 Foundations · Oct 23 → Oct 30
-
-- **Monorepo scaffold:**
-  - pnpm workspaces, TypeScript strict, React 19 + React Compiler.
-  - electron-vite 6 on **Electron 45**. Its Electron 45 support is unverified, so the first commit proves it; the fallback is ejecting to plain Vite.
-  - Packages: `@chord/core`, `ipc`, `db`, `tokens`, `ui`.
-- **Quality gates:**
-  - ESLint (Oxlint since 2026-11) plus the token-enforcing stylelint rules (DESIGN.md §4.1).
-  - Vitest.
-  - A Playwright `_electron` harness with test-only IPC.
-- **CI matrix:**
-  - `macos-26`, `macos-15-intel`, `windows-latest`, `windows-11-arm`, `ubuntu-24.04` (Xvfb and Weston-headless Wayland), and `ubuntu-24.04-arm`.
-  - Visual captures are uploaded as artifacts on every PR.
-- **Repo hygiene:**
-  - `LICENSE` (MIT), README, CONTRIBUTING, CODE_OF_CONDUCT.
-  - SECURITY.md, with a temporary contact until `security@chordbrowser.com` exists.
-  - Renovate config and the `electron-watch` workflow (ARCHITECTURE.md §14).
-- **Foundations:**
-  - The `tokens` package with `createChordTheme()` and its 10,000-input contrast test.
-  - The `core` reducer with undo round-trip property tests.
-  - The `chord-data` utility process with `node:sqlite`, migrations, and backups.
-- **Spikes**, each about a day, with results written up in `docs/decisions/`:
-  - **S1** `node:sqlite` with FTS5 in utilityProcess on every OS.
-  - **S2** sign-in and bot-check matrix: Google, Microsoft, Apple, GitHub, Cloudflare Turnstile. This is the biggest risk.
-  - **S3** the macOS default-browser prompt.
-  - **S4** blur over a tab view.
-  - **S6** trackpad gesture phases per OS.
-  - **S7** auto picture-in-picture controls and *back to tab* routing.
-  - **S8** keyboard routing: reserved keys caught before the page, page-first keys that defer to it (DESIGN.md §14).
-
-### M1.1 Browsing shell · → Nov 6
-
-- **Window:**
-  - Composition: shell, tab, popover, and overlay views (ARCHITECTURE.md §5).
-  - Materials: vibrancy, Mica, or solid.
-  - Native window controls: traffic lights on macOS, Window Controls Overlay on Windows and Linux.
-  - The inset, rounded content frame, with layout sync.
-- **Tabs:**
-  - Open, close, activate, and navigate, with history recording and favicons (including fallback monograms).
-  - Sleeping tabs.
-  - OAuth-capable popups.
-- **Browser basics:**
-  - Native context menus, find in page, fullscreen.
-  - Downloads, permission prompts.
-  - Certificate interstitial, crash page.
-- **Command bar v0:** always mounted; URL, Google search, open tabs. ⌘T opens it centered; **⌘L / Ctrl+L edits the address in place** in the URL pill.
-- **Keyboard:** the shortcut registry and every Phase 1 shortcut in DESIGN.md §14 that has an action by then; the rest are added as their features land. Includes the cheat sheet (⌘⌥/ / Ctrl+Alt+/).
-- **Persistence:** session restore on relaunch.
-
-### M1.2 Sidebar · → Nov 16
-
-- **Structure:**
-  - Pinned and Today sections.
-  - Nestable, collapsible folders.
-  - Pinned tabs reset to their URL.
-  - *Clear* Today.
-  - Favorites, if Q5 is yes.
-- **Drag and drop** with live make-room animation and the drop settle (`@dnd-kit/react` wrapped in `SortableTree`).
-- **Choreography:** distinct close, archive, and pin motions (DESIGN.md §6.5), with undo toasts for every destructive action.
-- **Collapse to minimal mode** (DESIGN.md §3.3), with peek-on-hover.
-- **Polish:** sidebar resize with detent; full keyboard tree navigation and keyboard drag-and-drop.
-
-### M1.3 Chords · → Nov 23
-
-- **Chords:** create, rename, reorder, delete with undo; icons.
-- **ThemePicker:** wheel, swatches, presets, grain, light/dark/auto, *Surprise me*.
-- **Switching:**
-  - ⌘/Ctrl+1–9 and clicking the switcher.
-  - **1:1 trackpad swipe**, interruptible, on both the sidebar and the minimal bar.
-  - Theme crossfade.
-- **Keep sign-ins separate:** per-chord profiles and session partitions. Moving a tab across a profile boundary is handled explicitly.
-
-### M1.4 Command bar + archive · → Nov 30
-
-- **Unified search:**
-  - Sources: open tabs in every chord, pinned tabs, history (FTS5), archive, actions.
-  - Ranking ported from Crest's tested scoring, with learned picks per chord. Inline autocomplete, and Google suggestions (per Q4).
-  - `@tabs`/`@history`/… filters, site keywords (`yt`+Tab), and Enter variants that choose where a result opens (DESIGN.md §7.3).
-  - **Budgets measured:** under 50 ms to open, and results on the same frame as each keystroke.
-- **Archive:**
-  - The auto-archive policy, per-chord idle time (default 12 h).
-  - `chord://archive` with restore.
-  - ⌘⇧T walks the archive.
-
-### M1.5 Extensions + essentials · → Dec 7
-
-- **Chrome extensions:**
-  - Install, update, and remove from the Chrome Web Store, per profile.
-  - Toolbar action buttons and popups, in the sidebar URL pill, the minimal bar, and the Windows/Linux strip.
-  - Extension context-menu items.
-  - Security fixes applied to the Web Store installer.
-  - **Acceptance suite:** Bitwarden, 1Password, Proton Pass, Dark Reader, uBO Lite smoke test.
-- **Auto picture-in-picture**, as in your Dia screenshots (ARCHITECTURE.md §9). It depends on S7.
-- **Password-manager desktop links:** let 1Password and Bitwarden extensions reach their desktop apps through native messaging. This is Crest's fix: also look in Chrome's `NativeMessagingHosts` locations, the registry on Windows.
-- **Resilience:** crashed pages reload themselves at most twice; playing, PiP and screen-sharing tabs are never slept or archived.
-- **Private windows.**
-- **Default browser** on all three OSes:
-  - Windows: the NSIS include that writes the registry keys, plus a deep link to Settings.
-  - macOS: `Info.plist` and the system prompt.
-  - Linux: `.desktop` plus GIO and `xdg-settings`.
-  - Links from other apps open in a mini window (Phase 2, below); Settings → General can make them tabs instead.
-- **`chord://settings`:** search engine, auto-archive, appearance, PiP, extensions, default browser, update channel.
-- **Rebindable shortcuts** with conflict detection (moved up from Phase 3 at your request, 2026-10-23). **Done:** every action's keys can be changed in Settings → Keyboard shortcuts (DESIGN.md §14.1).
-
-### M1.6 First run + preview release · → Mon Dec 14
-
-- **First run:** the onboarding flow from DESIGN.md §8.1, under 60 s to your first chord. Empty states and a copy pass.
-- **Accessibility pass:** ✅ automated (DESIGN.md §10 *As built*, ARCHITECTURE.md §15.5).
-  - Every flow completed keyboard-only: first run, tabs (F6 into the sidebar, move, reorder, pin, fold, close), chords, the command bar, Settings (change and reset), the assistant, split view. `keyboard.spec.ts`.
-  - Screen-reader structure checked by aria snapshots; axe clean (serious and critical) on every surface, light and dark, four themes. `a11y.spec.ts`.
-  - Reduced motion (both ways), reduced transparency (wired to `nativeTheme.prefersReducedTransparency`, live), Windows High Contrast (`forced-colors`, with captures).
-  - ⏳ By hand: a screen-reader smoke test with Narrator (Windows), VoiceOver (macOS, docs/testing/macos.md) and Orca (Linux); real Windows High Contrast themes. Text scaling is built: Settings → Appearance → Interface size, 90–150% (DESIGN.md §10 *As built*).
-- **Full design QA sweep** across the capture matrix.
-- **Unsigned packaging** (ARCHITECTURE.md §15.2):
-  - macOS: universal `.dmg` + `.zip`. ⚠ Verify the ad-hoc signature that Apple Silicon needs.
-  - Windows: NSIS x64 + arm64.
-  - Linux: AppImage (refuses to run unsandboxed), `.deb`, `.rpm`.
-- **Install guides** covering Gatekeeper *Open Anyway* and SmartScreen *Run anyway*.
-- **Releases:** a notify-only update check, and the tag-driven release workflow. **Chord 0.1 "preview" on GitHub Releases.**
-
-### Phase 1 exit criteria
-
-- Every Phase 1 feature from the brief works on all targets: sidebar, pinned/Today, folders, auto-archive, chords, command bar, first run, collapsible sidebar. So do Chrome extensions, default-browser registration, and auto-PiP.
-- Spike S2 is resolved: Google sign-in works in Chord.
-- Performance budgets are met on reference hardware: cold launch < 1.5 s, command bar < 50 ms, 120 fps shell where the display supports it.
-- You've used it as your main browser for at least a few days without going back to Arc.
-
-**Explicitly not in Phase 1:**
-- Split view, Peek, mini window, hover previews.
-- The assistant.
-- In-app update installs, Flatpak, package repos.
-- Ad blocking, Safe Browsing.
-- Code signing.
+- **The assistant clicks and types in your tab (S18 M2e-2).** Let the built-in assistant act directly in the tab you're looking at when you ask—starting with a spike on WebAuthn, native dialogs, PaymentRequest, FedCM, and print handling in Electron 45—with inline site, risky-step, tainted-typing, leaving-site, and *Send data* cards, instant handoff whenever you use or leave the tab, and the password vault staying out of reach ([S18](docs/decisions/S18-agent-mcp.md#m2e-plan-the-assistant-acts-in-your-tab), [#114](https://github.com/anaremore/chord-browser/pull/114)).
+- **Acting polish and context-based risk checks (S18 M2g).** Make acting hold up on real-world pages—same-site iframes, late-loading interactive controls, duplicate-label handling, and remaining M2d follow-ups ([#115](https://github.com/anaremore/chord-browser/issues/115))—and replace coarse word lists with context-based risk checks (page structure, locally observed payment context, per-site *No real money here* choices, and escalation-only model hints) for both outside agents and the assistant ([S18](docs/decisions/S18-agent-mcp.md#risk-from-context-for-agents-and-the-assistant-the-owner-2026-11-24-in-m2g)).
+- **Acting docs and release (S18 M2f).** Update [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md), this roadmap, and [chordbrowser.com](site/public/index.html) for page acting across outside agents and the assistant, and ship the release ([S18](docs/decisions/S18-agent-mcp.md#slices)).
 
 ---
 
-## Phase 2 — Side by side · January 2027
+## Later
 
-- **Electron 46 upgrade** as soon as it's stable (Jan 5, 2027). It's our first major upgrade and the rehearsal for the 8-week cadence.
-- **Split view:** 2–4 panes, drag-to-split drop zones, saved as one unit in the sidebar, dividers, focus ring (DESIGN.md §7.9 and §8.4).
-- **Mini window** for links from other apps, promotable into a chord. On Wayland the compositor places it. *(Moved up from Phase 3 on 2026-10-22: Chord can already be your default browser.)* **Built 2026-10-23** (DESIGN.md §7.9).
-- **Peek** for links clicked inside pinned tabs. *(Moved up from Phase 3 on 2026-10-22.)* **Built 2026-10-23**, with *Open link in Peek* in any tab's menu, private windows included (DESIGN.md §8.5).
-- **Hover previews** for pinned tabs and folders, with the capture cache. *(Built 2026-10-23: ARCHITECTURE.md §9, with a switch in Settings → Privacy.)*
-- **The assistant: conversations on the fly, optionally reading the browser** (ARCHITECTURE.md §11). Scope set 2026-10-22: *"basic chat is enough"*.
-  - **Setup:** detects your `claude` / `codex`; "Sign in" runs `claude auth login` or `codex login` for you.
-  - **Adapters:** Claude Code (the unmodified CLI) and Codex app-server.
-  - **Reading:** tabs, selection, history and archive, scoped by a setting (default **Ask first**), with citations that highlight the quote.
-  - **Threads:** one per chord, kept by Chord and resumed across restarts.
-  - **Controls:** exclusions per site, plus per-chord and global off.
-  - No organize actions: the assistant reads, it doesn't rearrange your tabs.
-  - **Built** (ARCHITECTURE.md §11 as built; spikes S10 pass, S5 partly verified). **Built 2026-10-23:** reading PDFs (with page citations), a context meter, and Claude Code or Codex installed only inside WSL. Still to do: the panel's slide-in animation.
+Queued work without fixed dates, grouped by what it unlocks.
 
-## Phase 3 — Links from everywhere · February 2027
+### Engine, security, and distribution
 
-- **Link routes** (from Crest): rules that send a site's links to a chosen chord, and Chord remembering which chord a site belongs in. **Built 2026-10-23**, with the mini window: routes apply to links from other apps and to the command bar, and Chord offers a route rather than making one (DESIGN.md §8.5).
-- **Distribution** (status 2026-10-23, [docs/releasing/](docs/releasing/patch-runbook.md)):
-  - **Flathub:** a from-source build, app ID verified through chordbrowser.com.
-    - *Done:* `flatpak/` builds Chord from source with no network, on the Electron BaseApp 26.08 ([flathub.md](docs/releasing/flathub.md)).
-    - *Yours, by hand:* Flathub's AI policy forbids AI-written manifests and AI-opened PRs, so you write the manifest that's submitted, and the submission must disclose Chord's AI-written code; reviewers may weigh that against it.
-    - *To decide:* the app ID. `com.chordbrowser.Chord` needs a page on chordbrowser.com over HTTPS for verification; `io.github.anaremore.chord-browser` works today.
-  - **Cloudsmith** apt and dnf repos, GPG-signed.
-    - *Done:* `release.yml` builds a `.deb` and an `.rpm` for each architecture, `linux-repos.yml` uploads each published release's packages, and the README has the install steps marked "coming soon".
-    - *Yours:* the Cloudsmith repository and the `CLOUDSMITH_API_KEY` secret ([linux-repos.md](docs/releasing/linux-repos.md#switching-it-on)).
-  - **In-app updates** on Windows and AppImage, gated by Ed25519-signed manifests. *Built:* download in the background, then "Restart to update"; it needs the signing key made once ([patch-runbook.md](docs/releasing/patch-runbook.md#update-signing-key)).
-  - The **72-hour patch runbook** rehearsed end to end. *Done:* written ([patch-runbook.md](docs/releasing/patch-runbook.md)) and rehearsed on 2026-10-23 up to the publish step. The first real release completes the rehearsal.
-- **D7 Safe Browsing.** **Decided and built 2026-10-23** (ARCHITECTURE.md §14.5): Google's Safe Browsing API v5 in Local List Mode, for pages, frames, redirects and downloads in every window, private ones too.
-  - *Built:* the lists and hashing in a worker thread (a local check takes about 0.2 ms); the warning in the content frame, with *Back to safety*, *Visit anyway* behind Details (remembered until you quit), Google's learn-more pages and its attribution; held downloads kept as `.crdownload` until you keep or delete them; Settings → Privacy's switch with its notice; first run's step for new profiles, a one-time offer for older ones; off in Google-free mode.
-  - *The key:* the `CHORD_SAFE_BROWSING_KEY` secret in the `release` environment, put into release builds at build time. Builds without it show Safe Browsing as unavailable.
-  - *Yours:* restrict the key to the Safe Browsing API, and check it by hand against Google's test pages ([patch-runbook.md](docs/releasing/patch-runbook.md#safe-browsing-key)).
-- **Google-free mode** (requested 2026-10-22).
-  - *Why not ungoogled-chromium itself:* it's a set of patches, domain substitutions and build flags for Chromium's source. Chord runs on Electron, which builds its own Chromium, so using it would mean building Electron from source with those patches applied. That's hours of build per OS and architecture for every security release, and no maintained project does it today.
-  - *What we can do instead:* first, an **audit spike** that runs a Chord session with a network log (`--log-net-log`) and lists every Google host Chord itself contacts, apart from pages you visit. Then a switch in Settings:
-    - a non-Google default search;
-    - no search suggestions;
-    - spellcheck dictionaries from a non-Google host (`session.setSpellCheckerDictionaryDownloadURL`), or local only;
-    - plus anything else the audit finds.
-  - *Kept honest by a test:* CI fails if a fresh session in this mode contacts a Google domain on its own.
-  - *Built:* the audit is [S10](docs/decisions/S10-google-free.md). The switch is in Settings → Privacy: a non-Google engine (your choice), so its suggestions too; spelling only with dictionaries already downloaded; no background Web Store update checks; Safe Browsing off. The test is `test/e2e/google-free.spec.ts`. A new profile's first tab is still Google, because the mode can't be on yet.
+- **Electron 46 upgrade (expected 2027-01-05).** Chord's first major Electron upgrade, rehearsing the 8-week cadence on the 72-hour security clock ([docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md)).
+- **macOS signing, notarization, and in-app updates.** Remove first-launch Gatekeeper warnings and turn on automatic updates on macOS (plus Touch ID for passkeys and passwords) once an Apple Developer account is set up ([docs/releasing/signing.md](docs/releasing/signing.md)).
+- **Linux package channels (Flathub, apt, and dnf).** Publish Chord on Flathub and turn on signed Cloudsmith apt and dnf repositories so Linux users update through their package manager ([docs/releasing/flathub.md](docs/releasing/flathub.md), [docs/releasing/linux-repos.md](docs/releasing/linux-repos.md)).
 
-## Phase 4 — Deeper · March 2027 onward
+### Agents and the assistant
 
-- **Code signing and notarization.** This unlocks macOS auto-update and removes the Gatekeeper and SmartScreen steps. An optional Microsoft Store (MSIX) channel.
-  - **Built 2026-10-23, off until your certificates exist** (ARCHITECTURE.md §15.2). Once the secrets are in the `release` environment, a tag build signs and checks itself, with no code change:
-    - macOS: Developer ID and the hardened runtime, notarized with an App Store Connect API key.
-    - Windows: Azure Artifact Signing, or a `.pfx`.
-    - Checks that stop a release that should be signed and isn't. Unsigned builds stay exactly as they are, and so do their in-app updates.
-  - **Your part:** [docs/releasing/signing.md](docs/releasing/signing.md) has the steps:
-    - Apple Developer Program, US$99 a year: about two days for an individual, longer for an organization.
-    - Artifact Signing, US$9.99 a month: 1–20 business days of identity validation. Individuals must be in the US or Canada.
-  - **Still to do:** Mac in-app updates (what they'd take is in that doc), and a Store submission. The Store package is drafted and builds, but is off.
-- **Electron 47** (around March 2027), compact density, and whatever Phase 1–3 use teaches us.
+- **Share a tab and let an agent act in it.** Opt-in acting on a tab you explicitly share with an outside agent, extending today's read-only tab sharing ([S18](docs/decisions/S18-agent-mcp.md#owners-answers-2026-11-22)).
+- **WebMCP pass-through.** Expose sites' own structured page tools (`document.modelContext`) to outside agents and the assistant through Chord's approval gate once Chromium ships WebMCP on by default ([S18](docs/decisions/S18-agent-mcp.md#webmcp-later)).
+- **Optional extension-free profile for agents.** An opt-in setting to run agent tabs in a dedicated profile (you sign in there once) without user extensions, closing Electron's current limit where extension content scripts still run inside agent tabs ([S18](docs/decisions/S18-agent-mcp.md#m2d-as-built-2026-11-23)).
+- **Antigravity as a built-in assistant app (on hold).** Revisit when `agy acp` can disable or gate its built-in web search, timers, and subagents; Antigravity remains supported as an outside agent ([S19](docs/decisions/S19-antigravity-assistant.md)).
 
-## After 0.1 (planned 2026-10-24)
+### Browsing and passwords
 
-Priorities: **P0** blocks testers, **P1** is the next release, **P2** is planned, **P3** is later or maybe. Decisions D5 and D12–D15 are in ARCHITECTURE.md §16.
+- **Passwords follow-ups and optional sync.** Fix remaining form-detection, subframe, and generator edge cases ([#39](https://github.com/anaremore/chord-browser/issues/39), [#41](https://github.com/anaremore/chord-browser/issues/41), [#60](https://github.com/anaremore/chord-browser/issues/60), [#66](https://github.com/anaremore/chord-browser/issues/66), [#68](https://github.com/anaremore/chord-browser/issues/68), [#71](https://github.com/anaremore/chord-browser/issues/71)), and revisit opt-in encrypted password sync ([S17](docs/decisions/S17-passwords.md#15-build-plan)).
+- **User scripts (Tampermonkey) and upstream engine gaps.** Enable `chrome.userScripts` upstream in Electron—or build Tampermonkey's subset in Chord if upstream stalls ([S16](docs/decisions/S16-user-scripts.md), [electron/electron#55337](https://github.com/electron/electron/issues/55337))—and track upstream back/forward cache support ([electron/electron#55333](https://github.com/electron/electron/issues/55333)).
+- **Everyday browsing additions.** Full-text search of pages you've read, page translation, floating multi-video players, compact density, faster signed site-rule and UI updates, and remaining manual verification passes (real-cloud sync in [docs/testing/sync.md](docs/testing/sync.md), macOS hardware checks in [docs/testing/macos.md](docs/testing/macos.md), and screen readers).
 
-### 0.1.0 · the preview
-- **P0** CI green on every OS, then tag `v0.1.0` and publish the draft as a prerelease.
+### Tooling and maintenance
 
-### 0.1.x · Daily-driver gaps · November
-- **P1 DRM notice.** **Built 2026-10-24** (ARCHITECTURE.md §16 D4, `main/drm.ts`): on the top DRM services (Netflix, Spotify, Disney+, Prime Video, Max, Hulu, Apple Music and TV, Peacock, Paramount+, Tidal), a notice that the site needs Widevine, which Chord doesn't include yet, with *Open in…* the other browsers import finds (opening "externally" would come back to Chord when it's the default). Recognized by address: catching a page's own DRM request would need a script in every page.
-- **P1 Spike S12, Widevine.** **Done 2026-10-24** (docs/decisions/S12-widevine.md): ECS trailed four of the last five CVE releases by 23 to 34 days, so D4 is decided as stock Electron for now.
-- **P2 Spike S14, a Widevine player** (D4's path, chosen 2026-10-24): an optional companion app on castLabs ECS, installed from the DRM notice, that opens only the notice's services, in a window of its own; any other link opens in Chord. **Done 2026-10-25** (docs/decisions/S14-widevine-player.md, prototypes in `spikes/widevine-player/`):
-  - **Plays:** ECS plays Widevine test streams on Windows, macOS and Linux, X11 and Wayland, up to 4K in software (L3), with picture-in-picture and fullscreen. The navigation lock and the control channel work.
-  - **Recommends:** a window of its own on every OS, once the maintainer has an EVS account for production VMP.
-  - **Glueing it over Chord's content area:** works on Windows as an owned window (under a frame of trail), trails on macOS, and is impossible on Wayland.
-
-  It covered:
-  - playback of Widevine test streams per OS, and which services refuse without VMP;
-  - EVS signing of the companion in CI;
-  - locking its navigation to the services;
-  - how it is installed and updated;
-  - what signing in feels like without Chord's extensions;
-  - Google-free mode (its CDM comes from Google).
-  - **Next: build it** (P2, started 2026-10-25). The maintainer's castLabs EVS account was confirmed on 2026-11-06 (the signup of 2026-10-25 was never confirmed, so it couldn't sign in), and its two secrets, `EVS_ACCOUNT_NAME` and `EVS_PASSWD`, are in the `release` environment (docs/releasing/signing.md, Chord Player). Release builds VMP-sign through it (since 0.1.1), and Windows builds are code-signed with Chord's Azure setup (since 0.1.2).
-  - **Built 2026-10-25: Chord Player** (ARCHITECTURE.md §9 and D4, DESIGN.md §7.14). What it does:
-    - It's `apps/player`, on castLabs ECS 44.10.1+wvcus, in a window of its own with a bar in the chord's colors. On Windows the window joins Chord's taskbar button.
-    - The DRM notice offers it first: *Install Chord Player (about N MB)*, its progress, then *Open in Chord Player*.
-    - Chord installs it per user from `player-v*` releases whose manifests Chord's update key signs, checks the zip's SHA-512, and unpacks it in a worker. Updates install beside the running version, and the previous one stays until the new one starts.
-    - It opens only the services and the hosts S14's census found; every other link opens in Chord, over a versioned local channel. The tab stays in Chord as *Playing in Chord Player*, and the player is on the Now playing card with *Back to the player*.
-    - It's hidden in Google-free mode and private windows.
-
-    How it's built and tested:
-    - `.github/workflows/player.yml` packages it for Windows x64, macOS x64 and arm64, and Linux x64 (no Linux arm64: no CDM S14 could test). It VMP-signs through EVS when the secrets exist, and smoke-tests each build by playing a Widevine test stream.
-    - `player-release.yml` drafts releases from `player-v*` tags. `ecs-bump.yml` opens a pull request for each newer stable `+wvcus` build, and never merges it.
-    - E2E: `player.spec.ts` drives the real player from Chord, in the Linux container and CI. Hand checks per service and OS, once production VMP is on: docs/testing/widevine-player.md.
-
-    **Released:** 0.1.1 (2026-11-06, ECS 44.10.1+wvcus, VMP-signed for production on Windows and macOS) and 0.1.2 (2026-11-06, `Chord Player.exe` code-signed on Windows with Chord's Azure setup). Hand-checked 2026-11-06 on Windows: installed from Spotify's notice, signed in, played. Chord 0.7.0 adds installing from Settings, asking again after no release, and removing the player when Chord is uninstalled (Windows).
-
-    **Built 2026-11-06: play in the tab, on Windows** (the maintainer's call; ARCHITECTURE.md §9, *Playing in the tab*). The player's page in a borderless window glued over the tab's content area (S14 §2 (b)), owned by Chord's window through a 5 KB helper (`window-owner.exe`, built with Windows' own C# compiler). It hides when you switch tabs or chords, and a still picture of it stands in whenever Chord draws over the page. Chord's shortcuts reach Chord from it, and closing the tab closes it. Fullscreen and picture-in-picture as before. Released in Chord 0.8.0 with Chord Player 0.2.0 (2026-11-06; 0.2.0 also code-signs the player's DLLs on Windows). It needs Chord Player 0.2.0; macOS (the window server makes it trail) and Wayland (no window positions) keep the window of its own. Hand checks: docs/testing/widevine-player.md, *In the tab*.
-
-    **Left:**
-    - macOS code signing (with Chord's, once there's an Apple Developer account);
-    - the hand checks on macOS, and Netflix;
-    - Chord's shortcuts forwarded from the player's window of its own (docked, they are);
-    - in the tab, Chord's window looks inactive while the player has the keyboard;
-    - an icon of its own.
-- **P1 Now playing, second round.** **Built 2026-10-24** (DESIGN.md §7.10, ARCHITECTURE.md §9): the card offers media you left playing or played from it, not a background tab's own autoplay or what you paused before leaving; several at once stack (the newest in full, up to two more as one-line rows, then "and N more"), in an order that doesn't jump when one plays again. Play and Pause read and press the site's own button where its element isn't enough (Twitch, whose player pauses its element again; SoundCloud, whose player isn't in the page; Bandcamp); YouTube and YouTube Music follow their element. Hand checks: docs/testing/media-sites.md. Then (asked the same day): each video row has picture-in-picture, so you choose which video is out; another swaps them.
-- **P2 Pop out every video** (asked 2026-10-24). Chromium has one picture-in-picture window, so "pop them all out" needs Chord's own floating players.
-  - **Design:** an always-on-top frameless window per video, holding the tab's own page. Its video fills the window through in-window fullscreen, so the site's own controls work. The windows stack in a corner, and each can be moved.
-  - **Returning:** *Back to the tab*, or closing the window, puts the page back in its tab. The tab's row says where it's playing meanwhile.
-  - **Card:** *Pop out all* appears with two or more videos.
-  - **Spike S13 first:** in-window fullscreen in a small always-on-top window on each OS (Wayland can't keep a window on top); what YouTube's, Twitch's and Jellyfin's players do in it; and the CPU cost of several videos decoding at once.
-  - **Alternative:** one floating window with the videos in a grid.
-- **P1 DevTools in the window** (asked 2026-10-24): DevTools open popped out today; dock it into the window beside the page (right or bottom, resizable), with a button to pop it out and back in, as Chrome does.
-  - **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.16). F12 docks a tab's DevTools on the right of its page, inside its frame or split pane, under a 32 px header of Chord's: the other side, pop out, close.
-  - Drag the edge between page and DevTools to resize, live. The side and size are one setting, kept across launches.
-  - *Pop out* moves them, as they are, into a window of their own; its bar's *Dock in the window* puts them back. New ones open the way you last chose. ⌘⇧D / Ctrl+Shift+D does both inside DevTools, as in Chrome.
-  - Each tab keeps its own. They close with the tab, and a tab with them open doesn't sleep. They glide with the page when the frame changes size, and F6 reaches them.
-  - They're a view of Chord's own: Electron's docking undocks them on Windows and Linux under Chord's caption controls, and the frame snapshot couldn't picture them inside the page's view. They load in a session of their own (a private window's in memory), never a profile's.
-  - Peek's and mini windows' pages keep popped-out DevTools.
-  - **Left:** remembering a DevTools window's size and place; a by-hand check on Windows and macOS (CI runs the journey on every OS).
-- **P0 HTTP Basic Auth.** **Built 2026-10-24** (ARCHITECTURE.md §9): a sign-in box in the popover over the tab that asked, for sites and proxies (Basic, Digest, NTLM), with the site's realm, a note after a wrong answer and a warning on plain HTTP. Chromium remembers a sign-in that worked until you quit; Chord keeps nothing (D12). Peek too (its box shows over Peek); not yet mini windows, whose pages get the site's 401 page.
-- **P0 Sign-in checks, by hand:** Google in a second chord on Windows, macOS and Linux; Microsoft, GitHub and Apple; 1Password, Bitwarden and KeePassXC-Browser (risk R2). No user-agent spoofing unless one fails (D15).
-- **P1 Crash resilience.** **Built 2026-10-24** (ARCHITECTURE.md §6.2): open tabs now keep their back/forward history, scroll position and form fields across a restart or a crash (before, they came back as just their address). E2E tests kill Chord mid-session and check a tab comes back where it was, and that every window, chord and split comes back.
-- **P0 Performance** (critical, the maintainer's call 2026-10-25). In this order, each measured before and after, and kept only if it wins:
-  1. **Smaller updates:** differential downloads. **Built 2026-10-25** (ARCHITECTURE.md §14.4): releases publish the Windows installers' blockmaps (an AppImage carries its own), and updates fetch only the blocks that changed, checked against the signed manifest's SHA-512. With the app archive stored as it is in the installer, a change to Chord's code is a 0.38 MB update instead of 3.24 MB (or the whole 126+ MB). macOS updates wait on signing.
-  2. **Preconnect from the command bar:** while you type, Chord connects to the top result's host (`session.preconnect`), as Chrome's address bar does, so the page starts sooner when you press Enter. **Built 2026-10-25** (ARCHITECTURE.md §9, Command bar).
-  3. **Chord's own processes:** measure what each window's UI views cost (shell, command bar, popover, hover preview: a renderer each, `app.getAppMetrics()`), then make the rarely used ones only when first needed, or share them, if that wins. **Measured 2026-10-25** (Linux, one window, idle; private memory from `/proc/<pid>/smaps_rollup`): shell 30 MB, command bar 21, popover 21, hover preview 15, so 87 MB of Chord's own UI per window (155 MB counting each one's share of what's shared); a second window adds 90 MB in all. Main is 114 MB, the GPU process 56, one simple page 12. Decided: the command bar and popover stay warm (the popover holds find, so making it later would slow the first ⌘F); making the preview on the first hover would save 15 MB a window, a small win for its risk, so not now. The bigger target is main's 114 MB, in step 4.
-  4. **The rest of the pass:**
-     - cold launch, against the 1.5 s budget (worst CI run 1.03 s). *2026-10-25:* **Node's compile cache for main: not doing.** It keeps compiled code in a folder the user can write, so anything running as you could plant code main would run, past the app-archive integrity check the fuses turn on; a few tens of milliseconds aren't worth that. The database open that took 4.5 s on Windows CI: the launch timeline now says where (1.56 s of it creating and migrating a new database on a CI runner; 15 ms on a desk machine), so it's the runner's disk. *2026-11-20:* a new database is now made in one transaction, one commit instead of 24 (ARCHITECTURE.md §7, *Migrations*): on a Windows desk the open went 31 → 26 ms (median of ten; the migrations alone 20 → 17 ms, 37 → 19 ms with each commit synced to disk). The unit perf suite reports both ways on every Windows CI runner (docs/testing/performance.md). **Non-critical launch work after the first page: built 2026-10-25** (ARCHITECTURE.md §1, *Launch order*). A startup trace found main was the shell's bottleneck: it serves every file of Chord's own views, and the shell's scripts waited 110–150 ms for it while the command bar, popover and hover preview loaded too. Those three now load once the shell has painted. The command bar is ready about 0.1 s later; ⌘T at the very moment of first paint takes 44 ms to its first frame instead of 27. Deleting unused sign-ins (launch used to wait for it) and their blocker copies, the assistant's pruning, and its look for Claude Code and Codex (which runs each twice) wait until the first page has loaded. Launch to a painted window, paired runs in the Linux container (median of 15 differences each): a fresh profile 579 → 474 ms, a returning one 531 → 424, with Claude Code and Codex installed 564 → 423, with Safe Browsing on 536 → 435, with a deleted chord's sign-ins to remove 565 → 437. perf.spec's launch test (24 launches each, before and after in turn): a fresh profile 555 → 468 ms (worst 855 → 511), 200 tabs restored 527 → 421 (worst 576 → 465). Stayed before the first page: ad blocking (its rules must be in before a page's first request; its lists refresh 5 minutes in already) and Safe Browsing's lists (the first navigation is checked, and a link opened from another app at launch is the likeliest phishing; its worker reads them off main, and its first update waits 15 s already);
-     - main's memory: 114 MB private, of which Chord's own JavaScript heap is 12 MB in use (measured 2026-10-25); the rest is Chromium's browser process, which every Electron app has;
-     - The assistant, the theme editor and Settings' code loaded when first opened. *2026-10-25:* **the shell's assistant panel and first run: not doing.** Loaded with dynamic imports (the assistant's chunk fetched at idle), they took 57 KB from the shell's 760 KB of script and 8 ms from its evaluation, but rolldown split the shared code into five more chunks, which main took 3–5 ms longer to serve. A returning launch didn't change (−0.3 ms), a fresh one stayed within the noise (−9 ms), and first run got 41 ms slower: it has to wait for its chunk to show without a flash. Settings was already its own renderer. If launch needs more, next: fewer, larger chunks for Chord's views (the shell's 22 scripts include 13 icon chunks under 0.5 KB, each a request main serves), or a cheaper `chord://` handler, as main is still about 84% busy while the shell fetches its scripts;
-     - the interactions over the 8 ms frame budget on 120 Hz displays. *2026-10-24:* CPU profiles (`CHORD_PERF_PROFILE=1`) found the costs. The frame snapshot's pictures now skip the preload and become bitmaps in a worker (collapse 17.1 → 8.1 ms worst frame, dock 14.5 → 6.3 ms, with 200 tabs), and dragging no longer hit-tests on every move (dnd-kit's AutoScroller replaced by `EdgeScroller`). *2026-10-25:* opening the assistant no longer lays its panel out twice in its first frame. Tab and chord switches no longer force a layout. The active highlight slides on its own (`SlidingPill`, reading geometry only after the browser's own layout) in place of Motion's shared-layout measuring (about 3 ms a switch with 200 tabs). The address bar's anchor reports only when the frame around it moves (5.6 ms). The roving Tab stop is placed after paint (2.8 ms). With 200 tabs, the 95th-percentile frame is now 3.3 ms for a tab switch and 5 ms for a chord switch. The profiles' `layoutReads` show which callers still force a layout. *2026-10-25, Clear Today:* measured in the Linux container on 4 CPUs, as shipped, its worst frame with 200 tabs is 13.5–21.4 ms over four runs (8–15 ms of work in its longest task), one frame as the clear starts; the rest of the animation stays under 8 ms. The cost is spread: React updating the list, the rows' exit animations, and a garbage collection when one lands there; the first clear after launch also compiles its code (15 ms once). **Not doing more for now:** under 16 ms needs the rows to leave without React re-rendering the list, a rework of the sidebar's animations for an action people take a few times a day;
-     - memory from `app.getAppMetrics()`, and tabs sleep sooner when free memory runs low (Electron has no pressure event). **Low-memory sleeping built 2026-10-24** (ARCHITECTURE.md §9);
-     - CI fails when launch time or memory grows past a set margin. **Built 2026-10-25** (docs/testing/performance.md, *Baselines*): `perf.spec.ts` holds each of Chord's own processes at idle (main, shell, command bar, popover, hover preview, the page, GPU, chord-data; one window, one simple page, the median of three launches) to 15% or 5 MB over the runner's baseline, whichever is more, and warm launches (200 tabs restored, the median of seven, each against a bare Electron launch on the same machine) to 25% over it. Each margin is at least three times the run-to-run spread measured. Baselines are per CI runner, and for the Linux container on 4 CPUs; macOS only reports. `pnpm --filter @chord/desktop perf:baseline` takes new ones, and a failure says what grew, by how much, and that command. CI holds them since 2026-10-25, with baselines from CI run 40242168101 for Linux (x64 X11 and Wayland, arm64) and Windows (x64, arm64). Retake them after a change that's meant to move them, a win included, so the gain is kept.
-  5. **Battery:** on battery, hidden tabs sleep sooner and Chord's own timers (Now playing's reads, update checks) slow down. **Built 2026-10-25** (ARCHITECTURE.md §9): on battery, hidden tabs sleep after 15 minutes instead of an hour, checked as soon as the computer goes on battery, and Now playing reads a playing tab every 15 s instead of 5 (Electron's own reports still bring most changes at once). Saving tabs' history no longer wakes main every 30 s: its timer is set only while something waits to be written, so with nothing going on Chord's own timers wake main about twice a minute (the memory check) instead of four times. Update checks stay as they are: one request a day.
-  6. **Back and Forward** reload the page in Chord (checked 2026-10-25: `pageshow` not persisted), where Chrome restores it from its back/forward cache. Chromium needs its embedder to opt in (`WebContentsDelegate::IsBackForwardCacheSupported`), and Electron 45 doesn't. Asked Electron upstream on 2026-10-25 ([electron/electron#55333](https://github.com/electron/electron/issues/55333): an opt-in web preference, with an offer to help with the patch); nothing in Chord can turn it on.
-  - Not doing: removing the app menu (shortcuts and the macOS Edit menu need it), or native modules (each Electron upgrade would need them rebuilt, against the 72-hour runbook).
-
-### 0.2 · Cleaner pages · December
-- **P1 Passkeys, properly** (asked 2026-10-24). **Built:** passkey autofill off, since it opened the system dialog by itself, and Chord's card for choosing between a key's passkeys; without it Electron cancelled every security-key sign-in. Hand checks: docs/testing/passkeys.md. **Next:** Touch ID on macOS once builds are signed (`app.configureWebAuthn`; the keychain entitlement is the maintainer's step). PIN entry, phones and autofill on macOS and Linux wait on Electron.
-- **P1 Screenshots** (asked 2026-10-24, from the maintainer's Screenboard extension). **Built 2026-10-24** (DESIGN.md §7.12): ⌘⇧2 over the page, then an element (hover, ↑/↓), an area, what's on screen or the whole page; on the clipboard at once, with Save in a toast and a recent list in the downloads panel. Next: **Asking the assistant** from the toast and the list (a screenshot attachment and a tool to view it).
-- **P1 Ad and tracker blocking** (D5, reversed).
-  - **First, spike S11:** measure main's time per page load on a set of ad-heavy pages two ways. (a) Ghostery's engine answering `webRequest` in main, where every request crosses main's JavaScript thread. (b) `declarativeNetRequest` rules compiled from the same lists, which Chromium applies in its network process. (b) can't reach private windows, since Electron won't load extensions into in-memory sessions; (a) can. Pick by the numbers, or combine them (rules for normal windows, the engine for private ones). See ARCHITECTURE.md's performance rules 2 and 3.
-  - Then: one request dispatcher per session, EasyList and EasyPrivacy on by default, a switch per site, private windows included, cosmetic filtering, and lists bundled at build time and refreshed from the lists' own hosts.
-  - **Built 2026-10-24** after S11 ([docs/decisions/S11-ad-blocking.md](docs/decisions/S11-ad-blocking.md); ARCHITECTURE.md §9). Both ways block the same requests; in chords the lists are `declarativeNetRequest` rules, which Chromium matches in its own code (in the browser process, with no JavaScript), so extensions like uBO Lite keep working. Private windows go through the dispatcher to Ghostery's engine in a worker, which also hides ad slots on every page. Settings → Privacy has the switch and the sites it's off for; a page's right-click menu turns it off for its site, with Undo. Not yet: element hiding that needs a script in the page, and stand-in files for `$redirect` filters.
-- **P1 Import** from Chrome, Edge, Brave, Firefox and Safari: bookmarks, history, and open tabs where the files can be read. First run and Settings map each bookmark folder to a chord. No passwords or cookies from their files: Chrome locks them to Chrome on Windows. Passwords come in instead as a CSV you export yourself, in Settings → Passwords (S17 phase 2, 0.12.0). Safari needs Full Disk Access, and Chord says so. Still no Arc import.
-  - **Built 2026-10-24** (ARCHITECTURE.md §9, DESIGN.md §8.7): first run's *Bring your bookmarks?* step and Settings → Import. Each top-level folder becomes a new chord or a pinned folder in one you have; the bookmarks bar's links can be Favorites (up to 24); Firefox's open tabs land in a chord's Today; history goes in with its visits, so frecency ranks it. Counts before, progress during, Undo after, history included. Read in a utility process from copies of each browser's files, which are never changed; a test imports 3,000 bookmarks and 6,000 pages.
-  - Not yet: Chrome, Edge and Brave's open tabs (their session files are an undocumented binary format that changes between versions) and Safari's; another Flatpak's browser data, which Chord's Flatpak can't see. *Done 2026-11-16:* after an import of tens of thousands of bookmarks, store changes are under a frame again. The nodes are kept in buckets, so a change copies one, and the tree's index is put right from the last state's rather than rebuilt (ARCHITECTURE.md §6.1, *Large profiles*): with 5,000 pinned tabs and 30,000 bookmarks a common change takes 0.2–1.1 ms in the store and under 0.6 in each mirror, from 38–80 and 41–50, held there on CI; deleting a chord 21–36, from 51–91. *2026-11-15:* the reducer stopped drafting every node as it read the tree (close with 5,000 pinned tabs 1,357 → 5 ms).
-- **P2 Link routes by path**, such as `github.com/acme/*` → Work. **Built 2026-10-24** (ARCHITECTURE.md §9).
-- **P2 Media controls** in the sidebar (the audible and muted states in DESIGN.md §7, plus play and pause). **Built 2026-10-24** (ARCHITECTURE.md §9, DESIGN.md §7.2 and §7.10): a speaker on the row of a tab making sound (on its Favorites tile too, and in the minimal bar for the tab on screen) mutes and unmutes it, kept through sleep and restarts; *Mute tab* in its menu and the command bar, and Ctrl+M (⌃M on macOS). A Now playing card at the bottom of the sidebar shows media playing in any of the window's chords out of sight, with the track from the page's Media Session, Play and Pause, Mute, picture-in-picture and Go to tab, read from an isolated world. The OS's own media controls already work through Chromium (checked on Linux). Not yet: pausing a player in an embedded frame (the card can mute it), and a by-hand check of Windows' media flyout and macOS's Now Playing.
-- **P2 Reader mode.** **Built 2026-10-24** (ARCHITECTURE.md §9, DESIGN.md §7.11): a book beside the address on pages that read as articles (Mozilla's Readability, asked in Chord's isolated world), the tab's menu, the command bar, and F9 (⌘⌥R on macOS). The article shows in a view of Chord's own in place of the page, which comes back as it was; it's cleaned to an allow-list in a worker before any renderer sees it, runs none of the page's script, loads its images through the tab's own session, and its links go where the tab's would. Text size, font (Onest or the computer's serif), line width and colors (the chord's, Light, Dark, Sepia) are remembered. Not yet: reading aloud, and reader view for Peek's and mini windows' pages.
-- **P2 Sharing** (planned 2026-10-24; about a week, one agent, after media controls since both touch the sidebar):
-  - **Share a single tab.** Chord's picker lists Chord's tabs beside screens and windows; Electron 45 shares a tab's frame (`setDisplayMediaRequestHandler` with a `WebFrameMain`) and its sound on every OS, where system sound is Windows-only. Only that page goes out: no sidebar, desktop, notifications or other apps. On macOS 15+, where the system's picker is used today, Chord's picker comes first (this tab, or another), with the system's for screens and windows one click away.
-  - **Presenting mode.** While anything is shared (a window or screen most of all; a shared tab already leaves Chord's own layers out), Chord hides what it knows is private: history, archive and assistant suggestions in the command bar (actions and typed addresses still work), hover previews, websites' notifications and Chord's own toasts. Optionally the sidebar collapses. It starts by itself when a page in Chord shares, and has a switch and a shortcut for when another app (Zoom, Teams) shares Chord's window, which Chord can't detect.
-  - **What's shared, shown:** a tinted edge on the shared tab's frame (or the window's), beside the sidebar's existing Stop. Swapping the shared tab mid-call is a stretch: the page may have to ask again.
-  - *Requirements found reviewing the multi-process model (2026-10-24):*
-    - A shared tab never sleeps or goes to the archive, and while it isn't on screen it stays attached to its window off-screen (as the frame snapshot parks pages), with background throttling off: a detached view has no compositor and its stream would freeze.
-    - Its sound: `enableLocalEcho: true`, or you stop hearing the tab you're sharing.
-    - A private window's tabs are offered only to a page in that window; moving the shared tab across sign-ins makes a new page and ends the share, which the UI says.
-    - The picker lists screens and windows by name first and fills in thumbnails after: `desktopCapturer` pictures every window, which can take seconds on a busy Windows desktop.
-    - Presenting mode lives in main's state and reaches the views in the usual patches, with no channel of its own. Main enforces it where the data comes from: history search answers nothing and no preview cards are sent, so a keystroke in the frame before a view hears of it can't show a suggestion. Websites' notifications can only be stopped by refusing their permission check while presenting, so pages see "denied" for that while.
-  - *Not doing:* automatic blurring of secrets (unreliable, and a miss is worse than none), silencing the OS's notifications (no public API on macOS, nothing usable on Windows), a presenter mirror, resolution or encoding controls (the calling app owns those), and cursor or markup overlays (they'd have to be injected into the shared page; maybe after Effects).
-  - **Built 2026-10-24** (ARCHITECTURE.md §9, *Screen sharing* and *Presenting mode*; DESIGN.md §7.13). Chord's picker lists its tabs first (a private window's only to that window's pages), then screens and windows by name, pictured a moment later. A tab goes out with its sound, still heard here; while shared it never sleeps or archives, isn't throttled, and stays attached to its window out of sight. On macOS 15+ and Wayland, *Screen or window…* opens the system's picker from Chord's (on macOS with the same stand-in source Electron uses for its own `useSystemPicker`). Presenting mode starts with a share and ends with the last, or with ⌘⇧P / Ctrl+Shift+P and the command bar; a card in the sidebar (a chip in the minimal bar) says so and turns it off; main refuses history, archive and assistant suggestions, preview cards, websites' notifications and Chord's toasts while it's on; Settings → General can collapse the sidebar too. A shared tab's frame, and a window a page shares, get a tinted edge, and the shared tab's row has its own Stop. Moving a shared tab to other sign-ins ends the share, with a toast. E2E tests share a tab and check its picture, sound, local echo, painting off screen, no sleep, presenting mode, the shortcut, private windows and the move (`sharing.spec.ts`, on every OS).
-  - *Not yet:* swapping the shared tab mid-call; a window edge when the system's picker chose (Chord can't know what it chose); by hand, the hand-over to macOS's picker (CI's macOS can't drive it) and to the portal on a real Wayland desktop, and a tab shared to a call on Windows and macOS.
-
-### 0.3 · Effects · next (moved up 2026-10-25)
-The maintainer moved Effects and Your data up, right after the P0 performance plan and ahead of everything else planned (2026-10-25). Effects is built beside the performance work, by an agent in its own worktree.
-
-- **P1 Effects**, in place of Boosts (D13): per-site styles with a Dry/Wet switch that removes them at once.
-  - By hand: your own CSS, hiding an element, a few presets.
-  - *Asking the assistant*: your Claude Code or Codex app writes a patch from a stripped outline of the page; same reading rules as the assistant.
-  - Every patch is parsed and stripped of anything that fetches before it's applied, and re-applied on each navigation.
-  - **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.15). The page's right-click menu, the command bar, the View or ⋯ menu and a button beside the address (while a site has Effects) open the Effects card in the popover, over the page, which shows each change as you make it: Dry · Wet, three presets (*Reading width*, *Dark*, *No sticky bars*), *Hide an element…* (the screenshot picker, clicking to hide), your CSS, asking the assistant, and Undo for what's removed. ⌘⇧E / Ctrl+Shift+E makes the site dry or wet; Settings → Effects lists the sites, and has Dry/Wet for every site. Kept by host (`www.` folded) in chord-data (migration 13), shared by every chord; a private window keeps its changes in memory. Each site's stylesheet is checked in a worker by a sanitizer built on the CSS Syntax spec's own parser, which writes out only known rules and functions and leaves out anything that fetches, then inserted once per navigation, as a stylesheet only. Asking the assistant sends your words and, through one read-only tool, an outline of the page (never form values), and deletes the provider's copy after. Tests: `effects.spec.ts` (the whole journey, and what applying costs on a heavy page) and the sanitizer's table of hostile stylesheets.
-  - **Each one switched and edited, built 2026-10-25** (asked for using the card on google.com with two of the assistant's patches in it). Your CSS, each hidden element and each of the assistant's patches has its own switch, kept with it (migration 15; older rows read as everything on), with Dry · Wet over them all. An assistant patch opens in its row to its name and CSS, which apply as you type and go through the same sanitizer as your CSS, which says what it left out; a hidden element opens to its selector and name, so one that matched too much can be narrowed. Switching or editing one makes the site's one stylesheet again and swaps it, as any change does. The export record carries the switches (S15). Settings → Effects still lists sites only. Tests: the journey switches a patch, your CSS and a hidden element off and on, edits a patch and narrows a selector, then reloads and relaunches; core's table of what goes into a site's stylesheet with items on and off and Dry over everything.
-  - *Not yet:* one set of Effects for a site and all its subdomains; a back/forward cache will need the stylesheet put back on a restored page.
-
-- **P1 The assistant fills forms** (D16, decided 2026-10-24): "fill only, you submit". Only when you ask, on the tab on screen; a review card of each field's value, then Chord fills them, with Undo; never submits, never passwords, cards, one-time codes or hidden fields. After Effects, sharing its safety review of writing into pages.
-  - **Built 2026-10-25** (ARCHITECTURE.md §11.6, DESIGN.md §7.8). Ask the assistant to fill the form on the tab on screen: it reads the fields' structure (labels, kinds, names, autocomplete hints, choices, required; never what's in them) under the chat's reading scope, and shows its values in a card in the panel. Each field is editable and can be left out; nothing goes in until you press Fill. Chord fills from its isolated world with the native setter and the events React, Vue and Angular listen for, outlines each field for a moment and scrolls to the first, and Undo puts back what was there. Chord's ids for the fields are checked again at Fill against the field as it was read, so a page that changed fills nothing and says so. Never a password, payment, one-time-code, ID-number, hidden or off-screen field, a frame, a private window, a Never site, or anything when the assistant reads nothing; never a button pressed or a form submitted. Tests: two journeys in `assistant.spec.ts` (on X11 and Wayland), a timed read of a page of 5,000 fields, and the classification and mapping tables in `core/test/assistant-forms.test.ts`.
-  - *Not yet:* forms inside frames (even the same site's), multiple-choice lists and rich-text editors; an "about me" note the assistant could fill from (D16); a hand check on real sign-up and checkout pages on each OS.
-
-### Your data · export in 0.5.0; import and sync in 0.6.0
-- **P1 A proxy per chord** (asked 2026-10-25), with one proxy for all chords as the default. **Built 2026-10-25** (ARCHITECTURE.md §9 *Proxies*, DESIGN.md §9 *Proxies*):
-  - **For every chord**, in Settings → Privacy → Proxy: the system's (the default), none, a server (HTTP, HTTPS or SOCKS5, with addresses that skip it) or an automatic configuration file. Private windows and Chord's own requests (update checks, ad-blocking lists, Safe Browsing, suggestions, Chord Player's updates, the Web Store) use it too.
-  - **A chord's own**, from Settings, the chord's menu or the command bar. Electron sets proxies per session, so it comes with the chord's own sign-ins: for a chord sharing them, Settings says first that it will be signed out, and the button says so too. Undo puts both back. Its suggestions and DevTools go through it as well.
-  - **No leaks:** every session gets its proxy as it's made, and nothing loads in it until that's done; after a change, connections made the old way are closed first; WebRTC sends no UDP around a proxy; SOCKS5 only, which sends names to the proxy (SOCKS4 would look them up here). A proxy that fails explains itself in the frame and never lets the page out without it. Nothing per request, and nothing at all with the system's proxy.
-  - Fields checked as you type; a proxy that asks for a password gets the sign-in box; Chord keeps none (D12).
-  - Tests: unit tables (validation, setProxy's config, which session gets which, the model) and `proxies.spec.ts` with two local proxies and a SOCKS server, X11 and Wayland.
-  - **Left:** a page's `<link rel="dns-prefetch">` hints still reach this computer's DNS behind a proxy (Electron resolves them itself, where Chrome skips them): to ask Electron upstream. The assistant's CLIs and Chord Player don't use the proxy yet. Chord's own requests can't answer a proxy that asks for a password. A hand check with a real corporate proxy (NTLM) and a PAC file on Windows and macOS.
-- **Design, decided 2026-10-25:** [docs/decisions/S15-your-data.md](docs/decisions/S15-your-data.md): one record format for export and sync, encryption, merging, import, the sync folder, and the build order. The maintainer took all ten of its recommendations: a plain export by default, settings from a file only when you turn them on, permissions imported as blocks only, one *Your data* page in Settings, scrypt and AES-256-GCM, and the rest in §10.
-- **P1 Export everything:** chords, tabs, folders, Favorites, themes, settings, routes, Effects, history and assistant chats, in the format sync uses.
-  - **Built 2026-10-26** (S15's step 1; ARCHITECTURE.md §9 *Your data: export*, DESIGN.md §8.8, [docs/data-format.md](docs/data-format.md)). Settings → Your data, in place of Settings → Import (which moved in as *From another browser*, unchanged): **Export…** opens a card with what goes in, counted, switches for history and assistant chats, and *Encrypt with a passphrase* (remembered; at least 12 characters, or *Suggest one*: five random words), then the system's save dialog, a progress bar, *Saved … · Show in folder*, or why it couldn't. A plain file is JSON Lines anyone can read; an encrypted one is scrypt (N=2¹⁷) and AES-256-GCM in authenticated frames, and Python reads it with the steps in docs/data-format.md (checked). A utility process of its own writes it from a read-only connection to the database, so main never holds the data and chord-data never waits.
-  - **Decided while building it** (S15 §1): proxies (Settings' and a chord's own) are exported, so a restore brings them back, but never synced, since they're about the network a computer is on; Effects' per-item switches go in as S15 had them. Migration 17 (S15 had 16; Effects' switches and proxies took 15 and 16) gives settings, Favorites and routes their `updated_at`, and keeps this computer's id; sync's tables move to 18.
-  - Tests: core's tables (every record type through JSON, what must never appear, which settings travel, the clock, plain files, passphrases), the encrypted envelope with Node's crypto (right and wrong passphrase, a flipped byte in the header or a frame, frames swapped, dropped or cut short, a newer format, an unknown key derivation), the rows → records export over a read-only connection, migration 17; `your-data.spec.ts` (a seeded profile exported plain and encrypted, checked line by line, and a folder Chord can't write to); and `perf.spec.ts`'s export of 50,000 visits while typing in the command bar.
-  - **Import from a Chord file: built 2026-10-26** (S15's step 2, §12; ARCHITECTURE.md §9 *Your data: import*, DESIGN.md §8.8). Settings → Your data → *From a Chord file* → **Choose a file…**: the system's open dialog, the passphrase if it's encrypted, then a preview counted against what's here (where it's from and when; what's new and what's newer; switches for history, assistant chats, Effects with their sites, and *Settings from the file*, each change named, off for a profile with data), and **Import**. It adds what's missing and updates what's older, field by field by the stamps, and never deletes; into a new profile it's a restore, and the first-run chord makes way. One Undo, from the toast or Settings, takes all of it back. A utility process reads the file a megabyte at a time and checks every record; history and chats go straight to chord-data; main applies setup a part at a time. Everything from a file is untrusted: Effects through the sanitizer, permissions as blocks only, chats that send nothing and whose turns reach a provider only as untrusted data, links only to web pages, images checked by their bytes, tabs unloaded. 50,000 visits import in about half a second on 4 CPUs while typing in the command bar.
-  - **Decided while building it** (S15 §12): migration 18 marks a chat that came from a file; a chord you have keeps its sign-ins; a setting still at its default counts as never set; an imported chat reads no more than a new chat would; tombstones in a file neither come in nor delete; sync's tables move to migration 19.
-  - Tests: the merge planner's and `data.merge`'s tables, hostile files (the sanitizer's hostile stylesheets, `javascript:` links, images that aren't, a huge line, unknown types, a damaged frame), reading in pieces, history twice, chats by id and their Undo; `your-data.spec.ts` (export, then import into a new profile and Undo; into a profile with data, with a wrong passphrase and settings off), X11 and Wayland; `perf.spec.ts`'s import of 50,000 visits while typing, into both kinds of profile.
-- **P1 Sync** through a folder you already sync, end-to-end encrypted with your passphrase (D14). Setup only in its first version: no history, no open tabs. One log per device, merged on every device.
-  - **Built 2026-10-26, merged 2026-10-31** after ten review rounds (S15's step 3, §13; ARCHITECTURE.md §9 *Your data: sync*, DESIGN.md §8.8, [docs/data-format.md](docs/data-format.md#syncs-folder)). Settings → Your data → *Sync your setup* → **Turn on sync…**: the system's folder picker, then a passphrase for a new folder (*Start syncing*) or the folder's own to join it (*Join*), and, for a computer with chords of its own, *Use the synced setup* (with Undo) or *Keep both*. Chords, pinned tabs and folders, Favorites, themes, settings, link routes and Effects then stay the same on each computer; history, Today tabs, assistant chats, zoom, permissions and proxies stay on each. On, the card lists the computers (rename this one, remove another), and has Pause, Change passphrase and Turn off; problems (a passphrase changed elsewhere, no key kept on Linux without a keyring, the folder missing, a newer Chord, this computer removed) show one at a time, with *Lost it? Start over…* wherever it asks for the passphrase, *Choose folder…* for a folder that moved, and, on Linux without a keyring, *Remember the key on this computer* behind its warning.
-  - **How:** each computer appends what you changed to its own log in `Chord sync`, in encrypted segments (the export's frames, keyed from the folder's `sync-1.json`), about 3 s after the last change; the others read it and merge it field by field by the stamps. chord-data stamps your changes inside its writes (migration 19) and merges a slice at a time; a worker thread inside chord-data's process does the folder work; main keeps the key with safeStorage and applies what comes in a part at a time, with no Undo. Everything in the folder is untrusted: the import's checks, limits on what's kept, permissions and the assistant never synced, a chord's sign-ins and proxy never changed. Keystrokes in the command bar stay within 16 ms while joining a realistic setup and while frames of 300 changes arrive.
-  - **Decided while building it** (S15 §13): a chord you have keeps its sign-ins; joining names how many computers, not which (their names are encrypted); a change of yours waiting puts off another computer's to the same thing; a stamp is checked by its data alone, another computer's moves the clock at most a minute, and a change made here beats what it replaces; a chord deleted elsewhere moves this computer's Today and open tabs to another, with Undo; a segment counts only once its first frame opens with the key (S15 §13, the security review); while sync is busy, chord.db's checkpoints run on its worker thread; searches flush only history, never the sidebar's writes; *Start over* is a passphrase change made without the old key; *Choose folder…* takes only a folder this computer's key opens.
-  - Tests: core's tables (what a log may hold, the field merge, what gets a stamp, what a change does here, `sync.apply`) and a property test (any logs, any order, any number of times: one result); the folder protocol against an in-memory folder (a frame half there, one that fails its check, a shorter file, conflicted copies, compaction mid-read, a copied id, a newer format, a changed passphrase); the stamping hook and the merge in chord-data; the folder on the disk; `sync.spec.ts` (two Chords and one folder: set up, join, edit on both, a wrong passphrase, one removed; a passphrase changed; a relaunch with no keyring; start over, remember the key anyway, a folder that moved), X11 and Wayland; `perf.spec.ts` (one change from stamp to frame, chord-data's memory with the worker on and off, keystrokes during a large merge). A seeded simulation of the whole pipeline (computers editing, joining, turning off, crashing, full disks, sync apps putting back old logs, late and conflicted copies) checks six invariants: every computer ends the same, no edit lost, nothing deleted that wasn't, nothing put back, what's local stays local, nothing stuck silently. Seeds 1–40,000 keep all six; the 56 that once failed run in `pnpm test`.
-  - **Left:** nothing of the performance pass's with 5,000 pinned tabs: deleting such a chord or its Undo now holds the store for 8–11 ms, from 165–197 (ARCHITECTURE.md §6.1, *Large profiles*), and the sidebar no longer draws every pinned row (Pinned is windowed, DESIGN.md §6.7). After *Use the synced setup*, a tab waiting on a chord deleted elsewhere shows this computer's values until a later edit lets it apply (S15 §13). The by-hand checks with real iCloud Drive, Dropbox, OneDrive and Syncthing between Windows, macOS and Linux ([docs/testing/sync.md](docs/testing/sync.md)); the Flatpak's folder through the document portal.
-
-### After Your data (planned 2026-10-25)
-- **P2 The assistant reads a page's problems** (asked 2026-10-25, after the maintainer asked the assistant whether it could use DevTools). A read-only tool, `page_diagnostics`, for "why is this page broken?": the tab on screen's console errors and warnings, uncaught exceptions, and requests that failed (address, status or network error, resource type), never their headers, cookies or bodies.
-  - **Built 2026-11-15** (ARCHITECTURE.md §11.3). `Runtime.enable` does replay earlier console calls and uncaught exceptions (checked in the E2E), so the tool reads both the log and the runtime; objects logged before come back by their class alone. No new UI: its use shows in the existing tool row.
-  - **Why not DevTools' *Give your agent access to DevTools*:** that's Chrome's link to `chrome-devtools-mcp`, which drives the browser over a remote-debugging connection. Chord never opens one: any program on the computer could then control every tab and read every sign-in.
-  - **How:** only when the assistant calls the tool, main attaches the tab's own debugger (`webContents.debugger`), asks once and detaches. Nothing listens before, so pages pay nothing. Chromium keeps a page's log for the asking: `Log.enable` "sends the entries collected so far" (checked in the protocol's definition, 2026-10-25), and its entries include the `network` ones Chrome prints for failed loads, so errors from before you asked are there. ~~⚠ Unverified~~ Verified 2026-11-15, it does: that `Runtime.enable` also replays earlier `console.error` calls and exceptions (the protocol says only that it collects them, `Runtime.discardConsoleEntries`); if it doesn't, the tool reads the log alone.
-  - **Bounded:** the newest 200 entries, each cut to 500 characters; addresses without their query or fragment, which often carry tokens; stack traces as file, line and function only.
-  - **The assistant's rules apply:** the tab on screen only; the chat's reading scope (*Ask every time* asks first, *Nothing* has no such tool); never a *Never read* site, a private window or Chord's own pages.
-  - **Tests:** a journey with the fake Claude on a local page that logs an error, throws, and fails a request (404 and a refused connection), checking what reaches the tool and what never does (a query string, a cookie, a header), and that a page the assistant didn't ask about is never attached.
-  - **Later, if it proves useful:** a *Reload and watch* button for problems that only show while a page loads, still read-only.
-- **Tampermonkey's user scripts** (asked 2026-10-25). Tampermonkey on Manifest V3 runs scripts through Chrome's `chrome.userScripts` API, which Electron doesn't expose, so it says *Please enable the "Allow User Scripts" extension setting* and runs nothing. **Scoped 2026-10-25** in [S16](docs/decisions/S16-user-scripts.md), for the maintainer's decision: Electron already carries Chromium's own userScripts code, switched off: no availability check and no per-extension *Allow* switch (the store for registered scripts arrived 2026-10-23, electron/electron#55155). Asked upstream on 2026-10-25, offering the PR: [electron/electron#55337](https://github.com/electron/electron/issues/55337). The recommendation is to have it turned on upstream in Electron (about 1.5–2 weeks for the patch, then Electron's review and release, then 3–4 days in Chord), with the subset Tampermonkey needs built in Chord as the fallback (about 3 weeks) if that stalls. Off by default per extension, switched on in Settings → Extensions, as in Chrome. **Decided 2026-11-15: upstream first** (S16's option (d)). The Electron patch is queued after the current work; electron/electron#55337 has had no reply since 2026-10-25. If it isn't merged upstream by mid-December, Chord builds Tampermonkey's subset itself (option (b)).
-
-### Passwords, phase 1 ([S17](docs/decisions/S17-passwords.md) §15)
-- **The detector** (built 2026-11-15, `feat/passwords-detector`; ARCHITECTURE.md §9, *Passwords: the detector*). No interface yet: it finds sign-in forms and tells main what you did, and the vault, the menu and the save card build on it.
-  - **The classifier** in core: Chromium's password form parser transliterated, with 100 of its unit tests' cases (the 95 others need Google's server or model predictions, or are about metrics), Chord's own additions (the kind of form, vetoes, the password's variant, the username-only first step) and DuckDuckGo's field vocabulary.
-  - **The sentinel and the agent:** a preload registered only while passwords are on, which wakes the agent in its own isolated world on a page with a sign-in field. Nothing is added to the page, and no field's value reaches main.
-  - **Knowing you signed in:** on submit and on navigation, with Chromium's reappeared-form check; a formless form that goes after its request; the page's own requests' status as a hint.
-  - **The corpus in CI** (`forms` job): DuckDuckGo's 563 labelled forms, a pinned and hash-checked download, held to a baseline that only ratchets up. 394 of 458 files wholly right (86.0%; the M0 spike had about 81%).
-- **The vault, Settings → Passwords, the menu, filling and the save and update cards** (built 2026-11-15 to 11-16): shipped in **0.11.0**. HTTP sign-in and the sign-in sweep's fixes (built 2026-11-16 to 11-17) came in 0.11.1, never published, so they ship in 0.12.0.
-
-### Passwords, phase 2 ([S17](docs/decisions/S17-passwords.md) §15) · in 0.12.0
-- **Import and export** (built 2026-11-17, #52; S17, *Phase 2: import and export*): CSV import from Chrome, Edge, Brave, Firefox, Safari and Apple Passwords, Bitwarden, 1Password and common column names, with a preview, the rows left out and Undo; CSV export in Chrome's shape behind the passphrase; passwords in an encrypted Chord file only, never a plain one, its passphrase never the vault's.
-- **The generator, sign-up and change** (built 2026-11-17, #53; S17, *Phase 2: the generator, sign-up and change*): *Use a strong password* with site rules (Apple's vendored lists), saved the moment it's filled as *Not confirmed*, saving on sign-up and change-password forms, a change matched by its current password, and *Change password on the site*.
-- **Next:** phase 3, the harder forms, after Electron 46 (see *Next, in order*).
-
-### Electron 46 · January 5, 2027
-- **P0** The first major upgrade, on the 72-hour clock, whatever else is under way.
-
-### Later (P3)
-- **Updates on the fly** (asked 2026-10-24), in three layers, safest first. Every layer is signed with the update key, pinned to the contract of the main process that runs it, and rolls back to the last good version on failure. Main never runs code it downloaded.
-  1. **Data without a release:** a signed pack of site rules, fetched like the ad lists and applied at once. It holds media-sites.ts's buttons, the DRM services, and selector fixes. When Twitch changes its markup, a fix doesn't wait for a release.
-  2. **The UI without a restart:** the `chord://` pages (shell, command bar, popover, Settings, reader) as one signed bundle, versioned to main's IPC contract. A new bundle is swapped in by reloading those views, as after a crash. State lives in main, so nothing is lost.
-  3. **Engine and main:** Chromium and Node can't be swapped while running, so these still need a restart, made nearly invisible. The update downloads in the background and Chord restarts at a quiet moment: nothing playing, sharing or typed but unsent. Tabs come back with their history, scroll and form fields (0.1.x's crash resilience did this groundwork), and Chord says what changed afterwards.
-- **Translation.** Needs its own decision: an on-device engine, or Google's, which Google-free mode rules out.
-- **Search the text of pages you've read**, kept on your computer.
-- **Counts on tabs** (asked 2026-10-25). **Built 2026-10-25** (ARCHITECTURE.md §9, DESIGN.md §7.2): the Badging API's count on the tab, its tile, a closed folder and the chord switcher, the total on Chord's icon; a site's hidden from the tab's menu. A service worker's count shows on its site's tabs too (built 2026-10-25). Next: a hand check of the Dock and taskbar.
-- **The assistant makes images** (asked 2026-10-25). **Built 2026-10-25** with Codex's own image tool (ARCHITECTURE.md §11.5); Claude can't make images and offers Codex. A real image needs a hand check on the maintainer's plan.
-- **Antigravity as the assistant's app:** no-go for now ([S19](docs/decisions/S19-antigravity-assistant.md)); look again when `agy acp` can drop its built-in tools.
-- **The assistant tidying your tabs.** It conflicts with D8 ("the assistant reads, it doesn't rearrange"), so it waits for you to ask again.
-
-## Not planned (decided 2026-10-22, updated 2026-10-24)
-
-- **Arc import.**
-- ~~**A built-in password store** (D12)~~ Reversed 2026-11-15: Chord builds its own ([S17](docs/decisions/S17-passwords.md)); see *Next, in order* above.
-- **Assistant developer mode, your own API keys, local models.** The assistant stays a chat that can read the browser; Effects use the same apps.
-- **Connect an agent** (the Chord MCP server for your own Claude Code, Codex or Antigravity) came back on 2026-11-19 as [S18](docs/decisions/S18-agent-mcp.md): M1 shipped in 0.14.0 (2026-11-22).
-  - Unparked as [S18](docs/decisions/S18-agent-mcp.md) (2026-11-19). M1 was hidden in release builds for 0.13.1 (decided 2026-11-21) and turned on in 0.14.0 (`AGENTS_RELEASED`, packages/core/src/agent-tools.ts).
-- *Moved to After 0.1 on 2026-10-24:* built-in ad blocking (D5 reversed) and importing from other browsers.
+- **Code quality and dependency hygiene.** Adopt Oxfmt at 1.0, evaluate type-aware Oxlint (`oxlint-tsgolint`), run a Knip unused-code cleanup ([#111](https://github.com/anaremore/chord-browser/pull/111)), keep Renovate's automated update PRs (installed 2026-11-24) flowing, and close open bug, test, and CI follow-ups ([#27](https://github.com/anaremore/chord-browser/issues/27), [#44](https://github.com/anaremore/chord-browser/issues/44), [#64](https://github.com/anaremore/chord-browser/issues/64), [#80](https://github.com/anaremore/chord-browser/issues/80), [#85](https://github.com/anaremore/chord-browser/issues/85), [#87](https://github.com/anaremore/chord-browser/issues/87)).
 
 ---
 
-## Borrowed from Crest
+## Not planned
 
-[Crest](https://github.com/pauljoda/Crest) is MPL-2.0. Ideas are reimplemented freely under Chord's MIT license. Any file *ported* from Crest keeps the MPL-2.0 header and adds "Portions derived from Crest, © 2026 Paul Davis". MPL-2.0 applies per file, so it doesn't spread to the rest of Chord.
+Decisions already settled as out of scope:
 
-| From Crest | Where it lands |
-|---|---|
-| No app token in the user agent; Chrome-style reduced version | Done (S2) |
-| Command bar scoring, top-hit and completion rules, learned picks | M1.4 |
-| `@` filters, site keywords, Enter variants | M1.4 |
-| Never sleep or archive playing/PiP/sharing tabs; at most 2 crash reloads | M1.5 |
-| Native-messaging lookup for password managers | M1.5 |
-| Per-animation switches with ↺ reset, and ↺ on every changed setting | Each animation as it ships (DESIGN.md §6.8) |
-| Connect an agent: Chord's own MCP server, the Agent chord, the connect card and Stop (S18 M1) | Shipped in 0.14.0 |
-| Link routes, remembered chord per site | Done (2026-10-23, with the mini window) |
-| Import guardrails with written exemptions, AGENTS.md, append-only release notes | Process, M1.1 |
-
-Skipped on purpose: Crest Passwords (we use extensions), its 19-host blocklist, memory-pressure unloading (Electron has no pressure event), and its heraldic visual identity (trademarked).
-
-## Schedule risks
-
-| Risk | Effect | Mitigation |
-|---|---|---|
-| S2 shows Google blocks sign-in | Without Google sign-in this isn't a daily driver | It's the first spike. Fallbacks: a user-agent and client-hints strategy, and tracking Electron PR #53519. Result is reported by Oct 30. |
-| Review turnaround | Each milestone waits on your merge | Handoffs are small. A one-day turnaround keeps Dec 14; slips push 0.1 day for day, and Dec 22 has 8 days of slack. |
-| Extension license (D1) unanswered by Nov 30 | M1.5 extensions slip | Core work doesn't depend on it; only the integration does. |
-| macOS issues found late (no local Mac) | Late polish on vibrancy, gestures, ProMotion | CI captures from day one, plus your by-hand checklist each milestone. |
-| Electron 46 lands mid-Phase 2 | Upgrade churn | Scheduled as the first task of Phase 2, not mid-feature. |
+- **A Chord account, telemetry, or a Chord sync server.** Your data stays on your computer or syncs encrypted through a folder you already control ([ARCHITECTURE.md §1](ARCHITECTURE.md#1-scope)).
+- **Arc import.** Import covers Chrome, Edge, Brave, Firefox, and Safari ([ARCHITECTURE.md §9](ARCHITECTURE.md#9-browser-engine-services)).
+- **Bring-your-own API keys or local models in the assistant.** The assistant uses the Claude Code or Codex app and subscription you already run ([ARCHITECTURE.md §16 D8](ARCHITECTURE.md#16-decisions)).
+- **Automatic tab organizing by the assistant.** The assistant reads and acts in your tab when you ask; it does not rearrange your sidebar ([ARCHITECTURE.md §16 D8](ARCHITECTURE.md#16-decisions)).

@@ -1,17 +1,14 @@
 /**
  * Who's calling (S18 M2a, agents/peer.ts): the process at the other end of an agent's connection, as the OS says.
- * The parsers and the choice as tables; then a real lookup on the OS the test runs on (every CI OS runs this file):
+ * The parsers and the choice as tables; then a real lookup on the OS the test runs on (every CI OS runs this file; its
+ * times are agent-peer.perf.test.ts):
  * Windows through window-owner.exe's pipe-clients, Linux through ss, macOS through lsof, against clients in
  * processes of their own.
  */
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { createServer, type Server, type Socket } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import type { Socket } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { endpointPath } from '../../src/main/agents/endpoint';
-import { choosePeer, linuxPeer, macPeer, parseLsof, parsePipeClients, parseSs, peerDeps, peerOf, type PeerDeps } from '../../src/main/agents/peer';
+import { choosePeer, linuxPeer, macPeer, parseLsof, parsePipeClients, parseSs, peerOf, type PeerDeps } from '../../src/main/agents/peer';
+import { canLookUp, completeList, lookUp } from './agent-peer-live';
 
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -165,106 +162,17 @@ describe('The lookup, when the OS can’t say', () => {
   });
 });
 
-/* ---------- A real lookup on this OS ---------- */
-
-const helper = resolve(import.meta.dirname, '../../out/window-owner/window-owner.exe');
-const hasSs = process.platform === 'linux' && spawnSync('ss', ['-V']).status === 0;
-const canLookUp = process.platform === 'win32' || hasSs || process.platform === 'darwin';
-
-/** A server like Chord's endpoint, and the server's ends of its connections, in order. */
-async function endpoint(): Promise<{ path: string; ends: Socket[]; server: Server }> {
-  const dir = mkdtempSync(join(tmpdir(), 'chord-peer-'));
-  cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
-  const path = process.platform === 'win32' ? endpointPath('win32', process.env) : join(dir, 's');
-  const ends: Socket[] = [];
-  const server = createServer((socket) => void ends.push(socket));
-  await new Promise<void>((done) => server.listen(path, done));
-  cleanup.push(() => new Promise((done) => server.close(done)));
-  cleanup.push(() => ends.forEach((s) => s.destroy()));
-  return { path, ends, server };
-}
-
-/** A client in a process of its own, connected and staying so. */
-function client(path: string): ChildProcess {
-  const child = spawn(process.execPath, ['-e', `require('net').connect(${JSON.stringify(path)}).on('error',()=>{});setTimeout(()=>{},30000)`], { stdio: 'ignore', windowsHide: true });
-  cleanup.push(() => child.kill());
-  return child;
-}
-
-/**
- * The lookup's budget per OS (ms, wall clock), as the card waits on it. On Windows that's the helper started warm: the
- * first connection runs window-owner.exe's restrict-pipe (M1b), and every connection's code waits for it before the
- * card, so the helper's first start (.NET loading) is paid there, not by the lookup. The test does the same: a
- * `pipe-dacl` run first (its cold start, budgeted apart as `PEER_COLD_MS`), then the lookups.
- *
- * Measured (2026-11-22): Windows x64 here (11 Pro, about 396,000 handles in the system) 104 to 163 ms a lookup, the
- * helper's own work 57 to 85 ms of it (the table 31 to 50, its scan 2 to 3, the queries 3 to 4, the chain 21 to 28).
- * CI's Windows arm64, over two runs: a lookup 582, 606 and 1,271 ms (the helper's own work 456 ms in one, 286 ms of it
- * its queries waiting out the 250 ms deadline for one stuck on a file with I/O pending, never one of the pipe's: its
- * server ends never block); its first start 3.0 and 3.7 s cold (the first .NET program on a fresh runner). That runner
- * is noisy, and 600 to 1,300 ms while the card shows is acceptable. Later runs there (#104, #106; issue #107): its first
- * lookup 3.3 and 4.4 s (one query stuck, the chain 857 and 917 ms), the next ones 580 to 827 ms. So on Windows arm64
- * the budget is the warm lookup's (`again`), about 1.5 times its worst, and the first lookup has a ceiling about 1.5
- * times the worst seen. Windows x64's is 400 ms for both, about 2.5 times the worst seen here (163 ms). Before the scan
- * read the table in place (each entry marshalled, twice), a lookup took 3.6 s there. Linux: one ss (tens of ms in WSL's
- * Ubuntu). macOS: one lsof of this user's sockets.
- */
-const PEER_BUDGET_MS: Partial<Record<string, { first: number; again: number }>> = {
-  win32: { first: 400, again: 400 },
-  'win32/arm64': { first: 6500, again: 1300 },
-  linux: { first: 500, again: 500 },
-  darwin: { first: 1500, again: 1500 },
-};
-/**
- * A lookup whose list may be incomplete (a query stuck on a file with I/O pending, or one skipped) has no timing
- * budget: what it waits out isn't the lookup's own work, and on CI's runners it varies from a quarter of a second to
- * seconds. Its answer is still checked (never the wrong process). Seen on #112 (2026-11-23): Windows x64 a warm lookup
- * of 426 ms against 400, Windows arm64 5,055 and 2,710 ms against 6,500 and 1,300 (with a 250 ms allowance it still
- * missed), each with one stuck and one skipped. A complete list keeps its budget.
- */
-/**
- * Windows: the helper's first start on the machine, cold (what restrict-pipe pays in M1b, at the first connection, off
- * the card's path). A ceiling, not a target, on x64 only: CI's Windows arm64 took 3.0 to 6.6 s (the 6,588 ms on #112,
- * 2026-11-23, its fourth failure there), runner noise, so it's logged there and never asserted.
- */
-const PEER_COLD_MS = 6000;
-const COLD_ASSERTED = !(process.platform === 'win32' && process.arch === 'arm64');
-
-/** The helper looked at every file and each answered: otherwise a client may be missing, and unknown is a right answer. */
-const completeList = (timings: Record<string, number> | undefined) => !timings || (timings['stuck'] === 0 && timings['truncated'] === 0 && timings['skipped'] === 0);
+/* ---------- A real lookup on this OS (its budgets: agent-peer.perf.test.ts) ---------- */
 
 describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
   it('names each connection’s own client process', async () => {
-    if (process.platform === 'win32') {
-      if (!existsSync(helper)) spawnSync(process.execPath, [resolve(import.meta.dirname, '../../scripts/build-window-owner.mjs')], { stdio: 'inherit' });
-      expect(existsSync(helper)).toBe(true);
-    }
-    const { path, ends } = await endpoint();
-    const a = client(path);
-    await expect.poll(() => ends.length, { timeout: 10_000 }).toBe(1);
-    const b = client(path);
-    await expect.poll(() => ends.length, { timeout: 10_000 }).toBe(2);
-    const deps = peerDeps(process.platform === 'win32' ? helper : null);
-    // Windows: the helper's first start, as Chord's first connection pays it (restrict-pipe), measured apart.
-    let cold = 0;
-    if (process.platform === 'win32') {
-      const coldStart = performance.now();
-      await deps.run(helper, ['pipe-dacl', path]);
-      cold = performance.now() - coldStart;
-    }
-    // The lookup, as the card waits on it.
-    const started = performance.now();
-    const first = await peerOf(ends[0]!, path, a.pid!, new Set(), deps);
-    const lookup = performance.now() - started;
+    const { a, b, ends, path, deps, first, second } = await lookUp(cleanup);
     // Never the wrong process. With a list that may miss a client (a stuck query on CI's Windows arm64, issue #107), an
     // answer of nobody is right too; with a complete one, it must be the client.
     const oneOf = (got: number | null, right: number, timings: Record<string, number> | undefined) =>
       expect(completeList(timings) ? [right] : [right, null], JSON.stringify(timings)).toContain(got);
     oneOf(first.pid, a.pid!, first.timings);
     // Windows can't tell which instance is whose: the claim decides, and another's claim is refused.
-    const warmStart = performance.now();
-    const second = await peerOf(ends[1]!, path, b.pid!, new Set([a.pid!]), deps);
-    const warm = performance.now() - warmStart;
     oneOf(second.pid, b.pid!, second.timings);
     if (process.platform === 'win32' && first.pid !== null) {
       // The chain comes with it, from the same process: the client, then who started it (this test).
@@ -280,16 +188,34 @@ describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
       // Linux and macOS know: the claim doesn't matter.
       expect((await peerOf(ends[1]!, path, a.pid!, new Set(), deps)).pid).toBe(b.pid);
     }
-    // Off any call's path (it runs while the card shows), but it delays the card's *Started by*. Budgets per OS, from
-    // what was measured (PEER_BUDGET_MS); the message carries what was seen.
-    const seen = `${process.platform}/${process.arch}: helper's first start ${cold.toFixed(0)} ms, lookup ${lookup.toFixed(0)} ms, again ${warm.toFixed(0)} ms, helper ${JSON.stringify(first.timings ?? {})}, again ${JSON.stringify(second.timings ?? {})}`;
-    const budget = PEER_BUDGET_MS[`${process.platform}/${process.arch}`] ?? PEER_BUDGET_MS[process.platform] ?? { first: 1000, again: 1000 };
-    console.info(`peer lookup: ${seen}`);
-    // No timing asserted at all once either list is incomplete (a stuck or skipped query: above); its answers were still
-    // checked. The cold start, on x64 only.
-    if (!completeList(first.timings) || !completeList(second.timings)) return;
-    expect(lookup, seen).toBeLessThan(budget.first);
-    expect(warm, seen).toBeLessThan(budget.again);
-    if (COLD_ASSERTED) expect(cold, seen).toBeLessThan(PEER_COLD_MS);
+  }, 60_000);
+});
+
+/* ---------- A real lookup on this OS (its times: agent-peer.perf.test.ts) ---------- */
+
+describe.runIf(canLookUp)(`A real lookup (${process.platform})`, () => {
+  it('names each connection’s own client process', async () => {
+    const { a, b, ends, path, deps, first, second } = await lookUp(cleanup);
+    // Never the wrong process. With a list that may miss a client (a stuck query on CI's Windows arm64, issue #107), an
+    // answer of nobody is right too; with a complete one, it must be the client.
+    const oneOf = (got: number | null, right: number, timings: Record<string, number> | undefined) =>
+      expect(completeList(timings) ? [right] : [right, null], JSON.stringify(timings)).toContain(got);
+    oneOf(first.pid, a.pid!, first.timings);
+    // Windows can't tell which instance is whose: the claim decides, and another's claim is refused.
+    oneOf(second.pid, b.pid!, second.timings);
+    if (process.platform === 'win32' && first.pid !== null) {
+      // The chain comes with it, from the same process: the client, then who started it (this test).
+      expect(first.chain?.map((p) => p.pid).slice(0, 2)).toEqual([a.pid, process.pid]);
+      expect(first.chain?.[0]?.path?.toLowerCase()).toBe(process.execPath.toLowerCase());
+    }
+    if (process.platform === 'win32') {
+      // The only free client, by a claim that's taken: given only when the helper looked at every file and each answered.
+      const fallback = await peerOf(ends[1]!, path, a.pid!, new Set([a.pid!]), deps);
+      expect(fallback.pid, JSON.stringify(fallback.timings)).toBe(completeList(fallback.timings) ? b.pid : null);
+      expect((await peerOf(ends[1]!, path, 4, new Set(), deps)).pid).toBeNull();
+    } else {
+      // Linux and macOS know: the claim doesn't matter.
+      expect((await peerOf(ends[1]!, path, a.pid!, new Set(), deps)).pid).toBe(b.pid);
+    }
   }, 60_000);
 });

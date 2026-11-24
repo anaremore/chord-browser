@@ -300,10 +300,9 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     await c.initialize();
     const waiting = c.call('list_tabs');
     await sleep(100);
-    const started = performance.now();
     service.stopAll();
+    // At once, not when its card gives up: that's 10 s, past this test's 5 s timeout (no wall-clock budget here, #85).
     expect(await waiting).toEqual({ error: true, text: CONTROL_REFUSALS.stopped });
-    expect(performance.now() - started).toBeLessThan(500);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.stopped });
   });
 
