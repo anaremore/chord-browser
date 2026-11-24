@@ -484,7 +484,22 @@ Every blocker was checked against `feat/s18-m2d` before it was taken; all seven 
 
 ## M2e: plan (the assistant acts in your tab)
 
-*Planning thread, 2026-11-23, revised 2026-11-24; the mock is `mocks/agents-s18-m2.html` §7 (outside the repo). The owner's decisions (2026-11-23): the assistant acts on the tab on screen (their example: a card game's Fold, Call and Raise); the same control layer as outside agents; it reads agent tabs only when you ask and never acts in them; you can close or reload agent tabs. Each rule names its checklist item.*
+*Planning thread, 2026-11-23, revised 2026-11-24; the mock is `mocks/agents-s18-m2.html` §7 (outside the repo). The owner's decisions (2026-11-23): the assistant acts on the tab on screen (one of their examples: a card game's Fold, Call and Raise); the same control layer as outside agents; it reads agent tabs only when you ask and never acts in them; you can close or reload agent tabs. Each rule names its checklist item.*
+
+### What people will use it for
+
+*The owner, 2026-11-24: the card game is one example among many, not the design's center.* Every case acts only in the message's tab (A1), asks the site card on its first action on a site (A2), and ends when you use or leave the tab (F1). What each adds:
+
+| Use | Example ask | Cards it sees after the site card | Rules that matter most |
+|---|---|---|---|
+| **Filling and correcting forms** (a return, a sign-up, an application) | *Fill in the return form for my scarf order; reason: too small* | The risky-step card on the submit (*Submit this form*, *Create an account*), every time; *Type this in …?* when the values came from another tab or the archive (B3) | A3 (your text kept, *Replaced* rows), A4 (no password, code or card typing; the vault ignores it), the `values` check, F6 |
+| **Changing settings in a web app** | *Turn off the weekly email and set my time zone to Denver* | *Send data* for the toggles and selects that save on change (Allow for this chat covers the app's own origin); a step card on *Delete account*, *Sign out*, *Revoke* | C1 (saves held), D1, A6 (a confirm dialog ends the action), F2 |
+| **Search, filter and sort** (a store, a dashboard, a docs site) | *Show only size M wool scarves under $40, cheapest first* | Usually none: a search form is reading, and filters that are links or GETs go; *Send data* only if the page posts its filters | The classifier's search rows, B3 (leaving the site asks), the taint when the query came from elsewhere |
+| **Composing** (an email draft, a comment, an issue) | *Draft a reply saying I'll be there at 6, don't send it* | None while typing in its own tab; the step card on *Send*, *Post*, *Reply*, *Submit*, and on Enter in a text area; *Send data* when the app saves the draft | Never sends unless asked (instructions, and the step card if it tries), A3, C2 (a draft saved past 1.5 s goes unasked: stated), B3's taint for quoted text |
+| **Shopping up to the checkout** | *Add the blue one in M to the cart and go to checkout* | *Send data* for add-to-cart; the step card on paying (*Place the order*), every time, never remembered | D1, D3 (real payments by pay words and card fields), A4 (never card numbers), A6 (popups and payment windows denied) |
+| **Editing in a docs or spreadsheet app** | *Put the totals row in bold and fix the typo in B4* | *Send data* for the app's saves (Allow for this chat); frames and canvas editors may have nothing to act on | E5 (no refs in frames; a stated limit), C6 (apps that save over a live connection: unasked, stated), A3 (undo inside the app), the `values` check |
+| **A multi-step wizard** | *Go through the setup, pick the free plan, skip the extras* | The site card once; a step card on each *Next* that submits a form or on *Confirm*; *Send data* for steps that post; leaving the site if it hands off to another (a payment page) | A1 (the same tab all the way), E4 (refs stale after each step), D1 (a *Continue* that submits asks), B3 |
+| **Games** (one case: the card table) | *Raise* | *Send data* if a move posts (Allow for this chat); none over a live connection | D3 (game moves aren't payments), C6 |
 
 ### Tools
 
@@ -549,16 +564,19 @@ One quiet line per action, consecutive ones on a page folded (*Clicked “Raise�
 | Releasing | ≤ 20 ms, off the tool's result | Same |
 | An action, ref to input | As agents' (median ≤ 15 ms, p95 ≤ 40 ms) | Same |
 | The tools and instructions in each turn | ≤ 6,000 characters more, only with acting on | A unit test on the built prompt |
-| The card game: three clicks after the site card | Each ≤ 700 ms tool time | The E2E, the stand-in Claude |
+| Three actions in a row after the site card (the forms and settings journey) | Each ≤ 700 ms tool time | The E2E, the stand-in Claude |
 
 ### Tests
 
 - **Table-driven units:** `mayAct` (the message's tab, another tab, switched and back, a split, minimized, Peek, private, *Never*, a Chord page, chord off, *Nothing*, acting off, an agent's tab, a kept one, another window, a queued message after a switch, a retry); the chat's grants; the lease (join, tail into the next action, release on every path, bypass always restored, your input ending it, the turn ending with a tail card); the taint (which reads taint, `type` asking, untainted asking nothing); popups (features denied, background tab checked, Peek skipped); G4's entry points each taking over, and a page's own reload, meta refresh and timed redirect **not**; agent tabs left out unless pointed.
-- **Journeys** (the Linux container, X11 and Wayland, the stand-in Claude):
-  1. **The card game:** *Raise*: the site card, the click, the *Send data* card (Allow for this chat); *Call* next message, no card; *Bet* and *All in*, no step card. Bar, outline, rows. Your click mid-turn: *Stopped*. Typing in the composer while it acts: every key there. Two clicks within 500 ms: no stall.
-  2. **A risky step inline:** the checkout, *Place order*, Don't then Allow; *Show me*; a misleading name.
-  3. **Your tab's edges:** switched tabs mid-turn; a queued message after a switch doesn't act on the new tab; a features popup denied and a `<form target=_blank method=post>` held; a background tab to a sign-out address asks; a pinned tab's cross-site click doesn't open Peek; a passkey `get` and `create` on its click never reach a system prompt (per the spike); a file picker never shown; a dialog ends the action promptly; `beforeunload` keeps your page; the clipboard put back; a `mailto:` link refused; a download asked; a same-site open redirect asks; a tainted chat's `type` asks with its text; your click, picker and passkey 0.5 s after it finished all work normally; the vault's menu never opens on its focus of a username field nor takes its Enter; Settings' switch off mid-turn; DevTools open, a crash, a close mid-action.
-  4. **Agent tabs** (M2e-1): with *All chords*, no agent tab listed; on screen, it's read (not the tab of yours behind it); attached, read; acting refused (a unit in M2e-1, the E2E in M2e-2); your reload, back, forward and typed address each pause the agent and fail its held send; the page's own reload and timed redirect between actions **don't**; your close mid-action ends it cleanly.
+- **The uses, as table rows** (the use-case table above, through `control.test.ts`' acting rows on fixture pages: which cards each case raises, by its kind of control): a form's submit, a settings toggle that saves, a search and a filter (no card), a draft typed and not sent, add-to-cart then *Place order*, a wizard's *Next* that submits, a game move that posts.
+- **Journeys** (the Linux container, X11 and Wayland, the stand-in Claude), a few that cross the uses, on fixtures:
+  1. **Forms and settings:** a return form filled (a field you'd typed into kept, *Replaced* where asked), then submitted (the step card, Don't then Allow); a settings page's toggle and select saving (*Send data*, Allow for this chat, then no more cards there); *Delete account* asks. Your click mid-turn: *Stopped*. Typing in the composer while it acts: every key there. Two actions within 500 ms: no stall.
+  2. **Search and compose:** a store's search, a filter and a sort (no card past the site card); a comment drafted and left unsent; asked to send, the step card. A query from another tab: *Type this in …?* with the text.
+  3. **Shopping and a risky step:** add to cart (*Send data*), the checkout's *Place order* (the step card, *Show me*, a misleading name), a payment popup denied.
+  4. **The card table:** *Raise*, *Call*, *Bet* and *All in*: no step card; *Send data* once, Allow for this chat.
+  5. **Your tab's edges:** switched tabs mid-turn; a queued message after a switch doesn't act on the new tab; a features popup denied and a `<form target=_blank method=post>` held; a background tab to a sign-out address asks; a pinned tab's cross-site click doesn't open Peek; a passkey `get` and `create` on its click never reach a system prompt (per the spike); a file picker never shown; a dialog ends the action promptly; `beforeunload` keeps your page; the clipboard put back; a `mailto:` link refused; a download asked; a same-site open redirect asks; a tainted chat's `type` asks with its text; your click, picker and passkey 0.5 s after it finished all work normally; the vault's menu never opens on its focus of a username field nor takes its Enter; Settings' switch off mid-turn; DevTools open, a crash, a close mid-action.
+  6. **Agent tabs** (M2e-1): with *All chords*, no agent tab listed; on screen, it's read (not the tab of yours behind it); attached, read; acting refused (a unit in M2e-1, the E2E in M2e-2); your reload, back, forward and typed address each pause the agent and fail its held send; the page's own reload and timed redirect between actions **don't**; your close mid-action ends it cleanly.
 
 ### Slices
 
