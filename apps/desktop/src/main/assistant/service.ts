@@ -1259,7 +1259,9 @@ export class AssistantService {
     state.actTab = null;
     state.startedAt = null;
     // Cards still waiting go with the turn, each answered no.
-    state.control.cancelCards();
+    // A tab of yours's lease asks on its own after the turn (what the page still sends, a download its click started:
+    // M2e-2b): those cards stay until answered, or the lease ends.
+    state.control.cancelCards((subject) => /\|(tail|download)\|/.test(subject));
     const text = streaming.body.text;
     const citations: AssistantCitation[] = [];
     for (const seg of splitCitations(text)) {

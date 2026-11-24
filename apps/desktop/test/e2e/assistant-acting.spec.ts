@@ -189,9 +189,10 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
   try {
     const shell = await shellOf(app);
     const panel = await openAssistant(shell);
-    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/tricks` });
-    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/tricks`))).toBe(true);
-    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/tricks`))!;
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.other}/tricks` });
+    // On localhost: WebAuthn takes no IP address as a site (127.0.0.1 is a SecurityError before anything else).
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.other}/tricks`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.other}/tricks`))!;
     await app.evaluate(({ clipboard }) => clipboard.writeText('yours'));
     const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Open window' }, { tool: 'click', name: 'Upload' }, { tool: 'click', name: 'Copy' }, { tool: 'click', name: 'Passkey' }]));

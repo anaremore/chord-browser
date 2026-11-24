@@ -93,6 +93,8 @@ const cardKey = (card: { kind: ApprovalKind; subject: string; tab: string | null
 
 interface OpenCard {
   id: string;
+  /** What it covers (the card's subject): what cancelCards may keep up. */
+  subject: string;
   /** The tabs waiting on it: the one it names, and (a site card) any other tab of the agent's asking the same. */
   tabs: Set<string>;
   cancel: AbortController;
@@ -292,7 +294,7 @@ export class ControlAgent {
     card.takeDown?.addEventListener('abort', () => cancel.abort(), { once: true });
     if (card.takeDown?.aborted) cancel.abort();
     this.step(tab, { t: 'ask', card: id });
-    const open: OpenCard = { id, tabs: new Set([tab]), cancel, askers: 0, waiting: new Map(), answer: Promise.resolve<Grant>('deny') };
+    const open: OpenCard = { id, subject: card.subject, tabs: new Set([tab]), cancel, askers: 0, waiting: new Map(), answer: Promise.resolve<Grant>('deny') };
     open.answer = (async (): Promise<Grant> => {
       try {
         const grant = await this.present({ ...card, id }, cancel.signal);
@@ -317,8 +319,8 @@ export class ControlAgent {
   }
 
   /** Take down every card waiting (each answers `deny`): the assistant's turn ended. A late *once* goes too. */
-  cancelCards(): void {
-    for (const { cancel } of [...this.open.values()]) cancel.abort();
+  cancelCards(keep?: (subject: string) => boolean): void {
+    for (const { cancel, subject } of [...this.open.values()]) if (!keep?.(subject)) cancel.abort();
     this.late.clear();
   }
 
