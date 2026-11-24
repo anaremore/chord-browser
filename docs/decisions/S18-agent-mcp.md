@@ -423,7 +423,7 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 
 - **D1.** The classifier, the step card, *Show me* (in your tab: the element outlined, the tab already on screen), the re-description after the card and before the input, and *Don't* (*Don't try it another way; ask the user*): all *carry over*, inline in the chat.
 - **D2. A step answered late.** The assistant's cards wait as long as it takes (the read card's rule), so there's no *waiting* and no late Allow, except the *Send data* card: what it holds is your page's request, which can't hang forever, so it waits 45 s (`CONTROL_WAIT_MS`) and then drops what's held (*Not answered in time, so nothing was sent*). *New in M2e.*
-- **D3. Money words in games.** *Raise*, *Call* and *Fold* aren't risky words; a real-money table's *Raise* is a bet. The owner's question 3.
+- **D3. Game moves aren't payments** (the owner, 2026-11-24). *Fold*, *Call*, *Raise*, *Bet*, *Wager* and *All in* are ordinary clicks (`act`): in a game they're moves, not payments. A real payment still asks every time through the signals the classifier already has: the pay words (*Pay*, *Buy*, *Place order*…) and a payment-card field in the form (`cc-*`, `transaction-amount`, forms' payment words). No new words. *Carries over.*
 
 **E. Teardown, crash, navigation, frames**
 
@@ -561,7 +561,7 @@ As the plan's *The assistant's side*: one quiet line per action, consecutive one
 
 1. **The *Send data* card's lasting answer for the assistant.** Agents get *Allow until done* (until the agent's done). For the assistant, done could be the end of *this message's* work, or the end of *this chat*. With the card game, per message means a card on every hand. **Recommended: *Allow for this chat*** (exact origins, this tab, until the chat ends or you take the tab over).
 2. **Leaving the site.** `navigate` to another site in your tab can carry data in its address. **Recommended: ask every time, showing the address** (B3). The other way: the site card only, as agents have.
-3. **Money words in games.** Add *Bet*, *Wager* and *All in* to the pay words (risky every time)? *Raise*, *Call* and *Fold* would stay ordinary clicks, so the example plays smoothly. **Recommended: add the three.**
+3. **Money words in games.** *Answered (the owner, 2026-11-24): no.* *Bet*, *Wager* and *All in* stay ordinary clicks, as *Raise*, *Call* and *Fold* do; real payments ask through the pay words and payment-card fields (D3).
 4. **What your tab can't hold.** In your tab, sends from workers the page already runs, a `fetchLater` fired after the watch, and live connections go unasked (C4–C6); an agent's tab closes all but the last. The other way is to refuse acting on any page with a running worker, which would refuse most web apps. **Recommended: act, and state the limits.**
 5. **Your key or click while it acts.** Agents pause and wait for *Continue*. **Recommended for the assistant: end this message's acting** (the chat says *Stopped: you used the tab*; your next message goes on), since a chat turn shouldn't hang waiting for a button.
 
