@@ -177,7 +177,7 @@ function fakePage(url: string, read: Answer) {
     history: { url: string; skippable?: boolean }[];
     active: number;
     /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
-    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean };
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[] };
     debugging: string[];
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
@@ -250,7 +250,12 @@ function fakePage(url: string, read: Answer) {
         (at.commands ??= []).push([method, params]);
         if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } };
         if (method === 'Runtime.enable') debugEvents.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, auxData: { frameId: 'F', type: 'isolated' } } });
-        if (method === 'Runtime.evaluate') return params?.expression?.includes('instanceof Map') ? { result: { value: true } } : { result: { objectId: 'el' } };
+        if (method === 'Runtime.evaluate') {
+          if (params?.expression?.includes('instanceof Map')) return { result: { value: true } };
+          // deep.open's look at the element: what the page answers, in turn (the node replaced, the snapshot gone).
+          const opened = params?.expression?.includes("'replaced'") ? at.deep.opens?.shift() : undefined;
+          return opened ? { result: { type: 'string', value: opened } } : { result: { objectId: 'el' } };
+        }
         if (method === 'DOM.getNodeForLocation') return { backendNodeId: 1, frameId: 'F' };
         if (method === 'DOM.resolveNode') return { object: { objectId: 'hit' } };
         if (method === 'Runtime.callFunctionOn') {
@@ -842,9 +847,10 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; others?: number; unchanged?: boolean; has?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
+    twist.codes?.push(code);
     if (code.includes('__chordAgentGuard')) {
       const op = code.includes('.arm(') ? 'guard' : 'unguard';
       steps.push(op);
@@ -866,13 +872,18 @@ describe('acting through the gate (S18 M2c)', () => {
       const el = ELEMENTS[args.key!]!;
       const f = twist.field ?? el.field;
       const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}) };
+      // The page replaced the node, this many more times at this step (a re-render): found again only by point.
+      if (twist.replaced?.[args.op] && !(args as { refind?: boolean }).refind) {
+        twist.replaced[args.op]!--;
+        return { ok: false, why: 'replaced' };
+      }
       if (args.op === 'describe') {
         if (args.option !== undefined) {
           if (!el.select) return { ok: false, why: 'not-select' };
           const found = el.options?.filter((o) => o === args.option).length ?? 0;
           if (found !== 1) return { ok: false, why: found ? 'two-choices' : 'no-choice' };
         }
-        return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : twist.noRisk ? {} : { risk: riskOf(el) }) };
+        return { ok: true, ...said, editable: Boolean(el.editable), select: Boolean(el.select), disabled: Boolean(el.disabled), ...(args.option !== undefined ? { choice: args.option } : twist.noRisk ? {} : { risk: { ...riskOf(el), ...(twist.multiline ? { multiline: true } : {}) } }) };
       }
       if (args.op === 'point') return el.cover ? { ok: false, why: 'covered', cover: el.cover } : { ok: true, ...said, x: 10, y: 20 };
       if (args.op === 'hit' && twist.noMove) return { ok: false, why: 'no-move' };
@@ -895,7 +906,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[] } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -1140,6 +1151,97 @@ describe('acting through the gate (S18 M2c)', () => {
     }));
     expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused).toBe(CONTROL_REFUSALS.paused);
     expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+  });
+
+  it('Enter in a one-line field whose keydown moved the focus (a game takes the bet, then focuses its table): done once, said so, no character', async () => {
+    // The focus elsewhere once Enter's keydown is in (the owner's retest of #117, round 3: refused, the agent pressed again).
+    const run = async (key: string, twist: Twist = {}) => {
+      const held: { t?: Awaited<ReturnType<typeof acting>> } = {};
+      const t = (held.t = await acting({
+        twist,
+        onAct: (_events, op) => {
+          const sent = (held.t?.at.input ?? []) as { type: string }[];
+          if (op === 'focus') twist.focused = true;
+          if (op === 'focused' && sent.some((e) => e.type === 'keyDown')) twist.focused = false;
+        },
+      }));
+      const out = await t.call('press_key', { tab_id: t.tab, ref: 'e2', key });
+      return { out, keys: (t.at.input as { type: string }[]).map((e) => e.type) };
+    };
+    const enter = await run('Enter');
+    expect(result(enter.out).data).toMatchObject({ done: 'Pressed Enter in “Search”', focus: 'The page moved the focus away from that field after Enter. Enter was pressed once; don’t press it again.' });
+    expect(enter.keys).toEqual(['keyDown', 'keyUp']);
+    // Its keyup reached a frame (lost): still that, done.
+    expect(result((await run('Enter', { lost: true })).out).data['done']).toBe('Pressed Enter in “Search”');
+    // A field that takes more lines (Enter types a new line there), or Space (it types): a no, and no character.
+    const multi = await run('Enter', { multiline: true });
+    expect(refusal(multi.out).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect(multi.keys).toEqual(['keyDown', 'keyUp']);
+    const space = await run('Space');
+    expect(refusal(space.out).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+    expect(space.keys).toEqual(['keyDown', 'keyUp']);
+    // The keydown itself stopped by the guard (the focus moved before it): never done.
+    expect(refusal((await run('Enter', { moved: true })).out).refused).toBe('The page moved the focus away from that field, so nothing was typed. Call snapshot again.');
+  });
+
+  it('the guard is armed with a mark only main knows, and the focus check fires it at the element', async () => {
+    const codes: string[] = [];
+    const t = await acting({ twist: { codes } });
+    const marks: string[] = [];
+    await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Tab' });
+    for (const code of codes) {
+      const armed = /\.arm\("keyup", "(chord-guard-[0-9a-f]{32})"\)/.exec(code);
+      if (armed) marks.push(armed[1]!);
+      const checked = /"op":"focused","guard":"(chord-guard-[0-9a-f]{32})"/.exec(code);
+      if (checked) marks.push(checked[1]!);
+    }
+    expect(marks).toHaveLength(2);
+    expect(marks[0]).toBe(marks[1]);
+  });
+
+  it('a node the page replaced on the way to the press: tried again from the pointer’s move, at most three times, never once pressed (the review of #117)', async () => {
+    const CHANGED = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    // Replaced at the hit test once: pointed at again, and pressed.
+    const t = await acting({ twist: { replaced: { hit: 1 } } });
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data['done']).toBe('Clicked “Home”');
+    expect(t.steps).toEqual(['describe', 'point', 'hit', 'point', 'hit', 'describe']);
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove', 'mouseMove', 'mouseDown', 'mouseUp']);
+    // At the step's last check (its own why, not another step's), and at the debugger's look (deep.open): the same.
+    const u = await acting({ twist: { replaced: { describe: 1 } }, deep: { opens: ['replaced'] } });
+    expect(result(await u.call('click', { tab_id: u.tab, ref: 'e1' })).data['done']).toBe('Clicked “Home”');
+    expect(u.steps).toEqual(['describe', 'point', 'hit', 'point', 'hit', 'describe', 'point', 'hit', 'describe']);
+    // Every time: changed, and nothing pressed.
+    const v = await acting({ twist: { replaced: { hit: 3 } } });
+    expect(refusal(await v.call('click', { tab_id: v.tab, ref: 'e1' })).refused).toBe(CHANGED);
+    expect((v.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove', 'mouseMove', 'mouseMove']);
+    // deep.open's other answers are never tried again: the snapshot gone (stale), a node it can't find again (changed).
+    const w = await acting({ deep: { opens: ['stale'] } });
+    expect(refusal(await w.call('click', { tab_id: w.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+    expect(w.steps.filter((x) => x === 'point')).toHaveLength(1);
+    const x = await acting({ deep: { opens: ['changed'] } });
+    expect(refusal(await x.call('click', { tab_id: x.tab, ref: 'e1' })).refused).toBe(CHANGED);
+    expect(x.steps.filter((s2) => s2 === 'point')).toHaveLength(1);
+  });
+
+  it('Stop while the press is tried again: no other move of the pointer, nothing pressed', async () => {
+    let stop = () => undefined as void;
+    const t = await acting({ twist: { replaced: { hit: 2 } }, onAct: (_events, op) => void (op === 'hit' && stop()) });
+    stop = () => t.agent.stop();
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(CONTROL_REFUSALS.stopped);
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['mouseMove']);
+  });
+
+  it('a key, a choice, a value: a node replaced before the input is looked for again from the pointer’s move too', async () => {
+    const t = await acting({ twist: { replaced: { focus: 1 } } });
+    expect(result(await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Tab' })).data['done']).toBe('Pressed Tab in “Search”');
+    expect(t.steps.slice(0, 5)).toEqual(['describe', 'point', 'focus', 'point', 'focus']);
+    const u = await acting({ twist: { replaced: { describe: 1 } } });
+    expect(result(await u.call('select_option', { tab_id: u.tab, ref: 'e3', option: 'Express' })).data['done']).toBe('Chose “Express” in “Shipping”');
+    expect(u.steps).toEqual(['describe', 'point', 'describe', 'point', 'describe', 'choose']);
+    // Three times: changed, nothing chosen.
+    const v = await acting({ twist: { replaced: { describe: 3 } } });
+    expect(refusal(await v.call('select_option', { tab_id: v.tab, ref: 'e3', option: 'Express' })).refused).toBe('That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.');
+    expect(v.steps).not.toContain('choose');
   });
 
   it('no guard there, but no document committed either: a no', async () => {

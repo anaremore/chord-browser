@@ -59,7 +59,8 @@ export interface ControlPage {
    * The page preload's guard (preload/agent-guard.ts) up, before text or keys: whatever has the focus now is all
    * input may reach. False if there's no guard to arm (then nothing is sent).
    */
-  guard(until: 'keyup' | 'beforeinput'): Promise<boolean>;
+  /** Up, armed with `mark` (an event name only main knows: act.ts's focus check fires it at the element). */
+  guard(until: 'keyup' | 'beforeinput', mark: string): Promise<boolean>;
   /**
    * The guard down, once the input's last event came (at most 250 ms): what it (or a frame's) stopped. `gone`: no
    * guard was ever up in that document (another document: the page went); `expired`: it was, and ran out or was
@@ -230,12 +231,12 @@ export function controlPage(contents: WebContents): ControlPage {
       ]);
     },
     keys: (events) => sendAgentInput(contents, events),
-    guard: async (until) => {
+    guard: async (until, mark) => {
       // The frames' guards first (agent-guard.ts's installFrameGuard): whatever they stop meanwhile is heard here.
       frameStopped = false;
       contents.ipc?.on('page:agentGuardStopped', onFrameStopped);
       toFrames(contents, true);
-      return (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}) : false`)) === true;
+      return (await inPreload(contents, `globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.arm(${JSON.stringify(until)}, ${JSON.stringify(mark)}) : false`)) === true;
     },
     unguard: async () => {
       const answer = await inPreload(contents, 'globalThis.__chordAgentGuard ? globalThis.__chordAgentGuard.disarm(250) : null');

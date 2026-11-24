@@ -427,7 +427,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
   const ref = scope.refs.refFor(node.id);
-  const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false): Promise<ToolOutput> => {
+  const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false, focusTaken = false): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
     if (after) return refuse(after);
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
@@ -446,6 +446,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // took the tab: sends.ts).
         // A ref whose node the page had replaced, found again (the owner's bug #2).
         ...(refoundElement ? { refound: 'The page had redrawn that element; Chord found it again by its role, name, place and target.' } : {}),
+        // Enter's keydown went, and the page then moved the focus (its handler did): done, once; never press it again.
+        ...(focusTaken ? { focus: 'The page moved the focus away from that field after Enter. Enter was pressed once; don’t press it again.' } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
       }),
     };
@@ -570,12 +572,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   let refound = false;
   const refToken = lookup.token;
   const refKey = lookup.key;
-  /** The last step's no, by its why (the press's retry: a node replaced since, `replaced`). */
-  let lastWhy: string | null = null;
   const actOn = async (op: ActOp): Promise<ActAnswer> => {
     const answer = await page.act(owner, refToken, refKey, op);
     if (answer.ok && answer.refound) refound = true;
-    if (!answer.ok) lastWhy = answer.why;
     return answer;
   };
   const owner = scope.agent.id;
@@ -623,8 +622,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
    * Text or a key goes where the focus is: only while it's this element's, and it's no field Chord never types in. The
    * page can still move the focus after this answers (a timer); the guard (see below) stops what would land elsewhere.
    */
-  const focusOk = async (now?: ActAnswer): Promise<string | null> => {
-    now ??= await actOn({ op: 'focused' });
+  const focusOk = async (mark?: string): Promise<string | null> => {
+    // Under the guard, the check marks the element for it (agent-guard.ts): input may reach it and nothing else.
+    const now = await actOn({ op: 'focused', ...(mark ? { guard: mark } : {}) });
     if (!now.ok) return actRefusal(now);
     if (now.field && sensitiveField(now.field)) return ACT_REFUSALS.sensitive;
     if (!now.focused) return ACT_REFUSALS.focusMoved;
@@ -705,15 +705,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
    * change a link, a form's address or its fields) and after any card. Not the step that was checked (named the same,
    * shaped the same, no riskier, and for a risky one the same why): nothing goes in.
    */
-  const sameStep = async (): Promise<string | null> => {
+  const stepNow = async (): Promise<{ refused: string; why?: string } | null> => {
     const now = await actOn({ op: 'describe', ...(tool === 'select_option' ? { option: asked } : {}) });
-    if (!now.ok) return actRefusal(now);
-    if (now.field && sensitiveField(now.field)) return ACT_REFUSALS.sensitive;
-    if (now.name !== element.name || stepShape(now) !== stepShape(element)) return ACT_REFUSALS.stepChanged;
+    // Its why too: a node replaced since (`replaced`) is tried again from the pointer's move (below).
+    if (!now.ok) return { refused: actRefusal(now), why: now.why };
+    if (now.field && sensitiveField(now.field)) return { refused: ACT_REFUSALS.sensitive };
+    if (now.name !== element.name || stepShape(now) !== stepShape(element)) return { refused: ACT_REFUSALS.stepChanged };
     const again = stepOf(tool, args, now);
-    if (step.class === 'act' ? again.class !== 'act' : again.class !== 'risky' || again.why !== step.why) return ACT_REFUSALS.stepChanged;
+    if (step.class === 'act' ? again.class !== 'act' : again.class !== 'risky' || again.why !== step.why) return { refused: ACT_REFUSALS.stepChanged };
     return null;
   };
+  const sameStep = async (): Promise<string | null> => (await stepNow())?.refused ?? null;
 
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
@@ -724,6 +726,14 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   const droppedBefore = page.droppedAfter();
   try {
     let refused: string | null = null;
+    /** The guard's mark while it's up (agent-guard.ts): an event name only main knows. */
+    let guardMark = '';
+    /**
+     * Enter in a one-line field whose keydown handler took the focus elsewhere (a game takes the bet on Enter's keydown,
+     * then focuses its table: the owner's retest of #117): the keydown did its work, so it's done, and the result says
+     * the page moved the focus. Refused, the agent would press again: a second bet.
+     */
+    let enterMovedFocus = false;
     /**
      * Text or keys in, with the page preload's guard up (the window's first listener): the guard takes what has the
      * focus as the element; the focus is then checked to be this element's (in this document, so not in a frame), its
@@ -734,7 +744,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     const stillOk = async (): Promise<string | null> => {
       // The tab's file picker hold, still on (it can be lost between steps: the debugger let go).
       if (!deep!.held()) return ACT_REFUSALS.noCheck;
-      const focus = await focusOk();
+      const focus = await focusOk(guardMark);
       if (focus) return focus;
       const open = await deep!.open();
       if (!open.ok) return deepRefusal(open);
@@ -747,7 +757,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
      * insertion the page would get anywhere else is stopped there, and the action ends. The guard always comes down.
      */
     const guarded = async (until: 'keyup' | 'beforeinput', input: () => Promise<string | null>, typesNothing = false): Promise<boolean> => {
-      if (!(await page.guard(until))) {
+      guardMark = `chord-guard-${randomBytes(16).toString('hex')}`;
+      if (!(await page.guard(until, guardMark))) {
         await page.unguard();
         refused = ACT_REFUSALS.changed;
         return false;
@@ -780,11 +791,39 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         refused = ACT_REFUSALS.focusLost;
         return false;
       }
+      // Something stopped: never the case for Enter whose keydown moved the focus (only its keyup went after, never stopped).
       if (down.moved) refused = ACT_REFUSALS.focusMoved;
       // A key that types nothing (Tab, an arrow, Escape) may take the focus anywhere, a frame too: its keyup there is
-      // that, not text gone astray.
-      else if (down.lost && !typesNothing) refused = ACT_REFUSALS.focusLost;
+      // that, not text gone astray. So may Enter's keydown in a one-line field (its keyup's all that went after).
+      else if (down.lost && !typesNothing && !enterMovedFocus) refused = ACT_REFUSALS.focusLost;
       return !refused;
+    };
+    /**
+     * The step checked right before input that isn't a press (a key, a choice, a value), after `first` (the focus, for a
+     * key). A node the page replaced on the way (a re-render) is looked for again from the pointer's move and checked
+     * again, at most PRESS_TRIES times, as a press is (the review of #117, round 3); never once input went in.
+     */
+    const readyAgain = async (first?: () => Promise<ActAnswer>): Promise<string | null> => {
+      for (let attempt = 1; ; attempt++) {
+        const halted = halt();
+        if (halted) return halted;
+        if (attempt > 1) {
+          const repointed = await actOn({ op: 'point', highlight: false });
+          if (!repointed.ok) return actRefusal(repointed);
+          if (repointed.field && sensitiveField(repointed.field)) return ACT_REFUSALS.sensitive;
+        }
+        if (first) {
+          const did = await first();
+          if (!did.ok) {
+            if (did.why === 'replaced' && attempt < PRESS_TRIES) continue;
+            return actRefusal(did);
+          }
+        }
+        const changed = await stepNow();
+        if (!changed) return null;
+        if (changed.why === 'replaced' && attempt < PRESS_TRIES) continue;
+        return changed.refused;
+      }
     };
     /** After text or a value went in: this field changed, or now holds the text; and no other field changed. */
     const typedWhere = async (): Promise<string | null> => {
@@ -831,6 +870,15 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Never the character: the key's let go of, nothing typed.
       if (again) {
         page.keys(rest.filter((e) => e.type === 'keyUp'));
+        // Enter in a one-line field, the focus taken elsewhere by its keydown (a game's bet): that's done, as on a button
+        // (above), and said so. In a field that takes more lines, or any key that types text, still a no.
+        if (pressed === 'Enter' && again === ACT_REFUSALS.focusMoved && element.risk?.multiline === false) {
+          if (!deep!.held()) return ACT_REFUSALS.noCheck;
+          if (call.stopped()) return CONTROL_REFUSALS.stopped;
+          if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
+          enterMovedFocus = true;
+          return null;
+        }
         return again;
       }
       page.keys(rest);
@@ -878,23 +926,20 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if ((refused = halt())) return;
       if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
       if (tool === 'select_option') {
-        if ((refused = await sameStep())) return;
+        if ((refused = await readyAgain())) return;
         // By the page's whole label, as describe matched it (the card showed it clipped).
         const chosen = await actOn({ op: 'choose', option: asked });
         if (!chosen.ok) refused = actRefusal(chosen);
         return;
       }
       if (tool === 'press_key') {
-        const focused = await actOn({ op: 'focus' });
-        if (!focused.ok) return void (refused = actRefusal(focused));
-        if ((refused = await sameStep())) return;
+        if ((refused = await readyAgain(() => actOn({ op: 'focus' })))) return;
         return void (await guarded('keyup', pressKey(key as PressKey), !typesInto(key as PressKey)));
       }
       // A field that isn't text: set to its value, never clicked (its own picker would open) nor typed into; what else
       // changed in the page meanwhile is checked as for text.
       if (valueType) {
-        if ((refused = await sameStep())) return;
-        if ((refused = halt())) return;
+        if ((refused = await readyAgain())) return;
         // Every field's value, as it is now (a no: the element's gone, and nothing goes in).
         const remembered = await actOn({ op: 'values', mode: 'remember' });
         if (!remembered.ok) return void (refused = actRefusal(remembered));
@@ -916,6 +961,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       let at = pointed;
       for (let attempt = 1; ; attempt++) {
         const again = (why: string | undefined) => why === 'replaced' && attempt < PRESS_TRIES;
+        // Stop, the user taking the tab, the page gone on: never another try, nor another move of the pointer.
+        if ((refused = halt())) return;
         if (attempt > 1) {
           const repointed = await actOn({ op: 'point', highlight: false });
           if (!repointed.ok || repointed.x === undefined || repointed.y === undefined) return void (refused = repointed.ok ? ACT_REFUSALS.changed : actRefusal(repointed));
@@ -924,6 +971,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         }
         const x = at.x!;
         const y = at.y!;
+        if ((refused = halt())) return;
         page.pointer(x, y);
         let hit = await actOn({ op: 'hit', x, y });
         // The move to the point not seen as the page's last: the pointer was there already (a second click at the point:
@@ -933,12 +981,14 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // moves still sees neither: no press.
         if (!hit.ok && hit.why === 'no-move') {
           const off = { x: x + 3, y };
+          if ((refused = halt())) return;
           page.pointer(off.x, off.y);
           const seen = await actOn({ op: 'hit', ...off, onlyMove: true });
           if (!seen.ok) {
             if (again(seen.why)) continue;
             return void (refused = actRefusal(seen));
           }
+          if ((refused = halt())) return;
           page.pointer(x, y);
           hit = await actOn({ op: 'hit', x, y });
         }
@@ -957,11 +1007,10 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           if (again(open.why)) continue;
           return void (refused = deepRefusal(open));
         }
-        lastWhy = null;
-        const changed = await sameStep();
+        const changed = await stepNow();
         if (changed) {
-          if (again(lastWhy ?? undefined)) continue;
-          return void (refused = changed);
+          if (again(changed.why)) continue;
+          return void (refused = changed.refused);
         }
         break;
       }
@@ -1007,7 +1056,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    return await done(navigated, loading, actDone(description), droppedBefore, refound);
+    return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus);
   } finally {
     // What its page still sends from now is the tab's: held, and asked about between actions (sends.ts).
     (watch as SendWatch | null)?.end();

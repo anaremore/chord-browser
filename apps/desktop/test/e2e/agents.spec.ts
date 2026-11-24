@@ -1228,6 +1228,8 @@ test('a game whose action controls are pointer divs, re-rendered every 100 ms an
     const popover = await pageWhere(app, isPopover);
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     const read = async () => (JSON.parse((await mcp.call('read_tab', { tab_id: 'a1' })).text) as { content: string }).content;
+    // The page's own log (what its controls and its Enter did), never the controls' words.
+    const logText = async () => String(await app.evaluate(({ webContents }, prefix) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(prefix))!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/game`));
     let outline = await snap();
     // The real button first (the site card), as on the owner's page.
     const ranking = mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Hand rankings"') });
@@ -1259,20 +1261,80 @@ test('a game whose action controls are pointer divs, re-rendered every 100 ms an
       await card.getByRole('button', { name: 'Allow', exact: true }).click();
       const entered = await entering;
       expect(entered.text, `Enter in the bet, round ${round}`).toMatch(/^\{/);
+      // Done, once, and said so: the page took the focus on Enter's keydown (refused, the agent pressed again: two bets).
+      expect(JSON.parse(entered.text)).toMatchObject({ data: { done: 'Pressed Enter in “Bet”', focus: 'The page moved the focus away from that field after Enter. Enter was pressed once; don’t press it again.' } });
+      await expect.poll(async () => (await logText()).match(/bet \d+/g)?.length ?? 0, `one bet per Enter, round ${round}`).toBe(round + 1);
     }
-    await expect.poll(read).toContain('bet 30');
+    expect((await logText()).match(/bet \d+/g)).toEqual(['bet 10', 'bet 20', 'bet 30']);
     // Every frame: the same controls, re-rendered at 60 Hz.
     expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/game?raf=1` })).text)).toMatchObject({ data: { navigated: true } });
     // A node replaced every frame can't be checked and pressed within one: each is clicked, or refused as changed
     // (fails closed), never another element (a stated limit). How many got through is a report.
     outline = await snap();
-    let through = 0;
+    const through: string[] = [];
     for (const name of ['Fold', 'Call', 'Raise', 'Fold', 'Call', 'Raise']) {
       const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, `generic "${name}"`) });
-      if (clicked.text.startsWith('{')) through++;
-      else expect(clicked.text, `${name}, every frame`).toBe('That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.');
+      if (clicked.text.startsWith('{')) {
+        expect(JSON.parse(clicked.text), `${name}, every frame`).toMatchObject({ data: { done: `Clicked “${name}”` } });
+        through.push(name);
+      } else expect(clicked.text, `${name}, every frame`).toBe('That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.');
     }
-    console.log(`[game] every frame: ${through} of 6 clicks went through; the rest refused as changed`);
+    // The log grew by exactly the names clicked, in order: never another control.
+    await expect.poll(async () => (await logText()).match(/\b(Fold|Call|Raise)\b/g) ?? []).toEqual(through);
+    console.log(`[game] every frame: ${through.length} of 6 clicks went through; the rest refused as changed`);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a press tried again when the page replaces the element as the pointer arrives (the review of #117, round 3)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/moves?m=once` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const inPage = (code: string) => app.evaluate(({ webContents }, [prefix, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(prefix))!.executeJavaScript(js), [`${site.origin}/moves`, code] as const);
+    const log = async () => String(await inPage('document.getElementById("log").textContent'));
+    /** The page in the mode, a snapshot, armed: its Go's ref. */
+    const ready = async (m: string) => {
+      if (m !== 'once') expect(JSON.parse((await mcp.call('navigate', { tab_id: 'a1', url: `${site.origin}/moves?m=${m}` })).text)).toMatchObject({ data: { navigated: true } });
+      const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+      await inPage('window.arm()');
+      return refOf(outline, 'button "Go"');
+    };
+    const STALE = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    // Replaced once as the pointer arrives: the second try finds it, and clicks it (the site card first).
+    const clicking = mcp.call('click', { tab_id: 'a1', ref: await ready('once') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    expect(JSON.parse((await clicking).text)).toMatchObject({ data: { done: 'Clicked “Go”', refound: expect.any(String) } });
+    expect(await log()).toBe(' Go');
+    // A decoy put where it was, it lower down: the second try points at it where it is now; the decoy never.
+    expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: await ready('decoy') })).text)).toMatchObject({ data: { done: 'Clicked “Go”', refound: expect.any(String) } });
+    expect(await log()).toBe(' Go');
+    // Replaced on every move: three tries, then exactly changed, and nothing clicked.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('every') })).text).toBe(STALE);
+    expect(await log()).toBe('');
+    // Between tries, a closed root on it, a twin beside it, it in a form that posts: refused, nothing clicked or sent.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('closed') })).text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.');
+    expect(await log()).toBe('');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('twin') })).text).toBe(STALE);
+    expect(await log()).toBe('');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('form') })).text).toBe(STALE);
+    expect(await log()).toBe('');
+    expect(reached.filter((r) => r.includes('wipe'))).toEqual([]);
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -1362,6 +1424,30 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     o = await snap();
     await mode('other');
     await refused('another table', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Sit out"') }));
+    // Each item kind, found again in the same item as the page redraws: a row in a section named by aria-labelledby, a
+    // row in a region, a list item in a dialog (the walk's items and the act's are the same).
+    await mode('');
+    o = await snap();
+    for (const name of ['Fold here', 'Take seat', 'Show cards']) {
+      await new Promise((r) => setTimeout(r, 400));
+      const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(o, `button "${name}"`) });
+      expect(JSON.parse(clicked.text), name).toMatchObject({ data: { done: `Clicked “${name}”`, refound: expect.any(String) } });
+    }
+    // And in another (a section's heading, a row's or a dialog's name changed): refused, the nearest named item or not.
+    for (const [m2, name] of [['lab', 'Fold here'], ['seat', 'Take seat'], ['hand', 'Show cards']] as const) {
+      await mode('');
+      o = await snap();
+      await mode(m2);
+      await refused(`${name} in another item`, mcp.call('click', { tab_id: 'a1', ref: refOf(o, `button "${name}"`) }));
+    }
+    // A node patched in place into another table (still connected, never looked for again; two Mucks: no re-finding
+    // either): refused on its items, at every step.
+    await mode('');
+    o = await snap();
+    await inPage(`document.getElementById('pt').setAttribute('aria-label', 'Table 8')`);
+    await refused('patched into another table', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Muck"') }));
+    await refused('patched, hovered', mcp.call('hover', { tab_id: 'a1', ref: refOf(o, 'button "Muck"') }));
+    await inPage(`document.getElementById('pt').setAttribute('aria-label', 'Table 7')`);
     // A swap while a risky step's card is up that keeps the element (its place and shape) but not the step (its form
     // now asks for a card number): exactly "step changed", nothing sent (Claude's test gap).
     await mode('');
@@ -1383,7 +1469,10 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     await inPage('window.huge()');
     await new Promise((r) => setTimeout(r, 700));
     await refused('a huge page', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Call"') }));
-    expect(await inPage('document.getElementById("log").textContent')).not.toMatch(/Delete row|Check|Pass|Keep|Open the way/);
+    const log = String(await inPage('document.getElementById("log").textContent'));
+    expect(log).not.toMatch(/Delete row|Check|Pass|Keep|Open the way|Muck/);
+    // Each item kind's control clicked once (the found-again ones), never in another item.
+    for (const name of ['Fold here', 'Take seat', 'Show cards']) expect(log.split(name).length - 1, name).toBe(1);
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -1967,7 +2056,10 @@ test.beforeAll(async () => {
     // framework-style render every 100 ms (or every frame, ?raf), in a named table; a bet field the page takes the focus
     // from on its tick; a real button beside them.
     '/game': '<title>Game</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div id=table role=region aria-label="Table 3" tabindex=-1><div id=controls></div><label>Bet <input id=bet></label> <button id=rankings>Hand rankings</button></div><p id=log></p></main><script src="/game.js"></script>',
-    '/redraws': '<title>Redraws</title><div id=big></div><div id=keep><button id=kb>Keep</button></div><main id=m></main><p id=log></p><script src="/redraws.js"></script>',
+    // The press tried again (the review of #117, round 3): the page replaces its button as the pointer arrives, once
+    // armed (window.arm), in the way ?m= says.
+    '/moves': '<title>Moves</title><main id=m></main><p id=log></p><script src="/moves.js"></script>',
+    '/redraws': '<title>Redraws</title><div id=big></div><div id=keep><button id=kb>Keep</button></div><div id=pt role=region aria-label="Table 7"><button>Muck</button> <button>Muck</button></div><main id=m></main><p id=log></p><script src="/redraws.js"></script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +
       '<button id=b>Go</button><input id=i><p id=log></p><script>const log = (t, e) => { document.getElementById("log").textContent += t + ":" + e.isTrusted + " "; };' +
@@ -2003,9 +2095,31 @@ test.beforeAll(async () => {
         c.addEventListener('click', (e) => { const a = e.target.closest('.act'); if (a) log.textContent += ' ' + a.textContent; });
         document.getElementById('rankings').addEventListener('click', () => { log.textContent += ' rankings'; });
         const bet = document.getElementById('bet');
-        bet.addEventListener('keydown', (e) => { if (e.key === 'Enter') log.textContent += ' bet ' + bet.value; });
+        // Enter takes the bet on its keydown, then gives the table the focus (the owner's game: round 3 of #117).
+        bet.addEventListener('keydown', (e) => { if (e.key === 'Enter') { log.textContent += ' bet ' + bet.value; document.getElementById('table').focus(); } });
         // The page's tick takes the focus to its table (keyboard shortcuts), once a second.
         setInterval(() => document.getElementById('table').focus(), 1000);
+      `,
+      '/moves.js': `
+        const m = document.getElementById('m');
+        const kind = new URLSearchParams(location.search).get('m') || 'once';
+        // (A closed root takes a div with a button's role: a button can't have a shadow root.)
+        const go = kind === 'closed' ? '<div class=row><div role=button tabindex=0>Go</div></div>' : '<div class=row><button>Go</button></div>';
+        m.innerHTML = go;
+        let armed = false;
+        window.arm = () => { armed = true; };
+        // On the pointer's (trusted) move: once (the second try finds it), every time (never), a decoy where it was and
+        // it lower down, a closed root on it, a twin beside it, it in a form that posts.
+        document.addEventListener('mousemove', (e) => {
+          if (!armed || !e.isTrusted) return;
+          if (kind !== 'every') armed = false;
+          if (kind === 'once' || kind === 'every') m.innerHTML = go;
+          if (kind === 'decoy') m.innerHTML = '<div class=row><button>Fold</button></div>' + go;
+          if (kind === 'closed') { m.innerHTML = go; m.querySelector('[role=button]').attachShadow({ mode: 'closed' }).innerHTML = '<span>Go</span>'; }
+          if (kind === 'twin') m.innerHTML = go + go;
+          if (kind === 'form') m.innerHTML = '<form method=post action=/wipe>' + go + '</form>';
+        }, true);
+        m.addEventListener('click', (e) => { const b = e.target.closest('button, [role=button]'); if (b) { e.preventDefault(); document.getElementById('log').textContent += ' ' + b.textContent; } });
       `,
       '/redraws.js': `
         window.mode = '';
@@ -2027,6 +2141,10 @@ test.beforeAll(async () => {
           h += '<a href="' + (md === 'relink' ? '/elsewhere' : '/home') + '"><x-in></x-in></a>';
           h += '<div class=solo><button>Check</button></div>' + (md === 'twin' ? '<div class=solo><button>Check</button></div>' : '');
           h += '<div role=region aria-label="' + (md === 'other' ? 'Table 4' : 'Table 3') + '"><button>Sit out</button></div>';
+          // Unnamed rows and list items, in named sections, regions and dialogs (the review of #117, round 3).
+          h += '<section aria-labelledby=t5><h3 id=t5>' + (md === 'lab' ? 'Table 6' : 'Table 5') + '</h3><table><tr><td><button>Fold here</button></td></tr></table></section>';
+          h += '<div role=region aria-label=Lobby><div role=row aria-label="' + (md === 'seat' ? 'Seat 2' : 'Seat 1') + '"><button>Take seat</button></div></div>';
+          h += '<div role=dialog aria-label="' + (md === 'hand' ? 'Hand 13' : 'Hand 12') + '"><ul><li><button>Show cards</button></li></ul></div>';
           h += '<form method=post action=/remove><label>Note <input name=note></label>' + (md === 'fields' ? '<label>Card <input name=cc autocomplete=cc-number></label>' : '') + '<button>Remove item</button></form>';
           m.innerHTML = h;
           if (md === 'closed') document.getElementById('pass').attachShadow({ mode: 'closed' }).innerHTML = '<span>Pass</span>';
@@ -2035,7 +2153,9 @@ test.beforeAll(async () => {
         render();
         setInterval(render, 300);
         window.huge = () => { const big = document.getElementById('big'); for (let i = 0; i < 30000; i++) { const d = document.createElement('span'); d.textContent = 'x'; big.append(d); } };
-        m.addEventListener('click', (e) => { const b = e.target.closest('button, [role=button]'); if (b && !b.closest('form')) { e.preventDefault(); document.getElementById('log').textContent += ' ' + b.textContent; } });
+        const logClicks = (e) => { const b = e.target.closest('button, [role=button]'); if (b && !b.closest('form')) { e.preventDefault(); document.getElementById('log').textContent += ' ' + b.textContent; } };
+        m.addEventListener('click', logClicks);
+        document.getElementById('pt').addEventListener('click', logClicks);
       `,
       '/sw.js':
         'self.addEventListener("install", () => self.skipWaiting()); self.addEventListener("activate", (e) => e.waitUntil(clients.claim()));' +

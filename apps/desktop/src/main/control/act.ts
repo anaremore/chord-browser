@@ -41,7 +41,7 @@ export type ActOp =
   | { op: 'setValue'; value: string }
   | { op: 'values'; mode: 'remember' | 'compare'; text?: string }
   | { op: 'focus' }
-  | { op: 'focused' }
+  | { op: 'focused'; guard?: string }
   | { op: 'choose'; option: string }
   | { op: 'describe'; option?: string; refind?: boolean };
 
@@ -117,7 +117,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
         if (SKIP.has(c.localName) || String(c.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(c)) continue;
         if (refPath(c) === entry.path && refShape(c) === entry.shape) {
           const r = entry.role === 'generic' ? (!roleNow(c) && pointerGeneric(c) ? 'generic' : null) : roleNow(c);
-          if (r === entry.role && nameOf(c, r) === entry.name && (isField(c) ? visibleField(c, typeOf(c)) : shown(c))) found.push(c);
+          if (r === entry.role && nameOf(c, r) === entry.name && itemsOf(c) === entry.items && (isField(c) ? visibleField(c, typeOf(c)) : shown(c))) found.push(c);
         }
         if (c.shadowRoot && shadows < 4) visit(c.shadowRoot, shadows + 1);
         visit(c, shadows);
@@ -130,10 +130,14 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   }
   if (!el || !el.isConnected) return { ok: false, why: 'changed' };
   // The same element as the snapshot described: its role and name now, and on screen. A clickable element by its look
-  // (the snapshot's generic: no role, a pointer cursor its parent doesn't give it) is checked by that same rule (the
-  // owner's retest of #117: every generic ref was refused, its role compared with none).
+  // (the snapshot's generic: no role, a pointer cursor its parent doesn't give it) is checked by that rule, without the
+  // snapshot's other one (nothing keyed around it: this check doesn't walk from the top); the owner's retest of #117,
+  // every generic ref was refused, its role compared with none.
   const role = entry.role === 'generic' && !roleNow(el) && pointerGeneric(el) ? 'generic' : roleNow(el);
   if (role !== entry.role || nameOf(el, role) !== entry.name) return { ok: false, why: 'changed' };
+  // And in the same items (the owner, 2026-11-24): a node the page patched in place to be another table's Sit out, or
+  // moved to another row, is another element, for every step and every ref (one found again or not).
+  if (entry.items !== undefined && itemsOf(el) !== entry.items) return { ok: false, why: 'changed' };
   if (!(isField(el) ? visibleField(el, typeOf(el)) : shown(el))) return { ok: false, why: 'changed' };
   // One that opens a file picker now (the page made it one since): never acted on.
   if (opensFiles(el)) return { ok: false, why: 'file' };
@@ -247,7 +251,12 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     return { ok: true, ...said, disabled, editable, select, choice: clip(el.options[index].label || el.options[index].text, NAME_MAX) };
   }
   if (args.op === 'focus') { el.focus({ preventScroll: true }); return { ok: true, ...said, focused: deepFocus() === el }; }
-  if (args.op === 'focused') return { ok: true, ...said, focused: deepFocus() === el };
+  if (args.op === 'focused') {
+    const focused = deepFocus() === el;
+    // The guard's mark (agent-guard.ts): this element, and only while it has the focus, is the one input may reach.
+    if (focused && typeof args.guard === 'string' && /^chord-guard-[0-9a-f]{32}$/.test(args.guard)) el.dispatchEvent(new CustomEvent(args.guard, { bubbles: true, composed: true }));
+    return { ok: true, ...said, focused };
+  }
   // setValue (#112, the owner's hand test): a field that isn't text (a time, a date, a color, a range) set to a value,
   // as the fill sets one (the native setter, then input and change); one the browser won't take (out of range, not its
   // format) is refused, and nothing is changed.
