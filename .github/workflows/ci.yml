@@ -733,7 +733,9 @@ jobs:
     env: *e2e-env
     steps: *e2e-steps
 
-  # The tier's E2E verdict, and the `E2E` commit status: the one status that says a pull request can merge.
+  # The tier's E2E verdict, and the `E2E` commit status: the one status that says a pull request can merge, and
+  # main's ruleset's one required check (for pull requests and merge groups alike). So it covers the whole run:
+  # it fails when the checks, the password detector's corpora or Chord Player failed too.
   # This job passes when every shard of its tier passed, or none had to run (a pull request of docs alone), and
   # fails when any shard failed or was cancelled, or what changed couldn't be told. Its name says which tier ran.
   # The `E2E` status, posted on the pull request's head commit (or the pushed one), is:
@@ -748,7 +750,7 @@ jobs:
   # token, so it can't post one: the maintainer runs the full tier from a branch of this repository instead.
   e2e:
     name: E2E · ${{ needs.changes.outputs.tier || 'unknown' }} tier
-    needs: [changes, e2e-fast, e2e-full, e2e-perf]
+    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e-perf]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -768,6 +770,11 @@ jobs:
           FAST: ${{ needs.e2e-fast.result }}
           FULL_SHARDS: ${{ needs.e2e-full.result }}
           PERF: ${{ needs.e2e-perf.result }}
+          # The rest of the run: `E2E` is the one required check (main's ruleset), so it also fails when these do.
+          CHECKS: ${{ needs.checks.result }}
+          FORMS: ${{ needs.forms.result }}
+          FORMS_TTW: ${{ needs.forms-ttw.result }}
+          PLAYER: ${{ needs.player.result }}
         run: |
           # The full tier is its shards and perf.spec.ts's jobs: failed or cancelled if either was, else their result.
           if [ "$FULL_SHARDS" = failure ] || [ "$PERF" = failure ]; then FULL=failure
@@ -780,6 +787,13 @@ jobs:
           pass=false state=failure
           if [ "$CHANGES" != success ]; then
             desc="Couldn't tell what changed ($CHANGES)"
+          elif failed="$(for job in "checks:$CHECKS" "forms:$FORMS" "forms-ttw:$FORMS_TTW" "player:$PLAYER"; do
+                  case "${job#*:}" in failure | cancelled) printf '%s ' "${job%%:*} (${job#*:})" ;; esac
+                done)" && [ -n "$failed" ]; then
+            failed="${failed% }"
+            if [ "$FAST" = cancelled ] || [ "$FULL" = cancelled ]; then state='' desc="Cancelled: $failed"
+            else desc="Failed: $failed"
+            fi
           elif [ "$TIER" = none ]; then
             # main's push of a commit a merge group already passed: its `E2E` stands, nothing to post.
             pass=true state='' desc="Tested in the merge queue: nothing more to run"
