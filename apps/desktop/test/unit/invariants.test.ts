@@ -116,6 +116,9 @@ type Gap = { gap: string };
 const INPUT_LISTENERS: Record<string, (typeof CHECKS | Exempt | Gap)[]> = {
   'agents/chords.ts': [CHECKS, CHECKS],
   'browser.ts': [
+    // Your key or click in a tab of yours, before its page sees it (S18 M2e-2a, F1): the assistant's own input isn't yours.
+    CHECKS,
+    CHECKS,
     CHECKS,
     'DevTools front end of a tab (wire): Chord never sends an agent input there',
     "the passwords menu's own view (Chord's UI): never an agent's page",
@@ -133,7 +136,8 @@ const INPUT_LISTENERS: Record<string, (typeof CHECKS | Exempt | Gap)[]> = {
   ],
   'keyboard.ts': [CHECKS],
   'mini-window.ts': ["a mini window's page and bar: never an agent's (agent tabs open no windows: tabs.ts openFrom); recheck in M2e"],
-  'passwords/assist.ts': [{ gap: "S18 A4 (Neon's M2e blocker B2): the menu's key guard takes Enter and arrows with no isAgentInput check; planned for M2e" }],
+  // S18 A4 (Neon's M2e blocker B2), closed in M2e-2a: the menu's key guard ignores the input Chord sends.
+  'passwords/assist.ts': [CHECKS],
   'peek.ts': ["Peek's page: never an agent's (Peek opens from pinned tabs; agent tabs are never pinned); recheck in M2e"],
   'tabs.ts': ["Peek's link gesture in a pinned tab: agent tabs are never pinned; recheck in M2e, where an assistant's click in your pinned tab would open Peek"],
   'window.ts': ["the popover's card (Chord's UI): never an agent's page"],
@@ -217,6 +221,13 @@ const AUDITED: Record<string, [Site['kind'], string, string][]> = {
   'assistant/service.ts': [['fetch', 'net', 'a file you attached, read from disk (file: URL): no network']],
   'control/deep.ts': [['debugger', 'debug', "the assistant's deep read, through the tab's debugger queue (debugger-queue.ts); detached unless another client had it"]],
   'control/diagnostics.ts': [['debugger', 'debug', "page_diagnostics' read: Log and Runtime only, let go after the read"]],
+  'control/user-watch.ts': [
+    [
+      'debugger',
+      'debug',
+      "the assistant's lease on a tab of yours (S18 M2e-2a): attached through the debugger queue right before its action, which arms the Fetch hold (sends.ts) before anything goes in; let go at the lease's end, detached unless another client had it",
+    ],
+  ],
   'control/pdf.ts': [['fetch', 'contents.session', "the PDF a tab shows, for a read tool: `readable` (isNeverReadable) is asked about the final address, after redirects"]],
   'devtools.ts': [['window-open', 'contents', 'DevTools: denied']],
   'extensions/index.ts': [['window-open', 'win.webContents', "an extension's own window: links become tabs of yours"]],

@@ -132,6 +132,8 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     await expect.poll(() => reached).toEqual(['POST /move?Raise']);
     await expect.poll(() => actingTurns(config), { timeout: 15_000 }).toBe(1);
     expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('Clicked “Raise”');
+    // Its own click (input Chord sends, isAgentInput) is never you taking the tab (invariant 1; browser.ts' userInput).
+    await expect(panel.getByText('Stopped: you used the tab')).toHaveCount(0);
 
     // Call, in the next message, after Raise's lease is over (past TAIL_MS): no card (the site, and what it sends
     // there, allowed for this chat: the chat keeps it, not the lease).
