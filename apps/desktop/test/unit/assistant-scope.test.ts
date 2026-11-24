@@ -24,6 +24,7 @@ function setup() {
     thread: { id: 't1', chordId: 'c1', title: '', scope: 'all', provider: 'claude', model: null, createdAt: 0, lastUsedAt: 0 } as unknown as DuetChat['thread'],
     refs: new TabRefs<NodeId>('t'),
     attached: new Set(),
+    pointed: new Set(),
     windowId: 'w1',
     control: new ControlAgent('chat:1', async () => 'once'),
     pdfs: new Map(),
@@ -42,7 +43,7 @@ function setup() {
     fills: () => ({ refuse: () => null, show: async () => undefined }),
   } satisfies DuetHost;
   const tab = (id: string) => nodeOf(store.state, id) as TabNode;
-  return { chat, scope: duetScope(chat, host), mine, tab };
+  return { chat, host, scope: duetScope(chat, host), mine, tab };
 }
 
 describe('An outside agent’s tab, for the assistant (S18 M2e-1)', () => {
@@ -59,10 +60,31 @@ describe('An outside agent’s tab, for the assistant (S18 M2e-1)', () => {
   it('attached (on screen when you sent it, or added): read, but never filled', () => {
     const t = setup();
     t.chat.attached.add('a1');
+    t.chat.pointed.add('a1');
     expect(t.scope.tabs().map(({ node }) => node.id).sort()).toEqual([t.mine, 'a1'].sort());
     expect(t.scope.readable(t.tab('a1'))).toBe(true);
     expect(t.scope.whyNot?.(t.tab('a1'))).toBeNull();
     expect(t.scope.mayInspect(t.tab('a1'), 'propose_fill')).toBe(AGENT_TAB_REFUSALS.act('Claude Code'));
     expect(AGENT_TAB_REFUSALS.act('Claude Code')).toBe('That tab is Claude Code’s. Keep it first to make it yours, then I can act in it.');
+  });
+
+  it('pointing is per message: an agent’s tab attached to an earlier message isn’t read for the next one', () => {
+    const t = setup();
+    t.chat.attached.add('a1');
+    // The next message points at nothing of the agent's.
+    expect(t.scope.readable(t.tab('a1'))).toBe(false);
+    expect(t.scope.tabs().map(({ node }) => node.id)).toEqual([t.mine]);
+    expect(t.scope.defaultTab()).toBeNull();
+  });
+
+  it('under any scope, the tab the message points at is listed; a never-readable one gets the usual refusal, not a hint', () => {
+    const t = setup();
+    (t.chat.thread as { scope: string }).scope = 'ask';
+    t.chat.pointed.add('a1');
+    expect(t.scope.tabs().map(({ node }) => node.id).sort()).toEqual([t.mine, 'a1'].sort());
+    t.chat.pointed.clear();
+    const never = setup();
+    const scope = duetScope(never.chat, { ...never.host, readable: () => false });
+    expect(scope.whyNot?.(never.tab('a1'))).toBeNull();
   });
 });

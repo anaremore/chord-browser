@@ -20,6 +20,7 @@ import { DownloadManager } from '../../src/main/downloads';
 import { PasswordService } from '../../src/main/passwords/service';
 import { Store } from '../../src/main/store';
 import { holdForAgent } from '../../src/preload/agent-hold';
+import { holdSends } from '../../src/main/control/sends';
 
 afterEach(() => vi.useRealTimers());
 
@@ -138,34 +139,150 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
   /** A card no one answers: up until it's taken down. */
   const unanswered: CardPresenter = (_card, signal) => new Promise((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
   const card = (tab: string, kind: 'site' | 'step', subject: string) => ({ kind, tool: 'click', description: '', target: [`https://agent.test/${tab}`], tab, subject });
+  const never = new AbortController().signal;
+  const tick = () => new Promise((r) => setTimeout(r, 0));
 
-  it('your reload, back, forward or typed address takes the tab over: paused, its own cards down, another tab’s left', async () => {
-    const t = setup([], unanswered);
-    const contents = t.page('a1');
-    t.chords.wire(contents, 'a1');
-    const never = new AbortController().signal;
-    const step = t.agent.ask(card('a1', 'step', 'a1|p1|e4|click'), never);
-    // A site card is the site's: a2 waits on the one a1 opened.
-    const site1 = t.agent.ask(card('a1', 'site', 'agent.test'), never);
-    const site2 = t.agent.ask(card('a2', 'site', 'agent.test'), never);
-    t.chords.takeOverPage(contents);
-    expect(agentLive(t.store, 'a1')?.state).toBe('paused');
-    await expect(step).resolves.toBe('deny');
-    expect(t.agent.hasOpenCard('site', 'agent.test', 'a1') || t.agent.hasOpenCard('site', 'agent.test', 'a2')).toBe(true);
-    // Its other tab isn't paused.
-    expect(agentLive(t.store, 'a2')?.state).not.toBe('paused');
-    t.agent.cancelCards();
-    await Promise.all([site1, site2]);
+  /** The tab's page with its lifelong send hold on (control/sends.ts, over a fake debugger), wired to its chord. */
+  function held(t: ReturnType<typeof setup>, nodeId: string) {
+    const contents = t.page(nodeId);
+    const debug = new EventEmitter();
+    const answered: [string, string][] = [];
+    Object.assign(contents, {
+      debugger: Object.assign(debug, {
+        isAttached: () => true,
+        sendCommand: async (method: string, params: { requestId?: string }) => void answered.push([method, params.requestId ?? '']),
+      }),
+    });
+    holdSends(contents);
+    t.chords.wire(contents, nodeId);
+    let n = 0;
+    /** What the page sends now (a POST to its site, or a load): its request id. */
+    const send = (type = 'XHR', method = 'POST') => {
+      const requestId = `r${++n}`;
+      debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method, url: `https://agent.test/${nodeId}/save` }, resourceType: type });
+      return requestId;
+    };
+    const how = (requestId: string) => answered.find(([, id]) => id === requestId)?.[0] ?? 'held';
+    const events = contents as unknown as EventEmitter;
+    return { contents, send, how, events };
+  }
+
+  const show = (t: ReturnType<typeof setup>, nodeId: string) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId });
+
+  // [what you did, whether a window shows the tab, whether it moves the page]
+  const takeovers: [string, boolean, boolean][] = [
+    ['the toolbar’s Back, on the tab you see', true, true],
+    ['the app menu’s Reload, on the tab you see', true, true],
+    ['an address you typed for the tab you see', true, true],
+    ['the row menu’s Reload, on a tab no window shows', false, true],
+    ['a key in the page you see', true, false],
+  ];
+  for (const [what, shown, navigating] of takeovers) {
+    it(`${what}: the held send fails, its card comes down; paused only where you see it`, async () => {
+      const t = setup([], unanswered);
+      const tab = held(t, 'a1');
+      if (shown) show(t, 'a1');
+      const waiting = tab.send();
+      await tick();
+      expect(tab.how(waiting)).toBe('held');
+      const step = t.agent.ask(card('a1', 'step', 'a1|p1|e4|click'), never);
+      if (navigating) t.chords.takeOver('a1', tab.contents, true);
+      else tab.events.emit('before-input-event', {}, { type: 'keyDown', key: 'a' });
+      expect(tab.how(waiting)).toBe('Fetch.failRequest');
+      await expect(step).resolves.toBe('deny');
+      expect(t.agent.state('a1').paused).toBe(shown);
+      // Not shown: still the agent's, so what the page sends next is held again (Neon's B1 on #116).
+      if (!shown) {
+        const next = tab.send('XHR');
+        await tick();
+        expect(tab.how(next)).toBe('Fetch.failRequest'); // the outgoing page's: no one's until the next one loads
+        tab.events.emit('did-navigate', {}, 'https://agent.test/a1');
+        tab.events.emit('did-stop-loading');
+        const after = tab.send();
+        await tick();
+        expect(tab.how(after)).toBe('held');
+      }
+    });
+  }
+
+  it('moving the page yourself: the outgoing page’s sends fail until the next one has loaded, then they’re yours; the new page’s load goes', async () => {
+    const t = setup();
+    const tab = held(t, 'a1');
+    show(t, 'a1');
+    t.chords.takeOver('a1', tab.contents, true);
+    // Its pagehide's keepalive POST and beacon: no one's, though you have the tab.
+    expect(tab.how(tab.send('XHR'))).toBe('Fetch.failRequest');
+    expect(tab.how(tab.send('Ping'))).not.toBe('Fetch.continueRequest');
+    // The page you sent it to, a document: on its way.
+    expect(tab.how(tab.send('Document', 'GET'))).toBe('Fetch.continueRequest');
+    tab.events.emit('did-navigate', {}, 'https://agent.test/a1');
+    tab.events.emit('did-stop-loading');
+    // Loaded, and you have the tab: what it sends is yours.
+    expect(tab.how(tab.send())).toBe('Fetch.continueRequest');
+    // Back within the same document: nothing unloads, nothing waits.
+    t.chords.takeOver('a1', tab.contents, true);
+    tab.events.emit('did-navigate-in-page', {}, 'https://agent.test/a1#x', true);
+    expect(tab.how(tab.send())).toBe('Fetch.continueRequest');
   });
 
-  it('the page navigating itself never takes it over (Neon’s B6: a pause makes its sends yours)', () => {
-    const t = setup();
-    const contents = t.page('a1') as unknown as EventEmitter;
-    t.chords.wire(t.page('a1'), 'a1');
-    // A page's own location.reload(), meta refresh or timed redirect: navigation events, no input, no button of Chord's.
-    for (const event of ['did-start-navigation', 'did-navigate', 'did-finish-load', 'did-redirect-navigation']) contents.emit(event, {}, 'https://agent.test/elsewhere', false, true);
-    expect(agentLive(t.store, 'a1')).toBeNull();
-    expect(t.agent.state('a1').paused).toBe(false);
+  it('the page navigating itself never takes it over (Neon’s B6), shown or not: what it sends stays held', async () => {
+    for (const shown of [true, false]) {
+      const t = setup([], unanswered);
+      const tab = held(t, 'a1');
+      if (shown) show(t, 'a1');
+      // A page's own location.reload(), meta refresh or timed redirect: navigation events, no input, no button of Chord's.
+      for (const event of ['did-start-navigation', 'did-redirect-navigation', 'did-navigate', 'did-navigate-in-page', 'did-finish-load', 'did-stop-loading']) tab.events.emit(event, {}, 'https://agent.test/elsewhere', true, true);
+      const sent = tab.send();
+      await tick();
+      expect(tab.how(sent), `shown: ${shown}`).toBe('held');
+      expect(t.agent.state('a1').paused).toBe(false);
+      t.agent.cancelCards();
+    }
+  });
+
+  it('a site card two tabs wait on: taking one over answers its ask no and leaves the card up for the other; both gone, it comes down', async () => {
+    let presented: AbortSignal | null = null;
+    let answerCard: (grant: 'once') => void = () => undefined;
+    const t = setup([], (_card, signal) => {
+      presented = signal;
+      return new Promise((resolve) => {
+        answerCard = resolve;
+        signal.addEventListener('abort', () => resolve('deny'), { once: true });
+      });
+    });
+    const a1 = t.agent.ask(card('a1', 'site', 'agent.test'), never);
+    const a2 = t.agent.ask(card('a2', 'site', 'agent.test'), never);
+    t.chords.takeOver('a1');
+    await expect(a1).resolves.toBe('deny');
+    expect(t.agent.hasOpenCard('site', 'agent.test')).toBe(true);
+    // Answered for a2: a1's action (asked before you took the tab) never gets the yes.
+    answerCard('once');
+    await expect(a2).resolves.toBe('once');
+    // Again, and both tabs let go of: no card left up with no one waiting.
+    const b1 = t.agent.ask(card('a1', 'site', 'other.test'), never);
+    const b2 = t.agent.ask(card('a2', 'site', 'other.test'), never);
+    t.chords.takeOver('a1');
+    t.chords.takeOver('a2');
+    await expect(Promise.all([b1, b2])).resolves.toEqual(['deny', 'deny']);
+    expect(presented!.aborted).toBe(true);
+    expect(t.agent.hasOpenCard('site', 'other.test')).toBe(false);
+  });
+
+  it('closing the tab (or Close all, or a Never site) answers its cards no at once, unpauses it, and fails what it held', async () => {
+    for (const close of ['tab.close', 'agent.tab.remove'] as const) {
+      const t = setup([], unanswered);
+      const tab = held(t, 'a1');
+      show(t, 'a1');
+      tab.events.emit('before-input-event', {}, { type: 'keyDown', key: 'a' });
+      expect(t.agent.state('a1').paused).toBe(true);
+      const step = t.agent.ask(card('a1', 'step', 'a1|p1|e4|click'), never);
+      const site = t.agent.ask(card('a1', 'site', 'agent.test'), never);
+      t.chords.doing('a1', { tool: 'click', name: 'Save', role: 'button' });
+      t.store.dispatch(close === 'tab.close' ? { t: 'tab.close', windowId: 'w1', nodeId: 'a1' } : { t: 'agent.tab.remove', nodeId: 'a1' });
+      await expect(Promise.all([step, site])).resolves.toEqual(['deny', 'deny']);
+      expect(t.agent.state('a1').paused).toBe(false);
+      expect(t.agent.hasOpenCard('site', 'agent.test')).toBe(false);
+    }
   });
 
   it('a tab of yours: nothing', () => {

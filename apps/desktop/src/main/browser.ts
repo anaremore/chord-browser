@@ -1628,6 +1628,8 @@ export class Browser {
     const request = imageSearchRequest(engine, image, app.isPackaged ? undefined : process.env['CHORD_IMAGE_SEARCH_ORIGIN'] || undefined);
     const contents = where === 'current' ? w.activeTabContents : this.openTabFor(w, request.home, where === 'background');
     if (!contents || contents.isDestroyed()) return;
+    // Loading it into the tab on screen moves it: an agent's tab is yours from here (S18 M2e-1).
+    if (where === 'current') this.userNavigates?.(contents);
     const upload = () => {
       if (contents.isDestroyed()) return;
       contents.loadURL(request.url, { postData: [{ type: 'rawData', bytes: request.body }], extraHeaders: `Content-Type: ${request.contentType}
@@ -2395,8 +2397,12 @@ export class Browser {
     const node = nodeOf(this.store.state, nodeId);
     if (!w || node?.kind !== 'tab') return;
     if (target !== 'background' && node.section === 'pinned' && isCrossSite(node.url, url)) this.peeks.show(w, nodeId, url, null);
-    else if (target === 'here') this.store.dispatch({ t: 'tab.navigate', nodeId, url });
-    else this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background: target === 'background' });
+    else if (target === 'here') {
+      // A link you followed in its reader view: an agent's tab is yours from here (S18 M2e-1).
+      const page = pageOf(this.tabs.get(nodeId));
+      if (page) this.userNavigates?.(page);
+      this.store.dispatch({ t: 'tab.navigate', nodeId, url });
+    } else this.store.dispatch({ t: 'tab.open', windowId: w.id, url, background: target === 'background' });
   }
 
   /** How a reader view looks: its tab's chord colors, the interface and reader settings, reduced motion, its keys. */
@@ -2637,6 +2643,9 @@ export class Browser {
   safeBrowsingAction(sender: WebContents, nodeId: NodeId, action: 'back' | 'proceed'): void {
     const w = this.windowFor(sender);
     if (!w || !shownTabs(this.store.state, w.id).includes(nodeId)) return;
+    // Back to safety or Visit anyway moves the page: an agent's tab is yours from here (S18 M2e-1).
+    const page = pageOf(this.tabs.get(nodeId));
+    if (page) this.userNavigates?.(page);
     if (action === 'back') this.safeBrowsing.back(nodeId);
     else this.safeBrowsing.proceed(nodeId);
   }

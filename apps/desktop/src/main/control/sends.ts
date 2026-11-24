@@ -83,7 +83,8 @@ export type SendAnswer = 'deny' | 'once' | 'until';
 /** What a tab's hold needs from its agent's chord (agents/chords.ts), once its page is wired. */
 export interface SendHoldDeps {
   /** Whose the tab's sends are now: the agent's (held, asked), yours (they go), or no one's to ask (dropped). */
-  whose(): 'agent' | 'user' | 'none';
+  /** `request`: the one held now (its resource type), when there is one. */
+  whose(request?: { type: string }): 'agent' | 'user' | 'none';
   /** Between actions: the card, *Codex's tab wants to send data to …* (or the step an address is: `why`, `going` there). */
   ask(sites: string[], why: RiskWhy | null, signal: AbortSignal, going?: string): Promise<SendAnswer>;
   /** A request's origin: what a card covers (the owner, 2026-11-23: exactly that origin, never its whole site). */
@@ -226,7 +227,7 @@ export function holdSends(contents: WebContents): void {
     // A document the agent already asked about (open_tab): its first load goes.
     if (read && type === 'Document' && hold.once.delete(normalUrl(url))) return hold.go(p);
     if (read && !p.why) return hold.go(p);
-    const whose = hold.deps?.whose() ?? 'agent';
+    const whose = hold.deps?.whose({ type }) ?? 'agent';
     if (whose === 'user') return hold.go(p);
     // A report: dropped, never asked (the owner's option A).
     if (REPORTS.has(type)) return hold.drop(p);

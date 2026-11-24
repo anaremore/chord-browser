@@ -96,6 +96,8 @@ interface OpenCard {
   cancel: AbortController;
   /** Asks still waiting on it. */
   askers: number;
+  /** Each tab's asks still waiting, to answer `deny` when that tab alone is let go of (cancelCardsFor). */
+  waiting: Map<string, Set<(answer: Grant) => void>>;
   answer: Promise<Grant>;
 }
 
@@ -113,6 +115,8 @@ export class ControlAgent {
   /** Who hears when a state changes (an agent's bar). */
   private readonly listeners = new Set<() => void>();
   private readonly waiters = new Set<() => void>();
+  /** How many times each tab's cards were let go of (cancelCardsFor): an ask's no after one wasn't the user's. */
+  private readonly releases_ = new Map<string, number>();
   private stopping = new AbortController();
   private stopped = false;
   private lastCard = 0;
@@ -255,14 +259,18 @@ export class ControlAgent {
     open.askers++;
     return new Promise<Grant | 'waiting'>((resolve) => {
       let done = false;
+      const mine = open.waiting.get(tab) ?? new Set();
+      open.waiting.set(tab, mine);
       const finish = (answer: Grant | 'waiting') => {
         if (done) return;
         done = true;
         open.askers--;
+        mine.delete(finish);
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
         resolve(answer);
       };
+      mine.add(finish);
       const onAbort = () => finish('deny');
       const timer = Number.isFinite(waitMs) ? setTimeout(() => finish('waiting'), waitMs) : undefined;
       timer?.unref?.();
@@ -282,7 +290,7 @@ export class ControlAgent {
     card.takeDown?.addEventListener('abort', () => cancel.abort(), { once: true });
     if (card.takeDown?.aborted) cancel.abort();
     this.step(tab, { t: 'ask', card: id });
-    const open: OpenCard = { id, tabs: new Set([tab]), cancel, askers: 0, answer: Promise.resolve<Grant>('deny') };
+    const open: OpenCard = { id, tabs: new Set([tab]), cancel, askers: 0, waiting: new Map(), answer: Promise.resolve<Grant>('deny') };
     open.answer = (async (): Promise<Grant> => {
       try {
         const grant = await this.present({ ...card, id }, cancel.signal);
@@ -313,11 +321,27 @@ export class ControlAgent {
   }
 
   /**
-   * Take down the cards waiting for this tab alone (each answers `deny`): you took the tab over (S18 M2e-1). A card
-   * another tab waits on too (a site card is the site's) stays up for that tab.
+   * Let go of a tab's cards (S18 M2e-1): you took the tab over, or it closed. Every ask of that tab answers `deny` now,
+   * the tab stops waiting on each card, and a card no tab waits on any more comes down; a card another tab still waits
+   * on (a site card is the site's) stays up for that tab alone, so its answer never runs this tab's action (Neon's B3).
+   * A late step answer for the tab goes too.
    */
   cancelCardsFor(tab: string): void {
-    for (const open of [...this.open.values()]) if (open.tabs.size === 1 && open.tabs.has(tab)) open.cancel.abort();
+    this.releases_.set(tab, (this.releases_.get(tab) ?? 0) + 1);
+    for (const open of [...this.open.values()]) {
+      if (!open.tabs.has(tab)) continue;
+      for (const finish of [...(open.waiting.get(tab) ?? [])]) finish('deny');
+      open.waiting.delete(tab);
+      open.tabs.delete(tab);
+      this.step(tab, { t: 'answer', card: open.id });
+      if (open.tabs.size === 0) open.cancel.abort();
+    }
+    for (const key of [...this.late.keys()]) if (!key.startsWith('site:') && key.endsWith(`:${tab}`)) this.late.delete(key);
+  }
+
+  /** How many times this tab's cards were let go of: taken before an ask, a different count after its no means the no wasn't the user's. */
+  releases(tab: string): number {
+    return this.releases_.get(tab) ?? 0;
   }
 
   /** Whether a card for this kind, subject and tab (null: none) is up now. */

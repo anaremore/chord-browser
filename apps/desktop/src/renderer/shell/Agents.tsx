@@ -14,6 +14,7 @@ import { api } from './api';
 import rows from './App.module.css';
 import styles from './Agents.module.css';
 import { useKeys } from './keys';
+import { menuPoint } from './Tabs';
 
 /**
  * Each agent's tabs, oldest first, below your chord's (none in a private window). An agent with no tabs has no section
@@ -57,9 +58,7 @@ export function AgentSections({ state, windowId, appearance, info }: { state: St
                     }}
                     onContextMenu={(e: MouseEvent) => {
                       e.preventDefault();
-                      // At the pointer, or under the row when the keyboard asked (as your own rows' menus).
-                      const r = e.currentTarget.getBoundingClientRect();
-                      void api.menu.tab(tab.id, e.clientX !== 0 || e.clientY !== 0 ? { x: e.clientX, y: e.clientY } : { x: r.left + r.width / 2, y: r.bottom });
+                      void api.menu.tab(tab.id, menuPoint(e));
                     }}
                   >
                     <button

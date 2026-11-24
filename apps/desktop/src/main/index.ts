@@ -338,7 +338,7 @@ function registerIpc(): void {
     if (command.t === 'agents.unshare') return agents?.service?.shares?.unshare(command.nodeId);
     // An address you typed for an agent's tab: where it goes is yours (a site you keep private makes it a tab of yours),
     // and you take the tab over (S18 M2e-1), as a reload of yours does.
-    if (command.t === 'tab.navigate') agents?.service?.chords?.takeOver(command.nodeId);
+    if (command.t === 'tab.navigate') agents?.service?.chords?.takeOver(command.nodeId, undefined, true);
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -354,11 +354,17 @@ function registerIpc(): void {
     const contents = browser!.pageIn(senderWindow(sender));
     if (!contents) return;
     const history = contents.navigationHistory;
-    // The toolbar's buttons: an agent's tab is yours from here (S18 M2e-1).
-    if (action !== 'stop') browser!.userNavigates?.(contents);
-    if (action === 'back' && history.canGoBack()) history.goBack();
-    else if (action === 'forward' && history.canGoForward()) history.goForward();
-    else if (action === 'reload') contents.reload();
+    // The toolbar's buttons: an agent's tab is yours from here (S18 M2e-1), when one moves it.
+    if (action === 'back' && history.canGoBack()) {
+      browser!.userNavigates?.(contents);
+      history.goBack();
+    } else if (action === 'forward' && history.canGoForward()) {
+      browser!.userNavigates?.(contents);
+      history.goForward();
+    } else if (action === 'reload') {
+      browser!.userNavigates?.(contents);
+      contents.reload();
+    }
     else if (action === 'stop') contents.stop();
   });
   handle('overlay:open', ({ mode, anchor }, sender) => {

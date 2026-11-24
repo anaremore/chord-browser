@@ -1536,10 +1536,15 @@ test.beforeAll(async () => {
   const pages: Record<string, string> = {
     '/notes': '<title>Release notes</title><h1>Notes</h1><p>Electron 46 brings a faster start.</p>',
     // M2e-1: a page that reloads itself twice, then sends itself on with a meta refresh (no hand of yours in it).
+    // It waits 1.5 s each time, so the test can show it first (a tab no window shows is let go of anyway).
     '/ticker':
       '<title>Ticker</title><script>const n = Number(sessionStorage.n || 0); sessionStorage.n = n + 1; document.title = "Ticker " + n;' +
-      'if (n < 2) setTimeout(() => location.reload(), 200); else setTimeout(() => { location.href = "/refresh"; }, 200);</script>',
-    '/refresh': '<title>Refreshing</title><meta http-equiv="refresh" content="0;url=/notes#refreshed">',
+      'if (n < 2) setTimeout(() => location.reload(), 1500); else setTimeout(() => { location.href = "/refresh"; }, 1500);</script>',
+    '/refresh': '<title>Refreshing</title><meta http-equiv="refresh" content="1;url=/poster#ticked">',
+    // M2e-1: a page that sends once after it loads, numbered by its load in this tab (/collect?<its hash>=<n>).
+    '/poster':
+      '<title>Poster</title><script>const n = Number(sessionStorage.p || 0) + 1; sessionStorage.p = n; document.title = "Poster " + n;' +
+      'setTimeout(() => fetch("/collect?" + location.hash.slice(1) + "=" + n, { method: "POST", body: "x" }).catch(() => {}), 300);</script>',
     // A page that shows a dialog as it loads: Chord holds it, and the read never waits on it.
     '/dialog': '<title>Greeter</title><p>Hello there.</p><script>setTimeout(() => alert("Hi from the page"), 50)</script>',
     // A page that downloads a file as it loads: refused in an agent's tab.
@@ -1905,12 +1910,14 @@ test('an agent opens and reads its own tabs, is stopped and let go on, is paused
   }
 });
 
-test('your hand on an agent’s tab: its row’s × and middle-click close it; an agent with no tabs has no section; your reload pauses it, the page’s own never does (M2e-1)', async () => {
+test('your hand on an agent’s tab: its row’s × and middle-click close it; an agent with no tabs has no section; the page’s own reloads never take it over (M2e-1)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
   try {
     const shell = await pageWhere(app, isShell);
+    const popover = await pageWhere(app, isPopover);
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
@@ -1939,20 +1946,111 @@ test('your hand on an agent’s tab: its row’s × and middle-click close it; a
     await expect(section).toHaveCount(0);
     expect((JSON.parse((await mcp.call('list_tabs')).text) as { data: { tabs: unknown[] } }).data.tabs).toEqual([]);
 
-    // Its next tab brings the section back.
+    // Its next tab brings the section back. On screen while the page reloads itself twice, then sends itself on with a
+    // meta refresh: never you (no button, key or menu of Chord's), so never paused, and what it sends is still held.
     await mcp.call('open_tab', { url: `${site.origin}/ticker` });
-    await expect(section.getByRole('button', { name: /Release notes/ })).toBeVisible({ timeout: 10_000 });
-    // The page reloaded itself twice and sent itself on with a meta refresh: never you, so never paused.
-    expect((await mcp.call('read_tab', { tab_id: 'a3' })).isError).toBe(false);
+    await section.getByRole('button', { name: /Ticker/ }).click();
+    const host = new URL(site.origin).host;
+    const ownSite = new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`);
+    const held = popover.getByRole('alertdialog', { name: ownSite });
+    await expect(held).toBeVisible({ timeout: 15_000 });
+    await expect(held).toContainText('Codex’s tab wants to send data to its site.');
+    await expect(section.getByRole('button', { name: /Poster/ })).toBeVisible();
     await expect(shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' })).toHaveCount(0);
+    expect(reached.filter((r) => r.startsWith('POST /collect'))).toEqual([]);
+    await popover.waitForTimeout(600);
+    await held.getByRole('button', { name: 'Don’t', exact: true }).click();
+    await expect(held).toHaveCount(0);
+    expect(reached.filter((r) => r.startsWith('POST /collect'))).toEqual([]);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
 
-    // Your reload, from the toolbar: you take the tab over, and it's paused there until you let it go on.
-    await section.getByRole('button', { name: /Release notes/ }).click();
-    await shell.getByRole('button', { name: 'Reload', exact: true }).click();
+test('your hand on an agent’s tab: Back, Reload (the app menu’s, the row menu’s) and a typed address each fail what it held; paused only where you see it (M2e-1)', async () => {
+  test.setTimeout(180_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  reached.length = 0;
+  try {
+    const shell = await pageWhere(app, isShell);
+    const popover = await pageWhere(app, isPopover);
+    const overlay = await pageWhere(app, isOverlay);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mine = (await where(shell)).tabId!;
+    const windowId = (await where(shell)).windowId;
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const host = new URL(site.origin).host;
+    const ownSite = new RegExp(`^Send data to http://${host.replace(/\./g, '\\.')}\\?$`);
+    const card = popover.getByRole('alertdialog', { name: ownSite });
+    const section = shell.getByRole('region', { name: 'Codex’s tabs' });
     const paused = shell.getByRole('status').filter({ hasText: 'Paused while you use this tab' });
-    await expect(paused).toBeVisible();
-    await paused.getByRole('button', { name: 'Let Codex continue' }).click();
-    await expect(paused).toHaveCount(0);
+    const collected = () => reached.filter((r) => r.startsWith('POST /collect'));
+
+    // [what you do, its key in the page's sends, whether you see the tab, whether the page loads again (its second send)]
+    const rows: [string, string, boolean, boolean][] = [
+      ['the toolbar’s Back', 'back', true, false],
+      ['the app menu’s Reload', 'reload', true, true],
+      ['the row menu’s Reload, on a tab no window shows', 'hidden', false, true],
+      ['an address typed in the address bar', 'typed', true, false],
+    ];
+    let first = true;
+    for (const [what, key, shown, reloads] of rows) {
+      // Back needs a page behind it: the agent goes from its first page to the poster (the site card, once).
+      const opening = mcp.call('open_tab', { url: `${site.origin}/${key === 'back' ? 'notes' : `poster#${key}`}` });
+      if (first) await answer(app, 'Codex', 'Allow once');
+      first = false;
+      const opened = JSON.parse((await opening).text) as { data: { tab_id: string } };
+      if (key === 'back') {
+        const going = mcp.call('navigate', { tab_id: opened.data.tab_id, url: `${site.origin}/poster#back` });
+        const siteCard = siteCardOf(popover, 'Codex');
+        await expect(siteCard).toBeVisible({ timeout: 15_000 });
+        await popover.waitForTimeout(600);
+        await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+        expect((await going).isError, what).toBeFalsy();
+      }
+      // Its send after it loads: held, the card up.
+      await expect(card, what).toBeVisible({ timeout: 15_000 });
+      const row = section.locator('[data-agent-tab]').filter({ hasText: /Poster/ });
+      const nodeId = (await row.getAttribute('data-agent-tab'))!;
+      if (shown) await row.getByRole('button').first().click();
+      else await dispatch(shell, { t: 'tab.activate', windowId, nodeId: mine });
+      if (key === 'back') await shell.getByRole('button', { name: 'Back', exact: true }).click();
+      else if (key === 'reload') await runAction(shell, 'nav.reload');
+      else if (key === 'hidden') await shell.evaluate((id) => (window as unknown as { chord: { tab: { reload(id: string): Promise<void> } } }).chord.tab.reload(id), nodeId);
+      else {
+        await runAction(shell, 'address.edit');
+        await overlay.keyboard.type(`${site.origin}/notes#typed`);
+        await overlay.keyboard.press('Enter');
+      }
+      // What it held never reaches the site.
+      if (shown) {
+        await expect(paused, what).toBeVisible();
+        await expect(card, what).toHaveCount(0);
+      }
+      await new Promise((r) => setTimeout(r, 800));
+      expect(collected(), what).not.toContain(`POST /collect?${key}=1`);
+      if (shown && reloads) {
+        // The page you reloaded, while you have the tab: what it sends is yours.
+        await expect.poll(collected, { message: what }).toContain(`POST /collect?${key}=2`);
+      }
+      if (!shown) {
+        // Not paused (you can't see it): still the agent's, so the reloaded page's send is held again.
+        expect((await mcp.call('read_tab', { tab_id: opened.data.tab_id })).isError, what).toBe(false);
+        await expect(card, what).toBeVisible({ timeout: 15_000 });
+        await popover.waitForTimeout(600);
+        await card.getByRole('button', { name: 'Don’t', exact: true }).click();
+        expect(collected(), what).not.toContain(`POST /collect?${key}=2`);
+      }
+      if (key === 'typed') await expect(section.getByRole('button', { name: /Release notes/ }), what).toBeVisible();
+      if (shown) await paused.getByRole('button', { name: 'Let Codex continue' }).click();
+      expect((await mcp.call('close_tab', { tab_id: opened.data.tab_id })).isError, what).toBeFalsy();
+      await expect(section).toHaveCount(0);
+    }
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

@@ -17,6 +17,8 @@ export interface DuetChat extends ToolMemory {
   refs: TabRefs<NodeId>;
   /** Tabs attached to any message in the chat: readable without asking. */
   attached: Set<NodeId>;
+  /** Tabs attached to the message being answered (S18 M2e-1): an agent's tab is read only while one points at it. */
+  pointed: Set<NodeId>;
   /** The window the last message came from: its tab on screen is the one forms and diagnostics work on. */
   windowId: WindowId | null;
   /** The chat's gate: its grants ("Allow for this chat"), cards and Stop. */
@@ -51,7 +53,7 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
   const state = () => host.browser.store.state;
   const granted = (tool: AssistantToolName) => chat.control.granted('read', tool) === 'always';
   /** An agent's tab the user hasn't pointed at: left out of everything the chat sees. */
-  const unpointed = (node: TabNode) => host.agentOf(node) !== null && !chat.attached.has(node.id);
+  const unpointed = (node: TabNode) => host.agentOf(node) !== null && !chat.pointed.has(node.id);
   const readable = (node: TabNode) => host.readable(node) && !unpointed(node);
   return {
     agent: chat.control,
@@ -62,19 +64,21 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
     tabs: () => {
       const scope: AssistantScope = chat.thread?.scope ?? 'ask';
       const nodes = nodeList(state()).filter((n): n is TabNode => n.kind === 'tab' && readable(n));
-      return (scope === 'all' ? nodes : nodes.filter((n) => n.chordId === chat.chordId)).map((node) => ({ node, given: chat.attached.has(node.id) }));
+      // An agent's tab the message points at is listed whatever the scope (it's given, as an attached tab is).
+      return (scope === 'all' ? nodes : nodes.filter((n) => n.chordId === chat.chordId || (host.agentOf(n) !== null && chat.pointed.has(n.id)))).map((node) => ({ node, given: chat.attached.has(node.id) }));
     },
     defaultTab: () => {
       for (const id of chat.attached) {
         const node = nodeOf(state(), id);
-        if (node?.kind === 'tab') return node;
+        if (node?.kind === 'tab' && !unpointed(node)) return node;
       }
       return null;
     },
     readable,
     whyNot: (node) => {
       const agent = host.agentOf(node);
-      return agent !== null && unpointed(node) ? AGENT_TAB_REFUSALS.read(agent) : null;
+      // Never readable anyway (a *Never* site, a Chord page): the usual refusal, not a hint to point at it.
+      return agent !== null && host.readable(node) && unpointed(node) ? AGENT_TAB_REFUSALS.read(agent) : null;
     },
     neverSites: () => host.settings().neverSites,
     // The chat's grants are per tool ("Allow for this chat"), as they always were.
