@@ -58,18 +58,18 @@ Checks inside tests that only run on Windows: downloads carry the mark of the we
 
 ## What CI runs on a pull request
 
-Every push gets the fast tier: typecheck, lint, unit tests, and E2E on Linux x64 X11, every spec but `perf.spec.ts`, in 6 shards balanced by how long each spec takes (`scripts/ci/e2e-shards.json`). The password detector's corpora run too when the pull request touches the detector. The full tier adds E2E on Windows, macOS, Linux Wayland and Linux arm64, `perf.spec.ts` on every platform, the password detector's corpora, and Chord Player. The `E2E` commit status is the merge gate:
+Every push gets the fast tier: typecheck, lint, unit tests, and E2E on Linux x64 X11, every spec but `perf.spec.ts`, in 6 shards balanced by how long each spec takes (`scripts/ci/e2e-shards.json`). The password detector's corpora run too when the pull request touches the detector. The merge tier adds E2E on Windows x64 and macOS arm64, `perf.spec.ts` on those and Linux x64 X11, and Chord Player when it changed. The full tier adds the rest: Windows arm64, macOS x64, Linux Wayland and Linux arm64, `perf.spec.ts` on each, the password detector's corpora and Chord Player. The free plan runs about 20 Linux and 5 macOS jobs at once, so the full tier runs nightly, not per merge. The `E2E` commit status is the merge gate:
 
 | The pull request | Runs | `E2E` |
 |---|---|---|
 | Docs, the site or mocks only | typecheck, lint, unit tests | success |
 | Any other | the fast tier | success once it passes |
 | Just labeled `ready` (the "run every platform now" escape hatch) | the full tier, that once | success once every platform passes |
-| In the merge queue (`gh pr merge <n> --merge --auto`) | the full tier, on the merge group: the commit main gets | success once every platform passes; on failure the queue drops the pull request |
+| In the merge queue (`gh pr merge <n> --merge --auto`) | on the merge group (the commit main gets): the merge tier if it's platform-sensitive, the full tier if it changes Electron, else the fast tier | success once that passes; on failure the queue drops the pull request |
 
 Until main's merge queue is turned on, a platform-sensitive pull request's `E2E` stays pending after the fast tier until it's labeled `ready`, as before.
 
-Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Every push to `main`, and a run each night, run the full tier; a failure there opens (or comments on) the issue *Nightly full tier failed on main*.
+Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Each night the full tier runs on `main`; a failure there opens (or comments on) the issue *Nightly full tier failed on main*, naming each failed platform's job and its failing tests.
 
 The *E2E* job's summary shows how even the shards were, and warns past 1.5×. To rebalance them, refresh the weights from a passing run on `main` and commit the map: `node scripts/ci/e2e-shard-weights.mjs <run-id>` (it needs `gh`). A new spec file runs before it's in the map, dealt to a shard in turn. Renovate opens at most 3 pull requests at a time, on Monday mornings, apart from Electron and security fixes, which come at once.
 

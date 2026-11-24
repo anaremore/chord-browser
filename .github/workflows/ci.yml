@@ -1,14 +1,20 @@
 name: CI
 
-# Tiers (the `changes` job picks one):
+# Tiers (the `changes` job picks one, and the platforms each runs):
 # - The fast tier, on every pull request push: typecheck, lint, unit tests, E2E on Linux x64 X11, and the password
 #   detector's corpora when the detector changed. Quick feedback while a pull request is in review.
-# - The full tier adds E2E on every other platform, perf.spec.ts and Chord Player.
+# - The merge tier, once per merge of platform-sensitive code (a merge group): the fast tier plus E2E on Windows x64
+#   and macOS arm64, and perf.spec.ts on those and Linux x64 X11 (the budgets' platforms). Chord Player when it changed.
+# - The full tier, nightly, by hand, with `ready`, and in a merge group that changes Electron: every platform (the
+#   merge tier's plus macOS x64, Windows arm64, Linux arm64 and Wayland), perf.spec.ts on each, and Chord Player.
 # - None: a push to main that a merge group already tested. Only the checks run.
+# The free plan runs about 20 Linux and 5 macOS jobs at once, and one full tier is over 30 jobs, so the full tier
+# runs once a night rather than once a merge (decided 2026-11-24); a merge group that isn't platform-sensitive
+# runs the fast tier.
 # The `E2E` commit status (posted by the `e2e` job) is the merge gate, on pull requests and merge groups alike.
 # With main's merge queue (a ruleset; decided 2026-11-24, to cut jobs on the free runners' queue): a pull request
 # runs the fast tier only, and its `E2E` passes with it. `gh pr merge <n> --merge --auto` queues it, and the merge
-# group runs the full tier once, on exactly the commit main gets, so main's push runs only the checks. `ready` is a
+# group runs its tier once, on exactly the commit main gets, so main's push runs only the checks. `ready` is a
 # "run the full tier now" escape hatch: adding the label runs it once, on that commit.
 # Without a merge queue (until the owner turns it on), as before: a platform-sensitive pull request's `E2E` stays
 # pending until the full tier passes (label it `ready`), and a push to main runs the full tier.
@@ -61,6 +67,10 @@ jobs:
       code: ${{ steps.tier.outputs.tier != 'none' && steps.diff.outputs.code || 'false' }}
       tier: ${{ steps.tier.outputs.tier }}
       queue: ${{ steps.queue.outputs.queue }}
+      # The tier's other platforms, as matrices for `e2e-full` and `e2e-perf` (the `Which tier?` step).
+      shards: ${{ steps.tier.outputs.shards }}
+      perf: ${{ steps.tier.outputs.perf }}
+      player: ${{ steps.tier.outputs.player }}
       platform: ${{ steps.platform.outputs.platform }}
       forms: ${{ steps.forms.outputs.forms }}
     steps:
@@ -209,6 +219,9 @@ jobs:
           done < "$RUNNER_TEMP/changed"
           if [ -s "$RUNNER_TEMP/platform" ]; then platform=true; else platform=false; fi
           echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          # Electron's version changes every platform at once: a merge group with it runs the full tier.
+          if grep -q "(Electron's version" "$RUNNER_TEMP/platform"; then echo "electron=true" >> "$GITHUB_OUTPUT"; fi
+          if grep -q "(Chord Player)" "$RUNNER_TEMP/platform"; then echo "player=true" >> "$GITHUB_OUTPUT"; fi
           if [ "$platform" = true ]; then
             echo "Platform-sensitive, because of $(wc -l < "$RUNNER_TEMP/platform") of the changed files:"
             cat "$RUNNER_TEMP/platform"
@@ -230,11 +243,16 @@ jobs:
           READY: ${{ contains(github.event.pull_request.labels.*.name, 'ready') }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           PLATFORM: ${{ steps.platform.outputs.platform }}
+          ELECTRON: ${{ steps.platform.outputs.electron }}
+          PLAYER: ${{ steps.platform.outputs.player }}
           QUEUE: ${{ steps.queue.outputs.queue }}
           TESTED: ${{ steps.queue.outputs.tested }}
         run: |
-          if [ "$EVENT" = push ] && [ "$TESTED" = true ]; then tier=none; why="a merge group already ran the full tier on this commit"
-          elif [ "$EVENT" = merge_group ]; then tier=full; why="a merge group: the full tier, once per merge"
+          if [ "$EVENT" = push ] && [ "$TESTED" = true ]; then tier=none; why="a merge group already tested this commit"
+          elif [ "$EVENT" = merge_group ] && [ "$ELECTRON" = true ]; then tier=full; why="a merge group that changes Electron: every platform"
+          elif [ "$EVENT" = merge_group ] && [ "$PLATFORM" = true ]; then tier=merge; why="a merge group of platform-sensitive code"
+          elif [ "$EVENT" = merge_group ]; then tier=fast; why="a merge group of code that isn't platform-sensitive (every platform runs nightly)"
+          elif [ "$EVENT" = push ]; then tier=merge; why="a push to main no merge group tested"
           elif [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
           elif [ "$QUEUE" = true ] && [ "$ACTION" = labeled ] && [ "$LABEL" = ready ]; then tier=full; why="just labeled ready: the full tier now"
           elif [ "$QUEUE" = true ]; then tier=fast; why="a pull request: the merge queue runs the full tier"
@@ -246,6 +264,44 @@ jobs:
           echo "Tier: $tier ($why)."
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
           echo "why=$why" >> "$GITHUB_OUTPUT"
+          # ── The platforms each tier runs, besides the fast tier's Linux x64 X11 shards ──────────────────────
+          # Per merge: Windows x64 and macOS arm64, and perf.spec.ts on those and Linux x64 X11, where the budgets
+          # are. Nightly adds the rest. macOS has 2 shards: GitHub's free plan runs 5 macOS jobs at a time.
+          merge_shards='{"name":"Windows x64","os":"windows-latest","shard":1,"shards":3}
+          {"name":"Windows x64","os":"windows-latest","shard":2,"shards":3}
+          {"name":"Windows x64","os":"windows-latest","shard":3,"shards":3}
+          {"name":"macOS arm64","os":"macos-26","shard":1,"shards":2}
+          {"name":"macOS arm64","os":"macos-26","shard":2,"shards":2}'
+          nightly_shards='{"name":"Windows arm64","os":"windows-11-arm","shard":1,"shards":3}
+          {"name":"Windows arm64","os":"windows-11-arm","shard":2,"shards":3}
+          {"name":"Windows arm64","os":"windows-11-arm","shard":3,"shards":3}
+          {"name":"macOS x64","os":"macos-15-intel","shard":1,"shards":2}
+          {"name":"macOS x64","os":"macos-15-intel","shard":2,"shards":2}
+          {"name":"Linux x64 · Wayland","os":"ubuntu-24.04","display":"wayland","shard":1,"shards":3}
+          {"name":"Linux x64 · Wayland","os":"ubuntu-24.04","display":"wayland","shard":2,"shards":3}
+          {"name":"Linux x64 · Wayland","os":"ubuntu-24.04","display":"wayland","shard":3,"shards":3}
+          {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":1,"shards":3}
+          {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":2,"shards":3}
+          {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":3,"shards":3}'
+          merge_perf='{"name":"Linux x64 · X11","os":"ubuntu-24.04","display":"x11","shard":"perf","shards":1}
+          {"name":"Windows x64","os":"windows-latest","shard":"perf","shards":1}
+          {"name":"macOS arm64","os":"macos-26","shard":"perf","shards":1}'
+          nightly_perf='{"name":"Linux x64 · Wayland","os":"ubuntu-24.04","display":"wayland","shard":"perf","shards":1}
+          {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":"perf","shards":1}
+          {"name":"Windows arm64","os":"windows-11-arm","shard":"perf","shards":1}
+          {"name":"macOS x64","os":"macos-15-intel","shard":"perf","shards":1}'
+          # ─────────────────────────────────────────────────────────────────────────────────────────────────────
+          case "$tier" in
+            merge) shards="$merge_shards" perf="$merge_perf" ;;
+            full) shards="$merge_shards"$'\n'"$nightly_shards" perf="$merge_perf"$'\n'"$nightly_perf" ;;
+            # None runs; a matrix can't be empty, and the jobs are skipped.
+            *) shards="$merge_shards" perf="$merge_perf" ;;
+          esac
+          echo "shards=$(printf '%s\n' "$shards" | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "perf=$(printf '%s\n' "$perf" | jq -sc .)" >> "$GITHUB_OUTPUT"
+          # Chord Player: the full tier, or the merge tier when the player changed.
+          if [ "$tier" = full ] || { [ "$tier" = merge ] && [ "$PLAYER" = true ]; }; then player=true; else player=false; fi
+          echo "player=$player" >> "$GITHUB_OUTPUT"
       # Whether the password detector's corpus jobs (`forms`, `forms-ttw`) run: on a pull request, only when it
       # touches the detector, its corpora or what they're built from. Always on the full tier and every other run.
       - name: Password detector?
@@ -258,8 +314,8 @@ jobs:
             echo "forms=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$EVENT" != pull_request ] || [ "$TIER" = full ]; then
-            echo "The full tier: the password detector's corpora run."
+          if [ "$TIER" = full ] || { [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; }; then
+            echo "The $TIER tier: the password detector's corpora run."
             echo "forms=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -290,7 +346,8 @@ jobs:
             echo "Why: $WHY."
             echo
             echo "- **Fast tier:** typecheck, lint, unit tests, E2E on Linux x64 X11 (every spec but perf.spec.ts, in balanced shards), and the password detector's corpora when the detector changed."
-            echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, perf.spec.ts on each platform, the password detector's corpora, and Chord Player."
+            echo "- **Merge tier** (a merge group of platform-sensitive code): the fast tier plus E2E on Windows x64 and macOS arm64, perf.spec.ts on those and Linux x64 X11, and Chord Player when it changed."
+            echo "- **Full tier** (nightly, by hand, \`ready\`, a merge group that changes Electron): all of that, plus E2E on Windows arm64, macOS x64, Linux x64 Wayland and Linux arm64, perf.spec.ts on each, the password detector's corpora, and Chord Player."
             echo
             if [ "$CODE" = true ]; then echo "Password detector's corpora: $([ "$FORMS" = true ] && echo run || echo "skipped (nothing they test changed)")."; echo; fi
             echo "Main's merge queue: $([ "$QUEUE" = true ] && echo on || echo "off (a pull request's \`E2E\` needs the full tier when it's platform-sensitive)")."
@@ -298,11 +355,11 @@ jobs:
             if [ "$TIER" = none ]; then
               echo "A merge group already ran the full tier on this commit and passed: only the checks run."
             elif [ "$EVENT" = merge_group ]; then
-              echo "A merge group: the full tier, on the commit main gets. If it fails, the queue drops the pull request."
+              echo "A merge group: the $TIER tier, on the commit main gets. If it fails, the queue drops the pull request."
             elif [ "$EVENT" != pull_request ]; then
               echo "A $EVENT run: every platform runs. If it fails on main, the \`main-failed\` job opens an issue (or comments on the open one)."
             elif [ "$QUEUE" = true ] && [ "$CODE" = true ]; then
-              echo "A pull request: \`E2E\` passes with the fast tier, and the merge queue runs every platform before it merges (\`gh pr merge <n> --merge --auto\`). Label it \`ready\` to run every platform now."
+              echo "A pull request: \`E2E\` passes with the fast tier, and its merge group runs the platforms it needs before it merges (\`gh pr merge <n> --merge --auto\`). Label it \`ready\` to run every platform now."
             elif [ "$CODE" != true ]; then
               echo "**Docs alone changed:** no E2E to run, and \`E2E\` passes."
             else
@@ -449,7 +506,7 @@ jobs:
   player:
     name: Chord Player · full tier
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.player == 'true'
     uses: ./.github/workflows/player.yml
 
   # E2E on every OS, each split into shards that run side by side on their own runners. A shard is a set of spec
@@ -677,10 +734,11 @@ jobs:
           name: e2e-failures-${{ env.ARTIFACT_SUFFIX }}
           path: apps/desktop/test-results/
 
+  # The merge and full tiers' other platforms: which, the `changes` job says (its `Which tier?` step).
   e2e-full:
-    name: E2E · full tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
+    name: E2E · ${{ needs.changes.outputs.tier }} tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
+    if: needs.changes.outputs.code == 'true' && (needs.changes.outputs.tier == 'full' || needs.changes.outputs.tier == 'merge')
     runs-on: ${{ matrix.os }}
     # A whole suite took 30 to 46 minutes with perf.spec.ts, and Playwright's --shard (by test count, not time)
     # once gave a macOS Intel shard 28 minutes (2026-11-22). Shards are balanced by time now, and the weights are
@@ -689,47 +747,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: Windows x64, os: windows-latest, shard: 1, shards: 3 }
-          - { name: Windows x64, os: windows-latest, shard: 2, shards: 3 }
-          - { name: Windows x64, os: windows-latest, shard: 3, shards: 3 }
-          - { name: Windows arm64, os: windows-11-arm, shard: 1, shards: 3 }
-          - { name: Windows arm64, os: windows-11-arm, shard: 2, shards: 3 }
-          - { name: Windows arm64, os: windows-11-arm, shard: 3, shards: 3 }
-          - { name: macOS arm64, os: macos-26, shard: 1, shards: 2 }
-          - { name: macOS arm64, os: macos-26, shard: 2, shards: 2 }
-          - { name: macOS x64, os: macos-15-intel, shard: 1, shards: 2 }
-          - { name: macOS x64, os: macos-15-intel, shard: 2, shards: 2 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 1, shards: 3 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 2, shards: 3 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: 3, shards: 3 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 1, shards: 3 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 2, shards: 3 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: 3, shards: 3 }
+        include: ${{ fromJSON(needs.changes.outputs.shards) }}
     env: *e2e-env
     steps: *e2e-steps
 
-  # perf.spec.ts (docs/testing/performance.md) alone on each platform, full tier only: launch times, memory and warm
+  # perf.spec.ts (docs/testing/performance.md) alone on each of the tier's platforms (merge and full tiers): launch times, memory and warm
   # launches, held to each runner's baseline (perf-baseline.json) where it has one. Its own job, so it doesn't
   # weigh down a shard; its perf-* artifacts are what `perf:baseline --run <id>` reads.
   e2e-perf:
     name: E2E · perf · ${{ matrix.name }}
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
+    if: needs.changes.outputs.code == 'true' && (needs.changes.outputs.tier == 'full' || needs.changes.outputs.tier == 'merge')
     runs-on: ${{ matrix.os }}
     # About 9 minutes on Linux x64 (2026-11-24). The limit only has to catch a hung job.
     timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 40 }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: perf, shards: 1 }
-          - { name: Linux x64 · Wayland, os: ubuntu-24.04, display: wayland, shard: perf, shards: 1 }
-          - { name: Linux arm64 · X11, os: ubuntu-24.04-arm, display: x11, shard: perf, shards: 1 }
-          - { name: Windows x64, os: windows-latest, shard: perf, shards: 1 }
-          - { name: Windows arm64, os: windows-11-arm, shard: perf, shards: 1 }
-          - { name: macOS arm64, os: macos-26, shard: perf, shards: 1 }
-          - { name: macOS x64, os: macos-15-intel, shard: perf, shards: 1 }
+        include: ${{ fromJSON(needs.changes.outputs.perf) }}
     env: *e2e-env
     steps: *e2e-steps
 
@@ -767,6 +802,7 @@ jobs:
           TIER: ${{ needs.changes.outputs.tier }}
           PLATFORM: ${{ needs.changes.outputs.platform }}
           QUEUE: ${{ needs.changes.outputs.queue }}
+          EVENT: ${{ github.event_name }}
           FAST: ${{ needs.e2e-fast.result }}
           FULL_SHARDS: ${{ needs.e2e-full.result }}
           PERF: ${{ needs.e2e-perf.result }}
@@ -814,9 +850,19 @@ jobs:
             else
               desc="Full tier failed ($FULL)"
             fi
+          elif [ "$TIER" = merge ]; then
+            path='the merge tier: Linux x64 X11, Windows x64 and macOS arm64 (the rest nightly)'
+            if [ "$FULL" = success ]; then
+              pass=true state=success desc="Merge tier passed: Linux x64, Windows x64, macOS arm64 (the rest nightly)"
+            else
+              desc="Merge tier failed ($FULL)"
+            fi
+          elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$EVENT" = merge_group ]; then
+            path="the fast tier: the merge group isn't platform-sensitive"
+            pass=true state=success desc="Fast tier passed; not platform-sensitive (every platform runs nightly)"
           elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$QUEUE" = true ]; then
             path="the fast tier, and the merge queue runs every platform"
-            pass=true state=success desc="Fast tier passed; the merge queue runs every platform"
+            pass=true state=success desc="Fast tier passed; the merge queue runs the platforms it needs"
           elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$PLATFORM" = false ]; then
             path="the fast tier is enough: the pull request isn't platform-sensitive"
             pass=true state=success desc="Fast tier passed; this change isn't platform-specific (full tier runs nightly on main)"
@@ -834,8 +880,8 @@ jobs:
             echo "| Shards | Result |"
             echo "| --- | --- |"
             echo "| Fast tier: Linux x64 X11 | $FAST |"
-            echo "| Full tier: every other platform | $FULL_SHARDS |"
-            echo "| Full tier: perf.spec.ts, each platform | $PERF |"
+            echo "| Merge or full tier: the other platforms | $FULL_SHARDS |"
+            echo "| Merge or full tier: perf.spec.ts, each platform | $PERF |"
             echo
             echo "**$desc.** The \`E2E\` status: ${state:-unchanged}."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -854,9 +900,9 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --jq '.jobs[]
-            | select(.name | test("^E2E · (fast|full) tier · .+ · [0-9]+/[0-9]+$"))
+            | select(.name | test("^E2E · (fast|merge|full) tier · .+ · [0-9]+/[0-9]+$"))
             | select(.conclusion == "success" or .conclusion == "failure")
-            | {platform: (.name | sub("^E2E · (fast|full) tier · "; "") | sub(" · [0-9]+/[0-9]+$"; "")),
+            | {platform: (.name | sub("^E2E · (fast|merge|full) tier · "; "") | sub(" · [0-9]+/[0-9]+$"; "")),
                shard: (.name | capture("(?<s>[0-9]+/[0-9]+)$").s),
                seconds: ([.steps[] | select(.name | startswith("E2E")) | select(.conclusion == "success" or .conclusion == "failure")
                           | ((.completed_at | fromdate) - (.started_at | fromdate))] | add // 0)}
@@ -946,12 +992,24 @@ jobs:
             push) what="The push to main" ;;
             *) what="A $EVENT run on main" ;;
           esac
-          # Every failed job of this run, with its link. This job is still running, so it isn't one of them.
-          failed="$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"')"
+          # Every failed job of this run, with its link (its name says the platform), and under each the tests
+          # that failed both tries, from Playwright's summary at the end of its log. This job is still running, so
+          # it isn't one of them.
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure") | [.id, .name, .html_url] | @tsv' > "$RUNNER_TEMP/failed.tsv"
+          failed=''
+          while IFS=$'\t' read -r id name url; do
+            failed+="- [$name]($url)"$'\n'
+            specs="$(gh api "repos/$REPO/actions/jobs/$id/logs" 2>/dev/null | sed -E 's/^[0-9T:.-]+Z //' | tr -d '\r' | awk '
+              /^ +[0-9]+ failed$/ { on = 1; next }
+              on && /^ +[0-9]+ (flaky|skipped|passed|did not run|interrupted)/ { on = 0 }
+              on && /spec\.ts:[0-9]+:[0-9]+/ { sub(/^ +/, ""); print }' | head -n 20 || true)"
+            while IFS= read -r spec; do [ -n "$spec" ] && failed+="  - \`${spec//\`/}\`"$'\n'; done <<< "$specs"
+          done < "$RUNNER_TEMP/failed.tsv"
           failed="${failed:-- (none listed: see the run)}"
           body="$what failed at ${SHA:0:7}: $RUN_URL
 
-          Failed jobs:
+          Failed jobs, by platform, with the tests that failed both tries:
           $failed
 
           Rerun the failed jobs to tell a flake from a bug. Close this issue once main is green again: the next failure opens a new one."
