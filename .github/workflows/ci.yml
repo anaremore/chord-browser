@@ -1,19 +1,19 @@
 name: CI
 
-# Two tiers (the `changes` job picks one):
-# - The fast tier, on every pull request push: typecheck, lint, unit tests, the password detector, and E2E on
-#   Linux x64 X11 only. Quick feedback while a pull request is in review.
-# - The full tier adds E2E on every other platform and Chord Player. It runs on a pull request labeled `ready`
-#   (and not a draft) and on Renovate's, and on every other event: a push to main, the nightly run, a run by hand.
-# The full tier only when it's needed (decided 2026-11-24). The `E2E` commit status (posted by the `e2e` job) is a
-# pull request's merge gate, and the `changes` job also says whether the pull request is platform-sensitive (its
-# list of what counts is there, in one place):
-# - not platform-sensitive: success once the fast tier passes. Every platform still runs on main, after the merge
-#   and each night, and a failure there opens an issue (the `main-failed` job);
-# - platform-sensitive: success only once the full tier passes, and pending after a fast tier that passed, so a
-#   fast-tier green never reads as a full one. Label it `ready`.
-# The `ready` label runs the full tier on any pull request. See the `e2e` job. Before a release is tagged, the last
-# full run on its commit must be green (docs/releasing/patch-runbook.md, §5).
+# Tiers (the `changes` job picks one):
+# - The fast tier, on every pull request push: typecheck, lint, unit tests, E2E on Linux x64 X11, and the password
+#   detector's corpora when the detector changed. Quick feedback while a pull request is in review.
+# - The full tier adds E2E on every other platform, perf.spec.ts and Chord Player.
+# - None: a push to main that a merge group already tested. Only the checks run.
+# The `E2E` commit status (posted by the `e2e` job) is the merge gate, on pull requests and merge groups alike.
+# With main's merge queue (a ruleset; decided 2026-11-24, to cut jobs on the free runners' queue): a pull request
+# runs the fast tier only, and its `E2E` passes with it. `gh pr merge <n> --merge --auto` queues it, and the merge
+# group runs the full tier once, on exactly the commit main gets, so main's push runs only the checks. `ready` is a
+# "run the full tier now" escape hatch: adding the label runs it once, on that commit.
+# Without a merge queue (until the owner turns it on), as before: a platform-sensitive pull request's `E2E` stays
+# pending until the full tier passes (label it `ready`), and a push to main runs the full tier.
+# The nightly run and a run by hand run the full tier; a failure on main opens an issue (`main-failed`). Before a
+# release is tagged, the last full run on its commit must be green (docs/releasing/patch-runbook.md, §5).
 on:
   # Every push to main runs everything. A pull request that changes only docs or the website skips the slow
   # jobs instead (the `changes` job): no `paths-ignore` here, which would leave such a pull request no status at all.
@@ -24,6 +24,9 @@ on:
     # request already gets (Actions can't filter labels before a run starts, and a run that skipped its jobs
     # would post skipped checks over the real ones). `ready_for_review`: a draft that's already labeled.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
+  # The merge queue's groups: the full tier, once per merge, on the commit main will get.
+  merge_group:
+    types: [checks_requested]
   # Every platform on main each night, whatever merged during the day.
   schedule:
     - cron: '0 8 * * *'
@@ -34,10 +37,11 @@ permissions:
   contents: read
 
 concurrency:
-  # One group per pull request: a new push cancels the run it replaces. Every other run (main, a run by hand)
-  # has a group of its own, so it's never cancelled, and never waits behind or replaces another run.
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request, and one per merge group's ref (gh-readonly-queue/main/pr-<n>-<sha>): a new push,
+  # or the group run again, cancels the run it replaces. Every other run (main, a run by hand) has a group of its
+  # own, so it's never cancelled, and never waits behind or replaces another run.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.ref) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
   # Whether anything but docs changed. Only a pull request can skip anything: the website (site/) is built and
@@ -48,16 +52,45 @@ jobs:
     name: What changed
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # Whether a merge group already tested a commit pushed to main.
+      actions: read
     outputs:
-      code: ${{ steps.diff.outputs.code }}
+      # A tier of none runs no E2E: as a pull request of docs alone does.
+      code: ${{ steps.tier.outputs.tier != 'none' && steps.diff.outputs.code || 'false' }}
       tier: ${{ steps.tier.outputs.tier }}
+      queue: ${{ steps.queue.outputs.queue }}
       platform: ${{ steps.platform.outputs.platform }}
       forms: ${{ steps.forms.outputs.forms }}
     steps:
-      # A pull request's run checks out its merge commit: its first parent is the base branch as it is now,
-      # so the diff between the two is exactly what merging the pull request changes.
+      # Whether main has a merge queue (a ruleset with the merge queue rule), which changes what a pull request's
+      # `E2E` needs and what a push to main runs; if it can't be told, no queue, the stricter way. And whether a
+      # push to main is a commit a merge group already tested and passed: then it runs nothing more.
+      - name: Merge queue?
+        id: queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          queue="$(gh api "repos/$REPO/rules/branches/main" --jq '[.[] | select(.type == "merge_queue")] | length' 2>/dev/null || echo 0)"
+          if [ "${queue:-0}" -gt 0 ]; then queue=true; else queue=false; fi
+          echo "Main has a merge queue: $queue"
+          echo "queue=$queue" >> "$GITHUB_OUTPUT"
+          tested=false
+          if [ "$EVENT" = push ]; then
+            n="$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=merge_group&status=success" --jq '.total_count' 2>/dev/null || echo 0)"
+            if [ "${n:-0}" -gt 0 ]; then tested=true; fi
+            echo "Tested in a merge group already: $tested"
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+      # A pull request's run checks out its merge commit: its first parent is the base branch as it is now, so the
+      # diff between the two is exactly what merging the pull request changes. A merge group's diff runs from its
+      # base (main, or the group ahead of it in the queue) to its head: every pull request in it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -65,15 +98,23 @@ jobs:
         id: diff
         env:
           EVENT: ${{ github.event_name }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          if [ "$EVENT" != pull_request ]; then
+          if [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; then
             echo "A $EVENT run: everything runs."
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          [ "$(git rev-list --parents -n 1 HEAD | wc -w)" = 3 ] || { echo "::error::HEAD isn't the pull request's merge commit"; exit 1; }
+          if [ "$EVENT" = merge_group ]; then
+            git fetch --quiet --no-tags --depth=1 origin "$GROUP_BASE"
+            base="$GROUP_BASE"
+          else
+            [ "$(git rev-list --parents -n 1 HEAD | wc -w)" = 3 ] || { echo "::error::HEAD isn't the pull request's merge commit"; exit 1; }
+            base="$(git rev-parse HEAD^1)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           # --no-renames: a file moved lists both its paths, so a test moved into docs/ still counts as code.
-          git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          git diff --name-only --no-renames "$base" HEAD > "$RUNNER_TEMP/changed"
           code=false
           while IFS= read -r file; do
             case "$file" in
@@ -89,9 +130,11 @@ jobs:
       # OS. Its `E2E` status then needs the full tier; otherwise the fast tier is enough (the `e2e` job).
       - name: Platform-sensitive?
         id: platform
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE: ${{ steps.diff.outputs.base }}
         run: |
-          base=HEAD^1 head=HEAD
+          base="$BASE" head=HEAD
           # ── What makes a change platform-sensitive ───────────────────────────────────────────────────────
           # The one list. A change is platform-sensitive when it touches code that behaves differently by OS,
           # going by where 2026-10-15 to 2026-11-24's platform-only fixes landed (about 40 of 945 commits).
@@ -172,20 +215,29 @@ jobs:
           else
             echo "Not platform-sensitive: none of the changed files."
           fi
-      # The fast tier or the full one. A pull request's labels and draft state are the event's: a run re-run by
-      # hand keeps the tier it had, so add `ready` (which starts a new run) rather than re-run an old one.
-      # Renovate's platform-sensitive pull requests (Electron's among them) get the full tier with no label, so
-      # Electron's automerge once every check passes; its others follow the same rule as anyone's.
+      # The tier. A pull request's labels and draft state are the event's: a run re-run by hand keeps the tier it had.
+      # With a merge queue, a pull request always gets the fast tier, except the run the `ready` label itself starts
+      # (the escape hatch: the full tier now, once). Without one, as before: `ready` (and not a draft) runs the full
+      # tier on every push, and so does a platform-sensitive pull request of Renovate's (Electron's), so it can
+      # automerge.
       - name: Which tier?
         id: tier
         env:
           EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
           DRAFT: ${{ github.event.pull_request.draft }}
           READY: ${{ contains(github.event.pull_request.labels.*.name, 'ready') }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           PLATFORM: ${{ steps.platform.outputs.platform }}
+          QUEUE: ${{ steps.queue.outputs.queue }}
+          TESTED: ${{ steps.queue.outputs.tested }}
         run: |
-          if [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
+          if [ "$EVENT" = push ] && [ "$TESTED" = true ]; then tier=none; why="a merge group already ran the full tier on this commit"
+          elif [ "$EVENT" = merge_group ]; then tier=full; why="a merge group: the full tier, once per merge"
+          elif [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
+          elif [ "$QUEUE" = true ] && [ "$ACTION" = labeled ] && [ "$LABEL" = ready ]; then tier=full; why="just labeled ready: the full tier now"
+          elif [ "$QUEUE" = true ]; then tier=fast; why="a pull request: the merge queue runs the full tier"
           elif [ "$AUTHOR" = 'renovate[bot]' ] && [ "$PLATFORM" = true ]; then tier=full; why="Renovate's platform-sensitive update"
           elif [ "$READY" = true ] && [ "$DRAFT" != true ]; then tier=full; why="labeled ready"
           elif [ "$READY" = true ]; then tier=fast; why="labeled ready, but still a draft"
@@ -202,6 +254,10 @@ jobs:
           EVENT: ${{ github.event_name }}
           TIER: ${{ steps.tier.outputs.tier }}
         run: |
+          if [ "$TIER" = none ]; then
+            echo "forms=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT" != pull_request ] || [ "$TIER" = full ]; then
             echo "The full tier: the password detector's corpora run."
             echo "forms=true" >> "$GITHUB_OUTPUT"
@@ -226,6 +282,7 @@ jobs:
           CODE: ${{ steps.diff.outputs.code }}
           PLATFORM: ${{ steps.platform.outputs.platform }}
           FORMS: ${{ steps.forms.outputs.forms }}
+          QUEUE: ${{ steps.queue.outputs.queue }}
         run: |
           {
             echo "## CI's $TIER tier"
@@ -236,8 +293,16 @@ jobs:
             echo "- **Full tier:** all of that, plus E2E on Windows x64 and arm64, macOS arm64 and x64, Linux x64 Wayland and Linux arm64, perf.spec.ts on each platform, the password detector's corpora, and Chord Player."
             echo
             if [ "$CODE" = true ]; then echo "Password detector's corpora: $([ "$FORMS" = true ] && echo run || echo "skipped (nothing they test changed)")."; echo; fi
-            if [ "$EVENT" != pull_request ]; then
+            echo "Main's merge queue: $([ "$QUEUE" = true ] && echo on || echo "off (a pull request's \`E2E\` needs the full tier when it's platform-sensitive)")."
+            echo
+            if [ "$TIER" = none ]; then
+              echo "A merge group already ran the full tier on this commit and passed: only the checks run."
+            elif [ "$EVENT" = merge_group ]; then
+              echo "A merge group: the full tier, on the commit main gets. If it fails, the queue drops the pull request."
+            elif [ "$EVENT" != pull_request ]; then
               echo "A $EVENT run: every platform runs. If it fails on main, the \`main-failed\` job opens an issue (or comments on the open one)."
+            elif [ "$QUEUE" = true ] && [ "$CODE" = true ]; then
+              echo "A pull request: \`E2E\` passes with the fast tier, and the merge queue runs every platform before it merges (\`gh pr merge <n> --merge --auto\`). Label it \`ready\` to run every platform now."
             elif [ "$CODE" != true ]; then
               echo "**Docs alone changed:** no E2E to run, and \`E2E\` passes."
             else
@@ -699,6 +764,7 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           TIER: ${{ needs.changes.outputs.tier }}
           PLATFORM: ${{ needs.changes.outputs.platform }}
+          QUEUE: ${{ needs.changes.outputs.queue }}
           FAST: ${{ needs.e2e-fast.result }}
           FULL_SHARDS: ${{ needs.e2e-full.result }}
           PERF: ${{ needs.e2e-perf.result }}
@@ -714,6 +780,9 @@ jobs:
           pass=false state=failure
           if [ "$CHANGES" != success ]; then
             desc="Couldn't tell what changed ($CHANGES)"
+          elif [ "$TIER" = none ]; then
+            # main's push of a commit a merge group already passed: its `E2E` stands, nothing to post.
+            pass=true state='' desc="Tested in the merge queue: nothing more to run"
           elif [ "$CODE" != true ]; then
             if [ "$FAST" = skipped ] && [ "$FULL" = skipped ]; then
               pass=true state=success desc="Docs alone changed: no E2E to run"
@@ -731,6 +800,9 @@ jobs:
             else
               desc="Full tier failed ($FULL)"
             fi
+          elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$QUEUE" = true ]; then
+            path="the fast tier, and the merge queue runs every platform"
+            pass=true state=success desc="Fast tier passed; the merge queue runs every platform"
           elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$PLATFORM" = false ]; then
             path="the fast tier is enough: the pull request isn't platform-sensitive"
             pass=true state=success desc="Fast tier passed; this change isn't platform-specific (full tier runs nightly on main)"
@@ -751,7 +823,7 @@ jobs:
             echo "| Full tier: every other platform | $FULL_SHARDS |"
             echo "| Full tier: perf.spec.ts, each platform | $PERF |"
             echo
-            echo "**$desc.** The \`E2E\` status: ${state:-unchanged (cancelled)}."
+            echo "**$desc.** The \`E2E\` status: ${state:-unchanged}."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "pass=$pass" >> "$GITHUB_OUTPUT"
           echo "state=$state" >> "$GITHUB_OUTPUT"

@@ -54,7 +54,9 @@ pnpm deadcode                  # Knip, on demand only
   Remove one only after its PR shows MERGED.
 - **Docker for the container runner** is Docker Engine in WSL 2. Don't `wsl --shutdown` casually: other threads'
   containers run there.
-- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges.
+- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges, through main's merge queue:
+  `gh pr merge <n> --merge --auto` queues a pull request whose `E2E` passed, and it merges once its merge group
+  passes the full tier. A plain `gh pr merge <n> --merge` is refused while the queue is on.
 
 ## Invariants (never broken; reviewers check every one)
 
@@ -138,7 +140,8 @@ New decision records (S20 and on) are a small folder each, not one growing file:
 - **Threat checklist first.** A slice that touches agents, passwords, IPC, sessions or anything web content can
   reach starts with a threat checklist and a design review, before code (S18's *M2e: threat checklist* is the
   model).
-- **CI is tiered.** Every push gets the fast tier (Linux X11); the `ready` label adds every other platform. The
-  merge gate is the `E2E` commit status (`.github/workflows/ci.yml`).
+- **CI is tiered.** Every push gets the fast tier (Linux X11); the merge queue runs every other platform once,
+  on the commit main gets. Adding the `ready` label runs every platform now, once. The merge gate is the `E2E`
+  commit status, on pull requests and merge groups (`.github/workflows/ci.yml`).
 - **PR descriptions** say what changed, what was measured, which invariants it touches and how each is tested.
   Commits use Conventional Commits prefixes.

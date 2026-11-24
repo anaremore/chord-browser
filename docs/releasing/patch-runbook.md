@@ -76,7 +76,7 @@ git commit -am "fix(deps): update electron to X (security)"
 git push -u origin HEAD                           # then open a PR
 ```
 
-- **Patch and minor updates** automerge once every CI check passes. If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
+- **Patch and minor updates** automerge once every CI check passes. With main's merge queue on, Renovate has to queue them through GitHub's auto-merge (`platformAutomerge: true`, turned on right after the ruleset), where the merge group runs every platform. If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
 - **A new major** (our major reached end of life) is a manual PR. Read Electron's breaking changes for the jump; the same suites must pass.
 - After the merge, check the Chromium version. The issue names it; `releases.electronjs.org` lists it per Electron version. In a running Chord, Settings → About shows both.
 
