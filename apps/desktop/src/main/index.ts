@@ -1417,7 +1417,10 @@ if (!app.requestSingleInstanceLock()) {
         },
         /**
          * S18 M2b's budgets: how long the snapshot script takes in the tab at `url`, round trip from main (the renderer's
-         * work and the answer's way back), `runs` times; and what the last one found.
+         * work and the answer's way back), `runs` times; and what the last one found. Beside each, a plain walk of the
+         * same page (`walk`: every element's visibility and computed style read), the same round trip in the same world,
+         * so a slow runner slows both: their ratio is a measure a shared CI runner can hold where milliseconds can't
+         * (#166).
          */
         agentSnapshotTimes: async (url: string, runs: number) => {
           const [{ snapshotPage }, { ASSISTANT_WORLD }] = await Promise.all([import('./control/snapshot'), import('./control/extract')]);
@@ -1425,6 +1428,11 @@ if (!app.requestSingleInstanceLock()) {
           if (!contents) return null;
           const times: number[] = [];
           const after: number[] = [];
+          const walk: number[] = [];
+          // The same kind of work the snapshot does for each element (control/snapshot.ts: checkVisibility, computed
+          // style), and nothing of its own logic, 8 times over: under a CPU quota a task much shorter than the snapshot
+          // is rarely throttled while the snapshot is, so a baseline must cost about what the snapshot costs to scale with it.
+          const WALK = `(() => { let n = 0; for (let round = 0; round < 8; round++) for (const el of document.body.querySelectorAll('*')) { if (el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) n++; const style = getComputedStyle(el); n += style.cursor.length + style.display.length; } return n; })()`;
           let last: Awaited<ReturnType<typeof snapshotPage>> = null;
           for (let i = 0; i < runs; i++) {
             const started = performance.now();
@@ -1437,8 +1445,12 @@ if (!app.requestSingleInstanceLock()) {
             // can still be pending after 30 ms, and the next snapshot timed would wait behind it (#154's macOS x64 run).
             const ms = await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { const r = globalThis.__chordSnapshots.get('timing'); if (r && r.finish) r.finish(); return r ? r.finishMs : -1; })()` }]);
             after.push(Number(ms));
+            // The baseline, in turn with the snapshot (so load that comes and goes falls on both).
+            const walked = performance.now();
+            await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: WALK }]);
+            walk.push(performance.now() - walked);
           }
-          return { times, after, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
+          return { times, after, walk, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
         },
         /**
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to

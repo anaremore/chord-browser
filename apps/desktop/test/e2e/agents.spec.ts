@@ -2068,7 +2068,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     expect(Math.max(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax);
 
     // Budgets (docs/decisions/S18-agent-mcp.md, "M2: plan"): a typical page (about 1,500 elements) and a 20,000-element one.
-    type Times = { times: number[]; after: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
+    type Times = { times: number[]; after: number[]; walk: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
     const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
     const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
     for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/noisy', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
@@ -2084,6 +2084,16 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
       test.info().annotations.push({ type: 'snapshot timing', description: seen });
       console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${seen}`);
       if (rows === 300) {
+        // #166: the snapshot against a plain walk of the same page, timed in turn with it from main. A slow runner slows
+        // both, so their ratio holds where milliseconds don't: reported for now, on every runner, to set the bound CI
+        // will hold (then the per-platform budgets below can go). Reported before anything is judged, so a slow run still says it; a snapshot cut for time did less work, which the line shows (cut).
+        const walk = sorted(measured.walk);
+        const walkMedian = walk[Math.floor(walk.length / 2)]!;
+        const ratio = median / walkMedian;
+        const ratioSeen = `${path}: the snapshot ${ratio.toFixed(2)}x a plain walk of the page${measured.cut?.['time'] ? ' (cut for time)' : ''} (snapshot median ${median.toFixed(1)} ms, walk median ${walkMedian.toFixed(1)} ms: ${walk.map((t) => t.toFixed(1)).join(' ')})`;
+        test.info().annotations.push({ type: 'snapshot ratio', description: ratioSeen });
+        console.log(`[snapshot ratio] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${ratioSeen}`);
+        expect(walk.every((t) => t > 0), ratioSeen).toBe(true);
         // Every key, unless a shared runner was slow enough for the scan's own time bound (SNAPSHOT_SCAN_MS) to cut it:
         // that's the bound working, and reported like the times.
         if (TIMES_HELD || !measured.cut?.['time']) expect(measured.keys, seen).toBe(600);
