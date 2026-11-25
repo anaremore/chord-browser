@@ -23,6 +23,7 @@
  * gets is in its own group, released when it closes (an agent's tab stays attached: nothing is kept alive). If the
  * debugger can't be had, nothing is pressed or typed.
  */
+import { userLeaseLost } from './user-watch';
 import type { WebContents } from 'electron';
 import { pickersLost, retryPickers } from '../agents/pickers';
 import { withDebugger } from '../debugger-queue';
@@ -243,7 +244,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           if (!described) return { ok: false, why: 'no-check' };
           return hasClosedRoot(described.node) ? { ok: false, why: 'closed' } : { ok: true };
         },
-        held: () => !pickersLost(contents),
+        held: () => !pickersLost(contents) && !userLeaseLost(contents),
         close,
       });
       await released;

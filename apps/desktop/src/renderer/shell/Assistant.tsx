@@ -26,6 +26,7 @@ import {
   nameTabs,
   splitCitations,
   stripCitations,
+  type AssistantActCard,
   type AssistantContextUsage,
   type AssistantFillCard,
   type AssistantFillField,
@@ -37,6 +38,7 @@ import type { AssistantAction, AssistantView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { durations } from '@chord/tokens';
 import { useMenu } from '../shared/a11y';
 import { AssistantIcon } from '../shared/icons';
 import { announce } from './announce';
@@ -316,16 +318,97 @@ function ToolRow({ messages }: { messages: AssistantMessage[] }) {
   );
 }
 
+/**
+ * An acting card (S18 M2e-2a; mocks/agents-s18-m2.html §7): the first action on a site, a risky step, or what an
+ * action sends. It takes no key and no click in its first moment (promptInputDelay), and keys only once it has the
+ * focus, so typing in the composer can't answer it (F6).
+ */
+function ActApproval({ message, act: card }: { message: AssistantMessage; act: AssistantActCard }) {
+  const [shownAt] = useState(() => performance.now());
+  if (message.body.role !== 'approval') return null;
+  const body = message.body;
+  const pending = body.decision === 'pending';
+  const answer = (decision: 'once' | 'thread' | 'always' | 'denied') => {
+    if (!pending || performance.now() - shownAt < durations.promptInputDelay) return;
+    act({ do: 'approve', messageId: message.id, decision });
+  };
+  const allow = card.kind === 'site' ? 'thread' : 'once';
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') answer('denied');
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) answer(allow);
+  };
+  const outcome = {
+    site: { once: 'Allowed', thread: 'Allowed to click and type here for this chat', always: 'Allowed to click and type here always', denied: 'Not allowed to act here', expired: 'Not answered', pending: '' },
+    step: { once: 'Allowed', thread: 'Allowed', always: 'Allowed', denied: 'Not done', expired: 'Not answered', pending: '' },
+    send: { once: 'Sent', thread: 'Sent, and allowed for this chat', always: 'Sent', denied: 'Not sent', expired: 'Not answered, so nothing was sent', pending: '' },
+  }[card.kind][body.decision];
+  const buttons: { label: string; look: 'primary' | 'secondary' | 'quiet' | 'danger'; decision?: 'once' | 'thread' | 'always' | 'denied'; show?: true }[] =
+    card.kind === 'site'
+      ? [
+          { label: 'Always on this site', look: 'primary', decision: 'always' },
+          { label: 'Allow for this chat', look: 'secondary', decision: 'thread' },
+          { label: 'No', look: 'quiet', decision: 'denied' },
+        ]
+      : card.kind === 'send'
+        ? [
+            { label: 'Allow', look: card.danger ? 'danger' : 'primary', decision: 'once' },
+            { label: 'Allow for this chat', look: 'secondary', decision: 'thread' },
+            { label: 'Don’t', look: 'secondary', decision: 'denied' },
+            { label: 'Show me', look: 'quiet', show: true },
+          ]
+        : [
+            { label: 'Allow', look: card.danger ? 'danger' : 'primary', decision: 'once' },
+            { label: 'Don’t', look: 'secondary', decision: 'denied' },
+            { label: 'Show me', look: 'quiet', show: true },
+          ];
+  // Show me only where there's something to point at (a tail's or a load's card has none).
+  const shown = buttons.filter((b) => !b.show || card.showable);
+  const looks = { primary: styles.primary, secondary: styles.secondary, quiet: styles.quiet, danger: `${styles.primary} ${styles.allowDanger}` };
+  return (
+    <div className={styles.approval} data-pending={pending || undefined} data-act={card.kind} role={pending ? 'group' : undefined} aria-label={pending ? card.title : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
+      <p className={styles.approvalTitle}>{card.title}</p>
+      <p id={`ask-${message.id}`} className={styles.muted}>
+        {card.note}
+        {card.lines.map((line, i) => (
+          <Fragment key={i}>
+            <br />
+            {line}
+          </Fragment>
+        ))}
+      </p>
+      {pending ? (
+        <div className={styles.approvalActions}>
+          {shown.map((b) => (
+            <button
+              key={b.label}
+              type="button"
+              className={looks[b.look]}
+              onClick={() => (b.show ? act({ do: 'showStep', messageId: message.id }) : b.decision && answer(b.decision))}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className={styles.approvalOutcome}>
+          <span className={styles.muted}>{outcome}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Approval({ message }: { message: AssistantMessage }) {
   if (message.body.role !== 'approval') return null;
   const body = message.body;
+  if (body.act) return <ActApproval message={message} act={body.act} />;
   const pending = body.decision === 'pending';
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!pending) return;
     if (e.key === 'Escape') act({ do: 'approve', messageId: message.id, decision: 'denied' });
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) act({ do: 'approve', messageId: message.id, decision: 'once' });
   };
-  const outcome = { once: 'Allowed', thread: 'Allowed for this chat', denied: 'Not allowed', expired: 'Not answered', pending: '' }[body.decision];
+  const outcome = { once: 'Allowed', thread: 'Allowed for this chat', always: 'Allowed for this chat', denied: 'Not allowed', expired: 'Not answered', pending: '' }[body.decision];
   return (
     <div className={styles.approval} data-pending={pending || undefined} role={pending ? 'group' : undefined} aria-label={pending ? 'Asking permission' : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
       <p id={`ask-${message.id}`} className={styles.approvalTitle}>
@@ -662,7 +745,7 @@ function Composer({ view, providerName, draftSeed }: { view: AssistantView; prov
   };
   const lastUser = [...view.messages].reverse().find((m) => m.body.role === 'user');
   // A card asking to read more answers to its keys from here too: ⌘↵ / Ctrl+↵ allows once, Esc says no (DESIGN.md §7.8).
-  const asking = view.messages.find((m) => m.body.role === 'approval' && m.body.decision === 'pending');
+  const asking = view.messages.find((m) => m.body.role === 'approval' && m.body.decision === 'pending' && !m.body.act);
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (asking && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -898,7 +981,9 @@ function useAssistantAnnouncements(view: AssistantView): void {
       if (asked.current.has(m.id)) continue;
       if (m.body.role === 'approval') {
         asked.current.add(m.id);
-        if (m.body.decision === 'pending') announce(`The assistant is asking: ${m.body.description}. Allow once, Allow for this chat, or No.`);
+        // An acting card says its own buttons (S18 M2e-2a).
+        const choices = m.body.act ? { site: 'Always on this site, Allow for this chat, or No', step: 'Allow, Don’t, or Show me', send: 'Allow, Allow for this chat, Don’t, or Show me' }[m.body.act.kind] : 'Allow once, Allow for this chat, or No';
+        if (m.body.decision === 'pending') announce(`The assistant is asking: ${m.body.description}. ${choices}.`);
       } else if (m.body.role === 'tool' && m.body.fill) {
         asked.current.add(m.id);
         if (m.body.fill.status === 'pending') announce(`The assistant suggests values for ${fieldCount(m.body.fill.fields.length)} on ${m.body.fill.site}. Check them, then Fill or Not now.`);

@@ -13,6 +13,17 @@ import { HOLD_MS } from '../../src/main/passwords/saving';
 import type { PasswordDetectorEvents } from '../../src/main/passwords/detector';
 import type { AccountsAnswer, CandidateAnswer, SaveAnswer } from '../../src/main/passwords/service';
 
+/** The assistant acting in the tab (control/user-watch.ts), and a key Chord sends for it (control/input.ts), as a test sets them. */
+const assistant = vi.hoisted(() => ({ acting: false, sendsKey: false, leases: [] as ((contents: unknown) => void)[] }));
+vi.mock('../../src/main/control/user-watch', () => ({
+  userTabActing: () => assistant.acting,
+  onUserLease: (listener: (contents: unknown) => void) => {
+    assistant.leases.push(listener);
+    return () => void assistant.leases.splice(assistant.leases.indexOf(listener), 1);
+  },
+}));
+vi.mock('../../src/main/control/input', () => ({ isAgentInput: () => assistant.sendsKey }));
+
 const ORIGIN = 'https://github.com';
 const OFFERS = [
   { id: 'a1', username: 'ada@acme.dev', host: 'github.com', match: 'origin' as const },
@@ -253,6 +264,60 @@ describe('the menu under the field: which focus gets one', () => {
     expect(t.page.listenerCount('before-input-event')).toBe(1);
     t.blur();
     expect(t.page.listenerCount('before-input-event')).toBe(0);
+  });
+});
+
+describe('the assistant acting in the tab (S18 M2e-2a, A4; Neon’s B2 on the M2e plan)', () => {
+  it('its click or focus on a username field opens no menu, and a menu open as it starts closes', async () => {
+    const t = setup();
+    await t.focus();
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    assistant.acting = true;
+    try {
+      await t.focus({ formId: 'f1' });
+      expect(t.assist.menuFor('w1')).toBeNull();
+      await t.focus();
+      expect(t.assist.menuFor('w1')).toBeNull();
+    } finally {
+      assistant.acting = false;
+    }
+  });
+
+  it('a menu already open closes as a lease begins in its tab; one the vault answers after the lease began never opens (Neon’s B7 on #147)', async () => {
+    const t = setup();
+    await t.focus();
+    expect(t.assist.menuFor('w1')).not.toBeNull();
+    for (const listener of assistant.leases) listener(t.contents);
+    expect(t.assist.menuFor('w1')).toBeNull();
+    // Disposed, it stops hearing leases (round 2 of #147: the unsubscribe was dropped).
+    const heard = assistant.leases.length;
+    t.assist.dispose();
+    expect(assistant.leases.length).toBe(heard - 1);
+    // The focus came first, the vault's answer after the lease began: no menu.
+    const u = setup();
+    const focusing = u.focus();
+    assistant.acting = true;
+    try {
+      await focusing;
+      await flush();
+      expect(u.assist.menuFor('w1')).toBeNull();
+    } finally {
+      assistant.acting = false;
+    }
+  });
+
+  it('a key Chord sends for it never reaches the menu: its Enter fills nothing', async () => {
+    const t = setup();
+    await t.focus();
+    assistant.sendsKey = true;
+    try {
+      expect([t.key('ArrowDown'), t.key('Enter')]).toEqual([false, false]);
+    } finally {
+      assistant.sendsKey = false;
+    }
+    await flush();
+    expect(sent(t.page)).toHaveLength(0);
+    expect(t.assist.menuFor('w1')).not.toBeNull();
   });
 });
 

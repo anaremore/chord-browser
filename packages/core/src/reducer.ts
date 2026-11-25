@@ -8,7 +8,7 @@ import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import { enablePatches, produceWithPatches, type Draft, type Patch } from 'immer';
 import { blockingSite, cleanOffSites } from './ad-blocking';
 import { cleanCountSites, countSite } from './tab-counts';
-import { cleanNeverSites } from './control-tools';
+import { cleanActSites, cleanNeverSites } from './control-tools';
 import { cleanKeys } from './bindings';
 import { cleanDevtoolsSettings } from './devtools';
 import { isInternalUrl, visibleTabs } from './idle';
@@ -2166,6 +2166,8 @@ function run(draft: Draft<State>, cmd: Command, ctx: Context, effects: Effect[])
         if (assistant.neverSites) current.neverSites = cleanNeverSites(assistant.neverSites);
         if (assistant.offChords) current.offChords = [...new Set(assistant.offChords)];
         if (assistant.codexImages !== undefined && current.codexImages !== assistant.codexImages) current.codexImages = assistant.codexImages;
+        if (assistant.acting !== undefined && current.acting !== assistant.acting) current.acting = assistant.acting;
+        if (assistant.actSites) current.actSites = cleanActSites(assistant.actSites);
       }
       const { separateSignIns, onboarded } = cmd.settings;
       if (separateSignIns !== undefined && draft.settings.separateSignIns !== separateSignIns) draft.settings.separateSignIns = separateSignIns;

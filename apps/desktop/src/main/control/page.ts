@@ -19,9 +19,10 @@ import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
 import { openDeep, type DeepSession } from './deep';
 import { pickersLost, pickersUnsecured, retryPickers } from '../agents/pickers';
 import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
+import { userLeaseLost } from './user-watch';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
-import { snapshotPage } from './snapshot';
+import { pageShows, snapshotPage } from './snapshot';
 
 export interface ControlPage {
   /** The page id now (see above). */
@@ -40,6 +41,8 @@ export interface ControlPage {
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */
   snapshot(owner: string, token: string): Promise<SnapshotRead | null>;
+  /** Whether the page shows anything yet, waiting for it at most `waitMs` (snapshot.ts' pageShows). */
+  shows(waitMs: number): Promise<boolean>;
   fillForm(args: { token: string; writes: FillWrite[]; undo: string; highlight: FillHighlight }): Promise<FillOutcome>;
   undoFill(undo: string): Promise<{ restored: number; kept: number } | null>;
   /** A PDF's bytes through the page's own session; `readable` checks each address it ends up at. */
@@ -229,6 +232,7 @@ export function controlPage(contents: WebContents): ControlPage {
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
     snapshot: (owner, token) => snapshotPage(contents, owner, token),
+    shows: (waitMs) => pageShows(contents, waitMs),
     fillForm: (args) => fillFormPage(contents, args),
     undoFill: (undo) => undoFillPage(contents, undo),
     fetchPdf: (url, readable) => fetchPdf(contents, url, readable),
@@ -270,7 +274,8 @@ export function controlPage(contents: WebContents): ControlPage {
       (await inPreload(contents, `globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.seen ? globalThis.__chordAgentGuard.seen(${Number(count)}, ${Number(waitMs)}) : false`)) === true,
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
     unsecured: () => pickersUnsecured(contents),
-    lost: () => pickersLost(contents),
+    // An agent's tab whose hold is down, or a tab of yours whose lease was lost (S18 M2e-2a): nothing goes there.
+    lost: () => pickersLost(contents) || userLeaseLost(contents),
     retryHold: () => retryPickers(contents),
     watchSends: (allowed) => watchSends(contents, allowed),
     droppedAfter: () => takeDroppedAfter(contents),
