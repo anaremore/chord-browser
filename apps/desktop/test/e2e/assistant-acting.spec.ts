@@ -4,7 +4,7 @@
  * lasting for the chat, a risky step asking every time, and your own key in the tab stopping it. On fixtures: a card
  * table (one use among many), and a checkout on another site.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -230,6 +230,47 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     await dispatch(shell, { t: 'agents.stopAll' });
     await expect(panel.getByRole('group', { name: /^Place the order/ })).toHaveCount(0);
     expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('the assistant’s token baseline: its tool list, and an acting turn on the table, metered as the agents’ eval is (M2g-2 slice 1)', async () => {
+  test.setTimeout(120_000);
+  reached.length = 0;
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    const card = (title: RegExp) => panel.getByRole('group', { name: title });
+    // A first turn answers the site's card and its Send data card for this chat, so the measured turn waits on none.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Fold' }]));
+    for (const title of [/^Let the assistant click and type on /, /^Send data to /]) {
+      const c = card(title);
+      await expect(c).toBeVisible({ timeout: 20_000 });
+      await shell.waitForTimeout(700);
+      await c.getByRole('button', { name: 'Allow for this chat' }).click();
+    }
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
+    await shell.waitForTimeout(2_500);
+    // The measured turn: a look, then an action, as the agents' journeys play.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Call' }]));
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
+    expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('Clicked “Call”');
+    const sizes = readFileSync(join(config, 'acting-sizes.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { tools: number; steps: { tool: string; chars: number }[] }).at(-1)!;
+    // The agents' eval's estimate (8,000 tokens of system prompt and history a turn; each result read again after).
+    const defs = Math.ceil(sizes.tools / 4);
+    const results = sizes.steps.map((s) => Math.ceil(s.chars / 4));
+    const input = results.reduce((sum, _, k) => sum + defs + 8000 + results.slice(0, k + 1).reduce((a, b) => a + b, 0), 0);
+    const row = { journey: 'assistant: a look and a click on the table', calls: results.length, tokens: results.reduce((a, b) => a + b, 0), defs, input };
+    console.log(`[token eval] assistant ${process.env['CHORD_E2E_DISPLAY'] ?? ''}: ${JSON.stringify(row)}`);
+    mkdirSync(join(appDir, 'test-results'), { recursive: true });
+    writeFileSync(join(appDir, 'test-results', 'token-eval-assistant.json'), JSON.stringify(row, null, 2));
+    expect(defs).toBeGreaterThan(0);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
