@@ -151,7 +151,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   ),
   ...(
     [
-      ['click', 'Click an element in one of your own tabs by its ref. The first action on a site, and risky steps (submit, pay, send, delete), ask the user. Says whether the page went elsewhere (refs stale: call snapshot) and what changed.', true],
+      ['click', 'Click an element in one of your own tabs by its ref. The first action on a site, and risky steps such as submit, pay, send or delete, ask the user. Says whether the page went elsewhere (refs stale: call snapshot) and what changed.', true],
       ['type', 'Type text into a text field by its ref: replaces what’s there unless replace is false; submit presses Enter after. Never type passwords, codes or card numbers (those fields have no ref: the user fills them).', true],
       ['press_key', 'Press one key in an element by its ref; text goes in with type.', true],
       ['select_option', 'Choose an option of a list by its ref and the option’s label.', false],
@@ -163,7 +163,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   {
     name: 'batch',
     level: 'act',
-    description: `Up to ${BATCH_STEPS_MAX} steps on one of your tabs in one call, in order: each a click, type, press_key, select_option or hover, as that tool takes it and asking the user as it would. Stops at the first step refused.`,
+    description: `Up to ${BATCH_STEPS_MAX} steps on one of your own tabs in one call, in order (fill a form's fields, then submit): each a click, type, press_key, select_option or hover, as that tool takes it and asking the user as it would. Stops at the first step refused.`,
     inputSchema: object(
       {
         tab_id: { type: 'string' },

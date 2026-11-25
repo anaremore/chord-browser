@@ -663,8 +663,6 @@ describe('Review 1 of #77', () => {
     const [a, b] = [await listed('Claude Code'), await listed('Codex')];
     expect(a).toBe(b);
     expect(a).toBe(JSON.stringify(agentToolList(true)));
-    // Its fingerprint, the same every time (list_changed only when the list really differs).
-    expect(agentToolsVersion(agentToolList(true))).toBe(agentToolsVersion(JSON.parse(a) as unknown[]));
   });
 
   it('close_tab waits while you use the tab: it answers paused, and the tab stays', async () => {

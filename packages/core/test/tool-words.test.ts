@@ -15,9 +15,9 @@ const assistantWire = (acting: boolean) => assistantTools(true, acting).map((t) 
  * What each list may cost, in tokens, with some room. A change that grows one past it fails here, and raises it in
  * the same PR with a measured reason (the plan's rule).
  */
-// Measured with the diet (M2g-2 slice 2): agents 2,075 + 41 for the instructions (main: 2,330 + 41); the assistant
-// 1,763 acting (main: 1,894) and 1,110 reading only (main: 1,181). Each with 20 tokens' room.
-const BUDGET = { agents: 2136, assistantActing: 1783, assistantReading: 1130 };
+// Measured with the diet (M2g-2 slice 2): agents 2,087 + 41 for the instructions (main: 2,330 + 41); the assistant
+// 1,768 acting (main: 1,894) and 1,115 reading only (main: 1,181). Each with 20 tokens' room.
+const BUDGET = { agents: 2148, assistantActing: 1788, assistantReading: 1135 };
 
 describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
   it('outside agents: tools/list and the instructions sent with initialize', () => {
@@ -46,9 +46,11 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     ['agents', 'snapshot', /until the page navigates/],
     ['agents', 'type', /Never type passwords, codes or card numbers/],
     ['agents', 'click', /ask the user/],
+    ['agents', 'click', /risky steps such as/],
+    ['agents', 'batch', /one of your own tabs/],
     ['agents', 'batch', /asking the user/],
     ['agents', 'wait_for', /One wait at a time/],
-    ...['read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'snapshot'].map((t): [string, string, RegExp] => ['assistant', t, /untrusted/i]),
+    ...['read_tab', 'read_selection', 'tab_screenshot', 'read_form', 'page_diagnostics', 'snapshot'].map((t): [string, string, RegExp] => ['assistant', t, /untrusted/i]),
     ['assistant', 'read_tab', /ask the user first/],
     ['assistant', 'read_form', /only when the user's own message asks/],
     ['assistant', 'read_form', /Never what's in them/],

@@ -2485,6 +2485,8 @@ describe('acting through the gate (S18 M2c)', () => {
         [[{ tool: 'click', ref: 'e1' }, { tool: 'type', ref: 'e2', text: 'x', submit: 'yes' }], 'Step 2: submit and replace are true or false.'],
         // press_key's own words, which list the keys (batch's schema no longer does: M2g-2 slice 2).
         [[{ tool: 'click', ref: 'e1' }, { tool: 'press_key', ref: 'e2', key: 'F13' }], `Step 2: ${ACT_REFUSALS.key}`],
+        // Its key missing: the same, before step 1 (Claude's review of #188).
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'press_key', ref: 'e2' }], `Step 2: ${ACT_REFUSALS.key}`],
         [[{ tool: 'click', ref: 'e1' }, { tool: 'select_option', ref: 'e3' }], 'Step 2: select_option takes option, its label (at most 500 characters).'],
         // Its ref too: one never given (round 2 of #145).
         [[{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'e99' }], 'Step 2: There’s no element e99 in that tab. Call snapshot for the page’s elements.'],
