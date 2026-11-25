@@ -804,6 +804,12 @@
   flex-wrap: wrap;
 }
 
+/* A card's first moment (promptInputDelay): its answers can't be pressed yet, and look it. */
+.approvalActions [data-waiting] {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* A card's lines: a long address wraps anywhere, and a very long one scrolls so the buttons stay in reach. */
 .approvalText {
   overflow-wrap: anywhere;

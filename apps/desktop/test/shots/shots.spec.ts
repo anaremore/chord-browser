@@ -431,3 +431,81 @@ test('light: agents, Claude Code at work in its own chord', async () => {
     server.close();
   }
 });
+
+/**
+ * The assistant acting picture's page: a ticket order on no real site. A server on this machine answers for
+ * https://tickets.example.com, as the passwords picture's sign-in page is served.
+ */
+const TICKETS_HOST = 'tickets.example.com';
+const TICKETS_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#c2410c"/><path d="M12 22V10l11-2v12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linejoin="round"/><circle cx="9.5" cy="22" r="3" fill="#fff"/><circle cx="20.5" cy="20" r="3" fill="#fff"/></svg>';
+const TICKETS_PAGE =
+  '<!doctype html><title>Tickets · Spring Concert</title><link rel="icon" href="/favicon.svg">' +
+  '<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fbf6f1;font:16px/1.45 system-ui,sans-serif;color:#2a2118}' +
+  'main{width:440px;background:#fff;border-radius:14px;padding:34px 32px;box-shadow:0 1px 2px #0000000f,0 8px 28px #00000014}' +
+  '.brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:18px;margin-bottom:20px}.brand img{width:28px;height:28px}' +
+  'h1{font-size:24px;margin:0 0 4px}p{margin:0 0 18px;color:#6b5d50}label{display:block;font-size:14px;font-weight:600;margin:14px 0 6px}' +
+  'input,select{width:100%;padding:11px 12px;border:1px solid #d8cdc2;border-radius:8px;font:inherit;background:#fff}' +
+  '.total{display:flex;justify-content:space-between;margin-top:20px;padding-top:16px;border-top:1px solid #eee4da;font-weight:600}' +
+  'button{margin-top:18px;width:100%;padding:12px;border:0;border-radius:8px;background:#c2410c;color:#fff;font:inherit;font-weight:600}</style>' +
+  '<main><div class="brand"><img src="/favicon.svg" alt="">Riverside Hall</div><h1>Spring Concert</h1><p>Saturday, 7:30 pm · General admission</p>' +
+  '<form action="/order" method="post"><label for="n">Name</label><input id="n" name="name" autocomplete="name" spellcheck="false">' +
+  '<label for="e">Email</label><input id="e" name="email" type="email" autocomplete="email" spellcheck="false">' +
+  '<label for="q">Tickets</label><select id="q" name="tickets"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>' +
+  '<div class="total"><span>Total</span><span>$48.00</span></div><button>Place order</button></form></main>';
+
+test('light: the assistant clicks and types in your tab, and asks before it pays', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'chord-shots-cert-'));
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', `/CN=${TICKETS_HOST}`, '-addext', `subjectAltName=DNS:${TICKETS_HOST}`, '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], { stdio: 'ignore' });
+  const posted: string[] = [];
+  const server = createServer({ key: readFileSync(join(dir, 'key.pem')), cert: readFileSync(join(dir, 'cert.pem')) }, (req, res) => {
+    const path = new URL(req.url ?? '/', `https://${TICKETS_HOST}`).pathname;
+    req.resume();
+    if (req.method === 'POST') posted.push(path);
+    if (path === '/favicon.svg') {
+      res.writeHead(200, { 'content-type': 'image/svg+xml' });
+      res.end(TICKETS_ICON);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(TICKETS_PAGE);
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address() as AddressInfo;
+  const { app, shell } = await session('light', {}, [`--host-resolver-rules=MAP ${TICKETS_HOST} 127.0.0.1:${port}`, '--ignore-certificate-errors']);
+  try {
+    // In the article's tab, the one on screen.
+    const page = await pageWhere(app, (u) => u === PAGES.chord);
+    await page.goto(`https://${TICKETS_HOST}/spring`);
+    await iconsLoaded(shell);
+
+    await runAction(shell, 'assistant.toggle');
+    const panel = shell.getByRole('complementary', { name: 'Assistant' });
+    await panel.getByRole('button', { name: 'Use this' }).first().click();
+    await panel.getByRole('button', { name: 'Got it' }).click();
+    const input = panel.getByRole('textbox', { name: 'Message' });
+    // demo-claude.mjs's ticket turn: it fills in the form, then clicks Place order.
+    await input.fill('Get me two tickets for Saturday, under my name.');
+    await input.press('Enter');
+    // The first action on the site asks (the card names the site, example.com); Allow for this chat (its first moment
+    // takes no click).
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await siteCard.waitFor({ timeout: 20_000 });
+    await sleep(800);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    // Paying asks every time: the picture is that card, with the form filled in behind it.
+    const pay = panel.getByRole('group', { name: /^Place the order on / });
+    await pay.waitFor({ timeout: 20_000 });
+    await expect(page.locator('#e')).toHaveValue('ada@example.com');
+    // No caret or focus ring left in the field it typed in last.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await shell.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await rest(shell);
+    await capture(app, 'Chord', 'assistant-acting');
+    if (posted.length) throw new Error(`The order reached the site before the card was answered: ${posted.join(', ')}`);
+    await sleep(800);
+    await pay.getByRole('button', { name: 'Don’t', exact: true }).click();
+  } finally {
+    await app.close();
+    server.close();
+  }
+});
