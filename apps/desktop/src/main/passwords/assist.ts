@@ -80,12 +80,12 @@ const CHANGE_KINDS = new Set(['change', 'reset']);
  * the page reloaded) and to give it the username its submit had. The entry itself stays in the vault, *Not
  * confirmed*, whatever happens to this.
  */
-export const PRESAVE_MS = 10 * 60_000;
+const PRESAVE_MS = 10 * 60_000;
 /**
  * How long a tab keeps the username a first step was submitted with (S17 §4, phase 3: Chromium's `possible_usernames_`),
  * for the password step after it: as long as a typed sign-in is held.
  */
-export const FIRST_STEP_MS = HOLD_MS;
+const FIRST_STEP_MS = HOLD_MS;
 
 export interface AssistTab {
   readonly nodeId: string;
@@ -95,7 +95,7 @@ export interface AssistTab {
   readonly private: boolean;
 }
 
-export interface PasswordAssistHost {
+interface PasswordAssistHost {
   /** The tab a page is, or null when it isn't a tab's page. */
   tabOf(contents: WebContents): AssistTab | null;
   /** Whether the page is on screen in its window now. */
@@ -317,7 +317,7 @@ export function changeCard(
 }
 
 /** The menu's accounts with the one a first step was submitted with first (by username, ignoring case), else as they were. */
-export function firstStepFirst<T extends { readonly username: string }>(accounts: readonly T[], username: string): T[] {
+function firstStepFirst<T extends { readonly username: string }>(accounts: readonly T[], username: string): T[] {
   const wanted = username.trim().toLowerCase();
   const i = accounts.findIndex((a) => a.username.trim().toLowerCase() === wanted);
   return i <= 0 ? [...accounts] : [accounts[i]!, ...accounts.slice(0, i), ...accounts.slice(i + 1)];

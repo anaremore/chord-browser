@@ -10,7 +10,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { join } from 'node:path';
 
 /** About 250 pinned tabs' worth at roughly 40 KB each, with room to spare. */
-export const CAPTURE_BUDGET_BYTES = 16 * 1024 * 1024;
+const CAPTURE_BUDGET_BYTES = 16 * 1024 * 1024;
 
 /** Node ids are UUIDs; anything else is never turned into a path. */
 const ID = /^[0-9a-z][0-9a-z-]{0,63}$/i;

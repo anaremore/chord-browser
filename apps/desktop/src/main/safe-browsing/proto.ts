@@ -31,7 +31,7 @@ export interface FullHashDetail {
   attributes: number[];
 }
 
-export interface FullHash {
+interface FullHash {
   fullHash: Uint8Array;
   details: FullHashDetail[];
 }
@@ -43,7 +43,7 @@ export interface SearchAnswer {
   cacheDurationMs: number | null;
 }
 
-export class ProtoError extends Error {}
+class ProtoError extends Error {}
 
 const THREAT_TYPES: Record<string, number> = { THREAT_TYPE_UNSPECIFIED: 0, MALWARE: 1, SOCIAL_ENGINEERING: 2, UNWANTED_SOFTWARE: 3, POTENTIALLY_HARMFUL_APPLICATION: 4 };
 const ATTRIBUTES: Record<string, number> = { THREAT_ATTRIBUTE_UNSPECIFIED: 0, CANARY: 1, FRAME_ONLY: 2 };

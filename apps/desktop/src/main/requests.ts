@@ -18,7 +18,7 @@
  */
 import type { OnBeforeRequestListenerDetails, Session } from 'electron';
 
-export type RequestVerdict = 'cancel' | undefined;
+type RequestVerdict = 'cancel' | undefined;
 
 export interface RequestHandler {
   /** Electron URL patterns (`*://*\/*`); a request matching none never reaches JavaScript. */

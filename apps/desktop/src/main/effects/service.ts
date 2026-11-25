@@ -182,7 +182,7 @@ const scopeKey = (scope: WindowId | null, host: string) => `${scope ?? ''}|${hos
 const clone = (site: SiteEffects): SiteEffects => structuredClone(site);
 
 /** "url() on line 3, @import on line 1": what the card says Chord left out. */
-export const removedText = (removed: readonly { what: string; line: number }[]): string => removed.map((r) => `${r.what} on line ${r.line}`).join(', ');
+const removedText = (removed: readonly { what: string; line: number }[]): string => removed.map((r) => `${r.what} on line ${r.line}`).join(', ');
 
 export class Effects {
   private readonly saved = new Map<string, Stored>();
