@@ -35,7 +35,7 @@ Typecheck and the unit tests pass locally (AGENTS.md: read the exit codes).
 ## 3. Every platform green on that commit
 
 - **On a release branch:** `git push origin release/<A.B>.x`, then `gh workflow run ci.yml --ref release/<A.B>.x` (a dispatched run is the full tier: every OS, arm64 and Chord Player). Check: `gh run list --workflow ci.yml --branch release/<A.B>.x`.
-- **On main:** the last full run on that commit (the push, the nightly, or `gh workflow run ci.yml --ref main`), and no open *Nightly full tier failed on main* issue.
+- **On main:** the last full run on that commit: the nightly, or `gh workflow run ci.yml --ref main` (a merge group runs only some platforms, unless it changed Electron), and no open *Nightly full tier failed on main* issue. The release commit merges like any PR: `gh pr merge <n> --merge --auto`.
 
 Not green: fix it, or rerun the failed jobs once to rule out a flake. Never tag a red commit.
 
