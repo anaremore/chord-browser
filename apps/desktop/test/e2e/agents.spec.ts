@@ -1241,6 +1241,53 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
+test('a control the page renames in place, or behind a diff too big to show: its old ref never acts on it (round 1 of #145, B1)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/rename` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const CHANGED = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    const inPage = (js: string) => app.evaluate(({ webContents }, [url, code]) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript(code), [`${site.origin}/rename`, js] as const);
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const draft = refOf(outline, 'button "Draft 1"');
+    const other = refOf(outline, 'button "Other"');
+    // Renamed in place (the same node): the diff shows it gone and the new one, with a new ref.
+    await inPage('document.getElementById("d").textContent = "Production DB"; 0');
+    const hovering = mcp.call('hover', { tab_id: 'a1', ref: other });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const hovered = JSON.parse((await hovering).text) as { data: { page_changes: { lines: string[] } } };
+    expect(hovered.data.page_changes.lines).toContain(`- - button "Draft 1" [ref=${draft}]`);
+    const renamed = hovered.data.page_changes.lines.find((l) => l.startsWith('+ - button "Production DB"'));
+    expect(renamed).toBeTruthy();
+    expect(renamed).not.toContain(`[ref=${draft}]`);
+    // The old ref never acts on it.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: draft })).text).toBe(CHANGED);
+    expect(await inPage('document.getElementById("log").textContent')).toBe('');
+    // Renamed again, behind a diff too big to show (70 rows more): still never by the ref the agent last saw.
+    const production = /\[ref=(e\d+)\]/.exec(renamed!)![1]!;
+    await inPage('document.getElementById("d").textContent = "Drop all"; const list = document.getElementById("list"); for (let i = 0; i < 70; i++) { const li = document.createElement("li"); li.textContent = "Row " + i; list.append(li); } 0');
+    const big = JSON.parse((await mcp.call('hover', { tab_id: 'a1', ref: other })).text) as { data: { page_changes: { note?: string } } };
+    expect(big.data.page_changes.note).toBe('Much of the page changed: call snapshot to see it.');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: production })).text).toBe(CHANGED);
+    expect(await inPage('document.getElementById("log").textContent')).toBe('');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('the first look at a tab just opened: a page that draws itself after it loads gives its outline and its picture, never an empty one (the owner, 2026-11-24)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1464,12 +1511,12 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     await journey('bot game, one hand', async () => {
       const tab = await open('/game');
       if (!lean) {
-        let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        // Main's tools, played as well as they allow (round 1 of #145, SF5): one look, and its refs throughout (main
+        // finds a redrawn control again too: #117).
+        const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
         await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
-        o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
         await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
         await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
-        o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
         await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
         return /Call.*bet 20.*Raise/.test(String(await inPage('/game', 'document.getElementById("log").textContent')));
       }
@@ -1490,6 +1537,9 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       expect((await ask('wait_for', { tab_id: body, text: 'Draft', timeout_ms: 1000 })).text).toBe(EDITOR);
       const design = await open('/design');
       expect((await ask('wait_for', { tab_id: design, text: 'typed secret', timeout_ms: 1000 })).text).toBe(EDITOR);
+      // The page's root editable (round 1 of #145).
+      const root = await open('/root-editor');
+      expect((await ask('wait_for', { tab_id: root, text: 'typed root', timeout_ms: 1000 })).text).toBe(EDITOR);
       // Never what doesn't show (S-5): a frame's fallback text, a button with no size.
       const ghosts = await open('/ghosts');
       for (const want of [{ text: 'Ghost text' }, { role: 'button', name: 'Ghost' }]) {
@@ -1517,6 +1567,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
         // The click's own turn: the others play again before Call shows.
         await new Promise((r) => setTimeout(r, 300));
       }
+      // A first look, as an agent knowing nothing of the page would (round 1 of #145, SF5); then it waits for its turn.
+      if (lean) await ask('snapshot', { tab_id: tab });
       for (let turn = 0; lean && turn < 2; turn++) {
         const waited = waitAnswer((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
         await act('click', { tab_id: tab, ref: refOf(waited.lines, 'generic "Call"') });
@@ -1544,7 +1596,7 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
       const stopped = await act('batch', { tab_id: tab, steps: [{ tool: 'type', ref: refOf(o, 'textbox "Field 1"'), text: 'w1' }, { tool: 'type', ref: 'e999', text: 'x' }, { tool: 'type', ref: refOf(o, 'textbox "Field 3"'), text: 'w3' }] });
       expect(stopped.error).toBe(true);
-      expect(stopped.text).toMatch(/^Step 2 \(type\) was refused: .* Steps 1 to 1 went: Typed in “Field 1”\.$/);
+      expect(JSON.parse(stopped.text)).toMatchObject({ trust: 'untrusted', data: { refused: 'Step 2 (type) was refused.', step: 2, done: ['Typed in “Field 1”'] } });
       expect(await inPage('/form20?again=1', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')).toBe('w1,,');
     }
     await journey('a page that draws itself after it loads', async () => {
@@ -2501,7 +2553,10 @@ test.beforeAll(async () => {
     // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
     // The token eval (the owner, 2026-11-24): a 20-field form, and a lobby that draws itself 600 ms after it loads.
     // A name that isn't what it shows (Neon's B3 for M2g-1): never found by it.
+    // A button the page renames in place (round 1 of #145, B1), and a list it grows.
+    '/rename': '<title>Rename</title><main><ul id=list></ul><button id=d onclick="document.getElementById(\'log\').textContent += \' clicked \' + this.textContent">Draft 1</button><button id=x>Other</button><p id=log></p></main>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
+    '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
     '/ghosts': '<title>Ghosts</title><main><p>Shown text</p><iframe srcdoc="<p>in the frame</p>">Ghost text</iframe><button style="width:0;height:0;padding:0;border:0;overflow:hidden">Ghost</button><div id=host></div></main><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<p>Shadow wait</p>";</script>',
     '/form20': `<title>Sign up</title><main><form onsubmit="return false"><h1>Sign up</h1>${Array.from({ length: 20 }, (_, i) => `<label>Field ${i + 1} <input name=f${i + 1}></label>`).join('')}</form></main>`,

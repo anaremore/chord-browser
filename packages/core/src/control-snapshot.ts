@@ -111,6 +111,14 @@ export class ElementRefs {
     this.kept = outline;
   }
 
+  /**
+   * A shown diff's lines as the next diff's baseline (M2g-1), leaving the outline the agent read for its later ranges
+   * (round 1 of #145: `start` pages through what the agent read, never a diff's whole read).
+   */
+  rebase(lines: ReadonlyMap<string, string>): void {
+    if (this.kept) this.kept = { ...this.kept, lines };
+  }
+
   /** The latest outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
   outline(pageId: string): SnapshotOutline | null {
     return pageId && this.kept?.pageId === pageId && this.current?.pageId === pageId ? this.kept : null;
@@ -138,6 +146,19 @@ export class ElementRefs {
     } else this.earlier = [];
     this.current = { pageId, token, keys: keyByRef, pinned };
     return byKey;
+  }
+
+  /**
+   * The refs `issue` would give a read, without issuing them (round 1 of #145, B1): a diff that won't be shown (too
+   * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
+   */
+  preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept };
+    try {
+      return this.refsFor(pageId, keys, sids).byKey;
+    } finally {
+      Object.assign(this, saved);
+    }
   }
 
   /** Refs for a read's keys, by the page's ids where it has them (the same element, the same ref). */
@@ -203,6 +224,8 @@ export interface SnapshotOutline {
   note?: string;
   /** Its lines by the page's ids (snapshotLines), for the diff after the agent's next action (M2g-1). */
   lines?: ReadonlyMap<string, string>;
+  /** The read was cut short (too many elements, refs, or too slow): no baseline for a diff (round 1 of #145). */
+  cut?: boolean;
 }
 
 /** What an agent hears for a ref that isn't good (M2c's actions), one sentence each. */
@@ -313,11 +336,14 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     open.push(i);
   }
   for (const i of open) ends[i] = nodes.length;
-  // A row's shape: its own and its subtree's roles, each at its depth below it (never names: rows alike differ there).
+  // A row's shape: its own and its subtree's roles and states, each at its depth below it (never names: rows alike
+  // differ there; states do count, so a checked or disabled row is never hidden in a run: round 1 of #145). Made only
+  // when a row has a next sibling of the same subtree size (round 1 of #145, SF4: it was made for every node, the page's
+  // top ones whole, at every level).
   const shapeOf = (i: number) => {
     const base = depthOf(i);
     const parts: string[] = [];
-    for (let k = i; k < ends[i]!; k++) parts.push(`${depthOf(k) - base}:${nodes[k]!.role}`);
+    for (let k = i; k < ends[i]!; k++) parts.push(`${depthOf(k) - base}:${nodes[k]!.role}${nodes[k]!.states?.length ? `[${nodes[k]!.states!.join(' ')}]` : ''}`);
     return parts.join(',');
   };
   let collapsed = 0;
@@ -325,11 +351,13 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     let i = from;
     while (i < to) {
       const d = depthOf(i);
-      const shape = shapeOf(i);
-      // The run of rows alike from here: siblings (the same depth, one after another) of the same shape.
+      // The run of rows alike from here: siblings (the same depth, one after another) of the same shape. A node with no
+      // next sibling has no run, and no shape is made for it.
       const run = [i];
       let k = ends[i]!;
-      while (k < to && depthOf(k) === d && shapeOf(k) === shape) {
+      const size = ends[i]! - i;
+      let shape: string | undefined;
+      while (k < to && depthOf(k) === d && ends[k]! - k === size && (shape ??= shapeOf(i)) === shapeOf(k)) {
         run.push(k);
         k = ends[k]!;
       }

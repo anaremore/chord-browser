@@ -146,6 +146,25 @@ describe('ControlAgent', () => {
     expect(shown).toHaveLength(2);
   });
 
+  it('a call held on a paused tab ends at once when the client gives up (round 1 of #145, SF3)', async () => {
+    vi.useFakeTimers();
+    const agent = new ControlAgent('a', presenter().present);
+    agent.pause('n1', true);
+    const giveUp = new AbortController();
+    let ran = false;
+    let settled = false;
+    const held = agent.call('n1', async () => ((ran = true), 'ran'), (why) => why, giveUp.signal).finally(() => void (settled = true));
+    await vi.advanceTimersByTimeAsync(10);
+    giveUp.abort();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await expect(held).resolves.toBe('stopped');
+    // And it never runs, even once the user leaves the tab.
+    agent.pause('n1', false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ran).toBe(false);
+  });
+
   it('holds a paused tab’s calls until the user leaves it, or answers paused after 45 s', async () => {
     vi.useFakeTimers();
     const agent = new ControlAgent('a', presenter().present);
@@ -181,6 +200,8 @@ function fakePage(url: string, read: Answer) {
   // history: the tab's entries as Chromium keeps them (skippable: added by the page without a gesture, which goBack skips).
   const at: {
     url: string;
+    /** The page still loading (a wait for it, cancelled: SF3). */
+    loading?: boolean;
     onCapture?: () => void;
     pdfLandsAt?: string;
     zoom: number;
@@ -286,7 +307,7 @@ function fakePage(url: string, read: Answer) {
       },
     },
     isDestroyed: () => false,
-    isLoading: () => false,
+    isLoading: () => Boolean(at.loading),
     getURL: () => at.url,
     on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
     once: (e: string, f: (...a: unknown[]) => void) => events.once(e, f),
@@ -366,8 +387,14 @@ function setup(
     cards.push(c);
     opts.onCard?.({ go, close });
     if (opts.answer !== 'hold') return Promise.resolve(opts.answer ?? 'once');
-    return new Promise<Grant>((resolve) => signal.addEventListener('abort', () => resolve('deny'), { once: true }));
+    // Held: answered by the test later (holds), or deny when taken down.
+    return new Promise<Grant>((resolve) => {
+      holds.push(resolve);
+      signal.addEventListener('abort', () => resolve('deny'), { once: true });
+    });
   });
+  /** Each held card's answer, for a test to give late. */
+  const holds: ((g: Grant) => void)[] = [];
   const activity: string[] = [];
   const memory: ToolMemory = { pdfs: new Map(), form: null, nextField: 1, read: new Set() };
   const scope: ControlScope = {
@@ -392,7 +419,7 @@ function setup(
   const call = (name: string, args: Record<string, unknown> = {}) => runControlTool(scope, browser, name, args);
   /** A call the client can give up on (MCP's notifications/cancelled). */
   const callUntil = (name: string, args: Record<string, unknown>, cancelled: AbortSignal) => runControlTool(scope, browser, name, args, cancelled);
-  return { scope, agent, call, callUntil, close, cards, activity, pages, go, browser };
+  return { scope, agent, call, callUntil, close, cards, activity, pages, go, browser, holds };
 }
 
 const refusal = (out: { text?: string }) => (JSON.parse(out.text!) as { data: { refused?: string; error?: string } }).data;
@@ -822,6 +849,25 @@ describe('wait_for (S18 M2g-1)', () => {
     expect(t.activity.at(-1)).toBe('Watched “Article” for a change');
   });
 
+  it('with snapshot, a diff too big to show (or a cut read) gives the outline instead, never just a note (round 1 of #145, SF1)', async () => {
+    let many = false;
+    const nodes = () => (many ? Array.from({ length: 70 }, (_, i) => ({ depth: 0, role: 'button', name: `More ${i}`, key: i, sid: i + 1 })) : [{ depth: 0, role: 'generic', name: 'Call', key: 0, sid: 1 }]);
+    const t = setup({
+      read: async (code: string) => {
+        if (code.includes('const want =')) return { met: true, cut: false };
+        if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Table', nodes: nodes(), cut: {} };
+        return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
+      },
+      actions: true,
+    });
+    const tab = t.scope.refs.refFor('n1');
+    await t.call('snapshot', { tab_id: tab });
+    many = true;
+    const out = data(await t.call('wait_for', { tab_id: tab, text: 'More', snapshot: true }));
+    expect(out.wait).toMatchObject({ met: true });
+    expect(out.content).toContain('button "More 0"');
+  });
+
   it('takes text, or role and name: never both, never neither', async () => {
     const { scope, call } = setup({ read: page([{ met: true, cut: false }]), actions: true });
     const tab = scope.refs.refFor('n1');
@@ -876,6 +922,40 @@ describe('wait_for (S18 M2g-1)', () => {
     expect(refusal(await over).refused).toBe(ACT_REFUSALS.takenOver);
   });
 
+  it('a look slower than a quarter of a chunk never stalls the wait: a chunk with no look counts down the throttle (round 1 of #145, SF2)', async () => {
+    const codes: string[] = [];
+    const answers = page([{ met: false, cut: false, ms: 300, since: 0 }, { met: false, cut: false, looked: false } as never, { met: true, cut: false, ms: 300, since: 0 }]);
+    const t = setup({ read: async (code: string, events: EventEmitter) => (code.includes('const want =') && codes.push(code), answers(code, events)), actions: true });
+    const out = data(await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 5000 }));
+    expect(out.data).toMatchObject({ met: true });
+    // 4 x 300 ms after the first look; then, a chunk (1 s) later with no look, the 200 ms left.
+    expect(codes.map((c) => Number(/"after":(\d+)/.exec(c)?.[1]))).toEqual([0, 1200, 200]);
+  });
+
+  it('at most what’s left of the call’s time for cards (an outside agent’s: Codex gives a call 60 s) (round 1 of #145)', async () => {
+    const t = setup({ read: page(['hold']), actions: true, cardWaitMs: 1500 });
+    vi.useFakeTimers();
+    let settled = false;
+    const waiting = t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 20_000 }).finally(() => void (settled = true));
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(settled).toBe(true);
+    expect(data(await waiting).data).toMatchObject({ met: false });
+  });
+
+  it('the client giving up while the page still loads ends it at once (round 1 of #145, SF3)', async () => {
+    const u = setup({ read: page([{ met: true, cut: false }]), actions: true });
+    u.pages.get('n1')!.at.loading = true;
+    const giveUp = new AbortController();
+    vi.useFakeTimers();
+    let settled = false;
+    const waiting = u.callUntil('wait_for', { tab_id: u.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 5000 }, giveUp.signal).finally(() => void (settled = true));
+    await vi.advanceTimersByTimeAsync(50);
+    giveUp.abort();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(settled).toBe(true);
+    expect(refusal(await waiting).refused).toBe(CONTROL_REFUSALS.stopped);
+  });
+
   it('the throttle carries from one second to the next: a slow look isn’t followed at once by another (S-2)', async () => {
     const codes: string[] = [];
     const answers = page([{ met: false, cut: false, ms: 100, since: 10 }, { met: true, cut: false, ms: 100, since: 10 }]);
@@ -908,6 +988,17 @@ describe('wait_for (S18 M2g-1)', () => {
     await new Promise((r) => setTimeout(r, 20));
     giveUp.abort();
     expect(refusal(await waiting).refused).toBe(CONTROL_REFUSALS.stopped);
+  });
+
+  it('a tab that can’t be read any more mid-wait ends it: a never-read address, or a scope that no longer reads it (round 1 of #145, SF7)', async () => {
+    let moved = false;
+    const t: ReturnType<typeof setup> = setup({ read: page(['hold', 'hold', 'hold'], () => { if (moved) return; moved = true; t.go('n1', 'https://private.test/inbox', true); }), actions: true });
+    expect(refusal(await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'x', timeout_ms: 3000 })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    let gone = false;
+    const u: ReturnType<typeof setup> = setup({ read: page(['hold', 'hold', 'hold'], () => { if (gone) return; gone = true; (u.scope as { readable: (n: TabNode) => boolean }).readable = () => false; }), actions: true });
+    const out = await u.call('wait_for', { tab_id: u.scope.refs.refFor('n1'), text: 'x', timeout_ms: 3000 });
+    expect(out.isError).toBe(true);
+    expect(refusal(out).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
   });
 
   it('the page going somewhere else while it waits ends it: not met, and said so', async () => {
@@ -1295,6 +1386,17 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.input).toEqual([]);
   });
 
+  it('the diff’s read never comes from a page that became never-read meanwhile, on the same origin (round 1 of #145, SF7)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    let never: string[] = ['private.test'];
+    (t.scope as { neverSites: () => readonly string[] }).neverSites = () => never;
+    // The user adds the site to Never while the diff's read is under way.
+    twist.read = { meanwhile: () => void (never = ['private.test', 'news.test']) };
+    const out = await t.call('hover', { tab_id: t.tab, ref: 'e1' });
+    expect(out.text).not.toContain('page_changes');
+  });
+
   it('the diff after an action is read under a read’s rules: never a page that may not be read, another origin, or a read cut short (Neon’s round 1 of M2g-1, B-6)', async () => {
     // [the read the diff takes, what page_changes is]
     const table: [NonNullable<Twist['read']>, unknown][] = [
@@ -1330,6 +1432,58 @@ describe('acting through the gate (S18 M2c)', () => {
     // With no snapshot of the page to compare with (it went elsewhere), none: the agent calls snapshot.
     await (t.pages.get('n1')!.contents as unknown as { loadURL(u: string): Promise<void> }).loadURL('https://news.test/c');
     expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+  });
+
+  it('a new page’s ids never give an old ref to its element: they’re numbered above every ref before (round 1 of #145, SF7)', async () => {
+    const t = await acting();
+    await t.call('snapshot', { tab_id: t.tab });
+    // The next page: the fixture's ids start at 1 again (sid key+1), as a new document's do.
+    await (t.pages.get('n1')!.contents as unknown as { loadURL(u: string): Promise<void> }).loadURL('https://news.test/c');
+    const after = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { content: string };
+    expect(after.content).not.toContain('[ref=e1]');
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ELEMENT_REFUSALS.stale);
+    expect(t.at.input).toEqual([]);
+  });
+
+  it('a late Allow is spent by another action on the tab: the step asks again, never runs on it (round 1 of #145, SF7)', async () => {
+    const t = await acting({ answer: 'hold', cardWaitMs: 30, act: { siteAllowed: () => true } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe(CONTROL_REFUSALS.waiting);
+    // The user allows it late; then the agent hovers (another action), and asks the step again.
+    t.holds.at(-1)!('once');
+    await new Promise((r) => setTimeout(r, 0));
+    await t.call('hover', { tab_id: t.tab, ref: 'e1' });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'wool', submit: true })).refused).toBe(CONTROL_REFUSALS.waiting);
+    expect(t.cards.filter((c) => c.kind === 'step')).toHaveLength(2);
+    expect(t.at.text).toEqual([]);
+  });
+
+  it('no diff against a snapshot that was cut short: what it didn’t reach would show as new (round 1 of #145)', async () => {
+    const twist: Twist = {};
+    twist.read = { cut: { time: true } };
+    const t = await acting({ twist });
+    twist.read = {};
+    expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot to see it.' });
+  });
+
+  it('a diff too big to show is never committed: the agent’s refs and the next diff’s baseline stay its last snapshot’s (round 1 of #145, B1a)', async () => {
+    const t = await acting();
+    // The agent's own snapshot, and the token its e1 resolves to.
+    const looked = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { page_id: string };
+    const own = t.scope.memory.elements!.get('n1')!.resolve('e1', looked.page_id);
+    const extra = Array.from({ length: 70 }, (_, i) => ({ role: 'button', name: `More ${i}` }));
+    ELEMENTS.push(...extra);
+    try {
+      const first = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'] as { changed?: number; lines?: string[] };
+      expect(first).toMatchObject({ changed: 70, note: 'Much of the page changed: call snapshot to see it.' });
+      // Not seen, so not taken as seen: the next diff still compares with the agent's snapshot (before: lines: []).
+      const second = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'] as { changed?: number; lines?: string[] };
+      expect(second).toMatchObject({ changed: 70 });
+      // And the agent's refs resolve in its own snapshot, never in the unseen one.
+      const pageId = (result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_id']) as string;
+      expect(t.scope.memory.elements!.get('n1')!.resolve('e1', pageId)).toMatchObject({ ok: true, token: (own as { token: string }).token });
+    } finally {
+      ELEMENTS.splice(ELEMENTS.length - extra.length, extra.length);
+    }
   });
 
   it('refuses, before anything is sent: a ref never made, a stale one, a shared tab, a covered or disabled element, text where none goes', async () => {
@@ -2246,6 +2400,13 @@ describe('acting through the gate (S18 M2c)', () => {
         [[{ tool: 'click', ref: 'e1' }, { tool: 'navigate', url: 'https://news.test/b' }], 'Step 2: batch takes click, type, press_key, select_option, hover.'],
         [[{ tool: 'click', ref: 'e1' }, 'click'], 'Step 2: each step is an object with its tool and arguments.'],
         ['steps', 'batch takes 1 to 20 steps.'],
+        // Each step's own arguments too, before step 1 runs (round 1 of #145, SF6).
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'x1' }], 'Step 2: ref is an element’s ref from a snapshot (e1, e2…).'],
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'type', ref: 'e2' }], 'Step 2: type takes text, at most 5000 characters.'],
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'type', ref: 'e2', text: 'x'.repeat(5001) }], 'Step 2: type takes text, at most 5000 characters.'],
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'type', ref: 'e2', text: 'x', submit: 'yes' }], 'Step 2: submit and replace are true or false.'],
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'press_key', ref: 'e2', key: 'F13' }], 'Step 2: press_key takes a key from its list.'],
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'select_option', ref: 'e3' }], 'Step 2: select_option takes option, its label (at most 500 characters).'],
       ];
       for (const [steps, says] of table) expect((await batch(t, steps)).text, JSON.stringify(steps).slice(0, 60)).toBe(says);
       // None ran: a bad step 2 never leaves step 1 done.
@@ -2265,14 +2426,16 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(t.cards.filter((c) => c.kind === 'site')).toHaveLength(1);
       const u = await acting({ answer: 'deny', act: { siteAllowed: () => true } });
       const out = await batch(u, [{ tool: 'hover', ref: 'e1' }, { tool: 'type', ref: 'e2', text: 'wool', submit: true }, { tool: 'click', ref: 'e1' }]);
-      expect(out.text).toBe('Step 2 (type) was refused: The user said no to this step. Don’t try it another way; ask the user what to do. Steps 1 to 1 went: Pointed at “Home”.');
+      // The refusal in the untrusted envelope (round 1 of #145, SF6): what went is the page's words.
+      expect(out.isError).toBe(true);
+      expect(ok(out)).toEqual({ refused: 'Step 2 (type) was refused.', step: 2, tool: 'type', why: 'The user said no to this step. Don’t try it another way; ask the user what to do.', done: ['Pointed at “Home”'] });
       expect(clicks(u)).toBe(0);
     });
 
     it('what a step sends is held and asked about, as for its own call', async () => {
       const t = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
       const out = await batch(t, [{ tool: 'click', ref: 'e1' }, { tool: 'hover', ref: 'e1' }]);
-      expect(out.text).toMatch(/^Step 1 \(click\) was refused: .* None before it went\.$/);
+      expect(ok(out)).toMatchObject({ refused: 'Step 1 (click) was refused.', step: 1, tool: 'click', done: [] });
       expect(t.at.debugging).toContain('Fetch.fulfillRequest');
       expect(t.at.debugging).not.toContain('Fetch.continueRequest');
     });
@@ -2303,7 +2466,7 @@ describe('acting through the gate (S18 M2c)', () => {
         expect(out.isError, what).toBe(true);
         // Stop and the client's cancel end the whole call, step 1's answer too (stopped); the others stop it before step 2.
         if (what === 'stop' || what === 'cancel') expect(out.text, what).toContain(says);
-        else expect(out.text, what).toBe(`Step 2 (click) didn’t run: ${says} Steps 1 to 1 went: Clicked “Home”.`);
+        else expect(ok(out), what).toEqual({ refused: 'Step 2 (click) didn’t run.', step: 2, tool: 'click', why: says, done: ['Clicked “Home”'] });
         expect(clicks(t), what).toBe(1);
       }
     });

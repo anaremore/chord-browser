@@ -185,7 +185,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     if (why) {
       const site = siteOfUrl(url) ?? barAddress(url);
       const answer = await agent.ask(
-        { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: `open|${url}`, step: { why, site, fields: [], more: 0 } },
+        { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: JSON.stringify(['open', url]), step: { why, site, fields: [], more: 0 } },
         // The call's own signal (Neon's review 2 of #112): Stop or the agent cancelling takes the card down for it.
         callSignal,
         cardWait(),
@@ -241,7 +241,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** close_tab: one of its own tabs, never yours; through the gate on that tab, so it waits while you're using it. */
-  const closeTab = async (args: Record<string, unknown>): Promise<ToolOutput> => {
+  const closeTab = async (args: Record<string, unknown>, cancelled: AbortSignal): Promise<ToolOutput> => {
     const state = deps.browser.store.state;
     const found = scope.refs.resolve(args['tab_id'], (id) => nodeOf(state, id)?.kind === 'tab');
     if (!found.ok) return { text: found.why === 'closed' ? CONTROL_REFUSALS.closed : 'No such tab. Use list_tabs.', isError: true };
@@ -256,6 +256,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         return { text: 'Closed.' };
       },
       refused,
+      // The client giving up while it waits (a paused tab): it never closes the tab later (round 1 of #145, SF3).
+      cancelled,
     );
   };
 
@@ -300,6 +302,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: card ? AGENT_PROGRESS.card : AGENT_PROGRESS.working } });
         }, deps.progressMs ?? PROGRESS_MS)
       : null;
+    // Never what keeps the process up (round 1 of #145).
+    beat?.unref?.();
     if (beat) cancel.signal.addEventListener('abort', () => clearInterval(beat), { once: true });
     try {
       const out = await agent.call(
@@ -310,11 +314,12 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
           if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
-          if (tool === 'close_tab') return closeTab(args);
+          if (tool === 'close_tab') return closeTab(args, cancel.signal);
           if (tool === 'batch') return runBatch(callScope, deps.browser, args, cancel.signal);
           return toPlain(await runControlTool(callScope, deps.browser, tool, args, cancel.signal));
         },
         refused,
+        cancel.signal,
       );
       const answer = output(out);
       if (beat) clearInterval(beat);

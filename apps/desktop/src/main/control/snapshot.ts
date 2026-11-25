@@ -285,10 +285,17 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
   const keep = [];
   // Each element's own id in this document, for this agent (M2g-1): the same element, the same id, from one snapshot to
   // the next; a replaced one gets another. Refs are made from it (core's ElementRefs), so an action's diff can name them.
+  // Only while it's the same element as the agent knows it (round 1 of #145, B1): its role, its name and the items it's
+  // in. A node the page renamed in place, or moved to another row, gets a new id, so its old ref is never it. A change of
+  // state alone (checked, filled) keeps it. At most as many owners as snapshots keep (args.owners).
   const sidsAll = (globalThis.__chordSids = globalThis.__chordSids || new Map());
   let sidsMine = sidsAll.get(args.owner);
-  if (!sidsMine) { sidsMine = { ids: new WeakMap(), next: 1 }; sidsAll.set(args.owner, sidsMine); }
-  const sidOf = (el) => { let id = sidsMine.ids.get(el); if (!id) { id = sidsMine.next++; sidsMine.ids.set(el, id); } return id; };
+  if (!sidsMine) sidsMine = { ids: new WeakMap(), next: 1 };
+  sidsAll.delete(args.owner);
+  sidsAll.set(args.owner, sidsMine);
+  while (sidsAll.size > args.owners) sidsAll.delete(sidsAll.keys().next().value);
+  const sidOf = (el, sig) => { let had = sidsMine.ids.get(el); if (!had || had.sig !== sig) { had = { id: sidsMine.next++, sig }; sidsMine.ids.set(el, had); } return had.id; };
+  const sigOf = (role, name, items) => JSON.stringify([role, name, items]);
   const cut = {};
   let looked = 0;
   const stop = () => {
@@ -359,7 +366,8 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
       const acted = ACTED.has(role) || role === 'generic';
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
-      const node = { depth, role, name: nameOf(el, role), sid: sidOf(el) };
+      const name = nameOf(el, role);
+      const node = { depth, role, name, sid: sidOf(el, sigOf(role, name, itemsAt(chain))) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -392,7 +400,8 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
   // contenteditable>, designMode, the data: notepad) is one typed field, named by its labels alone, never walked.
   const start = document.body || document.documentElement;
   if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
-    const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox'), sid: sidOf(start) };
+    const startName = nameOf(start, 'textbox');
+    const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, sigOf('textbox', startName, itemsOf(start))) };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);
@@ -490,7 +499,7 @@ export function waitScript(want: WaitFor, ms: number): string {
   const want = args.text !== undefined ? norm(args.text) : '';
   // A page that is an editor (its body editable, or designMode on: Neon's round 1 of M2g-1, B-3): what shows is what's
   // typed, so its text is never looked at, or a wait would be an oracle on it. Only an element by role and name.
-  const editorPage = document.designMode === 'on' || Boolean(document.body && document.body.isContentEditable);
+  const editorPage = document.designMode === 'on' || Boolean(document.body && document.body.isContentEditable) || Boolean(document.documentElement && document.documentElement.isContentEditable);
   if (editorPage && args.text !== undefined) return done({ met: false, cut: false, editor: true });
   const look = () => {
     const began = performance.now();
@@ -562,7 +571,8 @@ export function waitScript(want: WaitFor, ms: number): string {
     observeRoots();
   };
   // At most one look per throttle across chunks too (S-2): the chunk before's last look may be too recent.
-  const end = setTimeout(() => { if (!last) return finish(null); if (!pending) return finish(last); clearTimeout(timer); last = look(); finish(last); }, args.ms);
+  // The chunk's end never looks out of turn (SF2): a look still to come is the next chunk's, its throttle carried.
+  const end = setTimeout(() => finish(last), args.ms);
   if (args.after > 0 && args.after < args.ms) { pending = true; timer = setTimeout(first, args.after); }
   else if (!(args.after >= args.ms)) first();
 })`;

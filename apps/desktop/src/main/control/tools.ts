@@ -162,6 +162,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
       }
     },
     (why) => refuse(CONTROL_REFUSALS[why]),
+    cancelled,
   );
   return answered.finally(() => clock.lap('total'));
 }
@@ -213,12 +214,13 @@ function notTheirNo(call: Call, agent: ControlAgent, nodeId: NodeId, released: n
 }
 
 /** The tab's page, loading it if it's asleep or wasn't opened since launch. */
-async function loadedPage(browser: ControlBrowser, nodeId: NodeId): Promise<ControlPage | null> {
+async function loadedPage(browser: ControlBrowser, nodeId: NodeId, signal?: AbortSignal): Promise<ControlPage | null> {
   // A view whose page is gone (its renderer died) has none to wait on.
   const contents = pageOf(browser.tabs.ensure(nodeId));
   if (!contents) return null;
   // A page with a frame held unsecured never finishes loading (agents/pickers.ts): no waiting on it.
-  if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000);
+  // Stop and the client's cancel end the wait at once (round 1 of #145, SF3).
+  if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000, signal);
   return contents.isDestroyed() ? null : controlPage(contents);
 }
 
@@ -285,7 +287,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   if (refused) return refused;
   const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
   if (moved) return refuse(moved);
-  const page = await loadedPage(browser, node.id);
+  const page = await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
@@ -417,7 +419,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   if (refused) return refused;
   const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
   if (moved) return refuse(moved);
-  const page = await loadedPage(browser, node.id);
+  const page = await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
@@ -447,7 +449,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const retrievedAt = Date.now();
   // Its later ranges are of the page's whole outline, never a find's (N-3).
   const whole = find ? snapshotOutline(read, issued) : outline;
-  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}) });
+  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}), ...(read.cut.elements || read.cut.time || read.cut.refs ? { cut: true } : {}) });
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
@@ -471,6 +473,8 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   const refs = call.scope.memory.elements?.get(nodeId);
   const kept = refs?.outline(page.id);
   if (!refs || !kept?.lines) return null;
+  // A snapshot cut short is no baseline: what it didn't reach would show as new (round 1 of #145).
+  if (kept.cut) return { page_changes: { page_id: page.id, url: page.url(), note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot to see it.' } };
   const token = randomBytes(12).toString('hex');
   // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
   const read = await page.snapshot(call.scope.agent.id, token, false);
@@ -483,12 +487,16 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   const of = { page_id: page.id, url: read.url };
   // A read cut short (too big, or too slow) would show what it didn't reach as gone.
   if (read.cut.elements || read.cut.time || read.cut.refs) return { page_changes: { ...of, note: 'The page is too big to compare all of it: call snapshot to see it.' } };
-  const issued = refs.issue(page.id, token, snapshotKeys(read), sidsOf(read), false);
-  const lines = snapshotLines(read, issued);
-  const outline = snapshotOutline(read, issued);
-  refs.remember({ pageId: page.id, retrievedAt: Date.now(), url: read.url, title: read.title, text: outline.text, refs: outline.refs, lines });
+  // Its refs as they'd be, not yet issued (round 1 of #145, B1): a diff too big to show is never taken as seen, so the
+  // agent's refs, and the next diff's baseline, stay its last seen snapshot's.
+  const keys = snapshotKeys(read);
+  const sids = sidsOf(read);
+  const lines = snapshotLines(read, refs.preview(page.id, keys, sids));
   const changes = snapshotDiff(kept.lines, lines);
   if (changes.length > DIFF_MAX_LINES) return { page_changes: { ...of, changed: changes.length, note: 'Much of the page changed: call snapshot to see it.' } };
+  refs.issue(page.id, token, keys, sids, false);
+  // The next diff compares with what this one showed; later ranges stay the agent's snapshot's (no outline text built).
+  refs.rebase(lines);
   return { page_changes: { ...of, lines: changes } };
 }
 
@@ -515,7 +523,9 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   if ((text === undefined) === (role === undefined)) return refuse('wait_for takes text, or role and name (one of them).');
   if (text !== undefined && (!text.trim() || text.length > WAIT_FOR_TEXT_MAX)) return refuse(`wait_for's text is 1 to ${WAIT_FOR_TEXT_MAX} characters.`);
   if (role !== undefined && (!WAIT_ROLE.test(role) || !name || name.length > WAIT_FOR_TEXT_MAX)) return refuse(`wait_for's role is a role from the outline (button, generic…) and its name the element's exact name, 1 to ${WAIT_FOR_TEXT_MAX} characters.`);
-  const timeout = typeof args['timeout_ms'] === 'number' && Number.isFinite(args['timeout_ms']) ? Math.min(WAIT_FOR_MAX_MS, Math.max(100, Math.round(args['timeout_ms']))) : WAIT_FOR_DEFAULT_MS;
+  const asked = typeof args['timeout_ms'] === 'number' && Number.isFinite(args['timeout_ms']) ? Math.min(WAIT_FOR_MAX_MS, Math.max(100, Math.round(args['timeout_ms']))) : WAIT_FOR_DEFAULT_MS;
+  // Never past what's left of the call's time (an outside agent's: its cards' budget, under Codex's 60 s a call).
+  const timeout = scope.cardWaitMs !== undefined ? Math.min(asked, Math.max(100, scope.cardWaitMs)) : asked;
   const gone = args['gone'] === true;
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs or an attached tab id.');
   if (isOutput(found)) return found;
@@ -531,9 +541,11 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   let looked: WaitAnswer | null = null;
   let page: Awaited<ReturnType<typeof loadedPage>> = null;
   let pageId = '';
+  let gaveUp: (() => void) | null = null;
   const began = Date.now();
   try {
-    page = await loadedPage(browser, node.id);
+    page = await loadedPage(browser, node.id, call.signal);
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     if (!page) return refuse('That tab could not be loaded.');
     const before = blockedNow(call, node.id, page, 'That tab could not be loaded.');
     if (before) return refuse(before);
@@ -545,14 +557,18 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
     // The client's cancel and Stop answer at once (S-2): the page's chunk ends on its own within a second.
     const cancelled = new Promise<null>((resolve) => {
       if (call.signal.aborted) resolve(null);
-      else call.signal.addEventListener('abort', () => resolve(null), { once: true });
+      else {
+        gaveUp = () => resolve(null);
+        call.signal.addEventListener('abort', gaveUp, { once: true });
+      }
     });
     let after = 0;
     for (;;) {
       const left = timeout - (Date.now() - began);
       if (left <= 0) break;
       const want = text !== undefined ? { text, gone, after } : { role: role!, name: name!, gone, after };
-      const answer = await Promise.race([page.waitFor(want, Math.min(WAIT_CHUNK_MS, left)), cancelled]);
+      const chunk = Math.min(WAIT_CHUNK_MS, left);
+      const answer = await Promise.race([page.waitFor(want, chunk), cancelled]);
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       if (scope.agent.releases(node.id) !== released) return refuse(ACT_REFUSALS.takenOver);
@@ -567,11 +583,14 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
       if (answer.looked !== false) looked = answer;
       if (answer.met) break;
       // The next chunk's first look waits out the throttle from this one's last (S-2).
-      after = answer.looked === false ? after : Math.max(0, Math.round(Math.max(150, 4 * (answer.ms ?? 0)) - (answer.since ?? 0)));
+      // A chunk with no look (the throttle was longer than it) counts the throttle down by its length (SF2): a slow
+      // look never stalls the wait.
+      after = answer.looked === false ? Math.max(0, after - chunk) : Math.max(0, Math.round(Math.max(150, 4 * (answer.ms ?? 0)) - (answer.since ?? 0)));
     }
   } finally {
     waiting.delete(scope.agent);
     scope.act?.doing(node.id, null);
+    if (gaveUp) call.signal.removeEventListener('abort', gaveUp);
   }
   const waited = Date.now() - began;
   const met = looked?.met === true;
@@ -589,7 +608,9 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   // Met, with what changed since the agent's last snapshot of this page (the owner's token goal); with none, the outline
   // as snapshot gives it (its refs the tab's latest): always the outline after a pushState (its refs went with it).
   const changes = moved ? null : await pageChanges(call, node.id, page);
-  if (changes) return { text: toolResult({ ...result, ...changes }) };
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  // A diff with lines; one too big to show, or a cut read, is only a note: the outline instead (round 1 of #145, SF1).
+  if (changes && Array.isArray((changes['page_changes'] as { lines?: unknown }).lines)) return { text: toolResult({ ...result, ...changes }) };
   const snap = await snapshotTool(call, { tab_id: args['tab_id'] });
   if (snap.isError || !snap.text) return snap;
   return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), wait: result }) };
@@ -629,7 +650,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const notHere = host.mayAct(node);
   if (notHere) return refuse(notHere);
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
-  const page = await loadedPage(browser, node.id);
+  const page = await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -1711,7 +1732,7 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
     if (refused) return refused;
     const moved = blockedNow(call, node.id, null, 'That page could not be read.');
     if (moved) return refuse(moved);
-    const page = await loadedPage(browser, node.id);
+    const page = await loadedPage(browser, node.id, call.signal);
     const loaded = page && blockedNow(call, node.id, page, 'That page could not be read.');
     if (loaded) return refuse(loaded);
     const token = randomBytes(12).toString('hex');

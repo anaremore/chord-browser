@@ -2,16 +2,28 @@
  * batch (S18 M2g-1, the owner's token goal): several element steps on one tab in one call, each through the same layer
  * as its own call (runControlTool: every check, card, the send hold and the guard). Outside agents only (connection.ts).
  *
- * - Every step is checked before any runs (its tool, its shape): a bad step 3 never leaves steps 1 and 2 done.
+ * - Every step is checked before any runs: its tool, its shape, and its own arguments as its tool takes them (its ref,
+ *   text, key, option: round 1 of #145, SF6). A bad step 3 never leaves steps 1 and 2 done.
+ * - A step refused, or not run, is said in the untrusted envelope: what went before it is the page's words (SF6).
  * - The batch's tab is every step's: a step's own `tab_id` is ignored.
  * - Before each step: Stop or the client's cancel, the user pausing the agent here, or the user taking the tab over (its
  *   cards let go of since the batch began: Neon's round 1 of M2g-1, B-7) stops it there.
  * - It stops at the first refusal, or after a step that took the page elsewhere, saying which steps went.
  * - One diff, at the last step (each step's own would repeat what the next changes).
  */
-import { ACT_REFUSALS, BATCH_STEPS_MAX, BATCH_TOOLS, CONTROL_REFUSALS, toolResult, type NodeId } from '@chord/core';
+import { ACT_REFUSALS, BATCH_STEPS_MAX, BATCH_TOOLS, CONTROL_REFUSALS, isPressKey, TYPE_TEXT_MAX, toolResult, type NodeId } from '@chord/core';
 import type { ControlScope, ToolOutput } from './scope';
 import { runControlTool, type ControlBrowser } from './tools';
+
+/** A step's own arguments, as its tool takes them: null, or what's wrong (checked before any step runs: SF6). */
+function stepWrong(tool: string, a: Record<string, unknown>): string | null {
+  if (typeof a['ref'] !== 'string' || !/^e[1-9][0-9]{0,8}$/.test(a['ref'])) return 'ref is an element’s ref from a snapshot (e1, e2…).';
+  if (tool === 'type' && (typeof a['text'] !== 'string' || a['text'].length > TYPE_TEXT_MAX)) return `type takes text, at most ${TYPE_TEXT_MAX} characters.`;
+  if (tool === 'type' && [a['submit'], a['replace']].some((v) => v !== undefined && typeof v !== 'boolean')) return 'submit and replace are true or false.';
+  if (tool === 'press_key' && !isPressKey(a['key'])) return 'press_key takes a key from its list.';
+  if (tool === 'select_option' && (typeof a['option'] !== 'string' || !a['option'] || a['option'].length > 500)) return 'select_option takes option, its label (at most 500 characters).';
+  return null;
+}
 
 /** What a step's result says that the batch passes on, once each (on every exit). */
 const NOTES = ['refound', 'focus', 'dropped', 'note'] as const;
@@ -26,6 +38,8 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
     const { tool, tab_id: _ignored, ...stepArgs } = raw as Record<string, unknown>;
     void _ignored;
     if (typeof tool !== 'string' || !(BATCH_TOOLS as readonly string[]).includes(tool)) return { text: `Step ${i + 1}: batch takes ${BATCH_TOOLS.join(', ')}.`, isError: true };
+    const wrong = stepWrong(tool, stepArgs);
+    if (wrong) return { text: `Step ${i + 1}: ${wrong}`, isError: true };
     // The batch's tab, whatever the step says.
     planned.push({ tool, args: { ...stepArgs, tab_id: args['tab_id'] } });
   }
@@ -39,10 +53,14 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
   const caught: string[] = [];
   let changes: unknown;
   let last: Record<string, unknown> = {};
-  const went = () => (done.length ? ` Steps 1 to ${done.length} went: ${done.join('; ')}.` : ' None before it went.');
   const withNotes = (o: Record<string, unknown>) => ({ ...o, ...(notes.size ? { notes: [...notes] } : {}), ...(caught.length ? { caught } : {}) });
-  const tail = () => `${notes.size ? ` Notes: ${[...notes].join(' ')}` : ''}${caught.length ? ` Caught: ${caught.join('; ')}.` : ''}`;
-  const stoppedAt = (i: number, tool: string, why: string): ToolOutput => ({ text: `Step ${i + 1} (${tool}) didn’t run: ${why}${went()}${tail()}`, isError: true });
+  // A step that didn't go: Chord's sentence names only the step; why, and what went before it, are in the untrusted
+  // envelope (round 1 of #145, SF6: a refusal can carry an element's name, and what went is the page's words).
+  const notGone = (i: number, tool: string, verb: 'was refused' | 'didn’t run', why: string): ToolOutput => ({
+    text: toolResult(withNotes({ refused: `Step ${i + 1} (${tool}) ${verb}.`, step: i + 1, tool, why, done })),
+    isError: true,
+  });
+  const stoppedAt = (i: number, tool: string, why: string): ToolOutput => notGone(i, tool, 'didn’t run', why);
   for (const [i, { tool, args: stepArgs }] of planned.entries()) {
     if (cancelled.aborted || scope.agent.isStopped) return stoppedAt(i, tool, CONTROL_REFUSALS.stopped);
     if (nodeId !== null && i > 0) {
@@ -60,7 +78,7 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
           return out.text ?? '';
         }
       })();
-      return { text: `Step ${i + 1} (${tool}) was refused: ${why}${went()}${tail()}`, isError: true };
+      return notGone(i, tool, 'was refused', why);
     }
     const data = (JSON.parse(out.text ?? '{}') as { data?: Record<string, unknown> }).data ?? {};
     done.push(String(data['done'] ?? tool));

@@ -270,6 +270,15 @@ describe('the outline, for as few tokens (the owner, 2026-11-24)', () => {
     expect(snapshotOutline(short, refsOf(short)).text.split('\n').filter((l) => l.trim().startsWith('- listitem'))).toHaveLength(ROWS_COLLAPSE);
   });
 
+  it('a row whose state differs (a checked one, a disabled one) is never hidden in a run of rows alike (round 1 of #145)', () => {
+    const read = list(300);
+    // Row 200's button is checked: its own row, shown, so the agent sees it.
+    const at = read.nodes.findIndex((n) => n.name === 'Act 200');
+    read.nodes[at] = { ...read.nodes[at]!, states: ['checked'] };
+    const text = snapshotOutline(read, refsOf(read)).text;
+    expect(text).toContain('button "Act 200"');
+  });
+
   it('find: only what has the text in its name (any case), with what it’s in, and its ref good', () => {
     const read = list(300);
     const issued = refsOf(read);

@@ -571,6 +571,15 @@ describe('Review 1 of #77', () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(sent.find((m) => m.id === 2)).toBeDefined();
     expect(progress()).toHaveLength(3);
+    // Stop while a card waits: the call answers stopped, and no beat comes after (round 1 of #145).
+    connection.message({ id: 4, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://agent.test/x' }, _meta: { progressToken: 'p4' } } });
+    await vi.advanceTimersByTimeAsync(1500);
+    const before = progress().length;
+    connection.agent.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.find((m) => m.id === 4)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(progress()).toHaveLength(before);
     vi.useRealTimers();
   });
 
@@ -657,6 +666,14 @@ describe('Review 1 of #77', () => {
     await answer(2, 'close_tab', { tab_id: 'a1' });
     await vi.advanceTimersByTimeAsync(45_000);
     expect(sent.find((m) => m.id === 2)?.result).toMatchObject({ isError: true, content: [{ text: CONTROL_REFUSALS.paused }] });
+    expect(nodeOf(t.store.state, 'b1')).toBeDefined();
+    // Asked again, and the client gives up while it waits (round 1 of #145, SF3): it never closes the tab later.
+    connection.agent.pause('b1', true);
+    await answer(4, 'close_tab', { tab_id: 'a1' });
+    connection.message({ method: 'notifications/cancelled', params: { requestId: 4 } });
+    await vi.advanceTimersByTimeAsync(0);
+    connection.agent.pause('b1', false);
+    await vi.advanceTimersByTimeAsync(10);
     expect(nodeOf(t.store.state, 'b1')).toBeDefined();
     // Once you leave it, it closes.
     connection.agent.pause('b1', false);

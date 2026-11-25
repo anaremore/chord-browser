@@ -188,14 +188,16 @@ export class ControlAgent {
   /**
    * One tool call on a tab (null: none). Refused at once while stopped; held
    * while the tab is paused; answers `refused('stopped')` the moment Stop is
-   * pressed, whatever `run` is still doing.
+   * pressed, or the client gives up (`cancelled`: round 1 of #145, SF3), whatever
+   * `run` is still doing. A call the client gave up on while held never runs.
    */
-  async call<T>(tab: string | null, run: (signal: AbortSignal) => Promise<T>, refused: (why: CallRefusal) => T): Promise<T> {
+  async call<T>(tab: string | null, run: (signal: AbortSignal) => Promise<T>, refused: (why: CallRefusal) => T, cancelled?: AbortSignal): Promise<T> {
     const key = tab ?? NO_TAB;
+    if (cancelled?.aborted) return refused('stopped');
     let admits = controlAdmits(this.state(key));
-    if (admits === 'wait') admits = await this.unpaused(key);
+    if (admits === 'wait') admits = await this.unpaused(key, cancelled);
     if (admits !== 'go') return refused(admits === 'wait' ? 'paused' : 'stopped');
-    const signal = this.stopping.signal;
+    const signal = cancelled ? AbortSignal.any([this.stopping.signal, cancelled]) : this.stopping.signal;
     this.step(key, { t: 'call' });
     try {
       return await new Promise<T>((resolve, reject) => {
@@ -210,22 +212,25 @@ export class ControlAgent {
     }
   }
 
-  /** Waits out a pause: go once the user leaves the tab, stopped on Stop, still waiting after CONTROL_WAIT_MS. */
-  private unpaused(key: string): Promise<'go' | 'wait' | 'stopped'> {
+  /** Waits out a pause: go once the user leaves the tab, stopped on Stop or the client's cancel, still waiting after CONTROL_WAIT_MS. */
+  private unpaused(key: string, cancelled?: AbortSignal): Promise<'go' | 'wait' | 'stopped'> {
     return new Promise((resolve) => {
       const check = () => {
         const now = controlAdmits(this.state(key));
         if (now === 'wait') return;
         finish(now);
       };
+      const gaveUp = () => finish('stopped');
       const finish = (result: 'go' | 'wait' | 'stopped') => {
         clearTimeout(timer);
         this.waiters.delete(check);
+        cancelled?.removeEventListener('abort', gaveUp);
         resolve(result);
       };
       const timer = setTimeout(() => finish('wait'), CONTROL_WAIT_MS);
       timer.unref?.();
       this.waiters.add(check);
+      cancelled?.addEventListener('abort', gaveUp, { once: true });
     });
   }
 
