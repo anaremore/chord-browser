@@ -5,6 +5,7 @@
  * (page.ts), and asks the scope what this agent may see and when it must ask.
  * The refusals are one sentence each, as the assistant has always said them.
  */
+import { phaseClock } from './phases';
 import { firstLoadPending, pickersUnsecured } from '../agents/pickers';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -62,6 +63,13 @@ import {
   type NodeId,
   type State,
   type TabNode,
+  SNAPSHOT_FIND_MAX,
+  WAIT_FOR_DEFAULT_MS,
+  WAIT_FOR_MAX_MS,
+  WAIT_FOR_TEXT_MAX,
+  snapshotDiff,
+  snapshotLines,
+  type SnapshotRead,
 } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
@@ -70,6 +78,7 @@ import type { ActAnswer, ActOp } from './act';
 import type { DeepAnswer, DeepSession } from './deep';
 import { CARD_ORIGINS, normalUrl, shownOrigin, type Allowed, type SendWatch } from './sends';
 import type { PageRead } from './extract';
+import type { WaitAnswer } from './snapshot';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
 import type { ControlAgent } from './gate';
@@ -106,7 +115,11 @@ interface Call {
 }
 
 /** A tool call from a model: through the gate, then its handler. */
-export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>): Promise<ToolOutput> {
+/**
+ * `cancelled`: the client gave up on this call (MCP's notifications/cancelled; Neon's review of M2g-1, B5): as Stop is for
+ * it, so a long call (wait_for) ends and takes down what it left in the page.
+ */
+export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>, cancelled?: AbortSignal): Promise<ToolOutput> {
   const spec = controlTool(name);
   // M2's tools exist only where the scope offers them (a build that has M2), and acting only where it lets its agent
   // act (outside agents in M2c): elsewhere they're unknown, as they were.
@@ -115,9 +128,12 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
   if (off) return refuse(off);
   const ref = args['tab_id'];
   const tab = typeof ref === 'string' ? (scope.refs.get(ref) ?? null) : null;
-  return scope.agent.call(
+  // The whole call's time, by tool (M2g-1's measurement: phases.ts), from here to its answer.
+  const clock = phaseClock(spec.name);
+  const answered = scope.agent.call(
     tab,
-    async (signal) => {
+    async (gateSignal) => {
+      const signal = cancelled ? AbortSignal.any([gateSignal, cancelled]) : gateSignal;
       const call: Call = {
         scope,
         browser,
@@ -138,6 +154,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
         if (spec.name === 'read_form' || spec.name === 'propose_fill') return await formTool(call, spec.name, args);
         if (spec.name === 'page_diagnostics') return await diagnosticsTool(call, args);
         if (spec.name === 'snapshot') return await snapshotTool(call, args);
+        if (spec.name === 'wait_for') return scope.waits ? await waitForTool(call, args) : refuse('There’s no tool called wait_for.');
         if (spec.level === 'act') return await actTool(call, spec.name as ActTool, args);
         return await readTool(call, spec.name, args);
       } catch (error) {
@@ -145,7 +162,9 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
       }
     },
     (why) => refuse(CONTROL_REFUSALS[why]),
+    cancelled,
   );
+  return answered.finally(() => clock.lap('total'));
 }
 
 const isTab = (browser: ControlBrowser) => (id: NodeId) => nodeOf(browser.store.state, id)?.kind === 'tab';
@@ -195,12 +214,13 @@ function notTheirNo(call: Call, agent: ControlAgent, nodeId: NodeId, released: n
 }
 
 /** The tab's page, loading it if it's asleep or wasn't opened since launch. */
-async function loadedPage(browser: ControlBrowser, nodeId: NodeId): Promise<ControlPage | null> {
+async function loadedPage(browser: ControlBrowser, nodeId: NodeId, signal?: AbortSignal): Promise<ControlPage | null> {
   // A view whose page is gone (its renderer died) has none to wait on.
   const contents = pageOf(browser.tabs.ensure(nodeId));
   if (!contents) return null;
   // A page with a frame held unsecured never finishes loading (agents/pickers.ts): no waiting on it.
-  if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000);
+  // Stop and the client's cancel end the wait at once (round 1 of #145, SF3).
+  if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000, signal);
   return contents.isDestroyed() ? null : controlPage(contents);
 }
 
@@ -267,7 +287,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   if (refused) return refused;
   const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
   if (moved) return refuse(moved);
-  const page = await loadedPage(browser, node.id);
+  const page = await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
@@ -384,9 +404,11 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const elements = (scope.memory.elements ??= new Map());
   for (const id of [...elements.keys()]) if (nodeOf(browser.store.state, id)?.kind !== 'tab') elements.delete(id);
   const start = typeof args['start'] === 'number' ? args['start'] : 0;
+  // Only what has this text in its name (the owner, 2026-11-24: as few tokens as can be), with what it's in.
+  const find = typeof args['find'] === 'string' ? args['find'].slice(0, SNAPSHOT_FIND_MAX) : undefined;
   // Reading on: the same page's latest outline, as it was made, while the page is where it may be read.
   const now = currentPage(browser, node.id);
-  const kept = start > 0 && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
+  const kept = start > 0 && !find && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
   if (kept && now) {
     const blocked = blockedNow(call, node.id, now, 'That page could not be read.', kept.url);
     if (blocked) return refuse(blocked);
@@ -397,7 +419,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   if (refused) return refused;
   const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
   if (moved) return refuse(moved);
-  const page = await loadedPage(browser, node.id);
+  const page = await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
@@ -420,16 +442,187 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   // Refs for a page that moved on during the read are issued against no page: they resolve as stale.
   const samePage = sameId(page, pageId);
   // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
-  const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
-  const outline = snapshotOutline(read, issued);
+  // Refs from the page's own ids (M2g-1): an element still there keeps its ref, for the diff after the agent's actions.
+  const issued = refs.issue(samePage ?? '', token, snapshotKeys(read), sidsOf(read));
+  const outline = snapshotOutline(read, issued, find ? { find } : {});
   const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : snapshotNote(read.cut);
   const retrievedAt = Date.now();
-  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
+  // Its later ranges are of the page's whole outline, never a find's (N-3).
+  const whole = find ? snapshotOutline(read, issued) : outline;
+  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}), ...(read.cut.elements || read.cut.time || read.cut.refs ? { cut: true } : {}) });
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
 }
 
+/** The page's own ids of a snapshot's keyed elements (key → id), for refs that stay (core's ElementRefs). */
+function sidsOf(read: SnapshotRead): Map<number, number> {
+  return new Map(read.nodes.filter((n) => n.key !== undefined && n.sid !== undefined).map((n) => [n.key!, n.sid!]));
+}
+
+/** A diff that found nothing changed (its lines empty): said by saying nothing. */
+const emptyDiff = (changes: Record<string, unknown>): boolean => {
+  const lines = (changes['page_changes'] as { lines?: unknown } | undefined)?.lines;
+  return Array.isArray(lines) && lines.length === 0;
+};
+
+/** A diff past this many lines says to call snapshot instead (M2g-1: never more than the outline would have cost). */
+const DIFF_MAX_LINES = 60;
+
+/**
+ * What changed in the page since the agent's last snapshot of it (M2g-1, the owner's token goal): after an action, or
+ * when a wait is met. Read again as a snapshot is (its refs the tab's latest, an element still there with its ref), and
+ * only the lines that differ: new (+), changed as they are now (~), gone (-). Null with no snapshot of this page to
+ * compare with (then the agent calls snapshot), or if the page went elsewhere meanwhile.
+ */
+async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited<ReturnType<typeof loadedPage>>>): Promise<Record<string, unknown> | null> {
+  const refs = call.scope.memory.elements?.get(nodeId);
+  const kept = refs?.outline(page.id);
+  if (!refs || !kept?.lines) return null;
+  // A snapshot cut short is no baseline: what it didn't reach would show as new (round 1 of #145).
+  if (kept.cut) return { page_changes: { page_id: page.id, url: page.url(), note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot to see it.' } };
+  const token = randomBytes(12).toString('hex');
+  // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
+  const read = await page.snapshot(call.scope.agent.id, token, false);
+  if (!read || call.stopped() || page.id !== kept.pageId) return null;
+  // A snapshot of the agent's landed meanwhile: it wins (round 2 of #145), and this read is no diff of it.
+  if (refs.outline(page.id) !== kept) return null;
+  // Read under a read's rules (Neon's round 1 of M2g-1, B-6): never from a page that may not be read, nor of another
+  // origin than the snapshot it's compared with. Nothing of it is kept then.
+  if (blockedNow(call, nodeId, page, 'That page could not be read.', read.url)) return null;
+  if (originOf(read.url) !== originOf(kept.url)) return null;
+  // Its own envelope (S-4): the page and address it's of.
+  const of = { page_id: page.id, url: read.url };
+  // A read cut short (too big, or too slow) would show what it didn't reach as gone.
+  if (read.cut.elements || read.cut.time || read.cut.refs) return { page_changes: { ...of, note: 'The page is too big to compare all of it: call snapshot to see it.' } };
+  // Its refs as they'd be, not yet issued (round 1 of #145, B1): a diff too big to show is never taken as seen, so the
+  // agent's refs, and the next diff's baseline, stay its last seen snapshot's.
+  const keys = snapshotKeys(read);
+  const sids = sidsOf(read);
+  const lines = snapshotLines(read, refs.preview(page.id, keys, sids));
+  const changes = snapshotDiff(kept.lines, lines);
+  if (changes.length > DIFF_MAX_LINES) return { page_changes: { ...of, changed: changes.length, note: 'Much of the page changed: call snapshot to see it.' } };
+  refs.issue(page.id, token, keys, sids, false);
+  // The next diff compares with what this one showed; later ranges stay the agent's snapshot's (no outline text built).
+  refs.rebase(lines);
+  return { page_changes: { ...of, lines: changes } };
+}
+
+/* ---------- wait_for (S18 M2g-1) ---------- */
+
+/** Agents waiting now (one wait each: Neon's review of M2g-1, B5). */
+const waiting = new WeakSet<object>();
+/** wait_for waits in chunks this long: between them, Stop, the client's cancel, your taking the tab and the page going elsewhere end it. */
+const WAIT_CHUNK_MS = 1000;
+/** Roles wait_for looks for: what the outline names. */
+const WAIT_ROLE = /^[a-z]{1,40}$/;
+
+/**
+ * wait_for: until a text, or an element by its role and exact name, shows in the tab (or goes, with `gone`), as the
+ * snapshot sees the page, at most timeout_ms. Read under read_tab's rules (the scope's readable, its card). One at a
+ * time for each agent. In chunks of WAIT_CHUNK_MS: Stop, the client giving up, your taking the tab, the tab closing or
+ * its page going elsewhere end it at once, and the page's watcher with it. With `snapshot`, the outline once it's met.
+ */
+async function waitForTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
+  const { scope, browser } = call;
+  const text = typeof args['text'] === 'string' ? args['text'] : undefined;
+  const role = typeof args['role'] === 'string' ? args['role'].trim().toLowerCase() : undefined;
+  const name = typeof args['name'] === 'string' ? args['name'] : undefined;
+  if ((text === undefined) === (role === undefined)) return refuse('wait_for takes text, or role and name (one of them).');
+  if (text !== undefined && (!text.trim() || text.length > WAIT_FOR_TEXT_MAX)) return refuse(`wait_for's text is 1 to ${WAIT_FOR_TEXT_MAX} characters.`);
+  if (role !== undefined && (!WAIT_ROLE.test(role) || !name || name.length > WAIT_FOR_TEXT_MAX)) return refuse(`wait_for's role is a role from the outline (button, generic…) and its name the element's exact name, 1 to ${WAIT_FOR_TEXT_MAX} characters.`);
+  const asked = typeof args['timeout_ms'] === 'number' && Number.isFinite(args['timeout_ms']) ? Math.min(WAIT_FOR_MAX_MS, Math.max(100, Math.round(args['timeout_ms']))) : WAIT_FOR_DEFAULT_MS;
+  // Never past what's left of the call's time (an outside agent's: its cards' budget, under Codex's 60 s a call).
+  const timeout = scope.cardWaitMs !== undefined ? Math.min(asked, Math.max(100, scope.cardWaitMs)) : asked;
+  const gone = args['gone'] === true;
+  const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs or an attached tab id.');
+  if (isOutput(found)) return found;
+  const node = found;
+  if (!scope.readable(node)) return refuse(unreadable(scope, node));
+  if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
+  // Chord's words on the card and in the activity, never the agent's (what it waits for: B-4).
+  const refused = await call.card('snapshot', node, `Watch “${node.title || safeHost(node.url)}” for a change`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
+  if (refused) return refused;
+  // The agent's one wait, held from here (S-2): a second started meanwhile is refused, even while this one loads.
+  if (waiting.has(scope.agent)) return refuse('You’re waiting already: one wait at a time.');
+  waiting.add(scope.agent);
+  let looked: WaitAnswer | null = null;
+  let page: Awaited<ReturnType<typeof loadedPage>> = null;
+  let pageId = '';
+  let gaveUp: (() => void) | null = null;
+  const began = Date.now();
+  try {
+    page = await loadedPage(browser, node.id, call.signal);
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+    if (!page) return refuse('That tab could not be loaded.');
+    const before = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+    if (before) return refuse(before);
+    pageId = page.id;
+    const document = page.mark.document;
+    // The user taking the tab over (its cards let go of) ends it too (S-2).
+    const released = scope.agent.releases(node.id);
+    scope.act?.doing(node.id, { tool: 'wait_for' });
+    // The client's cancel and Stop answer at once (S-2): the page's chunk ends on its own within a second.
+    const cancelled = new Promise<null>((resolve) => {
+      if (call.signal.aborted) resolve(null);
+      else {
+        gaveUp = () => resolve(null);
+        call.signal.addEventListener('abort', gaveUp, { once: true });
+      }
+    });
+    let after = 0;
+    for (;;) {
+      const left = timeout - (Date.now() - began);
+      if (left <= 0) break;
+      const want = text !== undefined ? { text, gone, after } : { role: role!, name: name!, gone, after };
+      const chunk = Math.min(WAIT_CHUNK_MS, left);
+      const answer = await Promise.race([page.waitFor(want, chunk), cancelled]);
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+      if (scope.agent.releases(node.id) !== released) return refuse(ACT_REFUSALS.takenOver);
+      // During, and after: the tab closed, the page went somewhere it may not be read, or somewhere else at all.
+      const during = blockedNow(call, node.id, page, 'That page could not be read.');
+      if (during) return refuse(during);
+      // Another document ends it; the same one going to another address (a pushState: a single-page app's) doesn't,
+      // since what's waited for often comes with it (its refs are stale then: said in the result).
+      if (page.mark.document !== document) return { text: toolResult({ tab_id: scope.refs.refFor(node.id), met: false, waited_ms: Date.now() - began, navigated: true, note: 'The page changed while you waited: call snapshot again.' }) };
+      if (!answer) return refuse('That page didn’t answer while you waited.');
+      if (answer.editor) return refuse('That page is an editor: what shows in it is what’s typed there, so wait_for looks only for an element by its role and name there.');
+      if (answer.looked !== false) looked = answer;
+      if (answer.met) break;
+      // The next chunk's first look waits out the throttle from this one's last (S-2).
+      // A chunk with no look (the throttle was longer than it) counts the throttle down by its length (SF2): a slow
+      // look never stalls the wait.
+      after = answer.looked === false ? Math.max(0, after - chunk) : Math.max(0, Math.round(Math.max(150, 4 * (answer.ms ?? 0)) - (answer.since ?? 0)));
+    }
+  } finally {
+    waiting.delete(scope.agent);
+    scope.act?.doing(node.id, null);
+    if (gaveUp) call.signal.removeEventListener('abort', gaveUp);
+  }
+  const waited = Date.now() - began;
+  const met = looked?.met === true;
+  scope.memory.read.add(node.id);
+  await call.activity('wait_for', `Watched “${node.title || safeHost(node.url)}” for a change`, met ? `met after ${waited} ms` : `not met after ${waited} ms`, met);
+  const moved = page.id !== pageId;
+  // Every note that's so (S-3): a cut look says what it couldn't tell, waiting to show or to go; a pushState, that refs
+  // went with it.
+  const notes = [
+    ...(looked?.cut && !met ? [gone ? 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' : 'The page is too big to look at all of it: it may be in the part not looked at.'] : []),
+    ...(moved ? ['The page went to another address while you waited (the same document): refs from before are stale.'] : []),
+  ];
+  const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(moved ? { navigated: true } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) };
+  if (!met || args['snapshot'] !== true) return { text: toolResult(result) };
+  // Met, with what changed since the agent's last snapshot of this page (the owner's token goal); with none, the outline
+  // as snapshot gives it (its refs the tab's latest): always the outline after a pushState (its refs went with it).
+  const changes = moved ? null : await pageChanges(call, node.id, page);
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  // A diff with lines; one too big to show, or a cut read, is only a note: the outline instead (round 1 of #145, SF1).
+  if (changes && Array.isArray((changes['page_changes'] as { lines?: unknown }).lines)) return { text: toolResult({ ...result, ...(emptyDiff(changes) ? {} : changes) }) };
+  const snap = await snapshotTool(call, { tab_id: args['tab_id'] });
+  if (snap.isError || !snap.text) return snap;
+  return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), wait: result }) };
+}
 /** How long a first look waits for a page that draws itself after it loads, at most. */
 const FIRST_LOOK_MS = 2000;
 /** A page that shows nothing yet, said so (never an empty outline or a blank picture as if that were the page). */
@@ -465,7 +658,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const notHere = host.mayAct(node);
   if (notHere) return refuse(notHere);
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
-  const page = await loadedPage(browser, node.id);
+  const page = await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -492,6 +685,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
     await call.activity(tool, what, page.url());
     const caught = host.caught?.(node) ?? [];
+    // What changed since the agent's last snapshot, after an action on an element of a page that didn't go elsewhere
+    // (M2g-1: the default; not between a batch's steps).
+    const changes = !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
     return {
       text: toolResult({
         tab_id: ref,
@@ -511,6 +707,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // What the page's response was caught doing (a tab of yours): never say done when the page said no.
         ...(caught.length ? { caught } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
+        // Nothing changed: nothing extra (round 2 of #145: a diff costs nothing then).
+        ...(changes && !emptyDiff(changes) ? changes : {}),
       }),
     };
   };
@@ -556,7 +754,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           description: `go to ${barAddress(goingTo)}`,
           target: [page.url()],
           tab: node.id,
-          subject: `${node.id}|${page.id}|${tool}|${goingTo}`,
+          subject: JSON.stringify([node.id, page.id, tool, goingTo]),
           step: { why: goingWhy, site: goingSite, fields: [], more: 0 },
         },
         call.signal,
@@ -577,6 +775,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     // lease (below) starts clean (round 3 of #147).
     if (!host.lease && page.lost() && !(await page.retryHold())) return refuse(ACT_REFUSALS.noCheck);
     const before = page.id;
+    // It runs: a late Allow given on this tab for another step is spent.
+    scope.agent.dropLateSteps(node.id);
     host.doing(node.id, tool === 'navigate' ? { tool, to: barAddress(target) } : { tool });
     try {
       // The tab's load can take a while: the user taking the tab, or Stop, meanwhile stops it here.
@@ -606,13 +806,14 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
                 description: tool === 'navigate' ? `go to ${barAddress(target)}` : 'go back',
                 target: [page.url()],
                 tab: node.id,
-                subject: `${node.id}|${tool}|sends|${randomBytes(4).toString('hex')}`,
+                subject: JSON.stringify([node.id, tool, 'sends', randomBytes(4).toString('hex')]),
                 step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
                 takeDown,
               },
               AbortSignal.any([call.signal, w.cancelled]),
-              // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks.
-              scope.cardWaitMs ?? CONTROL_WAIT_MS,
+              // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks; an
+              // outside agent's its full wait, never a call's budget for cards (M2g-1, B2; round 1, B-5).
+              scope.sendWaitMs ?? scope.cardWaitMs ?? CONTROL_WAIT_MS,
             ),
           halt,
           originOf(page.url()),
@@ -635,9 +836,10 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     }
   }
 
+  const refArg = args['ref'];
   // An element, by its ref from the tab's latest snapshot, on the page it's on now.
-  const lookup = scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id) ?? { ok: false as const, why: 'unknown' as const };
-  if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(args['ref'] ?? '')) : ELEMENT_REFUSALS.stale);
+  const lookup = scope.memory.elements?.get(node.id)?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
+  if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
   /**
    * One step in the page on the ref's element (act.ts). A ref whose node the page replaced may be found again there
    * (the owner's bug #2): the result says so.
@@ -665,7 +867,13 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // asked, so the card and the bar show the page's label, never the agent's words.
   // Its first look may find a replaced node again (the owner's bug #2); so may the look after a card, the pointer's move
   // and the hit test, never a later one (the review of #117): once it's checked and pointed at, a replacement refuses.
+  // Where this action's time goes (phases.ts): its first look, its cards, its pointing, the debugger's session, the
+  // checks to the press, the press or the input, and the page settling after.
+  const phases = phaseClock(tool);
   const element = await actOn({ op: 'describe', refind: true, ...(tool === 'select_option' ? { option: asked } : {}) });
+  phases.lap('look');
+  // Stopped while it was described: nothing after it (round 2 of #145).
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   if (!element.ok) return refuse(actRefusal(element));
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
@@ -729,7 +937,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (halted) return refuse(halted);
     const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
     if (after) return refuse(after);
-    if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    if (!scope.memory.elements?.get(node.id)?.resolve(refArg, page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
     // And on another site now, it'd need its own yes.
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
     // It runs, on the page and site the card named: the yes is kept now (the agent's life; a fresh Always for good).
@@ -746,7 +954,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // And what the card showed (Neon's review of #112): why it asks, and the element's shape (its link, its form's
   // address, method and fields). Any of it changed, it's another step: a late Allow never covers it.
   const shown = createHash('sha256').update(`${step.class === 'risky' ? step.why : 'act'}|${stepShape(element)}`).digest('hex').slice(0, 16);
-  const stepKey = `${node.id}|${page.id}|${String(args['ref'])}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}|${typed}|${shown}`;
+  // As JSON (Neon's review of M2g-1, B4): no value can run into the next.
+  const stepKey = JSON.stringify([node.id, page.id, String(refArg), tool, isPressKey(key) ? key : '', args['submit'] === true, typed, shown]);
   if (step.class === 'risky') {
     const { fields, more } = stepFields(element.risk?.form?.fields.map((f) => f.label) ?? []);
     const released = scope.agent.releases(node.id);
@@ -772,7 +981,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (halted) return refuse(halted);
     const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
     if (after) return refuse(after);
-    if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    if (!scope.memory.elements?.get(node.id)?.resolve(refArg, page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
     // What the card showed is what goes (#112 review 1): described again, the same step, the same name, the same form
     // (where it goes, how, and its fields). A page that changed any of it while the card was up gets nothing.
@@ -800,6 +1009,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   };
   const sameStep = async (): Promise<string | null> => (await stepNow())?.refused ?? null;
 
+  // It runs: a late Allow given on this tab for another step is spent (Neon's review of M2g-1, B1).
+  scope.agent.dropLateSteps(node.id);
+  phases.lap('cards');
   host.doing(node.id, description);
   /** The debugger's checks, for what presses or types (deep.ts): opened right before, let go once the page settled. */
   let deep: DeepSession | null = null;
@@ -1045,15 +1257,17 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           target: [page.url()],
           tab: node.id,
           // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
-          subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
+          // Subjects as JSON (N-5): no value runs into the next.
+          subject: JSON.stringify([stepKey, 'sends', randomBytes(4).toString('hex')]),
           // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or isn't the page's.
           step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
           show: () => void actOn({ op: 'point', highlight: true }),
           takeDown,
         },
         AbortSignal.any([call.signal, w.cancelled]),
-        // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks.
-        scope.cardWaitMs ?? CONTROL_WAIT_MS,
+        // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks; an outside
+        // agent's its full wait, never a call's budget for cards (M2g-1, B2).
+        scope.sendWaitMs ?? scope.cardWaitMs ?? CONTROL_WAIT_MS,
       );
     /** Once the watch is on: what's held from then is asked about (below). */
     let watchOn: () => void = () => undefined;
@@ -1062,6 +1276,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     const markAtStart = page.mark;
     const acting = page.afterActing(async () => {
       const pointed = await actOn({ op: 'point', highlight: true });
+      phases.lap('point');
       if (!pointed.ok || pointed.x === undefined || pointed.y === undefined) return void (refused = pointed.ok ? ACT_REFUSALS.changed : actRefusal(pointed));
       // The field as it is now, after any card's wait: never one the page made a password, code or card field.
       if (pointed.field && sensitiveField(pointed.field)) return void (refused = ACT_REFUSALS.sensitive);
@@ -1071,6 +1286,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // (beacons, pings) are dropped either way.
       if ((refused = await leaseOn())) return;
       deep = await page.deep(owner, lookup.token, lookup.key);
+      phases.lap('debugger');
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
       holds = true;
       watch = page.watchSends(step.class === 'risky' ? allowedBy(element, stepSubmits(tool, args, element)) : null);
@@ -1175,6 +1391,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       }
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
+      phases.lap('checks');
       page.press(at.x!, at.y!);
       if (tool !== 'type') return;
       // Typing waits for the page to have seen its click (the caret goes where the click put it): only then the select
@@ -1207,7 +1424,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // The step again right before Enter (Neon's review 2 of #112): what typing did to the page counts.
       if ((refused = await sameStep())) return;
       await guardedTries('keyup', pressKey('Enter'), refocus);
-    });
+    },
+    // Its input done (phases.ts).
+    () => phases.lap('input'));
     // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and a card asks
     // for it, naming its sites, before the action is done (it waits on what's held): askHeld.
     if ((await Promise.race([acting.then(() => 'acted' as const), watching.then(() => 'on' as const)])) === 'on' && watch) {
@@ -1229,6 +1448,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     // (Neon's B5, round 2 of #147).
     if (!refused && holds && page.lost()) refused = ACT_REFUSALS.noCheck;
     const { navigated, loading } = await acting;
+    phases.lap('settle');
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -1411,11 +1631,14 @@ function originOf(url: string): string {
   }
 }
 
+/**
+ * The step's element as a card shows it and a late Allow covers it: its name, the items it's in and its place (Neon's
+ * round 1 of M2g-1, B-2: refs stay, so the same ref after a rename or a move is another step), then its risk's shape.
+ */
 function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
   const risk = element.risk;
-  if (!risk) return '';
-  const form = risk.form;
-  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
+  const form = risk?.form;
+  return JSON.stringify([element.name, element.items ?? '', element.path ?? '', !risk ? null : [risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]]);
 }
 
 
@@ -1520,7 +1743,9 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
     if (refused) return refused;
     const moved = blockedNow(call, node.id, null, 'That page could not be read.');
     if (moved) return refuse(moved);
-    const page = await loadedPage(browser, node.id);
+    const page = await loadedPage(browser, node.id, call.signal);
+    // Stopped, or the client gave up, while it loaded: the form is never read (round 2 of #145).
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     const loaded = page && blockedNow(call, node.id, page, 'That page could not be read.');
     if (loaded) return refuse(loaded);
     const token = randomBytes(12).toString('hex');

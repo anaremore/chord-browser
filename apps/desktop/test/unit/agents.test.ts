@@ -123,7 +123,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const c = client(ud);
     expect((await c.initialize()).result).toMatchObject({ serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
     // A build with M2 (development, tests): M1's tools, then M2's (snapshot so far).
-    expect(((await c.request('tools/list')).result['tools'] as { name: string }[]).map((t) => t.name)).toEqual(['list_tabs', 'open_tab', 'read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'close_tab', 'snapshot', 'click', 'type', 'press_key', 'select_option', 'hover', 'navigate', 'back']);
+    expect(((await c.request('tools/list')).result['tools'] as { name: string }[]).map((t) => t.name)).toEqual(['list_tabs', 'open_tab', 'read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'close_tab', 'snapshot', 'click', 'type', 'press_key', 'select_option', 'hover', 'navigate', 'back', 'batch', 'wait_for']);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     await chord(ud);
     const listed = await c.call('list_tabs');
@@ -136,7 +136,7 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const service = await chord(ud);
     const c = client(ud, true);
     await c.initialize();
-    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(16);
+    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(18);
     expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
     expect(service.connections.size).toBe(0);
   });
@@ -405,6 +405,18 @@ describe('Real clients’ initialize, replayed (S18 §3)', () => {
     expect(shown).toEqual([name]);
     // Connected, tools/list is Chord's own.
     expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList(true));
+  });
+
+  it('progress reaches the client through the relay while the connection card waits (#143)', async () => {
+    const ud = profile();
+    const service = new AgentService({ userData: ud, browser, ask: answering('once', 1200), helper: null, waitMs: 2000, progressMs: 300 });
+    await service.start();
+    cleanup.push(() => service.stop());
+    const c = client(ud);
+    await c.initialize();
+    const r = await c.request('tools/call', { name: 'list_tabs', arguments: {}, _meta: { progressToken: 'p1' } });
+    expect(r.result['isError']).toBe(false);
+    expect(c.notifications.filter((m) => m === 'notifications/progress').length).toBeGreaterThanOrEqual(2);
   });
 
   it('Chord says list_changed when the bridge gave another build’s list', async () => {

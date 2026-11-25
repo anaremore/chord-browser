@@ -151,7 +151,7 @@ describe('Tab refs', () => {
 
 describe('The tools both front doors offer', () => {
   it('are the assistant’s tools and M2’s: reads, and acting (M2c) at the act level', () => {
-    expect(CONTROL_TOOLS.map((t) => t.name)).toEqual([...ASSISTANT_TOOLS.map((t) => t.name), 'snapshot', 'click', 'hover', 'type', 'press_key', 'select_option', 'navigate', 'back']);
+    expect(CONTROL_TOOLS.map((t) => t.name)).toEqual([...ASSISTANT_TOOLS.map((t) => t.name), 'snapshot', 'click', 'hover', 'type', 'press_key', 'select_option', 'navigate', 'back', 'wait_for']);
     for (const tool of CONTROL_TOOLS) expect(tool).toMatchObject({ tier: 0, level: ['click', 'hover', 'type', 'press_key', 'select_option', 'navigate', 'back'].includes(tool.name) ? 'act' : 'read' });
   });
 

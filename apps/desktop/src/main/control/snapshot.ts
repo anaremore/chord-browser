@@ -263,14 +263,49 @@ export const SNAPSHOT_LIB = String.raw`
   };
 `;
 
+/**
+ * How many snapshots a diff took (after an action, M2g-1) are kept behind an agent's latest, besides its own last one
+ * (pinned until its next): its refs, core's ElementRefs, the same.
+ */
+const SNAPSHOT_HISTORY = 4;
+
+/**
+ * An owner's snapshot by its token, in the page: the latest, or one kept behind it (SNAPSHOT_HISTORY). For act.ts' and
+ * deep.ts' scripts: `snapshotFind(owner, token)` there.
+ */
+export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; return r || null; };`;
+
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
-export function snapshotScript(owner: string, token: string): string {
-  const args = { owner, token, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS };
+export function snapshotScript(owner: string, token: string, pinned = true): string {
+  const args = { owner, token, pinned, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   const started = performance.now();
   const nodes = [];
   const keep = [];
+  // Each element's own id in this document, for this agent (M2g-1): the same element, the same id, from one snapshot to
+  // the next; a replaced one gets another. Refs are made from it (core's ElementRefs), so an action's diff can name them.
+  // Only while it's the same element as the agent knows it (round 1 of #145, B1): its role, its name and the items it's
+  // in. A node the page renamed in place, or moved to another row, gets a new id, so its old ref is never it. A change of
+  // state alone (checked, filled) keeps it. At most as many owners as snapshots keep (args.owners).
+  // An owner's ids start above every id given in this document (round 2 of #145): one whose map was let go of (the
+  // owners' cap) and comes back never gets an id an earlier element had, so an old ref never names another element.
+  const sidsAll = (globalThis.__chordSids = globalThis.__chordSids || new Map());
+  let sidsMine = sidsAll.get(args.owner);
+  if (!sidsMine) sidsMine = { ids: new WeakMap(), next: globalThis.__chordSidNext || 1 };
+  sidsAll.delete(args.owner);
+  sidsAll.set(args.owner, sidsMine);
+  while (sidsAll.size > args.owners) sidsAll.delete(sidsAll.keys().next().value);
+  // Compared field by field, no string built per node (round 2 of #145: Neon measured it at 4 to 6.5 ms on 16k nodes).
+  const sidOf = (el, role, name, items) => {
+    let had = sidsMine.ids.get(el);
+    if (!had || had.role !== role || had.name !== name || had.items !== items) {
+      had = { id: sidsMine.next++, role, name, items };
+      sidsMine.ids.set(el, had);
+      if (sidsMine.next > (globalThis.__chordSidNext || 1)) globalThis.__chordSidNext = sidsMine.next;
+    }
+    return had.id;
+  };
   const cut = {};
   let looked = 0;
   const stop = () => {
@@ -307,10 +342,14 @@ export function snapshotScript(owner: string, token: string): string {
     for (let c = chain; c && parts.length < 64; c = c.up) parts.push(c.part);
     return JSON.stringify(parts);
   };
+  // Kept on the chain's node (round 2 of #145): its children all ask for the same items.
   const itemsAt = (chain) => {
+    if (chain && chain.itemsKey !== undefined) return chain.itemsKey;
     const parts = [];
     for (let c = chain && chain.items; c && chain.n - c.n < 64; c = c.up) parts.push(c.part);
-    return JSON.stringify(parts);
+    const key = JSON.stringify(parts);
+    if (chain) chain.itemsKey = key;
+    return key;
   };
   const walk = (parent, depth, keyed, named, chain) => {
     for (const child of parent.childNodes) {
@@ -341,7 +380,8 @@ export function snapshotScript(owner: string, token: string): string {
       const acted = ACTED.has(role) || role === 'generic';
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
-      const node = { depth, role, name: nameOf(el, role) };
+      const name = nameOf(el, role);
+      const node = { depth, role, name, sid: sidOf(el, role, name, itemsAt(chain)) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -374,7 +414,8 @@ export function snapshotScript(owner: string, token: string): string {
   // contenteditable>, designMode, the data: notepad) is one typed field, named by its labels alone, never walked.
   const start = document.body || document.documentElement;
   if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
-    const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox') };
+    const startName = nameOf(start, 'textbox');
+    const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, 'textbox', startName, itemsOf(start)) };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);
@@ -400,7 +441,6 @@ export function snapshotScript(owner: string, token: string): string {
     if (!pending) return;
     pending = false;
     // Another snapshot since (its refs replace these): nothing to keep.
-    if (reads.get(args.owner) !== read) return;
     const began = performance.now();
     let whole = !(cut.refs || cut.elements || cut.time);
     try {
@@ -425,12 +465,140 @@ export function snapshotScript(owner: string, token: string): string {
   };
   read.finish = finish;
   setTimeout(finish, 0);
-  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
+  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away. The ones before it
+  // stay behind it, at most SNAPSHOT_HISTORY in all (M2g-1): a ref the agent got from one of them (a diff after an action
+  // takes a snapshot too) still names its element there, and one the page replaced is found again from there (#117).
+  // The agent's own snapshot (it read it: pinned) stays until its next one; the ones a diff took, the last few.
+  read.pinned = args.pinned;
+  const before = reads.get(args.owner);
+  const kept = [read];
+  let pinnedKept = read.pinned;
+  let diffs = read.pinned ? 0 : 1;
+  for (let r = before && before.url === location.href ? before : null; r; r = r.prev) {
+    if (r.pinned ? !pinnedKept : diffs < args.history) {
+      kept.push(r);
+      if (r.pinned) pinnedKept = true;
+      else diffs++;
+    }
+  }
+  kept.forEach((r, i) => { r.prev = kept[i + 1] || null; });
   reads.delete(args.owner);
   reads.set(args.owner, read);
   while (reads.size > args.owners) reads.delete(reads.keys().next().value);
   return { url: location.href, title: document.title, nodes, cut };
 })(${JSON.stringify(args)})`;
+}
+
+/** What wait_for looks for (M2g-1): a text, or an element by its role and exact name; and whether it's to show or go. */
+/** `after`: how long the chunk waits before its first look (the throttle, carried from the chunk before: S-2). */
+export type WaitFor = { text?: string; role?: string; name?: string; gone: boolean; after?: number };
+/**
+ * One chunk's answer: met, and whether its last look was cut short (then it never proves something gone); `ms`, that
+ * look's time, and `since`, how long ago it ended (the next chunk's throttle); `looked` false when there was none.
+ */
+export type WaitAnswer = { met: boolean; cut: boolean; editor?: boolean; ms?: number; since?: number; looked?: boolean };
+
+/**
+ * wait_for in the page, for at most `ms` (the caller waits in chunks: tools.ts). It looks as the snapshot does (SNAPSHOT_LIB:
+ * only what's shown, open shadow roots, never what's typed in a field, at most SNAPSHOT_SCAN nodes and SNAPSHOT_SCAN_MS),
+ * once now, then again as the page changes: at most one look each max(150 ms, 4 × the last look's time), by a timer
+ * (Neon's review of M2g-1, B5). A look that was cut short never proves something gone.
+ */
+function waitScript(want: WaitFor, ms: number): string {
+  const args = { ...want, ms, scan: SNAPSHOT_SCAN, scanMs: SNAPSHOT_SCAN_MS };
+  return String.raw`new Promise((done) => {
+  const args = ${JSON.stringify(args)};
+  ${SNAPSHOT_LIB}
+  const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const want = args.text !== undefined ? norm(args.text) : '';
+  // A page that is an editor (its body editable, or designMode on: Neon's round 1 of M2g-1, B-3): what shows is what's
+  // typed, so its text is never looked at, or a wait would be an oracle on it. Only an element by role and name.
+  const editorPage = document.designMode === 'on' || Boolean(document.body && document.body.isContentEditable) || Boolean(document.documentElement && document.documentElement.isContentEditable);
+  if (editorPage && args.text !== undefined) return done({ met: false, cut: false, editor: true });
+  const look = () => {
+    const began = performance.now();
+    let looked = 0;
+    let cut = false;
+    let found = false;
+    const over = () => {
+      if (++looked > args.scan) { cut = true; return true; }
+      if (looked % 100 === 0 && performance.now() - began > args.scanMs) { cut = true; return true; }
+      return false;
+    };
+    const walk = (parent, keyed) => {
+      for (const child of parent.childNodes) {
+        if (found || cut) return;
+        if (child.nodeType === 3) {
+          if (over()) return;
+          // Never text in an editor (what's typed), wherever it is.
+          if (parent.nodeType === 1 && parent.isContentEditable) continue;
+          if (args.text !== undefined && norm(child.nodeValue).includes(want)) found = true;
+          continue;
+        }
+        if (child.nodeType !== 1) continue;
+        const el = child;
+        if (over()) return;
+        if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
+        let role = roleNow(el);
+        if (!role && !keyed && pointerGeneric(el)) role = 'generic';
+        // One that can be acted on counts only when it's on screen, as the snapshot gives it a ref (S-5).
+        if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name && (!(ACTED.has(role) || role === 'generic') || shown(el))) { found = true; return; }
+        // A field's inside is what's typed in it: never looked at. A frame's is its fallback, never shown (S-5).
+        if (isField(el) || TYPED.has(role) || el.localName === 'iframe' || el.localName === 'frame') continue;
+        const inner = keyed || ACTED.has(role) || role === 'generic';
+        if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot, inner); }
+        walk(el, inner);
+      }
+    };
+    walk(document.body || document.documentElement, false);
+    const ended = performance.now();
+    return { found, cut, ms: ended - began, ended };
+  };
+  const met = (r) => (args.gone ? !r.found && !r.cut : r.found);
+  // Open shadow roots a look passed: watched too (N-6), so a change inside a component wakes a look.
+  const roots = new Set();
+  const observed = new Set();
+  const OBSERVE = { subtree: true, childList: true, characterData: true, attributes: true };
+  const observeRoots = () => { if (!watch) return; for (const r of roots) if (!observed.has(r)) { observed.add(r); watch.observe(r, OBSERVE); } };
+  // The chunk's answer: its last look's, how long it took and how long ago it ended (the next chunk's throttle).
+  const answer = (r) => (r ? { met: met(r), cut: r.cut, ms: r.ms, since: performance.now() - r.ended } : { met: false, cut: false, looked: false });
+  let last = null;
+  let timer = 0;
+  let pending = false;
+  let watch = null;
+  const finish = (r) => { if (watch) watch.disconnect(); clearTimeout(timer); clearTimeout(end); done(answer(r)); };
+  const first = () => {
+    pending = false;
+    last = look();
+    if (met(last)) return finish(last);
+    watch = new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      timer = setTimeout(() => {
+        pending = false;
+        last = look();
+        if (met(last)) return finish(last);
+        observeRoots();
+      }, Math.max(150, 4 * last.ms));
+    });
+    watch.observe(document, OBSERVE);
+    observeRoots();
+  };
+  // At most one look per throttle across chunks too (S-2): the chunk before's last look may be too recent.
+  // The chunk's end never looks out of turn (SF2): a look still to come is the next chunk's, its throttle carried.
+  const end = setTimeout(() => finish(last), args.ms);
+  if (args.after > 0 && args.after < args.ms) { pending = true; timer = setTimeout(first, args.after); }
+  else if (!(args.after >= args.ms)) first();
+})`;
+}
+
+export async function waitInPage(contents: WebContents, want: WaitFor, ms: number): Promise<WaitAnswer | null> {
+  if (contents.isDestroyed()) return null;
+  const answer = await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: waitScript(want, ms) }]), null, ms + 2000);
+  if (!answer || typeof answer !== 'object' || typeof (answer as WaitAnswer).met !== 'boolean') return null;
+  const a = answer as WaitAnswer;
+  const num = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n < 60_000 ? n : 0);
+  return { met: a.met, cut: a.cut === true, ms: num(a.ms), since: num(a.since), ...(a.editor === true ? { editor: true } : {}), ...(a.looked === false ? { looked: false } : {}) };
 }
 
 /**
@@ -453,7 +621,7 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
-  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token) }]), null, SNAPSHOT_MS));
+  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned) }]), null, SNAPSHOT_MS));
 }

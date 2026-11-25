@@ -1470,6 +1470,10 @@ if (!app.requestSingleInstanceLock()) {
           }
           return { off, on };
         },
+        /** M2g-1: where actions' time went since the last read (control/phases.ts), cleared. */
+        agentPhaseTimes: async () => (await import('./control/phases')).takePhases(),
+        /** The owner's token goal: each tool result's size since the last read (control/phases.ts), cleared. */
+        agentResultSizes: async () => (await import('./control/phases')).takeResults(),
         agentActTimes: async (url: string, runs: number) => {
           const [{ snapshotPage }, { actOnPage }, { openDeep }] = await Promise.all([import('./control/snapshot'), import('./control/act'), import('./control/deep')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];

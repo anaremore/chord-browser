@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 // Core compiles without DOM or Node types; both are globals where the tests run.
 declare const performance: { now(): number };
 declare const console: { log(...args: unknown[]): void };
-import { cleanSnapshotRead, ElementRefs, snapshotKeys, snapshotOutline, snapshotResult } from '../src';
+import { cleanSnapshotRead, ElementRefs, snapshotDiff, snapshotKeys, snapshotLines, snapshotOutline, snapshotResult } from '../src';
 
 function answer(rows: number, maxKeys: number) {
   const nodes: unknown[] = [{ depth: 0, role: 'main', name: '' }, { depth: 1, role: 'heading', name: 'Rows', level: 1 }, { depth: 1, role: 'list', name: '' }];
@@ -69,5 +69,44 @@ describe('The snapshot in main', () => {
     const median = times[Math.floor(times.length / 2)]!;
     console.log(`[perf] snapshot in main, ${_what}: median ${median.toFixed(2)} ms, worst ${times[times.length - 1]!.toFixed(2)} ms`);
     expect(median).toBeLessThan(budget);
+  });
+
+  it('the diff after an action on the 20,000-element page: the main process’s part, before and after round 1 of #145 (SF4)', () => {
+    // The page's answer, with its own ids (sids), and one element renamed: a one-line diff.
+    const raw = answer(4000, 2000) as { nodes: { sid?: number; key?: number; name?: string }[] };
+    raw.nodes.forEach((n, i) => (n.sid = i + 1));
+    const changed = { ...raw, nodes: raw.nodes.map((n, i) => (i === 10 ? { ...n, name: 'Renamed', sid: 999_999 } : n)) };
+    const sidsOf = (read: ReturnType<typeof cleanSnapshotRead>) => new Map(read!.nodes.filter((n) => n.key !== undefined && n.sid !== undefined).map((n) => [n.key!, n.sid!]));
+    const run = (path: 'before' | 'after') => {
+      const times: number[] = [];
+      for (let i = 0; i < 21; i++) {
+        const refs = new ElementRefs();
+        const first = cleanSnapshotRead(raw)!;
+        const baseline = snapshotLines(first, refs.issue('p1', 't0', snapshotKeys(first), sidsOf(first)));
+        const started = performance.now();
+        const read = cleanSnapshotRead(changed)!;
+        const keys = snapshotKeys(read);
+        const sids = sidsOf(read);
+        if (path === 'before') {
+          // #145 at e8e922a: issued, its lines, its whole outline built and kept, then the diff.
+          const issued = refs.issue('p1', 't1', keys, sids, false);
+          const lines = snapshotLines(read, issued);
+          snapshotOutline(read, issued);
+          snapshotDiff(baseline, lines);
+        } else {
+          // Now: its lines from refs not yet issued, the diff, then issued (no outline text).
+          const lines = snapshotLines(read, refs.preview('p1', keys, sids));
+          snapshotDiff(baseline, lines);
+          refs.issue('p1', 't1', keys, sids, false);
+        }
+        times.push(performance.now() - started);
+      }
+      return times.sort((a, b) => a - b);
+    };
+    const before = run('before');
+    const after = run('after');
+    console.log(`[perf] the diff after an action, 16,003 nodes: before median ${before[10]!.toFixed(2)} ms, after median ${after[10]!.toFixed(2)} ms (worst ${after[20]!.toFixed(2)})`);
+    // A budget, not a race between the two (timings under load can cross): CI's slower runners have room.
+    expect(after[10]!).toBeLessThan(60);
   });
 });

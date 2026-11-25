@@ -58,6 +58,11 @@ export interface SnapshotNode {
   choice?: string;
   /** For fields (inputs, text areas, selects, any text field): what decides whether it's one Chord never lets an agent touch. */
   field?: SnapshotField;
+  /**
+   * The page's own id for an element (M2g-1): the same element, the same id, in every snapshot of that document for that
+   * agent; a replaced one gets another. Refs are made from it, so an element still there keeps its ref.
+   */
+  sid?: number;
 }
 
 /** What the page script returns. */
@@ -75,12 +80,29 @@ export interface SnapshotRead {
 export type ElementLookup = { ok: true; token: string; key: number } | { ok: false; why: 'unknown' | 'stale' };
 
 /**
- * A tab's element refs: `e1`, `e2`… counted for the tab and never reused. Only the latest snapshot's are good, and
- * only on the page (page id) it was taken of: an older snapshot's, or one from before a navigation, is stale.
+ * A tab's element refs: `e1`, `e2`… for the tab, never reused for another element. Only the latest snapshot's are good,
+ * and only on the page (page id) it was taken of: one from before a navigation is stale. With the page's element ids
+ * (M2g-1: `sid`), an element still there keeps its ref from one snapshot to the next (what an action's diff counts on);
+ * a page's ids are numbered above every ref the tab had before it, so no ref ever names another page's element.
  */
+/** How many of an agent's snapshots of a page its refs name (the page keeps as many: snapshot.ts' SNAPSHOT_HISTORY). */
+export const SNAPSHOT_KEPT = 4;
+
+/** The largest ref number the pattern takes (e and at most 9 digits). */
+const REF_MAX = 999_999_999;
+/** A page's own ids above this (a million elements one agent saw in one document) get refs in turn instead (N-4). */
+const SID_MAX = 1_000_000;
+
 export class ElementRefs {
   private next = 1;
-  private current: { pageId: string; token: string; keys: Map<string, number> } | null = null;
+  private current: { pageId: string; token: string; keys: Map<string, number>; pinned: boolean } | null = null;
+  /** The page its ids are numbered for, and from where (every ref before it is below). */
+  private base: { pageId: string; from: number } | null = null;
+  /**
+   * The snapshots before the latest, newest first: the agent's own last one (pinned: it read it) until its next, and
+   * the last SNAPSHOT_KEPT a diff took (the page keeps the same: snapshot.ts).
+   */
+  private earlier: { pageId: string; token: string; keys: Map<string, number>; pinned: boolean }[] = [];
   /** The latest snapshot's outline, for its later ranges: served as it was while the page is the same one. */
   private kept: SnapshotOutline | null = null;
 
@@ -89,36 +111,107 @@ export class ElementRefs {
     this.kept = outline;
   }
 
+  /**
+   * A shown diff's lines as the next diff's baseline (M2g-1), leaving the outline the agent read for its later ranges
+   * (round 1 of #145: `start` pages through what the agent read, never a diff's whole read).
+   */
+  rebase(lines: ReadonlyMap<string, string>): void {
+    if (this.kept) this.kept = { ...this.kept, lines };
+  }
+
   /** The latest outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
   outline(pageId: string): SnapshotOutline | null {
     return pageId && this.kept?.pageId === pageId && this.current?.pageId === pageId ? this.kept : null;
   }
 
-  /** The refs of a new snapshot, for the page's keys, in order. Every earlier ref is stale from now on. */
-  issue(pageId: string, token: string, keys: readonly number[]): Map<number, string> {
+  /**
+   * The refs of a new snapshot, for the page's keys, in order. An earlier ref is stale from now on, unless (with the
+   * page's ids, `sids`: key → id) its element is in this snapshot too: then it's the same ref.
+   */
+  issue(pageId: string, token: string, keys: readonly number[], sids?: ReadonlyMap<number, number>, pinned = true): Map<number, string> {
+    const { byKey, keyByRef } = this.refsFor(pageId, keys, sids);
+    // The one before stays behind it, on the same page: a ref from it still names its element there (M2g-1).
+    if (this.current && this.current.pageId === pageId) {
+      const kept: typeof this.earlier = [];
+      let pinnedKept = pinned;
+      let diffs = pinned ? 0 : 1;
+      for (const snap of [this.current, ...this.earlier]) {
+        if (snap.pinned ? !pinnedKept : diffs < SNAPSHOT_KEPT) {
+          kept.push(snap);
+          if (snap.pinned) pinnedKept = true;
+          else diffs++;
+        }
+      }
+      this.earlier = kept;
+    } else this.earlier = [];
+    this.current = { pageId, token, keys: keyByRef, pinned };
+    return byKey;
+  }
+
+  /**
+   * The refs `issue` would give a read, without issuing them (round 1 of #145, B1): a diff that won't be shown (too
+   * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
+   */
+  preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept };
+    try {
+      return this.refsFor(pageId, keys, sids).byKey;
+    } finally {
+      Object.assign(this, saved);
+    }
+  }
+
+  /** Refs for a read's keys, by the page's ids where it has them (the same element, the same ref). */
+  private refsFor(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): { byKey: Map<number, string>; keyByRef: Map<string, number> } {
     const byKey = new Map<number, string>();
     const keyByRef = new Map<string, number>();
+    // A new page: numbered from above every ref before it. When too few numbers are left for it (N-4), they start over
+    // at 1, and every snapshot before goes (none of their refs resolves again: no old ref names a new element).
+    if (pageId && (!this.base || this.base.pageId !== pageId) && this.next + SID_MAX + keys.length > REF_MAX) {
+      this.next = 1;
+      this.current = null;
+      this.earlier = [];
+      this.kept = null;
+    }
+    if (sids && pageId && (!this.base || this.base.pageId !== pageId)) this.base = { pageId, from: this.next - 1 };
+    const taken = new Set<string>();
     for (const key of keys) {
       if (byKey.has(key)) continue;
-      const ref = `e${this.next++}`;
+      const sid = sids?.get(key);
+      let ref: string;
+      if (sid !== undefined && this.base && this.base.pageId === pageId && Number.isInteger(sid) && sid > 0 && sid <= SID_MAX) {
+        ref = `e${this.base.from + sid}`;
+        // Two keys with one id (never from the page's script): the second gets a ref of its own.
+        if (taken.has(ref)) ref = `e${this.next++}`;
+        else this.next = Math.max(this.next, this.base.from + sid + 1);
+      } else {
+        // In turn, above every number the page's ids can map to (round 2 of #145): never one a later id of it takes.
+        if (sid !== undefined && this.base && this.base.pageId === pageId) this.next = Math.max(this.next, this.base.from + SID_MAX + 1);
+        ref = `e${this.next++}`;
+      }
+      taken.add(ref);
       byKey.set(key, ref);
       keyByRef.set(ref, key);
     }
-    this.current = { pageId, token, keys: keyByRef };
-    return byKey;
+    return { byKey, keyByRef };
   }
 
   /** What a model's ref names on the page it's on now (`pageId`). */
   resolve(ref: unknown, pageId: string): ElementLookup {
     if (typeof ref !== 'string' || !/^e[1-9][0-9]{0,8}$/.test(ref) || Number(ref.slice(1)) >= this.next) return { ok: false, why: 'unknown' };
-    const key = this.current?.keys.get(ref);
-    if (key === undefined || this.current!.pageId !== pageId || !pageId) return { ok: false, why: 'stale' };
-    return { ok: true, token: this.current!.token, key };
+    if (!pageId) return { ok: false, why: 'stale' };
+    // The latest snapshot first; then the ones kept behind it (an element the page replaced since is found again there).
+    for (const snap of this.current?.pageId === pageId ? [this.current, ...this.earlier] : []) {
+      const key = snap.keys.get(ref);
+      if (key !== undefined && snap.pageId === pageId) return { ok: true, token: snap.token, key };
+    }
+    return { ok: false, why: 'stale' };
   }
 
   /** The page moved on (or the tab went to sleep): every ref is stale. */
   forget(): void {
     this.current = null;
+    this.earlier = [];
     this.kept = null;
   }
 }
@@ -133,6 +226,10 @@ export interface SnapshotOutline {
   text: string;
   refs: number;
   note?: string;
+  /** Its lines by the page's ids (snapshotLines), for the diff after the agent's next action (M2g-1). */
+  lines?: ReadonlyMap<string, string>;
+  /** The read was cut short (too many elements, refs, or too slow): no baseline for a diff (round 1 of #145). */
+  cut?: boolean;
 }
 
 /** What an agent hears for a ref that isn't good (M2c's actions), one sentence each. */
@@ -174,16 +271,27 @@ export function snapshotKeys(read: SnapshotRead): number[] {
  * the refs issued for the read's keys (ElementRefs.issue). A field Chord never lets an agent touch has no ref and
  * says why. Returns the text and how many refs it holds.
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>): { text: string; refs: number } {
-  const lines: string[] = [];
+/**
+ * Runs of rows alike (a list, a table): past ROWS_COLLAPSE of them, the first ROWS_SHOWN are shown and the rest said in
+ * one line (the owner, 2026-11-24: as effective, for as few tokens). `find` shows them.
+ */
+export const ROWS_COLLAPSE = 8;
+export const ROWS_SHOWN = 5;
+
+/**
+ * The outline's text. With `find`, only the elements whose name has that text (any case), each with the elements it's
+ * in; else runs of more than ROWS_COLLAPSE rows alike (each the same roles, the same shape) show their first ROWS_SHOWN.
+ */
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[] } {
+  const nodes = read.nodes;
   let count = 0;
-  for (const node of read.nodes) {
+  const lineOf = (node: SnapshotRead['nodes'][number]): string | null => {
     const depth = Math.max(0, Math.min(40, Math.floor(node.depth)));
     const role = /^[a-z][a-z-]{0,30}$/.test(node.role) ? node.role : 'generic';
     const name = clipName(node.name ?? '');
     const parts = [`${'  '.repeat(depth)}- ${role === 'text' ? 'text:' : role}`];
     if (name) parts.push(quoted(name));
-    else if (role === 'text') continue;
+    else if (role === 'text') return null;
     const sensitive = node.field ? sensitiveField(node.field) : null;
     const ref = !sensitive && node.key !== undefined ? refs.get(node.key) : undefined;
     if (ref) {
@@ -198,9 +306,120 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     }
     if (node.choice && !sensitive) parts.push(`[choice=${quoted(clipName(node.choice))}]`);
     if (sensitive) parts.push(`[${SENSITIVE_NOTE[sensitive]}]`);
-    lines.push(parts.join(' '));
+    return parts.join(' ');
+  };
+  const depthOf = (i: number) => Math.max(0, Math.min(40, Math.floor(nodes[i]!.depth)));
+  // Every node's own line, uncollapsed (snapshotLines).
+  if (opts.whole) return { text: '', refs: 0, lines: nodes.map((n) => lineOf(n)) };
+  const lines: string[] = [];
+  // find: the matches, each with the elements it's in (those not shown yet).
+  const find = opts.find?.trim().toLowerCase();
+  if (find) {
+    const path: number[] = [];
+    const shown = new Set<number>();
+    for (let i = 0; i < nodes.length; i++) {
+      const d = depthOf(i);
+      while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
+      if ((nodes[i]!.name ?? '').toLowerCase().includes(find)) {
+        for (const a of [...path, i]) {
+          if (shown.has(a)) continue;
+          shown.add(a);
+          const line = lineOf(nodes[a]!);
+          if (line) lines.push(line);
+        }
+      }
+      path.push(i);
+    }
+    return { text: lines.join('\n'), refs: count };
   }
-  return { text: lines.join('\n'), refs: count };
+  // Each node's subtree ends where the next node at its depth or above begins.
+  const ends: number[] = new Array(nodes.length);
+  const open: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    while (open.length && depthOf(open[open.length - 1]!) >= depthOf(i)) ends[open.pop()!] = i;
+    open.push(i);
+  }
+  for (const i of open) ends[i] = nodes.length;
+  // A row's shape: its own and its subtree's roles and states, each at its depth below it (never names: rows alike
+  // differ there; states do count, so a checked or disabled row is never hidden in a run: round 1 of #145). Made only
+  // when a row has a next sibling of the same subtree size (round 1 of #145, SF4: it was made for every node, the page's
+  // top ones whole, at every level).
+  const shapeOf = (i: number) => {
+    const base = depthOf(i);
+    const parts: string[] = [];
+    for (let k = i; k < ends[i]!; k++) parts.push(`${depthOf(k) - base}:${nodes[k]!.role}${nodes[k]!.states?.length ? `[${nodes[k]!.states!.join(' ')}]` : ''}`);
+    return parts.join(',');
+  };
+  let collapsed = 0;
+  const render = (from: number, to: number) => {
+    let i = from;
+    while (i < to) {
+      const d = depthOf(i);
+      // The run of rows alike from here: siblings (the same depth, one after another) of the same shape. A node with no
+      // next sibling has no run, and no shape is made for it.
+      const run = [i];
+      let k = ends[i]!;
+      const size = ends[i]! - i;
+      let shape: string | undefined;
+      while (k < to && depthOf(k) === d && ends[k]! - k === size && (shape ??= shapeOf(i)) === shapeOf(k)) {
+        run.push(k);
+        k = ends[k]!;
+      }
+      const shownRows = run.length > ROWS_COLLAPSE ? run.slice(0, ROWS_SHOWN) : run;
+      for (const r of shownRows) {
+        const line = lineOf(nodes[r]!);
+        if (line) lines.push(line);
+        render(r + 1, ends[r]!);
+      }
+      if (shownRows.length < run.length) {
+        const more = run.length - shownRows.length;
+        collapsed += more;
+        const role = /^[a-z][a-z-]{0,30}$/.test(nodes[i]!.role) ? nodes[i]!.role : 'generic';
+        lines.push(`${'  '.repeat(d)}- … ${more} more ${role === 'text' ? 'lines' : role} like these (call snapshot with find to see one by its name)`);
+      }
+      i = k;
+    }
+  };
+  render(0, nodes.length);
+  return { text: lines.join('\n'), refs: count, ...(collapsed ? { collapsed } : {}) };
+}
+
+/**
+ * The outline's lines by what they show (M2g-1: the diff after an action): an element by the page's id for it, a text by
+ * the element it's in and its place there; each line as the outline gives it, without its indent.
+ */
+export function snapshotLines(read: SnapshotRead, refs: ReadonlyMap<number, string>): Map<string, string> {
+  const lines = new Map<string, string>();
+  const text = snapshotOutline({ ...read, nodes: read.nodes }, refs, { whole: true }).lines!;
+  const parents: { depth: number; id: string }[] = [];
+  const texts = new Map<string, number>();
+  read.nodes.forEach((node, i) => {
+    const line = text[i];
+    while (parents.length && parents[parents.length - 1]!.depth >= node.depth) parents.pop();
+    const parent = parents.length ? parents[parents.length - 1]!.id : 'top';
+    let id: string;
+    if (node.sid !== undefined) id = `s${node.sid}`;
+    else {
+      const k = (texts.get(parent) ?? 0) + 1;
+      texts.set(parent, k);
+      id = `${parent}/${node.role}${k}`;
+    }
+    if (node.sid !== undefined) parents.push({ depth: node.depth, id });
+    if (line !== null && line !== undefined && !lines.has(id)) lines.set(id, line.trimStart());
+  });
+  return lines;
+}
+
+/** What changed between two outlines' lines (snapshotLines): new ones (+), changed ones as they are now (~), gone ones (-). */
+export function snapshotDiff(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string[] {
+  const out: string[] = [];
+  for (const [id, line] of after) {
+    const was = before.get(id);
+    if (was === undefined) out.push(`+ ${line}`);
+    else if (was !== line) out.push(`~ ${line}`);
+  }
+  for (const [id, line] of before) if (!after.has(id)) out.push(`- ${line}`);
+  return out;
 }
 
 /** Chord's note on what the snapshot left out, if anything. */
@@ -268,6 +487,7 @@ export function cleanSnapshotRead(raw: unknown): SnapshotRead | null {
     if (typeof n['level'] === 'number') node.level = n['level'];
     if (Array.isArray(n['states'])) node.states = (n['states'] as unknown[]).filter((s): s is string => typeof s === 'string').slice(0, 8);
     if (typeof n['choice'] === 'string') node.choice = n['choice'].slice(0, 2000);
+    if (typeof n['sid'] === 'number' && Number.isInteger(n['sid']) && n['sid'] > 0 && n['sid'] < 1e8) node.sid = n['sid'];
     const f = n['field'] as Record<string, unknown> | undefined;
     if (f && typeof f === 'object') {
       const s = (k: string) => (typeof f[k] === 'string' ? (f[k] as string).slice(0, 200) : '');

@@ -85,8 +85,10 @@ const grantKey = (card: { kind: ApprovalKind; subject: string }) => `${card.kind
  */
 const openKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }): string => (card.kind === 'site' ? `site:${card.subject}` : `${card.kind}:${card.subject}:${card.tab ?? ''}`);
 /**
- * A risky step's card is never shared (Neon's review of #112): each call asks its own, so one Allow runs one action,
- * however many calls ask for the same step at once. Its late answer is still kept by the step (openKey).
+ * A risky step's card is never shared by two calls waiting at once (Neon's review of #112): one Allow runs one action,
+ * however many calls ask for the same step together. A retry after *waiting* joins the card still up for that step
+ * when no call waits on it any more (Neon's review of M2g-1, B1): never a second card for one step. Its late answer
+ * is kept by the step (openKey).
  */
 let lastStepCard = 0;
 const cardKey = (card: { kind: ApprovalKind; subject: string; tab: string | null }): string => (card.kind === 'step' ? `${openKey(card)}#${++lastStepCard}` : openKey(card));
@@ -113,6 +115,8 @@ export class ControlAgent {
   private readonly grants = new Map<string, 'always' | 'deny'>();
   /** Cards up now, one per kind, subject and tab. */
   private readonly open = new Map<string, OpenCard>();
+  /** A step's card up now, by its step (openKey): a retry joins it once no call waits on it. */
+  private readonly openSteps = new Map<string, OpenCard>();
   /** Cards answered *once* after their asks had gone: the next ask of each takes it. */
   /** Cards answered *once* after their asks had gone: the next ask of each takes it, if it's soon and for the same address. */
   private readonly late = new Map<string, { at: number; url: string; grant: 'once' | 'always' }>();
@@ -184,14 +188,16 @@ export class ControlAgent {
   /**
    * One tool call on a tab (null: none). Refused at once while stopped; held
    * while the tab is paused; answers `refused('stopped')` the moment Stop is
-   * pressed, whatever `run` is still doing.
+   * pressed, or the client gives up (`cancelled`: round 1 of #145, SF3), whatever
+   * `run` is still doing. A call the client gave up on while held never runs.
    */
-  async call<T>(tab: string | null, run: (signal: AbortSignal) => Promise<T>, refused: (why: CallRefusal) => T): Promise<T> {
+  async call<T>(tab: string | null, run: (signal: AbortSignal) => Promise<T>, refused: (why: CallRefusal) => T, cancelled?: AbortSignal): Promise<T> {
     const key = tab ?? NO_TAB;
+    if (cancelled?.aborted) return refused('stopped');
     let admits = controlAdmits(this.state(key));
-    if (admits === 'wait') admits = await this.unpaused(key);
+    if (admits === 'wait') admits = await this.unpaused(key, cancelled);
     if (admits !== 'go') return refused(admits === 'wait' ? 'paused' : 'stopped');
-    const signal = this.stopping.signal;
+    const signal = cancelled ? AbortSignal.any([this.stopping.signal, cancelled]) : this.stopping.signal;
     this.step(key, { t: 'call' });
     try {
       return await new Promise<T>((resolve, reject) => {
@@ -206,22 +212,25 @@ export class ControlAgent {
     }
   }
 
-  /** Waits out a pause: go once the user leaves the tab, stopped on Stop, still waiting after CONTROL_WAIT_MS. */
-  private unpaused(key: string): Promise<'go' | 'wait' | 'stopped'> {
+  /** Waits out a pause: go once the user leaves the tab, stopped on Stop or the client's cancel, still waiting after CONTROL_WAIT_MS. */
+  private unpaused(key: string, cancelled?: AbortSignal): Promise<'go' | 'wait' | 'stopped'> {
     return new Promise((resolve) => {
       const check = () => {
         const now = controlAdmits(this.state(key));
         if (now === 'wait') return;
         finish(now);
       };
+      const gaveUp = () => finish('stopped');
       const finish = (result: 'go' | 'wait' | 'stopped') => {
         clearTimeout(timer);
         this.waiters.delete(check);
+        cancelled?.removeEventListener('abort', gaveUp);
         resolve(result);
       };
       const timer = setTimeout(() => finish('wait'), CONTROL_WAIT_MS);
       timer.unref?.();
       this.waiters.add(check);
+      cancelled?.addEventListener('abort', gaveUp, { once: true });
     });
   }
 
@@ -248,12 +257,17 @@ export class ControlAgent {
     const key = openKey(card);
     const late = this.late.get(key);
     if (late) {
-      this.late.delete(key);
       // Only soon after, and only for the page it was given on: a once answers for one read of what the card named.
       // A step's late Allow counts for 2 minutes, and only for that same step (its key names the tab, page, ref and action).
-      if (Date.now() - late.at <= (card.kind === 'step' ? STEP_LATE_MS : CONTROL_WAIT_MS) && late.url === (card.target[0] ?? '')) return late.grant;
+      // Spent when it answers; gone once it's too old; kept for its own page otherwise (Neon's review of M2g-1, B1).
+      if (Date.now() - late.at > (card.kind === 'step' ? STEP_LATE_MS : CONTROL_WAIT_MS)) this.late.delete(key);
+      else if (late.url === (card.target[0] ?? '')) {
+        this.late.delete(key);
+        return late.grant;
+      }
     }
-    const open = (card.kind === 'step' ? undefined : this.open.get(key)) ?? this.openCard(card);
+    const waitingStep = card.kind === 'step' ? this.openSteps.get(key) : undefined;
+    const open = (card.kind === 'step' ? (waitingStep && waitingStep.askers === 0 && !waitingStep.cancel.signal.aborted ? waitingStep : undefined) : this.open.get(key)) ?? this.openCard(card);
     // Another tab waiting on a card up already (a site card is the site's): its bar says it's waiting too.
     const tab = card.tab ?? NO_TAB;
     if (!open.tabs.has(tab)) {
@@ -311,11 +325,21 @@ export class ControlAgent {
         return 'deny';
       } finally {
         if (this.open.get(key) === open) this.open.delete(key);
+        if (this.openSteps.get(lateKey) === open) this.openSteps.delete(lateKey);
         for (const waited of open.tabs) this.step(waited, { t: 'answer', card: id });
       }
     })();
     this.open.set(key, open);
+    if (card.kind === 'step') this.openSteps.set(lateKey, open);
     return open;
+  }
+
+  /**
+   * An action runs on this tab: a step's late Allow given there before is spent (Neon's review of M2g-1, B1). It was
+   * for the retry of that step, and the page has moved on since.
+   */
+  dropLateSteps(tab: string): void {
+    for (const key of [...this.late.keys()]) if (key.startsWith('step:') && key.endsWith(`:${tab}`)) this.late.delete(key);
   }
 
   /** Take down every card waiting (each answers `deny`): the assistant's turn ended. A late *once* goes too. */
@@ -341,6 +365,7 @@ export class ControlAgent {
       if (open.tabs.size === 0) {
         // Out of `open` now, before its answer settles: an ask meanwhile gets a card of its own, not this taken-down one.
         for (const [key, value] of this.open) if (value === open) this.open.delete(key);
+        for (const [key, value] of this.openSteps) if (value === open) this.openSteps.delete(key);
         open.cancel.abort();
       }
     }

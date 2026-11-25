@@ -12,7 +12,7 @@ import type { ControlAgent } from './gate';
 export interface ToolOutput {
   text?: string;
   /** Screenshots, for providers that take images through their CLI. */
-  image?: { data: string; mimeType: string };
+  image?: { data: string; mimeType: string; width?: number; height?: number };
   isError?: boolean;
 }
 
@@ -108,6 +108,15 @@ export interface ControlScope {
   mayInspect(node: TabNode, tool: 'read_form' | 'propose_fill' | 'page_diagnostics'): string | null;
   /** How long a call waits on a card before it answers *waiting* (outside agents: CONTROL_WAIT_MS); absent, as long as it takes. */
   readonly cardWaitMs?: number;
+  /**
+   * How long a Send data card waits (absent: cardWaitMs). Never cut by a call's budget for cards (#143; Neon's review
+   * of M2g-1, B2): no answer drops what the page sent, so it always gets its full wait.
+   */
+  readonly sendWaitMs?: number;
+  /** wait_for is offered (outside agents alone: Neon's round 1 of M2g-1, B-4); absent, it's refused as no such tool. */
+  readonly waits?: boolean;
+  /** No diff after an action (batch's steps but its last: one diff for the whole batch, M2g-1). */
+  readonly noDiff?: boolean;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */
   activity(tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
   /** search_history and search_archive, already kept to what may be read; absent, they're not offered. */
