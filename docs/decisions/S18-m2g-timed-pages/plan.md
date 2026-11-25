@@ -209,25 +209,25 @@ Result tokens alone mislead. Every call is a model turn that re-sends the whole 
 - The form's metered journey also carried a batch that was meant to fail.
 - One timed-table cell was Wayland's time in the X11 row.
 
-Now every journey starts with a snapshot, as an agent knowing nothing of the page would. Linux container, X11, at `917002a`:
+Now every journey starts with a snapshot, as an agent knowing nothing of the page would. Linux container, X11, at `485a0b0`, after by role and name was dropped and main (#150) merged:
 
 | Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |
 |---|---|---|---|---|---|---|
-| Bot game, one hand | yes → yes | 8 → **6** | 790 → 859 | 1,725 → 2,495 | 81,334 → **65,622** (−19%) | 4.8 → 4.2 |
-| Timed table, two turns | yes → yes | 8 → **5** | 781 → **563** | 1,725 → 2,495 | 81,220 → **54,048** (−33%) | 4.3 → 3.6 |
-| A 20-field form | yes → yes | 22 → **3** | 1,606 → 974 | 1,725 → 2,495 | 236,381 → **33,033** (−86%) | 6.1 → 4.1 |
-| A page that draws itself | yes → yes | 3 → 3 | 202 → 232 | 1,725 → 2,495 | 29,570 → 31,910 (**+8%**) | 1.0 → 0.9 |
-| A 300-row list | yes → yes | 3 → 4 | 10,290 → **510** | 1,725 → 2,495 | 49,746 → **43,295** (−13%) | 0.4 → 0.3 |
-| A picture of the view | yes → yes | 2 → 2 | 1,108 → 1,109 | 1,725 → 2,495 | 20,602 → 22,144 (**+7%**) | 0.1 → 0.1 |
+| Bot game, one hand | yes → yes | 8 → **6** | 790 → 859 | 1,725 → 2,330 | 81,334 → **64,632** (−21%) | 4.8 → 4.3 |
+| Timed table, two turns | yes → yes | 8 → **5** | 781 → **563** | 1,725 → 2,330 | 81,220 → **53,223** (−34%) | 4.3 → 3.6 |
+| A 20-field form | yes → yes | 22 → **3** | 1,606 → 974 | 1,725 → 2,330 | 236,381 → **32,538** (−86%) | 6.1 → 4.1 |
+| A page that draws itself | yes → yes | 3 → 3 | 202 → 232 | 1,725 → 2,330 | 29,570 → 31,415 (**+6%**) | 1.0 → 0.9 |
+| A 300-row list | yes → yes | 3 → 4 | 10,290 → **508** | 1,725 → 2,330 | 49,746 → **42,628** (−14%) | 0.4 → 0.3 |
+| A picture of the view | yes → yes | 2 → 2 | 1,108 → 1,109 | 1,725 → 2,330 | 20,602 → 21,814 (**+6%**) | 0.1 → 0.1 |
 
-The same on Wayland. With one CPU, also the same, except the timed table's results came to 618 tokens.
+Wayland gives the same counts. With by role and name still in (`917002a`), the tool definitions were 2,495: dropping it brought them down by 165 tokens a call, and the two rows #145 doesn't change went from +8% and +7% to +6%.
 
 **The answer:**
 - Every journey still succeeds.
-- *The form* (−86%) and *the timed table* (−33%): `batch` and `wait_for` save calls.
-- *The bot hand* (−19%): after one snapshot, each action's diff replaces a second look (8 → 6 calls). The diffs cost more result tokens than they save (859 against 790), but every call saved is a whole context.
-- *The 300-row list* (−13%): collapsed rows and `find` cut its results from 10,290 to 510 tokens, but it takes one more call (a `find` after the first look). Most of its saving is gone at 8,000 tokens a call.
-- *The two journeys #145 doesn't change* read 7–8% more: the larger tool list alone, +770 tokens on every call. That's M2g-2's tool-list diet.
+- *The form* (−86%) and *the timed table* (−34%): `batch` and `wait_for` save calls.
+- *The bot hand* (−21%): after one snapshot, each action's diff replaces a second look (8 → 6 calls). The diffs cost more result tokens than they save (859 against 790), but every call saved is a whole context.
+- *The 300-row list* (−14%): collapsed rows and `find` cut its results from 10,290 to 508 tokens, but it takes one more call (a `find` after the first look). Most of its saving is gone at 8,000 tokens a call.
+- *The two journeys #145 doesn't change* read 6% more: the larger tool list alone, +605 tokens on every call. That's M2g-2's tool-list diet.
 - Wall time is Chord's own. A real agent's turn takes seconds of model time, so the calls saved (2, 3 and 19) are most of the time saved.
 
 **By change** (each kept only where a journey shows it pays):
