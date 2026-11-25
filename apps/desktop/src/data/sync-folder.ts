@@ -25,7 +25,7 @@ const live = (): void => {
   if (abandoned) throw new Abandoned();
 };
 
-export class Abandoned extends Error {
+class Abandoned extends Error {
   constructor() {
     super('Sync let this worker go');
     this.name = 'Abandoned';

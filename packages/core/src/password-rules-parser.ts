@@ -23,7 +23,7 @@ export type PasswordRuleIdentifier = 'ascii-printable' | 'digit' | 'lower' | 'sp
 
 const IDENTIFIERS: readonly PasswordRuleIdentifier[] = ['ascii-printable', 'digit', 'lower', 'special', 'unicode', 'upper'];
 
-export type PasswordRuleName = 'allowed' | 'max-consecutive' | 'max-repeating' | 'max-sequential' | 'required' | 'minlength' | 'maxlength';
+type PasswordRuleName = 'allowed' | 'max-consecutive' | 'max-repeating' | 'max-sequential' | 'required' | 'minlength' | 'maxlength';
 
 const RULE_NAMES: readonly PasswordRuleName[] = ['allowed', 'max-consecutive', 'max-repeating', 'max-sequential', 'required', 'minlength', 'maxlength'];
 
