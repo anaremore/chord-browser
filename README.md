@@ -27,8 +27,8 @@ Everything here works on `main` today and comes with the latest preview.
 - **Chrome extensions**, including password managers.
 - **Pop-out video:** a playing video floats into picture-in-picture when you switch tabs.
 - **Safe Browsing:** a warning before suspected phishing and malware sites and downloads, from Google's lists, checked on your computer. Release builds only (it needs Chord's API key); off in Google-free mode.
-- **Assistant** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. It can fill in a form you ask it to, once you've checked each value. Turn it off in Settings and it's gone.
-- **Agents:** let the AI agents you run (Claude Code, Codex, Antigravity) browse in Chord, in tabs of their own, after you say yes. They read one of your tabs only when you share it, and never see your passwords. Off until you turn it on in Settings → Agents.
+- **Assistant** (⌘/Ctrl+E): a side panel for quick conversations, using your own Claude Code or Codex app and subscription. You choose what it can read, from your tabs down to nothing at all; it cites what it read, and never sees your sign-in. It can fill in a form you ask it to, once you've checked each value, and click and type in the tab you're on when you ask, asking first before it acts on a new site and every time before it submits, pays, sends, deletes or leaves the site. Turn it off in Settings and it's gone.
+- **Agents:** let the AI agents you run (Claude Code, Codex, Antigravity) browse in Chord, in tabs of their own, after you say yes: read, click, type and fill in forms, asking before they act on a new site and every time before a risky step. They read one of your tabs only when you share it, and never see your passwords. Off until you turn it on in Settings → Agents.
 - **Effects:** restyle a site your way, with your own CSS, hidden elements, presets, or styles the assistant writes. Dry/Wet takes them off at once. They're styles only, and never load anything.
 - **Developer tools** dock beside the page, as in Chrome, or pop out into a window.
 - **Proxies:** one for every chord, or one for a chord of its own (HTTP, HTTPS or SOCKS5, or a configuration file), in place before any page loads.
@@ -38,8 +38,8 @@ Everything here works on `main` today and comes with the latest preview.
 |---|---|
 | ![The command bar over a page, with open tabs, a site search and suggestions for "wiki"](site/public/images/command-bar-1440.webp) | ![Split view: a Wikipedia article and an MDN page side by side](site/public/images/split-view-1440.webp) |
 | **Command bar:** tabs, history, the archive and actions in one place. | **Split view:** pages side by side, one entry in the sidebar. |
-| ![The assistant beside a Wikipedia article, answering from the page with a numbered citation](site/public/images/assistant-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
-| **Assistant:** answers from your tabs, with citations you can click. | **Themes:** each chord has its own colors, light or dark. |
+| ![The assistant filling in a ticket order in the tab, its card asking: Place the order on example.com? with Allow, Don’t and Show me](site/public/images/assistant-acting-1440.webp) | ![Settings, Appearance: the color scheme and a library of themes for the chord](site/public/images/themes-860.webp) |
+| **Assistant:** answers from your tabs, and clicks and types in the one you’re on, asking first. | **Themes:** each chord has its own colors, light or dark. |
 
 ## Try the preview
 

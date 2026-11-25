@@ -54,8 +54,26 @@ const say = async (text) => {
   }
 };
 
+/**
+ * The acting picture's turn (shots.spec.ts): it looks the attached tab over, fills in the ticket form, and clicks
+ * Place order, which Chord holds on its card. Each step finds its element by the name the outline quotes.
+ */
+async function tickets(ref) {
+  const snapshot = JSON.parse(toolText(await callTool('snapshot', { tab_id: ref })) || '{}');
+  const outline = String(snapshot.content ?? snapshot.data?.content ?? '');
+  const at = (name) => outline.split('\n').find((line) => line.includes(`"${name}" [ref=`))?.match(/\[ref=(e\d+)\]/)?.[1] ?? 'e0';
+  await callTool('type', { tab_id: ref, ref: at('Name'), text: 'Ada Lovelace' });
+  await callTool('type', { tab_id: ref, ref: at('Email'), text: 'ada@example.com' });
+  await callTool('click', { tab_id: ref, ref: at('Place order') });
+}
+
 async function turn(text) {
   const ref = /Attached: tab (t\d+)/.exec(text)?.[1];
+  if (ref && /\btickets\b/i.test(text)) {
+    await tickets(ref);
+    appendFileSync(sessionFile, `${JSON.stringify({ at: Date.now() })}\n`);
+    return write({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: session });
+  }
   let answer = 'Attach a tab and I can tell you what it says.';
   if (ref) {
     const page = JSON.parse(toolText(await callTool('read_tab', { tab_id: ref })) || '{}');
