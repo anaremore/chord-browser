@@ -613,7 +613,8 @@ export class AppWindow {
   keepFocusOffParked(comingBack = false): void {
     if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
     const now = webContents?.getFocusedWebContents?.() ?? null;
-    const cardless = comingBack && now !== null && now === pageOf(this.popover) && (this.popoverSize.width === 0 || this.popoverSize.height === 0);
+    // macOS's alone: AppKit's choice of first responder (Windows and Linux keep the focus where it was).
+    const cardless = comingBack && platform === 'darwin' && now !== null && now === pageOf(this.popover) && (this.popoverSize.width === 0 || this.popoverSize.height === 0);
     if (now && !this.isParkedOnly(now) && !cardless) return;
     // The page of yours that had it (or the window's own), only while it's one you see (Claude's S7, round 4 of #112:
     // after a tab switch it isn't, and focusing it would put your keys in a tab you left).
