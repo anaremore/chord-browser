@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ELECTRON_VOLUME, RESERVED_CPUS, SLOW_CPUS, STALE_MS, STORE_VOLUME, buildKey, containerName, cpusetCpus, dockerRunArgs, imageTag, parseArgs, pickCpuset, slowDefaults, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
+import { ELECTRON_VOLUME, RESERVED_CPUS, TESTS_START, narrowArgs, SLOW_CPUS, STALE_MS, STORE_VOLUME, buildKey, containerName, cpusetCpus, dockerRunArgs, imageTag, parseArgs, pickCpuset, slowDefaults, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
@@ -296,5 +296,20 @@ describe('--slow', () => {
   });
   it('nothing without it', () => {
     expect(parsed(['agents.spec.ts'])).toMatchObject({ cpus: null, playwright: ['agents.spec.ts'] });
+  });
+});
+
+describe('a share of a CPU: built at full speed, tested at the share', () => {
+  it('narrows to the slot’s first CPU, held to the share', () => {
+    expect(narrowArgs('chord-e2e-run-x-1', '12-15', 0.35)).toEqual(['update', '--cpuset-cpus', '12', '--cpus', '0.35', 'chord-e2e-run-x-1']);
+    expect(narrowArgs('n', '7', 0.5)).toEqual(['update', '--cpuset-cpus', '7', '--cpus', '0.5', 'n']);
+  });
+
+  it('knows when the tests start from the line in-container.sh prints then', () => {
+    const script = readFileSync(join(import.meta.dirname, '../e2e-linux/in-container.sh'), 'utf8');
+    expect(script).toContain('step() { echo "[e2e-linux] $1');
+    expect(script).toContain('step "E2E on $display"');
+    expect(`[e2e-linux] E2E on x11 (31 s)`.includes(TESTS_START)).toBe(true);
+    expect(`[e2e-linux] pnpm build (5 s)`.includes(TESTS_START)).toBe(false);
   });
 });

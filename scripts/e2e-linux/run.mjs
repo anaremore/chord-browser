@@ -14,7 +14,8 @@
 //   --cpus <n>          n CPUs of the run's own (4 when not given, as CI's runners have; perf.spec.ts's baselines are
 //                       taken so). Each run gets a slot of its own from this machine's CPUs, never CPUs 0-3 (left for
 //                       you), so runs from several worktrees don't share cores. A fraction (0.35) is one CPU of its own
-//                       held to that share of it (a CFS quota). --cpus all: every CPU, shared, as before slots.
+//                       held to that share of it (a CFS quota) while the tests run; install and build run on a whole
+//                       slot first, at full speed. --cpus all: every CPU, shared, as before slots.
 //   --slow              a slow machine, to bring races out: --cpus 0.35 unless --cpus is given, and Playwright's
 //                       --retries 0 --repeat-each 5 unless those are given
 //   --throttle <rate>   pages' renderers slowed that many times over CDP (Emulation.setCPUThrottlingRate), in every
@@ -120,6 +121,20 @@ export function pickCpuset({ total, size, taken = [], reserved = RESERVED_CPUS, 
   const free = slots.filter((start) => overlap(start) === 0);
   const start = free.length > 0 ? free[Math.floor(random() * free.length)] : slots.reduce((best, slot) => (overlap(slot) < overlap(best) ? slot : best), slots[0]);
   return { cpuset: width === 1 ? String(start) : `${start}-${start + width - 1}`, shared: free.length === 0 };
+}
+
+/**
+ * A run held to a share of a CPU (--cpus 0.35, --slow) installs and builds on a whole slot first, at full speed: that
+ * part isn't what's being tested, and at 0.35 of one CPU it took 124 s of a 363 s run. When the tests start
+ * (TESTS_START, in-container.sh's step line), the container is narrowed to one CPU of its slot at the share
+ * (`docker update`), so what's timed runs as slow as asked.
+ */
+export const TESTS_START = '[e2e-linux] E2E on ';
+
+/** `docker update`'s arguments that narrow a run to its slot's first CPU, held to `quota` of it. */
+export function narrowArgs(name, cpuset, quota) {
+  const first = Math.min(...cpusetCpus(cpuset));
+  return ['update', '--cpuset-cpus', String(first), '--cpus', String(quota), name];
 }
 
 /** The image's tag: a hash of the Dockerfile and the pnpm version it bakes in, so a change to either builds a new one. */
@@ -332,10 +347,11 @@ async function main() {
    * passed on rather than inherited because wsl.exe writes each stream at file offsets of its own,
    * so with both sent to one file (> log 2>&1) stderr overwrote stdout.
    */
-  const dockerLive = (args, input) => {
+  const dockerLive = (args, input, onOutput = null) => {
     const [command, argv] = dockerCommand(args);
     const child = spawn(command, argv, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdout.pipe(process.stdout, { end: false });
+    if (onOutput) child.stdout.on('data', (chunk) => onOutput(chunk.toString()));
     child.stderr.pipe(process.stderr, { end: false });
     child.stdin.on('error', () => {}); // The container can exit (a bad image, say) before reading it all.
     child.stdin.end(input);
@@ -437,18 +453,30 @@ async function main() {
     if (total > 1) {
       const live = docker(['ps', '--quiet', '--filter', 'label=chord-e2e=run'], { quiet: true })?.split(/\s+/).filter(Boolean) ?? [];
       const taken = live.length ? (docker(['inspect', '--format', '{{.HostConfig.CpusetCpus}}', ...live], { quiet: true }) ?? '').split('\n') : [];
-      const picked = pickCpuset({ total, size: Math.ceil(want), taken });
+      // A share of a CPU still installs and builds on a whole slot; it's narrowed when the tests start (TESTS_START).
+      const picked = pickCpuset({ total, size: Number.isInteger(want) ? want : DEFAULT_CPUS, taken });
       cpuset = picked.cpuset;
       if (picked.shared) log(`Every CPU slot is in use by another run: sharing CPUs ${cpuset} with the fewest`);
     }
     if (!Number.isInteger(want)) quota = want;
   }
   const env = { ...process.env, ...(options.throttle ? { CHORD_E2E_CPU_THROTTLE: String(options.throttle) } : {}) };
-  const cpusSaid = cpuset ? `, CPUs ${cpuset}${quota ? ` at ${quota} of one` : ''}` : options.cpus === 'all' ? ', every CPU' : '';
+  const cpusSaid = cpuset ? `, CPUs ${cpuset}${quota ? ` (tests at ${quota} of CPU ${Math.min(...cpusetCpus(cpuset))})` : ''}` : options.cpus === 'all' ? ', every CPU' : '';
   const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${cpusSaid}${options.throttle ? `, pages ${options.throttle}x slower` : ''}`;
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
   const share = options.share === null ? null : dockerPath(resolve(options.share));
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota, share, build: buildKey(entries, image, env), env }), tar);
+  // A share of a CPU: installed and built on the whole slot, then narrowed to it as the tests start (TESTS_START).
+  let narrowed = !(quota && cpuset);
+  let tail = '';
+  const narrowWhenTestsStart = (text) => {
+    if (narrowed) return;
+    tail = (tail + text).slice(-4000);
+    if (!tail.includes(TESTS_START)) return;
+    narrowed = true;
+    if (docker(narrowArgs(name, cpuset, quota), { quiet: true }) === null) log(`Couldn't narrow ${name} to ${quota} of a CPU: its tests run on CPUs ${cpuset}`);
+    else log(`Tests at ${quota} of CPU ${Math.min(...cpusetCpus(cpuset))}; install and build ran on CPUs ${cpuset}`);
+  };
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota: cpuset ? null : quota, share, build: buildKey(entries, image, env), env }), tar, narrowWhenTestsStart);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);
