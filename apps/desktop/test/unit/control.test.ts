@@ -274,10 +274,14 @@ function fakePage(url: string, read: Answer) {
     off: (e: string, f: (...a: unknown[]) => void) => events.off(e, f),
     capturePage: async () => {
       at.onCapture?.();
-      return { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('secret') };
+      // Two pixels of different colors: a page drawn (extract.ts' oneColor).
+      return { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('secret'), toBitmap: () => Buffer.from([1, 2, 3, 255, 9, 9, 9, 255]) };
     },
     executeJavaScriptInIsolatedWorld: (_world: number, [script]: { code: string }[]) =>
-      typeof read === 'function'
+      // Whether the page shows anything yet (snapshot.ts' pageShows): it does.
+      script!.code.includes('const has = () =>')
+        ? Promise.resolve(true)
+        : typeof read === 'function'
         ? read(script!.code, events)
         : read === 'hang'
           ? new Promise(() => undefined)
@@ -873,6 +877,19 @@ describe('snapshot through the gate (S18 M2b)', () => {
     expect(refs.resolve('e3', second.page_id!)).toMatchObject({ ok: true, key: 0 });
     expect(refs.resolve('e5', second.page_id!)).toEqual({ ok: false, why: 'unknown' });
     expect(scope.memory.read.has('n1')).toBe(true);
+  });
+
+  it('a page that draws itself after it loads: an empty first look is taken once more when it shows something; still empty, said so (the owner, 2026-11-24)', async () => {
+    // Empty the first time, drawn the second.
+    let looks = 0;
+    const drawing = async (code: string, events: EventEmitter) => (code.includes('__chordSnapshots') && looks++ === 0 ? { url: 'https://news.test/a', title: 'Lobby', nodes: [], cut: {} } : page(nodes)(code, events));
+    const t = setup({ read: drawing, actions: true });
+    const out = snap(await t.call('snapshot', { tab_id: t.scope.refs.refFor('n1') }));
+    expect(looks).toBe(2);
+    expect(out.content).toContain('button "Go" [ref=e2]');
+    // Empty both times: the result says the page shows nothing yet, never an empty outline as if that were the page.
+    const u = setup({ read: page([]), actions: true });
+    expect(JSON.parse((await u.call('snapshot', { tab_id: u.scope.refs.refFor('n1') })).text!)).toMatchObject({ refs: 0, note: 'The page shows nothing yet (it may still be loading or drawing). Call snapshot again in a moment.' });
   });
 
   it('a page that moved on while it was read: no page_id, and its refs are never good', async () => {

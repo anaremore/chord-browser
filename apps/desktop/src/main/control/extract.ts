@@ -91,10 +91,28 @@ export async function readPage(contents: WebContents): Promise<PageRead | null> 
 }
 
 /** A tab's visible area as a PNG, at most 1280 px wide (tab_screenshot). */
+/** How long a picture that came back one color waits before it's taken again. */
+const BLANK_RETRY_MS = 300;
+
+/** Whether a picture is one color all over (sampled: every 97th pixel), or empty. */
+function oneColor(image: Electron.NativeImage): boolean {
+  const px = image.toBitmap();
+  if (px.length < 4) return true;
+  for (let i = 0; i < px.length; i += 4 * 97) if (px[i] !== px[0] || px[i + 1] !== px[1] || px[i + 2] !== px[2]) return false;
+  return true;
+}
+
 export async function screenshot(contents: WebContents): Promise<{ data: string; mimeType: string } | null> {
   if (contents.isDestroyed()) return null;
   try {
     let image = await pageCall(contents.capturePage(), null, READ_MS);
+    // One color all over (black: a tab not drawn yet, its first frame still to come; the owner, 2026-11-24): taken once
+    // more a moment later.
+    if (image && oneColor(image)) {
+      await new Promise((r) => setTimeout(r, BLANK_RETRY_MS));
+      if (contents.isDestroyed()) return null;
+      image = await pageCall(contents.capturePage(), null, READ_MS);
+    }
     if (!image) return null;
     if (image.getSize().width > 1280) image = image.resize({ width: 1280 });
     return { data: image.toPNG().toString('base64'), mimeType: 'image/png' };

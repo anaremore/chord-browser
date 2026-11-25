@@ -85,6 +85,7 @@ import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { PlayerInstaller } from './player/installer';
 import { playerRoot } from './player/paths';
 import { UPDATE_PUBLIC_KEY } from './update-key';
+import { takeUpdateFailure } from './update-outcome';
 import { RELEASE_DOWNLOADS } from './update-signing';
 
 // A bug in main must never put up Electron's "JavaScript error" box (a native dialog that
@@ -1205,6 +1206,11 @@ if (!app.requestSingleInstanceLock()) {
     // The tabs-with-an-icon index reads every tab, so no navigation waits for it: a slice of buckets a turn, the first
     // on a turn of its own (tens of ms in one pass at 35,000 nodes, a few ms a slice), never right after the task above.
     afterLaunch.run(() => browser!.tabs.warmIcons());
+    // A Windows update setup couldn't install (#142): setup put this version back and reopened it to say why.
+    afterLaunch.run(() => {
+      const failed = takeUpdateFailure(app.getPath('userData'));
+      if (failed) browser?.announce('update:failed', failed);
+    });
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.
     if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
@@ -1415,7 +1421,9 @@ if (!app.requestSingleInstanceLock()) {
             // A moment between snapshots, as an agent's are (seconds apart): the refs' items, place and shape are taken
             // in the task right after each (snapshot.ts), timed on its own.
             await new Promise((done) => setTimeout(done, 30));
-            const ms = await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { const r = globalThis.__chordSnapshots.get('timing'); return r ? r.finishMs : -1; })()` }]);
+            // Its task run by now, as it always is by an agent's next call (seconds later): on a slow runner its timer
+            // can still be pending after 30 ms, and the next snapshot timed would wait behind it (#154's macOS x64 run).
+            const ms = await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { const r = globalThis.__chordSnapshots.get('timing'); if (r && r.finish) r.finish(); return r ? r.finishMs : -1; })()` }]);
             after.push(Number(ms));
           }
           return { times, after, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };

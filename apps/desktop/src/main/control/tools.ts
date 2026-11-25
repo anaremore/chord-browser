@@ -291,6 +291,12 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   if (tool === 'tab_screenshot') {
     // What's on screen: a tab in reader view shows its article (its page waits, detached, where no picture can be taken).
     const reader = pageOf(browser.readers.viewFor(node.id));
+    // A page that draws itself after it loads (the owner's first look at a new tab): waited for a moment, never
+    // pictured empty (a reader view always shows its article).
+    if (!reader && !(await page.shows(FIRST_LOOK_MS))) {
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      return refuse(NOTHING_SHOWN('Take the picture'));
+    }
     const shot = await (reader ? controlPage(reader) : page).screenshot();
     // Kept only once the picture is taken, and never after Stop (as diagnostics and read_form do).
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -412,8 +418,14 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
   const pageId = page.id;
-  const token = randomBytes(12).toString('hex');
-  const read = await page.snapshot(scope.agent.id, token);
+  let token = randomBytes(12).toString('hex');
+  let read = await page.snapshot(scope.agent.id, token);
+  // Nothing in it: a page that draws itself after it loads (the owner, 2026-11-24: a new tab's first look came back
+  // empty). Taken once more when the page shows something, at most FIRST_LOOK_MS later; still nothing, the result says so.
+  if (read && read.nodes.length === 0 && !call.stopped() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped()) {
+    token = randomBytes(12).toString('hex');
+    read = await page.snapshot(scope.agent.id, token);
+  }
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read ? [read.url] : []));
   if (after) return refuse(after);
@@ -425,7 +437,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
   const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
   const outline = snapshotOutline(read, issued, find ? { find } : {});
-  const note = snapshotNote(read.cut);
+  const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : snapshotNote(read.cut);
   const retrievedAt = Date.now();
   refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
   scope.memory.read.add(node.id);
@@ -504,6 +516,10 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   if (snap.isError || !snap.text) return snap;
   return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), wait: result }) };
 }
+/** How long a first look waits for a page that draws itself after it loads, at most. */
+const FIRST_LOOK_MS = 2000;
+/** A page that shows nothing yet, said so (never an empty outline or a blank picture as if that were the page). */
+const NOTHING_SHOWN = (again: string) => `The page shows nothing yet (it may still be loading or drawing). ${again} again in a moment.`;
 
 /* ---------- Acting (S18 M2c) ---------- */
 

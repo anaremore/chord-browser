@@ -512,6 +512,25 @@ export async function waitInPage(contents: WebContents, want: WaitFor, ms: numbe
   return answer && typeof answer === 'object' && typeof (answer as WaitAnswer).met === 'boolean' ? (answer as WaitAnswer) : null;
 }
 
+/**
+ * Whether the page shows anything yet: text, or an image, a canvas, a control, a frame or an element with a role
+ * (the owner, 2026-11-24: a new tab's first look came back empty; its page draws itself after it loads). Waits for it
+ * at most `waitMs`, as the page changes. True at once on a page that already does.
+ */
+const SHOWS_SCRIPT = (waitMs: number) => `new Promise((done) => {
+  const has = () => { const b = document.body; return Boolean(b && (String(b.innerText || '').trim() || b.querySelector('img, svg, canvas, video, input, button, select, textarea, iframe, [role]'))); };
+  if (has()) return done(true);
+  let timer = 0;
+  const watch = new MutationObserver(() => { if (has()) { watch.disconnect(); clearTimeout(timer); setTimeout(() => done(true), 50); } });
+  watch.observe(document, { subtree: true, childList: true, characterData: true });
+  timer = setTimeout(() => { watch.disconnect(); done(has()); }, ${Number(waitMs)});
+})`;
+
+export async function pageShows(contents: WebContents, waitMs: number): Promise<boolean> {
+  if (contents.isDestroyed()) return false;
+  return (await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: SHOWS_SCRIPT(waitMs) }]), null, waitMs + 1000)) === true;
+}
+
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
 export async function snapshotPage(contents: WebContents, owner: string, token: string): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
