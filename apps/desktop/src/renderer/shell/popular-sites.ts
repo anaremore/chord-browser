@@ -2,7 +2,7 @@
  * First run's "What do you open every day?" (DESIGN.md §8.1) completes from
  * this short built-in list: no network while you type.
  */
-export const POPULAR_SITES = [
+const POPULAR_SITES = [
   'mail.google.com',
   'calendar.google.com',
   'docs.google.com',

@@ -30,7 +30,7 @@ const bouncy: KeyframeAnimationOptions = { duration: BOUNCY.durationMs, easing: 
 /** How a row arrives: from a little smaller (DESIGN.md §6.5, as Pinned's rows do). */
 const ENTER_SCALE = 0.96;
 /** An archived row shrinks to this as it fades (DESIGN.md §6.5). */
-export const ARCHIVED_SCALE = 0.92;
+const ARCHIVED_SCALE = 0.92;
 
 /** Slides a row to its place from `dy` px away (where it showed), on top of whatever it's doing. */
 export function slideFrom(el: HTMLElement, dy: number): void {

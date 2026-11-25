@@ -45,14 +45,14 @@ const hostOf = (origin: string) => {
 const day = (at: number) => new Date(at).toDateString();
 
 /** A *Not confirmed* sign-in's line in its detail (the owner's design 4A, S17 §6). */
-export function notConfirmedText(createdAt: number, now = Date.now()): string {
+function notConfirmedText(createdAt: number, now = Date.now()): string {
   const when = whenText(createdAt, now);
   const made = when === 'Today' || when === 'Yesterday' ? when.toLowerCase() : `on ${when}`;
   return `Not confirmed: Chord made this password ${made} and kept it, but hasn’t seen the site take it. If the sign-up didn’t go through, delete it.`;
 }
 
 /** *Today*, *Yesterday*, *Nov 2*, *Nov 2, 2025*: when a sign-in was last used, or saved. */
-export function whenText(at: number, now = Date.now()): string {
+function whenText(at: number, now = Date.now()): string {
   if (day(at) === day(now)) return 'Today';
   if (day(at) === day(now - 86_400_000)) return 'Yesterday';
   const date = new Date(at);

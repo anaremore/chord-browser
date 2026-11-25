@@ -64,7 +64,7 @@ export type Result =
   | { kind: 'imageAssistant'; key: string; title: string };
 
 /** The narrowing filters (DESIGN.md §7.3), in the order `@` lists them. */
-export const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
+const FILTERS: readonly { id: Filter; token: string; name: string; placeholder: string }[] = [
   { id: 'tabs', token: '@tabs', name: 'Tabs', placeholder: 'Search open tabs' },
   { id: 'pinned', token: '@pinned', name: 'Pinned', placeholder: 'Search pinned tabs' },
   { id: 'history', token: '@history', name: 'History', placeholder: 'Search history' },
@@ -74,7 +74,7 @@ export const FILTERS: readonly { id: Filter; token: string; name: string; placeh
   { id: 'actions', token: '@actions', name: 'Actions', placeholder: 'Search actions' },
 ];
 
-export const filterInfo = (id: Filter) => FILTERS.find((f) => f.id === id)!;
+const filterInfo = (id: Filter) => FILTERS.find((f) => f.id === id)!;
 
 /**
  * The scope the text switches to when Tab (or Space) follows it: a filter's
@@ -256,7 +256,7 @@ const archiveResult = (a: ArchivedTab): Result => ({
 });
 
 /** "github.com/anaremore/chord-browser": the address without scheme or `www.`. */
-export function shortUrl(url: string): string {
+function shortUrl(url: string): string {
   try {
     const u = new URL(url);
     const path = u.pathname === '/' ? '' : decodeURIComponent(u.pathname);

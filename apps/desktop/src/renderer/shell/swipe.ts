@@ -6,11 +6,11 @@
  */
 
 /** A swipe engages once it has moved this far sideways… */
-export const ENGAGE_PX = 8;
+const ENGAGE_PX = 8;
 /** …and clearly more sideways than up or down. */
-export const AXIS_RATIO = 1.5;
+const AXIS_RATIO = 1.5;
 /** Released past half the width, a swipe commits… */
-export const COMMIT_PROGRESS = 0.5;
+const COMMIT_PROGRESS = 0.5;
 /** …or moving toward the neighbor faster than this (px/ms). */
 export const COMMIT_SPEED = 0.5;
 /** No wheel events for this long ends a gesture where the OS sends no end phase. */

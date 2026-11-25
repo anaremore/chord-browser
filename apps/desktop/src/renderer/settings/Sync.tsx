@@ -19,7 +19,7 @@ import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
 /** "2 minutes ago", "just now", "3 hours ago", "on Nov 30". */
-export function agoText(at: number, now = Date.now()): string {
+function agoText(at: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
   if (s < 45) return 'just now';
   const m = Math.round(s / 60);
@@ -33,14 +33,14 @@ export function agoText(at: number, now = Date.now()): string {
 const aheadBy = (ms: number) => (ms >= 3_600_000 ? plural(Math.round(ms / 3_600_000), 'hour') : plural(Math.max(1, Math.round(ms / 60_000)), 'minute'));
 
 /** The On row's line: *On · Dropbox › Chord sync · Up to date*, or the last change from another computer. */
-export function onText(view: SyncView, now = Date.now()): string {
+function onText(view: SyncView, now = Date.now()): string {
   const where = view.folderName ? `${view.folderName} › Chord sync` : 'Chord sync';
   const state = view.pending > 0 ? `${plural(view.pending, 'change')} to write` : view.lastChange ? `Last change from ${view.lastChange.name}, ${agoText(view.lastChange.at, now)}` : 'Up to date';
   return `${view.state === 'paused' ? 'Paused' : 'On'} · ${where} · ${state}`;
 }
 
 /** A computer's line in the list: its system, and when it last synced. */
-export function computerText(c: SyncComputer, now = Date.now()): string {
+function computerText(c: SyncComputer, now = Date.now()): string {
   const parts = [c.os || 'Chord', c.app ? `Chord ${c.app}` : ''].filter(Boolean);
   if (c.self) return `${parts.join(' · ')} · This computer`;
   return `${parts.join(' · ')} · ${c.lastSync ? `Synced ${agoText(c.lastSync, now)}` : 'Not seen yet'}`;

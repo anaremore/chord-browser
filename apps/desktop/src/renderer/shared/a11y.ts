@@ -42,7 +42,7 @@ const itemsIn = (root: HTMLElement, items: string) => [...root.querySelectorAll<
  * `follow` (radios, tabs: the chosen one *is* the place), a choice made some
  * other way (a ↺ reset, another window) takes the keyboard along with it.
  */
-export function applyRoving(root: HTMLElement, items: string, current: string, follow = false): void {
+function applyRoving(root: HTMLElement, items: string, current: string, follow = false): void {
   const all = [...root.querySelectorAll<HTMLElement>(items)];
   if (all.length === 0) return;
   const enabled = all.filter(usable);
@@ -57,7 +57,7 @@ export function applyRoving(root: HTMLElement, items: string, current: string, f
 }
 
 /** Arrow keys, Home and End move focus between the widget's items (and choose it, with `activate`). */
-export function rovingKeyDown(event: KeyboardEvent<HTMLElement>, { items, orientation = 'both', activate = false }: RovingOptions): void {
+function rovingKeyDown(event: KeyboardEvent<HTMLElement>, { items, orientation = 'both', activate = false }: RovingOptions): void {
   if (event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
   const all = itemsIn(event.currentTarget, items);
   const at = all.indexOf(event.target as HTMLElement);

@@ -47,7 +47,7 @@ export interface NegativeStep extends BaseStep {
   readonly unreached?: true;
 }
 
-export type Step = SignInStep | NegativeStep;
+type Step = SignInStep | NegativeStep;
 
 export interface SitePage {
   /** Under /forms/ on the site. */

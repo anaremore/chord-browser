@@ -265,7 +265,7 @@ interface Rgba {
 const num = (s: string, scale = 1) => (s.endsWith('%') ? (Number.parseFloat(s) / 100) * scale : Number.parseFloat(s));
 
 /** Parses the color forms Chromium's computed styles use: rgb(a), oklch, oklab, color(srgb …). */
-export function parseColor(value: string): Rgba | null {
+function parseColor(value: string): Rgba | null {
   const v = value.trim();
   if (v === 'transparent') return { rgb: { r: 0, g: 0, b: 0 }, alpha: 0 };
   const m = /^(rgba?|oklch|oklab|color)\((.*)\)$/.exec(v);
@@ -322,7 +322,7 @@ interface TextSample {
 }
 
 /** Gathers the layers under each element's text, everything that paints included (tints don't take the pointer). */
-export function sampleText(selectors: string[]): TextSample[] {
+function sampleText(selectors: string[]): TextSample[] {
   const lifted: HTMLElement[] = [];
   for (const el of document.querySelectorAll<HTMLElement>('*')) {
     if (getComputedStyle(el).pointerEvents === 'none') {
@@ -359,7 +359,7 @@ export function sampleText(selectors: string[]): TextSample[] {
 }
 
 /** The lowest contrast of `sample` across every point of the gradients under it, over the worst-case material. */
-export function tokenContrast(sample: TextSample, appearance: Appearance): number {
+function tokenContrast(sample: TextSample, appearance: Appearance): number {
   const material = oklchToRgb(WORST_MATERIAL[appearance]);
   let backgrounds: Rgb[] = [material];
   for (const layer of [...sample.layers].reverse()) {

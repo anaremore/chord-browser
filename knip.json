@@ -38,7 +38,9 @@
         "test/forms/sandbox-recorder.ts",
         "test/e2e/fake-claude.mjs",
         "test/shots/demo-claude.mjs",
-        "test/signin-sweep/main.mjs"
+        "test/signin-sweep/main.mjs",
+        "test/e2e/step-times-reporter.ts",
+        "test/spa/App.tsx"
       ]
     },
     "apps/player": {

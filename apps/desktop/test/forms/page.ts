@@ -7,7 +7,7 @@ import { classifyPasswordForm, type PasswordFieldRole, type PasswordFormKind, ty
 import { scanDocument, submittedBy } from '../../src/passwords/agent/scan';
 
 /** One field as the suite scores it. */
-export interface PageField {
+interface PageField {
   /** Its index among the page's `[data-manual-scoring]` fields, or -1. */
   readonly index: number;
   /** DuckDuckGo's `data-manual-scoring`, or null. */
@@ -31,7 +31,7 @@ export interface PageResult {
 }
 
 /** Every element matching `selector` in the document and its open shadow roots, roots inside roots too. */
-export function deepAll(selector: string, root: Document | ShadowRoot = document): Element[] {
+function deepAll(selector: string, root: Document | ShadowRoot = document): Element[] {
   const out = [...root.querySelectorAll(selector)];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {

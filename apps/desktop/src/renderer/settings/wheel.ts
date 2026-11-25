@@ -15,12 +15,12 @@ export const MAX_STOPS = 3;
 /** "+" adds a color this far around the wheel from the last one. */
 export const ADD_STEP_DEG = 40;
 /** A handle dragged this far out (in radii) leaves the wheel: let go there and it's removed. */
-export const REMOVE_RADIUS = 1.25;
+const REMOVE_RADIUS = 1.25;
 /** Arrow keys turn the hue this far; Shift+arrows change chroma by this much. */
-export const HUE_STEP = 5;
-export const CHROMA_STEP = 0.01;
+const HUE_STEP = 5;
+const CHROMA_STEP = 0.01;
 /** Page Up / Page Down move this many hue steps. */
-export const HUE_PAGE = 6;
+const HUE_PAGE = 6;
 
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 const wrap = (deg: number) => ((deg % 360) + 360) % 360;
