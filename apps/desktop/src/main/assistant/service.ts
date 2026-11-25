@@ -1408,9 +1408,16 @@ export class AssistantService {
       onText: (delta: string) => {
         if (!state.streaming || state.streaming.body.role !== 'assistant') return;
         // After a tool call, a new paragraph (the owner's card-game run: never "to act.Only Arthur called").
-        const next = nextReplyText(state.streaming.body.text, delta, afterTool);
+        const was = state.streaming.body.text;
+        const next = nextReplyText(was, delta, afterTool);
+        // Where an update starts (its first words, or the first after a step), and what in the chat came just before it,
+        // so a long turn shows each update in its place (mocks/assistant-long-turns.html, approved 2026-11-25).
+        const starts = !was.trim() && next.text.trim() ? 0 : afterTool && !next.newBlock && was.trim() ? was.trimEnd().length + 2 : null;
         afterTool = next.newBlock;
-        state.streaming.body = { ...state.streaming.body, text: next.text };
+        const streamingId = state.streaming.id;
+        const blocks = state.streaming.body.blocks ?? [];
+        const before = starts === null ? null : ([...state.messages].reverse().find((m) => m.id !== streamingId)?.id ?? null);
+        state.streaming.body = { ...state.streaming.body, text: next.text, ...(starts === null ? {} : { blocks: [...blocks, { at: starts, after: before }] }) };
         this.schedulePush();
       },
       onTool: (name: string, args: Record<string, unknown>) => {
@@ -1530,7 +1537,7 @@ export class AssistantService {
       });
     }
     const images = streaming.body.images ?? [];
-    const body: AssistantMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}) };
+    const body: AssistantMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}), ...(streaming.body.blocks && streaming.body.blocks.length > 1 ? { blocks: streaming.body.blocks } : {}) };
     if (outcome.status === 'error') state.lastError = outcome.error ?? null;
     if (text.trim() || images.length || outcome.status !== 'done') {
       const message = { ...streaming, body };

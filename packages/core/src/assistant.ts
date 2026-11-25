@@ -152,6 +152,12 @@ export type AssistantMessageBody =
       images?: AssistantImage[];
       /** Images it's still making (while the reply streams). */
       making?: number;
+      /**
+       * Where each update of a long turn starts (the text it wrote after a step: a paragraph of its own), and the chat
+       * item just before it (a step's activity, a card), so the chat shows each in its place (the owner's card-game run).
+       * Absent on replies from before.
+       */
+      blocks?: AssistantReplyBlock[];
     }
   /**
    * A tool's activity line. propose_fill's carries its card (`fill`) while the
@@ -527,4 +533,106 @@ export function toolRowLabel(steps: readonly { tool: string; summary: string }[]
   }
   // Every different step stays in the row (what the page set off is said there: a picker refused, a window not opened).
   return [...counts].map(([summary, n]) => (n > 1 ? `${summary} (${n} times)` : summary)).join(' · ');
+}
+
+/** An update of a reply: where its text starts, and the id of the chat item just before it (null: none in the turn). */
+export interface AssistantReplyBlock {
+  at: number;
+  after: string | null;
+}
+
+/** A row of the chat's timeline. */
+export type TimelineRow =
+  | { kind: 'message'; message: AssistantMessage }
+  /** A run of steps' activity, one quiet row. */
+  | { kind: 'tools'; messages: AssistantMessage[] }
+  /** An update of a long turn's reply, a paragraph (or more) of its own; `last`: the reply's final one. */
+  | { kind: 'update'; message: AssistantMessage; text: string; last: boolean }
+  /** *Earlier in this task (N)*: the updates folded, with their steps in order, and those steps for the closed row's line. */
+  | { kind: 'earlier'; count: number; rows: TimelineRow[]; tools: AssistantMessage[] };
+
+/** A turn's updates past this many fold the earlier ones (mocks/assistant-long-turns.html, the owner's OK 2026-11-25). */
+const UNFOLDED_UPDATES = 3;
+
+const isStep = (m: AssistantMessage): boolean => m.body.role === 'tool' && !m.body.fill;
+
+/** Messages as rows: a run of steps' activity in one row; anything else (a card, a fill card, a divider) its own. */
+function messageRows(messages: readonly AssistantMessage[]): TimelineRow[] {
+  const out: TimelineRow[] = [];
+  for (const message of messages) {
+    const last = out.at(-1);
+    if (isStep(message)) {
+      if (last?.kind === 'tools') last.messages.push(message);
+      else out.push({ kind: 'tools', messages: [message] });
+    } else out.push({ kind: 'message', message });
+  }
+  return out;
+}
+
+/**
+ * The chat as rows (the owner's card-game run; mocks/assistant-long-turns.html, approved 2026-11-25). A reply that
+ * wrote updates between its steps shows each in its place, between the steps before and after it. Past three, the
+ * earlier ones fold into *Earlier in this task (N)*: while it works the latest two stay in view, and once it's done only
+ * its final answer, in full. A card still waiting for you is never folded away. Replies from before are as they were.
+ */
+export function timelineRows(messages: readonly AssistantMessage[]): TimelineRow[] {
+  const out: TimelineRow[] = [];
+  let turn: AssistantMessage[] = [];
+  for (const message of messages) {
+    const body = message.body;
+    if (body.role === 'user') {
+      out.push(...messageRows(turn));
+      turn = [];
+      out.push({ kind: 'message', message });
+      continue;
+    }
+    const blocks = body.role === 'assistant' ? (body.blocks ?? []) : [];
+    if (body.role !== 'assistant' || blocks.length < 2) {
+      if (body.role === 'assistant') {
+        out.push(...messageRows(turn), { kind: 'message', message });
+        turn = [];
+      } else turn.push(message);
+      continue;
+    }
+    // The turn in order: the items up to each update's `after`, then the update; what's after the last one, last.
+    const seq: (AssistantMessage | { update: number })[] = [];
+    let next = 0;
+    blocks.forEach((block, i) => {
+      const upTo = block.after === null ? -1 : turn.findIndex((m) => m.id === block.after);
+      for (; next <= upTo; next++) seq.push(turn[next]!);
+      seq.push({ update: i });
+    });
+    for (; next < turn.length; next++) seq.push(turn[next]!);
+    turn = [];
+    const updateRow = (i: number): TimelineRow => ({
+      kind: 'update',
+      message,
+      text: body.text.slice(blocks[i]!.at, blocks[i + 1]?.at ?? body.text.length).trim(),
+      last: i === blocks.length - 1,
+    });
+    const rowsOf = (part: (AssistantMessage | { update: number })[]): TimelineRow[] => {
+      const rows: TimelineRow[] = [];
+      let run: AssistantMessage[] = [];
+      for (const item of part) {
+        if ('update' in item) {
+          rows.push(...messageRows(run), updateRow(item.update));
+          run = [];
+        } else run.push(item);
+      }
+      return [...rows, ...messageRows(run)];
+    };
+    const kept = body.status === 'streaming' ? 2 : 1;
+    const folded = blocks.length - kept;
+    // The fold ends with its last update: the steps after it lead to the first one in view, and stay with it.
+    const cut = seq.findIndex((item) => 'update' in item && item.update === folded - 1) + 1;
+    const earlier = seq.slice(0, cut).filter((item): item is AssistantMessage => !('update' in item));
+    const waiting = earlier.some((m) => m.body.role === 'approval' && m.body.decision === 'pending');
+    if (blocks.length <= UNFOLDED_UPDATES || waiting) {
+      out.push(...rowsOf(seq));
+      continue;
+    }
+    out.push({ kind: 'earlier', count: folded, rows: rowsOf(seq.slice(0, cut)), tools: earlier.filter(isStep) }, ...rowsOf(seq.slice(cut)));
+  }
+  out.push(...messageRows(turn));
+  return out;
 }
