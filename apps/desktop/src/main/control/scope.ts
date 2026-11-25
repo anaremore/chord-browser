@@ -53,6 +53,11 @@ export interface ActHost {
   keepSite(site: string): void;
   /** What the bar says the agent is doing on the tab (core's barDoing), or null when it's done. */
   doing(nodeId: NodeId, doing: BarDoing | null): void;
+  /**
+   * A tab of yours (the assistant, S18 M2e-2a): the tab's debugger and send hold for the action (control/user-watch.ts),
+   * begun before it (null, or why not) and ended after it. Absent: an agent's own tab, which has them for its life.
+   */
+  lease?: { begin(node: TabNode): Promise<string | null>; end(node: TabNode): void };
 }
 
 /** propose_fill's card, which only a front door with a place to show it offers. */

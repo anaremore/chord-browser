@@ -1,0 +1,240 @@
+/**
+ * The assistant clicks and types in the tab on screen (S18 M2e-2a), end to end, with the fake Claude Code
+ * (fake-claude.mjs's `Act:` turns): the site card and the *Send data* card inline in the chat, *Allow for this chat*
+ * lasting for the chat, a risky step asking every time, and your own key in the tab stopping it. On fixtures: a card
+ * table (one use among many), and a checkout on another site.
+ */
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { dispatch, pressReal, where } from './a11y-kit';
+import { watchForMainErrors } from './main-errors';
+
+const appDir = resolve(import.meta.dirname, '../..');
+const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
+
+/** What reached the fixture site: each POST, by its path. */
+const reached: string[] = [];
+let site: { server: Server; origin: string; other: string };
+
+test.beforeAll(async () => {
+  const pages: Record<string, string> = {
+    // A card table: each move is a POST to the site, as a game's would be.
+    '/table':
+      '<title>Table 7</title><h1>Hand 12</h1><p id=log></p>' +
+      ['Fold', 'Call', 'Raise'].map((m) => `<button onclick="fetch('/move?${m}', { method: 'POST', body: '${m}' }).then(() => (log.textContent += '${m} '))">${m}</button>`).join(' '),
+    // A sign-up form: filled from its card, then reset by the assistant (the owner's preview, 2026-11-24).
+    '/form': '<title>Sign up</title><form><label>Full name <input name=name></label> <label>Email <input name=email></label> <button type=button onclick="this.form.reset()">Reset</button></form>',
+    // A checkout: paying asks every time.
+    '/checkout': '<title>Checkout</title><form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> <button>Place order</button></form>',
+  };
+  const server = createServer((req, res) => {
+    if (req.method === 'POST') {
+      reached.push(`POST ${req.url}`);
+      req.resume();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end('<title>Done</title><p>done</p>');
+      return;
+    }
+    const body = pages[(req.url ?? '/').split('?')[0]!];
+    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(body ?? 'not found');
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const port = (server.address() as AddressInfo).port;
+  // Another site, the same server: localhost isn't 127.0.0.1's site.
+  site = { server, origin: `http://127.0.0.1:${port}`, other: `http://localhost:${port}` };
+});
+test.afterAll(() => site.server.close());
+
+async function launch(profile: string, config: string): Promise<ElectronApplication> {
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    CHORD_USER_DATA: profile,
+    CHORD_HOME_URL: `${site.origin}/table`,
+    CHORD_ASSISTANT_CLAUDE: fake,
+    CHORD_ASSISTANT_CODEX: join(config, 'no-codex'),
+    CLAUDE_CONFIG_DIR: config,
+  };
+  delete env['ELECTRON_RUN_AS_NODE'];
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env, cwd: appDir }));
+}
+
+async function shellOf(app: ElectronApplication): Promise<Page> {
+  const isShell = (p: Page) => p.url().startsWith('chord://shell') || p.url().includes('/shell/index.html');
+  await expect.poll(() => app.windows().some(isShell), { timeout: 20_000 }).toBe(true);
+  return app.windows().find(isShell)!;
+}
+
+async function openAssistant(shell: Page): Promise<Locator> {
+  await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('assistant.toggle'));
+  const panel = shell.getByRole('complementary', { name: 'Assistant' });
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Use this' }).first().click();
+  await panel.getByRole('button', { name: 'Got it' }).click();
+  return panel;
+}
+
+async function send(panel: Locator, text: string): Promise<void> {
+  const input = panel.getByRole('textbox', { name: 'Message' });
+  await input.fill(text);
+  await input.press('Enter');
+}
+
+/** The fake's last `Act:` turn: each step's tool and what Chord answered. */
+const lastActing = (config: string): { tool: string; result: string }[] => {
+  const lines = readFileSync(join(config, 'acting.jsonl'), 'utf8').trim().split('\n');
+  return JSON.parse(lines.at(-1)!) as { tool: string; result: string }[];
+};
+const actingTurns = (config: string): number => {
+  try {
+    return readFileSync(join(config, 'acting.jsonl'), 'utf8').trim().split('\n').length;
+  } catch {
+    return 0;
+  }
+};
+const act = (steps: object[]) => `Act: ${JSON.stringify(steps)}`;
+
+test('the assistant acts in your tab: the site card and Send data card in the chat, Allow for this chat, a risky step every time, and your key stops it (M2e-2a)', async () => {
+  test.setTimeout(150_000);
+  reached.length = 0;
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    const card = (title: RegExp) => panel.getByRole('group', { name: title });
+
+    // Raise: the first action on the site asks, in the chat; then what the click sends asks.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Raise' }]));
+    const siteCard = card(/^Let the assistant click and type on /);
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await expect(siteCard).toContainText('It wants to click “Raise”.');
+    // Its first moment takes no click (F6): one right away does nothing.
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect(siteCard.getByRole('button', { name: 'Allow for this chat' })).toBeVisible();
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    const sendCard = card(/^Send data to /);
+    await expect(sendCard).toBeVisible({ timeout: 15_000 });
+    await expect(sendCard).toContainText('The assistant clicked “Raise”, and the page is sending something to its site.');
+    // Mid-action, the bar over the tab says what it's doing, with Stop (round 2 of #147: the bar and its Stop).
+    const bar = shell.getByRole('status').filter({ hasText: 'The assistant is clicking “Raise”' });
+    await expect(bar).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Stop' })).toBeVisible();
+    expect(reached).toEqual([]);
+    await shell.waitForTimeout(700);
+    await sendCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => reached).toEqual(['POST /move?Raise']);
+    await expect.poll(() => actingTurns(config), { timeout: 15_000 }).toBe(1);
+    expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('Clicked “Raise”');
+    // Its own click (input Chord sends, isAgentInput) is never you taking the tab (invariant 1; browser.ts' userInput).
+    await expect(panel.getByText('Stopped: you used the tab')).toHaveCount(0);
+
+    // Call, in the next message, after Raise's lease is over (past TAIL_MS): no card (the site, and what it sends
+    // there, allowed for this chat: the chat keeps it, not the lease).
+    await shell.waitForTimeout(2_500);
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Call' }]));
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
+    await expect.poll(() => reached).toEqual(['POST /move?Raise', 'POST /move?Call']);
+    expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('Clicked “Call”');
+    await expect(panel.getByRole('group', { name: /^(Let the assistant|Send data)/ })).toHaveCount(0);
+
+    // Another site, on screen: its first action asks; your key in the page stops it there (F1).
+    const windowId = (await where(shell)).windowId;
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.other}/checkout` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.other}/checkout`))).toBe(true);
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Place order' }]));
+    const otherCard = card(/^Let the assistant click and type on localhost:\d+\?$/);
+    await expect(otherCard).toBeVisible({ timeout: 20_000 });
+    await pressReal(app, `${site.other}/checkout`, 'Down');
+    await expect(otherCard.getByRole('button', { name: 'Allow for this chat' })).toHaveCount(0);
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(3);
+    expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('The user took that tab over');
+    await expect(panel.getByText('Stopped: you used the tab')).toBeVisible();
+
+    // Again: allowed for the chat, then paying asks every time; Don't, and nothing reaches the site.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Place order' }]));
+    await expect(otherCard.last()).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await card(/^Let the assistant click and type on localhost:\d+\?$/).last().getByRole('button', { name: 'Allow for this chat' }).click();
+    const pay = card(/^Place the order on localhost:\d+\?$/);
+    await expect(pay).toBeVisible({ timeout: 15_000 });
+    await expect(pay).toContainText('The assistant is about to click “Place order”.');
+    await shell.waitForTimeout(700);
+    await pay.getByRole('button', { name: 'Don’t' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(4);
+    expect(lastActing(config).find((s) => s.tool === 'click')?.result).toContain('The user said no to this step');
+    expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
+
+    // Once more, and Stop (the bar's, as Ctrl+.: every agent and reply) ends it: the card comes down, nothing is sent.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Place order' }]));
+    await expect(pay.last()).toBeVisible({ timeout: 20_000 });
+    await dispatch(shell, { t: 'agents.stopAll' });
+    await expect(panel.getByRole('group', { name: /^Place the order/ })).toHaveCount(0);
+    expect(reached.filter((r) => r.startsWith('POST /order'))).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('after a turn that only filled a form (its card answered), the next message acts in the same tab: the site card, never “switched away” (the owner’s preview)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const windowId = (await where(shell)).windowId;
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/form` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/form`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/form`))!;
+    const panel = await openAssistant(shell);
+    // A read-only turn: the fill card, answered.
+    await send(panel, 'fill this form for me');
+    const fill = panel.getByRole('button', { name: /^Fill \d+ fields?$/ });
+    await expect(fill).toBeVisible({ timeout: 20_000 });
+    await fill.click();
+    await expect.poll(() => page.evaluate(() => (document.querySelector('input[name=name]') as HTMLInputElement).value)).toBe('Ada Lovelace');
+    // You switch to another tab and back, between turns; the form is on screen as you send: the new message acts there
+    // (the owner's preview, 2026-11-24): the site card, never a refusal carried from between turns.
+    const formTab = (await where(shell)).tabId!;
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/table` });
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: formTab });
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Reset' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => page.evaluate(() => (document.querySelector('input[name=name]') as HTMLInputElement).value), { timeout: 20_000 }).toBe('');
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
+    expect(lastActing(config).find((x) => x.tool === 'click')?.result).toContain('Clicked “Reset”');
+
+    // A switch during a turn still ends that turn's acting, and says what was seen.
+    await send(panel, act([{ sleep: 2500 }, { tool: 'snapshot' }, { tool: 'click', name: 'Reset' }]));
+    await shell.waitForTimeout(500);
+    await dispatch(shell, { t: 'tab.open', windowId, url: `${site.origin}/table` });
+    expect((await where(shell)).tabId).not.toBe(formTab);
+    await dispatch(shell, { t: 'tab.activate', windowId, nodeId: formTab });
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
+    expect(lastActing(config).find((x) => x.tool === 'click')?.result).toContain('That tab left the screen while you were working on this message (another tab is on screen in its window)');
+  } finally {
+    const acted = (() => {
+      try {
+        return readFileSync(join(config, 'acting.jsonl'), 'utf8');
+      } catch {
+        return '';
+      }
+    })();
+    if (acted) console.log(`acting: ${acted}`);
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});

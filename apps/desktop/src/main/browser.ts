@@ -69,6 +69,7 @@ import { join } from 'node:path';
 import { app, BaseWindow, BrowserWindow, clipboard, Menu, nativeTheme, screen, webContents, webFrameMain, type Session, type WebContents, type WebContentsView } from 'electron';
 import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
+import { buildActs } from './assistant/preview';
 import { attachContextMenu } from './context-menu';
 import { isAgentInput } from './control/input';
 import { DevTools } from './devtools';
@@ -309,6 +310,12 @@ export class Browser {
    * take it over (agents/chords.ts' takeOverPage). Never called for a page navigating itself. Set by main.
    */
   userNavigates: ((contents: WebContents, going?: Going) => void) | null = null;
+  /** The assistant has a bar up over a tab of yours (S18 M2e-2a): the bars are kept in step for it too (Neon's B8 on #147). */
+  assistantBars = false;
+  /** Your key or click in a tab's page (never input Chord sends): the assistant stops acting there (S18 M2e-2a). Set by main. */
+  userInput: ((nodeId: NodeId) => void) | null = null;
+  /** What's on screen changed outside the store (Peek, a window minimized): the assistant checks its acting. Set by main. */
+  screenChanged: (() => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
   readonly assistantWidth = size.assistantWidth;
 
@@ -509,6 +516,14 @@ export class Browser {
         contents.on('focus', () => {
           if (!isAgentInput(contents)) this.paneFocused(nodeId);
         });
+        // Your key or click in a tab of yours: the assistant stops acting there for this message (S18 M2e-2a, F1). As the
+        // page sees it (before it), never input Chord sends (control/input.ts).
+        contents.on('before-input-event', (_event, input) => {
+          if (input.type === 'keyDown' && !isAgentInput(contents)) this.userInput?.(nodeId);
+        });
+        contents.on('before-mouse-event', (_event, mouse) => {
+          if (mouse.type === 'mouseDown' && !isAgentInput(contents)) this.userInput?.(nodeId);
+        });
         contents.on('input-event', (_event, input) => {
           // A click Chord sends for an agent (control/input.ts) doesn't move your focus to its pane.
           if (input.type === 'mouseDown' && !isAgentInput(contents)) this.paneFocused(nodeId);
@@ -642,7 +657,11 @@ export class Browser {
         this.extensions.tabCreated(contents, nodeId);
         this.readers.detect(nodeId);
       },
-      changed: () => this.syncPopovers(),
+      changed: () => {
+        this.syncPopovers();
+        // Peek over the assistant's tab: its acting ends at once (Neon's S1, round 2 of #147).
+        this.screenChanged?.();
+      },
     });
     this.readers = new Readers({
       workerPath: join(import.meta.dirname, 'reader.js'),
@@ -976,7 +995,7 @@ export class Browser {
   private syncAgentBars(state: State): void {
     // A tab you shared has a bar too (M1e), though its agent may have no chord: with no bar up, no agent's chord and
     // nothing shared, there's nothing to do.
-    if (!this.agentBars && agentChords(state).length === 0 && !this.agentSharing?.()) return;
+    if (!this.agentBars && !this.assistantBars && agentChords(state).length === 0 && !this.agentSharing?.()) return;
     let any = false;
     for (const w of this.windows.values()) {
       const shown = shownTabs(state, w.id);
@@ -1079,7 +1098,11 @@ export class Browser {
     });
     this.windows.set(windowId, w);
     // Chord Player docked in a tab follows the window and whatever covers its pages (player/dock.ts).
-    w.onPlacement = () => this.player?.placementChanged();
+    w.onPlacement = () => {
+      this.player?.placementChanged();
+      // Minimized, hidden: the assistant's acting there ends at once (Neon's S1, round 2 of #147).
+      this.screenChanged?.();
+    };
     this.finders.set(windowId, new FindInPage(() => this.syncPopover(w)));
     // A load can finish after its window has closed (quitting right after launch): only an open window syncs.
     w.popover.webContents.on('did-finish-load', () => {
@@ -2069,6 +2092,7 @@ export class Browser {
       spellcheckLanguages: spellcheckLanguages(),
       linkRoutes: Object.values(state.linkRoutes).sort((a, b) => a.host.localeCompare(b.host)),
       effects: this.effects.sites(),
+      assistantActing: buildActs(),
     };
   }
 

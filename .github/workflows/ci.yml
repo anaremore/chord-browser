@@ -3,21 +3,22 @@ name: CI
 # Tiers (the `changes` job picks one, and the platforms each runs):
 # - The fast tier, on every pull request push: typecheck, lint, unit tests, E2E on Linux x64 X11, and the password
 #   detector's corpora when the detector changed. Quick feedback while a pull request is in review.
-# - The merge tier, once per merge of platform-sensitive code (a merge group): the fast tier plus E2E on Windows x64
-#   and macOS arm64, and perf.spec.ts on those and Linux x64 X11 (the budgets' platforms). Chord Player when it changed.
-# - The full tier, nightly, by hand, with `ready`, and in a merge group that changes Electron: every platform (the
-#   merge tier's plus macOS x64, Windows arm64, Linux arm64 and Wayland), perf.spec.ts on each, and Chord Player.
-# - None: a push to main that a merge group already tested. Only the checks run.
+# - The merge tier, on a pull request labeled `ready` (and not a draft), and a push to main: the fast tier plus E2E on
+#   Windows x64 and macOS arm64, and perf.spec.ts on Linux x64 X11 and Windows x64 (the budgets' platforms). Chord
+#   Player when it changed.
+# - The full tier, nightly, by hand (workflow_dispatch, platform all), and on a change to Electron's version (labeled
+#   `ready`, or Renovate's): every platform (the merge tier's plus macOS x64, Windows arm64, Linux arm64 and
+#   Wayland), perf.spec.ts on each, and Chord Player.
+# - The checks only: a draft, or a pull request stacked on another's branch. A repro: one platform by hand.
 # The free plan runs about 20 Linux and 5 macOS jobs at once, and one full tier is over 30 jobs, so the full tier
-# runs once a night rather than once a merge (decided 2026-11-24); a merge group that isn't platform-sensitive
-# runs the fast tier.
-# The `E2E` commit status (posted by the `e2e` job) is the merge gate, on pull requests and merge groups alike.
-# With main's merge queue (a ruleset; decided 2026-11-24, to cut jobs on the free runners' queue): a pull request
-# runs the fast tier only, and its `E2E` passes with it. `gh pr merge <n> --merge --auto` queues it, and the merge
-# group runs its tier once, on exactly the commit main gets, so main's push runs only the checks. `ready` is a
-# "run the full tier now" escape hatch: adding the label runs it once, on that commit.
-# Without a merge queue (until the owner turns it on), as before: a platform-sensitive pull request's `E2E` stays
-# pending until the full tier passes (label it `ready`), and a push to main runs the full tier.
+# runs once a night, not per pull request (decided 2026-11-24).
+# The `E2E` commit status (posted by the `e2e` job) is the merge gate, required by main's ruleset:
+# - a pull request that isn't platform-sensitive: success once the fast tier passes;
+# - a platform-sensitive one: pending after the fast tier, success once the merge tier passes (label it `ready`).
+# The way to merge: draft while working, `ready` when review settles, and `gh pr merge <n> --merge` on `E2E` success.
+# GitHub's merge queue is for organizations' repositories only; the merge_group lines below are kept for one, should
+# this repository move to an organization (a merge group would then run the merge tier, and main's push of a commit
+# it tested only the checks).
 # The nightly run and a run by hand run the full tier; a failure on main opens an issue (ci-main-failed.yml). Before a
 # release is tagged, the last full run on its commit must be green (docs/releasing/patch-runbook.md, §5).
 on:
@@ -26,11 +27,11 @@ on:
   push:
     branches: [main]
   pull_request:
-    # `labeled`: adding `ready` starts the full tier with no new push. Any other label reruns the tier the pull
+    # `labeled`: adding `ready` starts the merge tier with no new push. Any other label reruns the tier the pull
     # request already gets (Actions can't filter labels before a run starts, and a run that skipped its jobs
     # would post skipped checks over the real ones). `ready_for_review`: a draft that's already labeled.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
-  # The merge queue's groups: the full tier, once per merge, on the commit main will get.
+  # A merge queue's groups, should this repository move to an organization (GitHub's queue is for those only).
   merge_group:
     types: [checks_requested]
   # Every platform on main each night, whatever merged during the day.
@@ -73,7 +74,7 @@ jobs:
   # Whether anything but docs changed. Only a pull request can skip anything: the website (site/) is built and
   # deployed by Clank, and no test reads the docs, the mocks or any Markdown file, so a pull request that changes
   # only those skips E2E, Chord Player and the password detector's corpora. Typecheck, lint and unit tests still run.
-  # And whether a pull request is platform-sensitive: whether its `E2E` status needs the full tier (the `e2e` job).
+  # And whether a pull request is platform-sensitive: whether its `E2E` status needs the merge tier (the `e2e` job).
   changes:
     name: What changed
     runs-on: ubuntu-24.04
@@ -161,7 +162,7 @@ jobs:
           echo "$(wc -l < "$RUNNER_TEMP/changed") files changed; E2E needed: $code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
       # Whether the pull request is platform-sensitive: whether its diff touches code that behaves differently by
-      # OS. Its `E2E` status then needs the full tier; otherwise the fast tier is enough (the `e2e` job).
+      # OS. Its `E2E` status then needs the merge tier; otherwise the fast tier is enough (the `e2e` job).
       - name: Platform-sensitive?
         id: platform
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
@@ -253,10 +254,12 @@ jobs:
             echo "Not platform-sensitive: none of the changed files."
           fi
       # The tier. A pull request's labels and draft state are the event's: a run re-run by hand keeps the tier it had.
-      # With a merge queue, a pull request always gets the fast tier, except the run the `ready` label itself starts
-      # (the escape hatch: the full tier now, once). Without one, as before: `ready` (and not a draft) runs the full
-      # tier on every push, and so does a platform-sensitive pull request of Renovate's (Electron's), so it can
-      # automerge.
+      # No merge queue (this is a personal account's repository, and GitHub offers the queue only to organizations):
+      # `ready` (and not a draft) runs the merge tier on every push, which `E2E` then needs when the pull request is
+      # platform-sensitive; a change to Electron's version runs the full tier, labeled `ready` or Renovate's (so its
+      # updates can automerge); a platform-sensitive pull request of Renovate's gets the merge tier with no label.
+      # The merge_group lines are for a merge queue, should the repository move to an organization: with one, a pull
+      # request gets the fast tier, and `ready` runs the full tier once, on the push that adds it.
       - name: Which tier?
         id: tier
         env:
@@ -276,7 +279,7 @@ jobs:
         run: |
           if [ "$EVENT" = pull_request ] && [ "$DRAFT" = true ] && [ "$READY" = true ]; then
             # Said loudly: a draft runs the checks only, so `ready` on one would otherwise wait for E2E that never comes.
-            echo "::error::Labeled ready but still a draft: mark it ready for review (gh pr ready <n>), and the label runs every platform"
+            echo "::error::Labeled ready but still a draft: mark it ready for review (gh pr ready <n>), and the label runs the merge tier"
             exit 1
           fi
           if [ "$EVENT" = push ] && [ "$TESTED" = true ]; then tier=none; why="a merge group already tested this commit"
@@ -292,8 +295,9 @@ jobs:
           elif [ "$BASE_REF" != main ]; then tier=checks; why="stacked on $BASE_REF: the checks only, until it targets main"
           elif [ "$QUEUE" = true ] && [ "$ACTION" = labeled ] && [ "$LABEL" = ready ]; then tier=full; why="just labeled ready: the full tier now"
           elif [ "$QUEUE" = true ]; then tier=fast; why="a pull request: the merge queue runs the full tier"
-          elif [ "$AUTHOR" = 'renovate[bot]' ] && [ "$PLATFORM" = true ]; then tier=full; why="Renovate's platform-sensitive update"
-          elif [ "$READY" = true ]; then tier=full; why="labeled ready"
+          elif [ "$ELECTRON" = true ] && { [ "$READY" = true ] || [ "$AUTHOR" = 'renovate[bot]' ]; }; then tier=full; why="a change to Electron's version: every platform"
+          elif [ "$AUTHOR" = 'renovate[bot]' ] && [ "$PLATFORM" = true ]; then tier=merge; why="Renovate's platform-sensitive update"
+          elif [ "$READY" = true ]; then tier=merge; why="labeled ready: the merge tier"
           else tier=fast; why="not labeled ready"
           fi
           echo "Tier: $tier ($why)."
@@ -395,7 +399,7 @@ jobs:
             echo "- **Full tier** (nightly, by hand, \`ready\`, a merge group that changes Electron): all of that, plus E2E on Windows arm64, macOS x64, Linux x64 Wayland and Linux arm64, perf.spec.ts on each, the password detector's corpora, and Chord Player."
             echo
             if [ "$CODE" = true ]; then echo "Password detector's corpora: $([ "$FORMS" = true ] && echo run || echo "skipped (nothing they test changed)")."; echo; fi
-            echo "Main's merge queue: $([ "$QUEUE" = true ] && echo on || echo "off (a pull request's \`E2E\` needs the full tier when it's platform-sensitive)")."
+            echo "Main's merge queue: $([ "$QUEUE" = true ] && echo on || echo "none (a platform-sensitive pull request's \`E2E\` needs the merge tier: label it \`ready\`)")."
             echo
             if [ "$TIER" = none ]; then
               echo "A merge group already ran the full tier on this commit and passed: only the checks run."
@@ -421,18 +425,18 @@ jobs:
                 n="$(wc -l < "$RUNNER_TEMP/platform")"
                 if [ "$n" -gt 100 ]; then echo "- … and $((n - 100)) more"; fi
                 echo
-                if [ "$TIER" = full ]; then
-                  echo "The full tier is running, so \`E2E\` passes when every platform does."
+                if [ "$TIER" = full ] || [ "$TIER" = merge ]; then
+                  echo "The $TIER tier is running, so \`E2E\` passes when it does."
                 else
-                  echo "So \`E2E\` stays pending after the fast tier: label the pull request \`ready\` (and mark it ready for review) to run every platform."
+                  echo "So \`E2E\` stays pending after the fast tier: label the pull request \`ready\` (and mark it ready for review) to run the merge tier (Windows x64, macOS arm64)."
                 fi
               else
                 echo "None of the changed files touch platform code."
                 echo
-                if [ "$TIER" = full ]; then
-                  echo "The full tier is running anyway ($WHY), so \`E2E\` passes when every platform does."
+                if [ "$TIER" = full ] || [ "$TIER" = merge ]; then
+                  echo "The $TIER tier is running anyway ($WHY), so \`E2E\` passes when it does."
                 else
-                  echo "So \`E2E\` passes with the fast tier. Every platform still runs on main after the merge and each night."
+                  echo "So \`E2E\` passes with the fast tier. Every platform still runs nightly on main."
                 fi
               fi
             fi
@@ -649,13 +653,13 @@ jobs:
       - run: pnpm build
       # Outside agents' transport (S18) on every OS: the endpoint, the relay, the gate, and on Windows the pipe's DACL
       # (window-owner.exe, just built), on Linux another user refused; and who's calling (M2a: pipe-clients, ss, lsof),
-      # looked up for real on each OS, and the lookup's budget per OS (agent-peer.perf.test.ts). pnpm test and pnpm test:perf
-      # run them on Linux too. Once per OS: in its first shard.
+      # looked up for real on each OS, and the lookup's budget per OS (agent-peer.perf.test.ts). Once per OS: in its first
+      # shard. Not on Linux x64, where the checks job's pnpm test and pnpm test:perf already run them, on the same OS.
       - name: Agents' transport
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64')
         run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/agent-peer.test.ts apps/desktop/test/unit/control.test.ts
       - name: Who's calling, timed
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64')
         run: pnpm test:perf apps/desktop/test/unit/agent-peer.perf.test.ts
       # chord-data's perf rows on Windows' disks too, where a sync to disk costs most: a new profile's database (and
       # its migrations committed one by one, as before 2026-11-20, for comparison) and a big import's Undo.
@@ -793,6 +797,19 @@ jobs:
       - name: Flaky tests
         if: always()
         run: node scripts/ci/flaky-summary.mjs apps/desktop/playwright-report/results.json "${{ env.ARTIFACT_SUFFIX }}"
+
+      # Playwright's JSON report and the step times (test/e2e/step-times-reporter.ts: launching the app, its windows,
+      # waits, closing it), from every shard, which `node scripts/ci/e2e-step-times.mjs <run-id>` compares by platform.
+      - name: Upload the E2E report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-report-${{ env.ARTIFACT_SUFFIX }}
+          path: |
+            apps/desktop/playwright-report/results.json
+            apps/desktop/playwright-report/step-times.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload design QA captures
         if: always()
@@ -971,7 +988,7 @@ jobs:
             pass=true state=success desc="Fast tier passed; this change isn't platform-specific (full tier runs nightly on main)"
           elif [ "$TIER" = fast ] && [ "$FULL" = skipped ] && [ "$PLATFORM" = true ]; then
             path="every platform has to pass: the pull request is platform-sensitive"
-            pass=true state=pending desc='Touches platform code: label `ready` to run every platform'
+            pass=true state=pending desc='Touches platform code: label `ready` to run Windows and macOS'
           else
             desc="Unexpected: tier ${TIER:-unknown}, platform-sensitive ${PLATFORM:-unknown}, full tier's shards $FULL"
           fi

@@ -339,7 +339,10 @@ function registerIpc(): void {
     if (command.t === 'agents.unshare') return agents?.service?.shares?.unshare(command.nodeId);
     // An address you typed for an agent's tab: where it goes is yours (a site you keep private makes it a tab of yours),
     // and you take the tab over (S18 M2e-1), as a reload of yours does.
-    if (command.t === 'tab.navigate') agents?.service?.chords?.takeOver(command.nodeId, undefined, { url: command.url });
+    if (command.t === 'tab.navigate') {
+      agents?.service?.chords?.takeOver(command.nodeId, undefined, { url: command.url });
+      assistant?.userUsedTab(command.nodeId);
+    }
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -366,7 +369,11 @@ function registerIpc(): void {
       browser!.userNavigates?.(contents);
       contents.reload();
     }
-    else if (action === 'stop') contents.stop();
+    else if (action === 'stop') {
+      // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
+      assistant?.userMovedPage(contents);
+      contents.stop();
+    }
   });
   handle('overlay:open', ({ mode, anchor }, sender) => {
     const w = senderWindow(sender);
@@ -1196,7 +1203,12 @@ if (!app.requestSingleInstanceLock()) {
     // Outside agents' tabs (S18): their pages' wiring, and what they held, go to the agents' chords once there are any.
     browser.agentContents = (contents, nodeId) => agents?.service?.chords?.wire(contents, nodeId);
     browser.agentHeld = (nodeId, what, detail, from) => agents?.service?.chords?.note(nodeId, what, detail, from);
-    browser.userNavigates = (contents, going) => agents?.service?.chords?.takeOverPage(contents, going);
+    browser.userNavigates = (contents, going) => {
+      agents?.service?.chords?.takeOverPage(contents, going);
+      assistant?.userMovedPage(contents);
+    };
+    browser.userInput = (nodeId) => assistant?.userUsedTab(nodeId);
+    browser.screenChanged = () => assistant?.screenChanged();
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {
       agents?.service?.stopAll();

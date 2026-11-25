@@ -339,6 +339,8 @@ export const SettingsPatch = z.strictObject({
       neverSites: z.array(z.string().max(300)).max(500),
       offChords: z.array(z.string().max(64)).max(500),
       codexImages: z.boolean(),
+      acting: z.boolean(),
+      actSites: z.array(z.string().max(253)).max(100),
     })
     .partial()
     .optional(),
@@ -405,6 +407,8 @@ export interface SettingsSnapshot {
   linkRoutes: LinkRoute[];
   /** Settings → Effects: every site with Effects, newest change first. */
   effects: EffectsSite[];
+  /** Whether this build lets the assistant click and type (S18 M2e): Settings → Assistant's *Acting on pages* shows. */
+  assistantActing: boolean;
 }
 
 /** A site with Effects, as Settings → Effects lists it. */
@@ -1324,7 +1328,9 @@ export const AssistantAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('stop') }),
   z.object({ do: z.literal('retry') }),
   z.object({ do: z.literal('unqueue'), index: z.number().int().min(0).max(100) }),
-  z.object({ do: z.literal('approve'), messageId: id, decision: z.enum(['once', 'thread', 'denied']) }),
+  z.object({ do: z.literal('approve'), messageId: id, decision: z.enum(['once', 'thread', 'always', 'denied']) }),
+  // An acting card's Show me (S18 M2e): the element outlined in its page, the card still up.
+  z.object({ do: z.literal('showStep'), messageId: id }),
   z.object({ do: z.literal('new') }),
   z.object({ do: z.literal('open'), threadId: id }),
   z.object({ do: z.literal('continue') }),

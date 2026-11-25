@@ -601,6 +601,13 @@ export interface AssistantSettings {
   offChords: string[];
   /** Codex may make images when asked (its own image tool, on the user's plan). */
   codexImages: boolean;
+  /**
+   * The assistant clicks and types in the tab on screen when you ask (S18 M2e: Settings → Assistant's *Click and type
+   * on pages*, on by default). Off: it gets no acting tools. Stays on this computer.
+   */
+  acting: boolean;
+  /** Sites you said *Always on this site* for (registrable domains), the newest last, at most AGENT_ACT_SITES_MAX. Stays on this computer. */
+  actSites: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -635,7 +642,7 @@ export const DEFAULT_SETTINGS: Settings = {
   safeBrowsingAsked: false,
   adBlocking: { enabled: true, offSites: [] },
   tabCounts: { enabled: true, offSites: [] },
-  assistant: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: [], offChords: [], codexImages: true },
+  assistant: { enabled: true, provider: null, model: null, keep: 'forever', scope: 'ask', readsNothing: false, neverSites: [], offChords: [], codexImages: true, acting: true, actSites: [] },
   externalLinks: 'mini',
   miniWindowSize: null,
   reader: DEFAULT_READER,

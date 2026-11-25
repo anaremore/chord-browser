@@ -38,6 +38,7 @@ import {
   isActionTool,
   sensitiveField,
   isPressKey,
+  CONTROL_WAIT_MS,
   NAVIGATE_URL_MAX,
   pressKeyEvents,
   quotedName,
@@ -607,6 +608,16 @@ const NOTHING_SHOWN = (again: string) => `The page shows nothing yet (it may sti
  * went somewhere else (its refs are then stale). navigate and back need no ref and no site card, as open_tab.
  */
 async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>): Promise<ToolOutput> {
+  // A tab of yours (the assistant): its lease, begun in actOn once the tab's checked, always ended here.
+  const leased: { node: TabNode | null } = { node: null };
+  try {
+    return await actOn(call, tool, args, leased);
+  } finally {
+    if (leased.node) call.scope.act?.lease?.end(leased.node);
+  }
+}
+
+async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, leased: { node: TabNode | null }): Promise<ToolOutput> {
   const { scope, browser } = call;
   const host = scope.act!;
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs for the tabs there are.');
@@ -622,6 +633,16 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (loaded) return refuse(loaded);
+  // A tab of yours: its debugger and send hold for this action (control/user-watch.ts), begun only right before its
+  // input or its load, once the cards and checks have passed (Neon's B5 on #147); ended by actTool.
+  const leaseOn = async (): Promise<string | null> => {
+    if (!host.lease || leased.node) return null;
+    const no = await host.lease.begin(node);
+    if (!no) leased.node = node;
+    return no;
+  };
+  /** Where it may act, asked again at every step (A1: the tab switched away, a split, minimized: Neon's B6 on #147). */
+  const notHereNow = () => host.mayAct(node);
   // Your taking the tab over lets go of its cards (S18 M2e-1): one no window shows isn't paused, so the count is how
   // an action hears of it (Claude's review 2 of #116).
   const releasedAtStart = scope.agent.releases(node.id);
@@ -715,7 +736,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (isNeverReadable(goingTo, scope.neverSites())) return refuse(NEVER);
     // Its hold on (Neon's final pass): a tab whose hold is lost, or never finished, loads nothing for the agent.
     if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
-    if (page.lost() && !(await page.retryHold())) return refuse(ACT_REFUSALS.noCheck);
+    // An outside agent's tab: its hold tried again. A tab of yours: a loss is its last lease's, and this action's own
+    // lease (below) starts clean (round 3 of #147).
+    if (!host.lease && page.lost() && !(await page.retryHold())) return refuse(ACT_REFUSALS.noCheck);
     const before = page.id;
     // It runs: a late Allow given on this tab for another step is spent.
     scope.agent.dropLateSteps(node.id);
@@ -726,13 +749,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
       // What its load sends, or a redirect to an address that deletes or signs out, is held as an action's is: only what
       // the card named goes (the address itself, when it asked).
+      const notNow = notHereNow() ?? (await leaseOn());
+      if (notNow) return refuse(notNow);
       const w = page.watchSends(goingWhy ? { urls: new Set(), documents: new Set([normalUrl(goingTo)]) } : null);
       if (!w) return refuse(ACT_REFUSALS.noCheck);
       let went: { loading: boolean } | null;
       let sent: string | null;
       try {
         const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
-        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : takenOver());
+        // The hold lost meanwhile (a detach, the renderer gone) is never a success (Neon's B5, round 2 of #147).
+        // Your own taking over reads as yours, before the hold's loss (Neon's S1, round 3).
+        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : null)));
         sent = await askHeld(
           w,
           going,
@@ -749,7 +776,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
                 takeDown,
               },
               AbortSignal.any([call.signal, w.cancelled]),
-              scope.cardWaitMs,
+              // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks.
+              scope.cardWaitMs ?? CONTROL_WAIT_MS,
             ),
           halt,
           originOf(page.url()),
@@ -759,6 +787,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         w.end();
       }
       if (sent) return refuse(sent);
+      // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
+      if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
       if (!went) return refuse(ACT_REFUSALS.noBack);
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
@@ -830,11 +860,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
    * there; the card's wait can be long), never on a page that moved on since the element was checked. Asked right
    * before every input and every text put in, and right after the card.
    */
+  /** This action has its own checks (deep) and, in a tab of yours, its own lease: a loss from then on is its own. */
+  let holds = false;
   const halt = (): string | null => {
     if (call.stopped()) return CONTROL_REFUSALS.stopped;
     if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
-    const taken = takenOver();
+    const taken = takenOver() ?? notHereNow();
     if (taken) return taken;
+    // The hold lost (a detach, the renderer gone) since this action got its checks: nothing more goes, and nothing is
+    // done (Neon's B5, round 2 of #147). Before then, a loss is an earlier one's: the checks (deep) try again or refuse
+    // (round 3 of #147).
+    if (holds && page.lost()) return ACT_REFUSALS.noCheck;
     // The page went somewhere: input now would land on another page's element.
     if (page.id !== pageAtCheck) return ELEMENT_REFUSALS.stale;
     return null;
@@ -1196,7 +1232,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
           takeDown,
         },
         AbortSignal.any([call.signal, w.cancelled]),
-        scope.sendWaitMs ?? scope.cardWaitMs,
+        // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks; an outside
+        // agent's its full wait, never a call's budget for cards (M2g-1, B2).
+        scope.sendWaitMs ?? scope.cardWaitMs ?? CONTROL_WAIT_MS,
       );
     /** Once the watch is on: what's held from then is asked about (below). */
     let watchOn: () => void = () => undefined;
@@ -1213,9 +1251,11 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // From here input goes in: the debugger's checks (deep.ts), and the watch on what it sends (sends.ts): for an
       // `act` step anything that sends data is held for the card; a step the user allowed sends as it does. Reports
       // (beacons, pings) are dropped either way.
+      if ((refused = await leaseOn())) return;
       deep = await page.deep(owner, lookup.token, lookup.key);
       phases.lap('debugger');
       if (!deep) return void (refused = ACT_REFUSALS.noCheck);
+      holds = true;
       watch = page.watchSends(step.class === 'risky' ? allowedBy(element, stepSubmits(tool, args, element)) : null);
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
       watchOn();
@@ -1223,6 +1263,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
       if (tool === 'select_option') {
         if ((refused = await readyAgain())) return;
+        if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         // By the page's whole label, as describe matched it (the card showed it clipped).
         const chosen = await actOn({ op: 'choose', option: asked });
         if (!chosen.ok) refused = actRefusal(chosen);
@@ -1240,6 +1281,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         const remembered = await actOn({ op: 'values', mode: 'remember' });
         if (!remembered.ok) return void (refused = actRefusal(remembered));
         if ((refused = halt())) return;
+        if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         const set = await actOn({ op: 'setValue', value: value as string });
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;
@@ -1361,10 +1403,17 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
       // Its document as it was when the card opened, not when the action began (Claude's final pass: a page the action
       // went to that posts as it loads gets its Allow).
       const sendHalt = (opened: unknown) =>
-        call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? (page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
+        call.stopped()
+          ? CONTROL_REFUSALS.stopped
+          : scope.agent.state(node.id).paused
+            ? CONTROL_REFUSALS.paused
+            : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
       const sent = await askHeld(w, acting, (held, sites, why, takeDown) => askSendCard(held, sites, why, w, takeDown), sendHalt, originOf(page.url()), () => page.mark);
       refused ??= sent;
     }
+    // The hold lost during the action (a detach, the renderer gone): what it sent wasn't asked about, so never done
+    // (Neon's B5, round 2 of #147).
+    if (!refused && holds && page.lost()) refused = ACT_REFUSALS.noCheck;
     const { navigated, loading } = await acting;
     phases.lap('settle');
     if (deep) await (deep as DeepSession).close();

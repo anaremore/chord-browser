@@ -80,3 +80,16 @@ describe('Chord’s words for an action: the site card, the activity line, the b
   ];
   it.each(addresses)('%s → %s', (url, shown) => expect(barAddress(url)).toBe(shown));
 });
+
+describe('The assistant’s acting sites as saved (the reviews of #147)', () => {
+  it('kept as a site is written: an address with its port and an IPv6 one too, the way agents’ allowances keep them', async () => {
+    const { cleanActSites } = await import('../src/control-tools');
+    expect(cleanActSites(['Game.Example.', 'localhost:39251', '[::1]:8080', '127.0.0.1:3000', 'shop.example.:443', 'bad site', 'game.example'])).toEqual([
+      'localhost:39251',
+      '[::1]:8080',
+      '127.0.0.1:3000',
+      'shop.example:443',
+      'game.example',
+    ]);
+  });
+});
