@@ -53,4 +53,7 @@ cd /z/Projects/chord-browser && git worktree remove --force "$WT"
 
 Never remove anything else in Z:\Projects\chord-builds (a release draft's folder lives there too).
 
+**On CI instead** (when Z: is busy, or for another platform): `gh workflow run release.yml --ref <branch> -f platform=win-x64`
+(or `mac-arm64`, `linux-x64`, …) builds that one installer, unsigned, as an artifact of the run; a tag always builds all six.
+
 **Report:** the installer's full Windows path (`Z:\Projects\chord-builds\…`), its size, the ref (and the merged branch) with the SHA, and that it's unsigned (Windows SmartScreen asks once).

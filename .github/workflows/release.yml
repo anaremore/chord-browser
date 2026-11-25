@@ -9,10 +9,19 @@ name: Release
 # A tag build signs, notarizes and checks the signatures once the signing secrets
 # are in the protected `release` environment. Without them, and in manual runs,
 # builds are unsigned, with an ad-hoc signature on macOS.
+#
+# A manual run (Actions → Release → Run workflow) can build one platform, for a preview the owner tries before a slice
+# merges: one runner and a few minutes, never the macOS runners unless asked. A tag always builds all six.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Which build (a manual run only; a tag always builds all six)
+        type: choice
+        default: all
+        options: [all, win-x64, win-arm64, mac-arm64, mac-x64, linux-x64, linux-arm64]
 
 permissions:
   contents: read
@@ -22,8 +31,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The builds to make: all six, or on a manual run that asks for one, that one. A tag's run (pushed, or run by hand
+  # on a tag) is always all six.
+  plan:
+    name: Which builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          PLATFORM: ${{ inputs.platform || 'all' }}
+        # Node, as every runner has it: the six builds, and the one asked for.
+        run: |
+          node - <<'EOF'
+          const all = [
+            { name: 'Windows x64', os: 'windows-latest', platform: 'win', arch: 'x64' },
+            { name: 'Windows arm64', os: 'windows-11-arm', platform: 'win', arch: 'arm64' },
+            { name: 'macOS arm64', os: 'macos-26', platform: 'mac', arch: 'arm64' },
+            { name: 'macOS x64', os: 'macos-15-intel', platform: 'mac', arch: 'x64' },
+            { name: 'Linux x64', os: 'ubuntu-24.04', platform: 'linux', arch: 'x64' },
+            { name: 'Linux arm64', os: 'ubuntu-24.04-arm', platform: 'linux', arch: 'arm64' },
+          ];
+          const { appendFileSync } = require('node:fs');
+          const pick = process.env.IS_TAG === 'true' ? 'all' : process.env.PLATFORM || 'all';
+          const include = all.filter((b) => pick === 'all' || `${b.platform}-${b.arch}` === pick);
+          if (include.length === 0) {
+            console.log(`::error::No build called ${pick}`);
+            process.exit(1);
+          }
+          const line = `Builds: ${include.map((b) => b.name).join(', ')}`;
+          console.log(line);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
+          EOF
+
   package:
     name: Package · ${{ matrix.name }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     # Tag builds read the signing secrets, so they run in the protected `release` environment and
     # wait for its reviewers. Manual runs from a branch get no environment and no secrets: unsigned.
@@ -32,14 +79,7 @@ jobs:
     timeout-minutes: ${{ matrix.platform == 'mac' && 90 || 45 }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { name: Windows x64, os: windows-latest, platform: win, arch: x64 }
-          - { name: Windows arm64, os: windows-11-arm, platform: win, arch: arm64 }
-          - { name: macOS arm64, os: macos-26, platform: mac, arch: arm64 }
-          - { name: macOS x64, os: macos-15-intel, platform: mac, arch: x64 }
-          - { name: Linux x64, os: ubuntu-24.04, platform: linux, arch: x64 }
-          - { name: Linux arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,6 +102,8 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME doesn't match apps/desktop/package.json version $version"
             exit 1
           fi
+          # The rest of the release commit (pnpm release:prep): the Flatpak metainfo's <release>, and its notes written.
+          node scripts/release-prep.mjs --check "$version"
 
       # Sets CHORD_SIGNING for the steps below and electron-builder.config.ts. Only whether each
       # secret is set reaches this step, never its value. A half-configured set fails here.

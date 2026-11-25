@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:sim": "node scripts/sync-sim.mjs",
-    "test:e2e:linux": "node scripts/e2e-linux/run.mjs"
+    "test:e2e:linux": "node scripts/e2e-linux/run.mjs",
+    "release:prep": "node scripts/release-prep.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

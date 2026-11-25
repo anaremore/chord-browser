@@ -14,7 +14,8 @@
 //   --cpus <n>          n CPUs of the run's own (4 when not given, as CI's runners have; perf.spec.ts's baselines are
 //                       taken so). Each run gets a slot of its own from this machine's CPUs, never CPUs 0-3 (left for
 //                       you), so runs from several worktrees don't share cores. A fraction (0.35) is one CPU of its own
-//                       held to that share of it (a CFS quota). --cpus all: every CPU, shared, as before slots.
+//                       held to that share of it (a CFS quota) while the tests run; install and build run on a whole
+//                       slot first, at full speed. --cpus all: every CPU, shared, as before slots.
 //   --slow              a slow machine, to bring races out: --cpus 0.35 unless --cpus is given, and Playwright's
 //                       --retries 0 --repeat-each 5 unless those are given
 //   --throttle <rate>   pages' renderers slowed that many times over CDP (Emulation.setCPUThrottlingRate), in every
@@ -29,7 +30,9 @@
 // that aren't ignored, uncommitted changes included, copied into a container of
 // its own. node_modules and the build are made in there (never the Windows
 // ones), the pnpm store and Electron download are cached in the named volumes
-// chord-e2e-pnpm-store and chord-e2e-electron-cache, and test-results (and a
+// chord-e2e-pnpm-store and chord-e2e-electron-cache, and so is the build: the
+// last few builds, by a hash of what they're built from (buildKey), so a run
+// that changes only tests skips `pnpm build`. test-results (and a
 // report, if a reporter wrote one) are copied back to apps/desktop as a local
 // run leaves them. Every Docker object is named chord-e2e-*; each run's
 // container has a name of its own, so runs from several worktrees don't collide.
@@ -120,9 +123,64 @@ export function pickCpuset({ total, size, taken = [], reserved = RESERVED_CPUS, 
   return { cpuset: width === 1 ? String(start) : `${start}-${start + width - 1}`, shared: free.length === 0 };
 }
 
+/**
+ * A run held to a share of a CPU (--cpus 0.35, --slow) installs and builds on a whole slot first, at full speed: that
+ * part isn't what's being tested, and at 0.35 of one CPU it took 124 s of a 363 s run. When the tests start
+ * (TESTS_START, in-container.sh's step line), the container is narrowed to one CPU of its slot at the share
+ * (`docker update`), so what's timed runs as slow as asked.
+ */
+export const TESTS_START = '[e2e-linux] E2E on ';
+
+/** `docker update`'s arguments that narrow a run to its slot's first CPU, held to `quota` of it. */
+export function narrowArgs(name, cpuset, quota) {
+  const first = Math.min(...cpusetCpus(cpuset));
+  return ['update', '--cpuset-cpus', String(first), '--cpus', String(quota), name];
+}
+
+/** The exit code for a run held to a share of a CPU whose tests couldn't be held to it. */
+export const NOT_NARROWED_EXIT = 3;
+
+/**
+ * What a run held to a share of a CPU ends with. Its tests must have run at that share: a `--slow` pass that wasn't
+ * slow would be a race hunt's false all-clear. So a narrowing that failed fails the run (its container was stopped
+ * then), and so does a pass whose tests never said they started (in-container.sh's TESTS_START line missing: they may
+ * have run at full speed). A run that failed anyway keeps its code, and says it wasn't narrowed.
+ */
+export function slowOutcome({ wanted, narrowed, failed, code }) {
+  if (!wanted || (narrowed && !failed)) return { code, message: null };
+  if (failed) return { code: NOT_NARROWED_EXIT, message: 'Failed: Docker couldn\'t hold the tests to their share of a CPU, so the run was stopped. A --slow run at full speed proves nothing.' };
+  if (code === 0) return { code: NOT_NARROWED_EXIT, message: `Failed: not narrowed. The tests never said they started (no "${TESTS_START.trim()}" line), so they may have run at full speed.` };
+  return { code, message: 'Not narrowed: the run ended before its tests started.' };
+}
+
 /** The image's tag: a hash of the Dockerfile and the pnpm version it bakes in, so a change to either builds a new one. */
 export function imageTag(dockerfile, pnpmVersion) {
   return `chord-e2e-runner:${createHash('sha256').update(dockerfile).update(`\0${pnpmVersion}`).digest('hex').slice(0, 12)}`;
+}
+
+/**
+ * Files no build reads: tests and their configs, docs, the website, CI. A change to these alone keeps the last
+ * build (buildKey). When unsure, a path is left out of this list: it then counts, and the build just runs again.
+ */
+export const NOT_BUILT_FROM = [
+  /^(apps|packages)\/[^/]+\/test\//,
+  /^apps\/[^/]+\/playwright(\.[\w-]+)?\.config\.ts$/,
+  /^scripts\/(test|ci|dev|e2e-linux)\//,
+  /^(docs|site|mocks|\.github)\//,
+  /\.md$/,
+];
+
+/**
+ * The build's cache key: a hash of the image, the variables that change a build (CHORD_NO_MINIFY), and every
+ * file of the tree it could be built from (all but NOT_BUILT_FROM), by path and content.
+ */
+export function buildKey(entries, image, env = {}) {
+  const hash = createHash('sha256').update(image).update(`\0${env.CHORD_NO_MINIFY ? 'unminified' : 'minified'}\0`);
+  for (const { path, body, link } of [...entries].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
+    if (NOT_BUILT_FROM.some((pattern) => pattern.test(path))) continue;
+    hash.update(path).update('\0').update(link !== undefined ? `link:${link}` : body).update('\0');
+  }
+  return hash.digest('hex').slice(0, 16);
 }
 
 /** A name of its own for each run's container: chord-e2e-run-<worktree folder>-<random>. */
@@ -160,7 +218,7 @@ export function staleRuns(inspected, now = Date.now()) {
 export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE', 'CHORD_E2E_SCREEN', 'CHORD_E2E_CPU_THROTTLE'];
 
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
-export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpuset = null, quota = null, share = null, env = {} }) {
+export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpuset = null, quota = null, share = null, build = null, env = {} }) {
   return [
     'run',
     '--interactive',
@@ -204,6 +262,8 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     ...(share ? ['--volume', `${share}:/share`, '--env', 'CHORD_E2E_SHARE=/share'] : []),
     '--env', `CHORD_E2E_DISPLAY=${display}`,
     '--env', `CHORD_E2E_STARTED=${Math.round(startedAt / 1000)}`,
+    // The build's cache key (buildKey): in-container.sh reuses the build it names, if one is kept.
+    ...(build ? ['--env', `CHORD_E2E_BUILD_KEY=${build}`] : []),
     ...PASSED_ENV.filter((key) => env[key]).flatMap((key) => ['--env', `${key}=${env[key]}`]),
     image,
     'bash', '-c', 'tar -xf - -C /work && exec bash /work/scripts/e2e-linux/in-container.sh "$@"', 'bash',
@@ -303,10 +363,11 @@ async function main() {
    * passed on rather than inherited because wsl.exe writes each stream at file offsets of its own,
    * so with both sent to one file (> log 2>&1) stderr overwrote stdout.
    */
-  const dockerLive = (args, input) => {
+  const dockerLive = (args, input, onOutput = null) => {
     const [command, argv] = dockerCommand(args);
     const child = spawn(command, argv, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdout.pipe(process.stdout, { end: false });
+    if (onOutput) child.stdout.on('data', (chunk) => onOutput(chunk.toString()));
     child.stderr.pipe(process.stderr, { end: false });
     child.stdin.on('error', () => {}); // The container can exit (a bad image, say) before reading it all.
     child.stdin.end(input);
@@ -408,18 +469,38 @@ async function main() {
     if (total > 1) {
       const live = docker(['ps', '--quiet', '--filter', 'label=chord-e2e=run'], { quiet: true })?.split(/\s+/).filter(Boolean) ?? [];
       const taken = live.length ? (docker(['inspect', '--format', '{{.HostConfig.CpusetCpus}}', ...live], { quiet: true }) ?? '').split('\n') : [];
-      const picked = pickCpuset({ total, size: Math.ceil(want), taken });
+      // A share of a CPU still installs and builds on a whole slot; it's narrowed when the tests start (TESTS_START).
+      const picked = pickCpuset({ total, size: Number.isInteger(want) ? want : DEFAULT_CPUS, taken });
       cpuset = picked.cpuset;
       if (picked.shared) log(`Every CPU slot is in use by another run: sharing CPUs ${cpuset} with the fewest`);
     }
     if (!Number.isInteger(want)) quota = want;
   }
   const env = { ...process.env, ...(options.throttle ? { CHORD_E2E_CPU_THROTTLE: String(options.throttle) } : {}) };
-  const cpusSaid = cpuset ? `, CPUs ${cpuset}${quota ? ` at ${quota} of one` : ''}` : options.cpus === 'all' ? ', every CPU' : '';
+  const cpusSaid = cpuset ? `, CPUs ${cpuset}${quota ? ` (tests at ${quota} of CPU ${Math.min(...cpusetCpus(cpuset))})` : ''}` : options.cpus === 'all' ? ', every CPU' : '';
   const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${cpusSaid}${options.throttle ? `, pages ${options.throttle}x slower` : ''}`;
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
   const share = options.share === null ? null : dockerPath(resolve(options.share));
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota, share, env }), tar);
+  // A share of a CPU: installed and built on the whole slot, then narrowed to it as the tests start (TESTS_START).
+  const wanted = Boolean(quota && cpuset);
+  let narrowed = false;
+  let narrowFailed = false;
+  let tail = '';
+  const narrowWhenTestsStart = (text) => {
+    if (!wanted || narrowed || narrowFailed) return;
+    tail = (tail + text).slice(-4000);
+    if (!tail.includes(TESTS_START)) return;
+    if (docker(narrowArgs(name, cpuset, quota), { quiet: true }) === null) {
+      // Never tested at full speed instead: stopped now, and the run fails (slowOutcome).
+      narrowFailed = true;
+      console.error(`[e2e-linux] Couldn't hold ${name}'s tests to ${quota} of a CPU (docker update failed): stopping it`);
+      docker(['kill', name], { quiet: true });
+      return;
+    }
+    narrowed = true;
+    log(`Tests at ${quota} of CPU ${Math.min(...cpusetCpus(cpuset))}; install and build ran on CPUs ${cpuset}`);
+  };
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota: cpuset ? null : quota, share, build: buildKey(entries, image, env), env }), tar, narrowWhenTestsStart);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);
@@ -436,8 +517,10 @@ async function main() {
   else if (existsSync(join(appDir, 'test-results'))) log('The run wrote no results; apps/desktop/test-results is an earlier run’s');
 
   removeContainer();
-  log(code === 0 ? 'Passed' : `Failed (exit ${code})`);
-  return code;
+  const outcome = slowOutcome({ wanted, narrowed, failed: narrowFailed, code });
+  if (outcome.message) log(outcome.message);
+  log(outcome.code === 0 ? 'Passed' : `Failed (exit ${outcome.code})`);
+  return outcome.code;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

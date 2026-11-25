@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ELECTRON_VOLUME, RESERVED_CPUS, SLOW_CPUS, STALE_MS, STORE_VOLUME, containerName, cpusetCpus, dockerRunArgs, imageTag, parseArgs, pickCpuset, slowDefaults, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
+import { ELECTRON_VOLUME, NOT_NARROWED_EXIT, RESERVED_CPUS, TESTS_START, narrowArgs, slowOutcome, SLOW_CPUS, STALE_MS, STORE_VOLUME, buildKey, containerName, cpusetCpus, dockerRunArgs, imageTag, parseArgs, pickCpuset, slowDefaults, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
@@ -114,6 +114,12 @@ describe('dockerRunArgs', () => {
     expect(after('--env')).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000']);
   });
 
+  it('hands the build’s cache key in only when there is one', () => {
+    const withKey = dockerRunArgs({ ...base, build: '0123456789abcdef' });
+    expect(withKey.flatMap((a, i) => (withKey[i - 1] === '--env' ? [a] : []))).toContain('CHORD_E2E_BUILD_KEY=0123456789abcdef');
+    expect(args.join(' ')).not.toContain('CHORD_E2E_BUILD_KEY');
+  });
+
   it('mounts a shared folder at /share only when one is given', () => {
     const shared = dockerRunArgs({ ...base, share: '/mnt/z/Temp/sweep' });
     const of = (flag: string) => shared.flatMap((a, i) => (a === flag ? [shared[i + 1]] : []));
@@ -217,6 +223,34 @@ describe('tarArchive', () => {
   });
 });
 
+describe('buildKey', () => {
+  const file = (path: string, text: string) => ({ path, body: Buffer.from(text) });
+  const tree = [
+    file('apps/desktop/src/main/index.ts', 'main'),
+    file('packages/core/src/model.ts', 'model'),
+    file('apps/desktop/test/e2e/web.spec.ts', 'a test'),
+    file('apps/desktop/playwright.config.ts', 'config'),
+    file('docs/testing/performance.md', 'docs'),
+    { path: 'apps/desktop/build/link', link: 'icon.png' },
+  ];
+  const key = buildKey(tree, 'chord-e2e-runner:abc');
+
+  it('stays the same when only tests, their configs, docs or CI change, so the build is reused', () => {
+    const edited = tree.map((f) => ('body' in f && !f.path.includes('/src/') ? { ...f, body: Buffer.from('changed') } : f));
+    expect(buildKey(edited, 'chord-e2e-runner:abc')).toBe(key);
+    expect(buildKey([...tree, file('apps/desktop/test/e2e/new.spec.ts', 'x'), file('.github/workflows/ci.yml', 'y'), file('scripts/ci/e2e-shards.mjs', 'z')], 'chord-e2e-runner:abc')).toBe(key);
+    expect(buildKey([...tree].reverse(), 'chord-e2e-runner:abc')).toBe(key);
+  });
+
+  it('changes with anything the build reads, the image, or an unminified build', () => {
+    expect(buildKey(tree.map((f) => (f.path.endsWith('index.ts') ? file(f.path, 'main 2') : f)), 'chord-e2e-runner:abc')).not.toBe(key);
+    expect(buildKey([...tree, file('apps/desktop/src/main/new.ts', 'x')], 'chord-e2e-runner:abc')).not.toBe(key);
+    expect(buildKey(tree.map((f) => ('link' in f ? { ...f, link: 'other.png' } : f)), 'chord-e2e-runner:abc')).not.toBe(key);
+    expect(buildKey(tree, 'chord-e2e-runner:def')).not.toBe(key);
+    expect(buildKey(tree, 'chord-e2e-runner:abc', { CHORD_NO_MINIFY: '1' })).not.toBe(key);
+  });
+});
+
 describe('CPU slots', () => {
   it('reads a cpuset', () => {
     expect([...cpusetCpus('4-7,10')]).toEqual([4, 5, 6, 7, 10]);
@@ -262,5 +296,37 @@ describe('--slow', () => {
   });
   it('nothing without it', () => {
     expect(parsed(['agents.spec.ts'])).toMatchObject({ cpus: null, playwright: ['agents.spec.ts'] });
+  });
+});
+
+describe('a share of a CPU: built at full speed, tested at the share', () => {
+  it('narrows to the slot’s first CPU, held to the share', () => {
+    expect(narrowArgs('chord-e2e-run-x-1', '12-15', 0.35)).toEqual(['update', '--cpuset-cpus', '12', '--cpus', '0.35', 'chord-e2e-run-x-1']);
+    expect(narrowArgs('n', '7', 0.5)).toEqual(['update', '--cpuset-cpus', '7', '--cpus', '0.5', 'n']);
+  });
+
+  it('knows when the tests start from the line in-container.sh prints then', () => {
+    const script = readFileSync(join(import.meta.dirname, '../e2e-linux/in-container.sh'), 'utf8');
+    expect(script).toContain('step() { echo "[e2e-linux] $1');
+    expect(script).toContain('step "E2E on $display"');
+    expect(`[e2e-linux] E2E on x11 (31 s)`.includes(TESTS_START)).toBe(true);
+    expect(`[e2e-linux] pnpm build (5 s)`.includes(TESTS_START)).toBe(false);
+  });
+});
+
+describe('a --slow run whose tests weren\u2019t held to its share fails', () => {
+  it.each([
+    ['not held to a share at all', { wanted: false, narrowed: false, failed: false, code: 0 }, 0, null],
+    ['narrowed, passed', { wanted: true, narrowed: true, failed: false, code: 0 }, 0, null],
+    ['narrowed, failed', { wanted: true, narrowed: true, failed: false, code: 1 }, 1, null],
+    ['the narrowing failed (stopped)', { wanted: true, narrowed: false, failed: true, code: 137 }, NOT_NARROWED_EXIT, /couldn't hold the tests/],
+    ['the narrowing failed, yet the run says passed', { wanted: true, narrowed: false, failed: true, code: 0 }, NOT_NARROWED_EXIT, /couldn't hold the tests/],
+    ['never narrowed, passed: may have run at full speed', { wanted: true, narrowed: false, failed: false, code: 0 }, NOT_NARROWED_EXIT, /not narrowed/],
+    ['never narrowed, failed before its tests', { wanted: true, narrowed: false, failed: false, code: 1 }, 1, /Not narrowed: the run ended before its tests started/],
+  ])('%s', (_name, input, code, message) => {
+    const out = slowOutcome(input);
+    expect(out.code).toBe(code);
+    if (message === null) expect(out.message).toBeNull();
+    else expect(out.message).toMatch(message);
   });
 });
