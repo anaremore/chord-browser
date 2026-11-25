@@ -52,6 +52,7 @@ import {
   userTurnText,
   uuidv7,
   nodeOf,
+  nextReplyText,
   nodeList,
   type AssistantAttachment,
   type AssistantCitation,
@@ -1395,6 +1396,8 @@ export class AssistantService {
       images,
     };
     let resumeFailed = false;
+    /** A tool ran since the reply's last text: its next text is a new paragraph. */
+    let afterTool = false;
     const events = {
       onSessionId: (id: string) => {
         if (thread.providerSessionId !== id) {
@@ -1404,10 +1407,16 @@ export class AssistantService {
       },
       onText: (delta: string) => {
         if (!state.streaming || state.streaming.body.role !== 'assistant') return;
-        state.streaming.body = { ...state.streaming.body, text: state.streaming.body.text + delta };
+        // After a tool call, a new paragraph (the owner's card-game run: never "to act.Only Arthur called").
+        const next = nextReplyText(state.streaming.body.text, delta, afterTool);
+        afterTool = next.newBlock;
+        state.streaming.body = { ...state.streaming.body, text: next.text };
         this.schedulePush();
       },
-      onTool: (name: string, args: Record<string, unknown>) => this.runTool(state, name, args),
+      onTool: (name: string, args: Record<string, unknown>) => {
+        afterTool = true;
+        return this.runTool(state, name, args);
+      },
       onUsage: (usage: AssistantContextUsage) => {
         state.context = usage;
         this.schedulePush();
@@ -2256,13 +2265,15 @@ export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
   popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,
   // What happened to the clipboard (control/user-watch.ts), or a clipboard permission refused (permissions.ts).
+  // Which case it was, so the model says what happened, never "probably" (the owner's card-game run on 982ce10): the page
+  // copied and Chord put yours back; it couldn't; or it changed with no copy of the page's own (a frame's, or yours).
   clipboard: (detail) =>
     detail === 'put back'
-      ? 'The page changed your clipboard; Chord put it back'
+      ? 'The page copied something to your clipboard while the assistant acted; Chord put back what you had'
       : detail === 'not put back'
-        ? 'The page changed your clipboard, and what was on it couldn’t be put back; check it before you paste'
+        ? 'The page copied something to your clipboard while the assistant acted, and Chord couldn’t put back what you had; check it before you paste'
         : detail === 'changed'
-          ? 'The clipboard changed while the assistant acted; check it before you paste'
+          ? 'Your clipboard changed while the assistant acted, but not by the page itself: a frame inside the page copied something, or you copied something elsewhere. Chord left it as it is; check it before you paste'
           : 'The page asked to use your clipboard; Chord said no',
   unload: () => 'The page has unsaved changes, so it stayed',
   external: (detail) => `The page tried to open ${detail} in another program; it wasn’t opened`,

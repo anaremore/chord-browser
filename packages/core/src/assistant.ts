@@ -501,3 +501,30 @@ function browsingLines(images: AssistantImageMaking, acting = false): string {
     IMAGE_LINES[images],
   ].join('\n');
 }
+
+/**
+ * The reply as its next piece streams in. Text the model writes after a tool call is a block of its own: a new paragraph,
+ * never glued to the last sentence ("to act.Only Arthur called": the owner's card-game run on 982ce10). A block's first
+ * piece that's only space waits for its words (`newBlock` stays).
+ */
+export function nextReplyText(text: string, delta: string, newBlock: boolean): { text: string; newBlock: boolean } {
+  if (!newBlock || !text.trim()) return { text: text + delta, newBlock: newBlock && !text.trim() ? false : newBlock };
+  if (!delta.trim()) return { text, newBlock: true };
+  return { text: `${text.trimEnd()}\n\n${delta.trimStart()}`, newBlock: false };
+}
+
+/**
+ * A run of tool steps' quiet row (the owner's card-game run: "Read 69 tabs · 44 more" for one tab looked at 69 times):
+ * tabs read are counted as tabs only when they're different tabs; the same step again is counted, not repeated.
+ */
+export function toolRowLabel(steps: readonly { tool: string; summary: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const s of steps) counts.set(s.summary, (counts.get(s.summary) ?? 0) + 1);
+  const tabs = new Set(steps.filter((s) => s.tool === 'read_tab' || s.tool === 'tab_screenshot').map((s) => s.summary)).size;
+  if (tabs > 1) {
+    const others = counts.size - tabs;
+    return `Read ${tabs} tabs${others > 0 ? ` · ${others} more` : ''}`;
+  }
+  // Every different step stays in the row (what the page set off is said there: a picker refused, a window not opened).
+  return [...counts].map(([summary, n]) => (n > 1 ? `${summary} (${n} times)` : summary)).join(' · ');
+}

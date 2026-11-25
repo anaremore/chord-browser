@@ -830,6 +830,17 @@ describe('The acting cards in the chat (S18 M2e-2a)', () => {
   });
 });
 
+describe('What the clipboard note says, by what happened (the owner’s card-game run on 982ce10)', () => {
+  it('each case its own words, so the model says what happened, never “probably”', async () => {
+    const { USER_TAB_NOTES } = await import('../../src/main/assistant/service');
+    expect(USER_TAB_NOTES.clipboard('put back')).toBe('The page copied something to your clipboard while the assistant acted; Chord put back what you had');
+    expect(USER_TAB_NOTES.clipboard('not put back')).toBe('The page copied something to your clipboard while the assistant acted, and Chord couldn’t put back what you had; check it before you paste');
+    expect(USER_TAB_NOTES.clipboard('changed')).toBe(
+      'Your clipboard changed while the assistant acted, but not by the page itself: a frame inside the page copied something, or you copied something elsewhere. Chord left it as it is; check it before you paste',
+    );
+  });
+});
+
 describe('The page’s words in the chat’s notes (Neon’s N1 on #150)', () => {
   it('one plain line: no control or bidi characters, at most 120 characters', () => {
     expect(plainNote('confirm: “Pay\n now?‮”')).toBe('confirm: “Pay now? ”');

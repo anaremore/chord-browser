@@ -26,6 +26,7 @@ import {
   nameTabs,
   splitCitations,
   stripCitations,
+  toolRowLabel,
   type AssistantActCard,
   type AssistantContextUsage,
   type AssistantFillCard,
@@ -293,9 +294,8 @@ function rows(messages: readonly AssistantMessage[]): Row[] {
 
 function ToolRow({ messages }: { messages: AssistantMessage[] }) {
   const [open, setOpen] = useState(false);
-  const summaries = messages.map((m) => (m.body.role === 'tool' ? m.body.summary : ''));
-  const reads = messages.filter((m) => m.body.role === 'tool' && (m.body.tool === 'read_tab' || m.body.tool === 'tab_screenshot')).length;
-  const label = reads > 1 ? `Read ${reads} tabs${summaries.length > reads ? ` · ${summaries.length - reads} more` : ''}` : summaries.join(' · ');
+  // The same step again counted, never one tab as many (the owner's card-game run on 982ce10).
+  const label = toolRowLabel(messages.flatMap((m) => (m.body.role === 'tool' ? [{ tool: m.body.tool, summary: m.body.summary }] : [])));
   return (
     <div className={styles.toolRow}>
       <button type="button" className={styles.toolSummary} aria-expanded={open} onClick={() => setOpen(!open)}>

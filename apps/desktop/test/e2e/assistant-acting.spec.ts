@@ -408,7 +408,8 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(3);
     // Don't: nothing in the folder, not even its pending name (Neon's S1 on #150).
     const folder = join(profile, 'downloads');
-    expect(readdirSync(folder)).toEqual([]);
+    // (Chromium deletes a cancelled download's partial file a moment after the cancel.)
+    await expect.poll(() => readdirSync(folder), { timeout: 10_000 }).toEqual([]);
     // Allow: saved under its name.
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Download' }]));
     const again = panel.getByRole('group', { name: /^Save file\.zip from / }).last();
@@ -483,14 +484,21 @@ test('leaving the site asks with the address, an open redirect away asks too, an
       await c.getByRole('button', { name: button, exact: true }).click();
       return c;
     };
+    /** A card's words, read while it waits (answered, it's no longer a group), then the answer. */
+    const readThenAnswer = async (title: RegExp, words: string[], button: string) => {
+      const c = card(title).last();
+      await expect(c).toBeVisible({ timeout: 20_000 });
+      for (const w of words) await expect(c).toContainText(w);
+      await shell.waitForTimeout(700);
+      await c.getByRole('button', { name: button, exact: true }).click();
+    };
     const tabUrl = () => app.evaluate(({ webContents }, o) => webContents.getAllWebContents().find((w) => w.getURL().startsWith(o))?.getURL() ?? '', site.origin);
 
     // navigate to another site: one card, the leaving card, with the whole address, never that site's own card (going
     // to a page isn't acting on it: the owner's test of the 0.15 preview). Don't: it stays.
     const away = `${site.other}/checkout?from=table`;
     await send(panel, act([{ tool: 'navigate', args: { url: away } }]));
-    const leave = await answer(/^Go to localhost:\d+\?$/, 'Don’t');
-    await expect(leave).toContainText(away);
+    await readThenAnswer(/^Go to localhost:\d+\?$/, [away], 'Don’t');
     await expect(card(/^Let the assistant click and type on /)).toHaveCount(0);
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
     expect(lastActing(config)[0]?.result).toContain('The user said no to this step');
@@ -499,10 +507,8 @@ test('leaving the site asks with the address, an open redirect away asks too, an
     // The same site's address that sends you on to another: held at the redirect, and asks as leaving does.
     await send(panel, act([{ tool: 'navigate', args: { url: `${site.origin}/out?to=${encodeURIComponent(away)}` } }]));
     await answer(/^Let the assistant click and type on 127\.0\.0\.1:\d+\?$/, 'Allow for this chat');
-    const redirected = await answer(/^Go to /, 'Don’t');
     // The whole address the redirect goes to, its query too, and what sent it on (Neon's B1 and N5 on #151).
-    await expect(redirected).toContainText(away);
-    await expect(redirected).toContainText('sends your tab to:');
+    await readThenAnswer(/^Go to /, [away, 'sends your tab to:'], 'Don’t');
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
     // Still where it was (Claude's review of #151: tabUrl finds only this origin's tab, so not-localhost proved nothing).
     expect(await tabUrl()).toBe(`${site.origin}/table`);
@@ -515,8 +521,7 @@ test('leaving the site asks with the address, an open redirect away asks too, an
     const read = panel.getByRole('group', { name: 'Asking permission' }).last();
     await expect(read).toBeVisible({ timeout: 20_000 });
     await read.getByRole('button', { name: 'Allow once' }).click();
-    const typing = await answer(/^Type this in “Order number”\?$/, 'Allow');
-    await expect(typing).toContainText('“W-104388”');
+    await readThenAnswer(/^Type this in “Order number”\?$/, ['“W-104388”'], 'Allow');
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(3);
     const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
     await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
@@ -599,6 +604,25 @@ test('read another tab, then type: each card answered with a click in the panel,
     expect(steps.find((x) => x.tool === 'type')?.result).not.toContain('took');
     await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
     await expect(panel.getByText(/Stopped: you used the tab/)).toHaveCount(0);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('what the assistant writes between its steps is a paragraph each, never glued together (the owner’s card-game run on 982ce10)', async () => {
+  test.setTimeout(90_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await send(panel, act([{ say: 'Waiting for the bots to act.' }, { tool: 'snapshot' }, { say: 'Only Arthur called. ' }]));
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    await expect(panel.getByText('Waiting for the bots to act.', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Only Arthur called. Done.', { exact: true })).toBeVisible();
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
