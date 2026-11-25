@@ -202,6 +202,8 @@ const downloads = new DownloadManager({
   dispatch: (command) => browser!.store.dispatch(command),
   newId: () => uuidv7(),
   defaultSession: () => profileSession('default'),
+  // Downloads under their pending names now: a crash's leftovers deleted at the next launch.
+  pendingList: join(app.getPath('userData'), 'pending-downloads.json'),
   // Every download, a private window's too, is checked while Safe Browsing is on (its final address and redirects).
   screen: (urls) => (safeBrowsing.active ? safeBrowsing.check(urls, 'download').then((v) => (v.verdict === 'unsafe' ? v.kind : null)) : null),
   onHeld: (download) => browser?.showHeldDownload(download.privateWindow),

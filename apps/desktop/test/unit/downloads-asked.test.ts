@@ -6,7 +6,7 @@
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { emptyState, type Command } from '@chord/core';
 import type * as FsPromises from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -46,14 +46,16 @@ afterEach(() => {
   delete process.env['CHORD_DOWNLOADS_DIR'];
 });
 
-function setup(threat: 'malware' | null | undefined = undefined) {
+function setup(threat: 'malware' | null | undefined = undefined, pendingList?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'chord-dl-'));
   dirs.push(dir);
   process.env['CHORD_DOWNLOADS_DIR'] = dir;
   const session = new EventEmitter();
   const commands: Command[] = [];
   const downloads = new DownloadManager({
-    state: () => emptyState(),
+    // The list as the rows Chord reported make it (what the panel's Open reads).
+    state: () => ({ ...emptyState(), downloads: Object.fromEntries(commands.flatMap((c) => (c.t === 'download.update' ? [[c.download.id, c.download]] : []))) }),
+    ...(pendingList ? { pendingList } : {}),
     dispatch: (c) => void commands.push(c),
     newId: () => 'd1',
     defaultSession: () => session as never,
@@ -106,13 +108,12 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
     const t = setup();
     expect(asked.calls).toEqual([{ filename: 'invoicepiz.exe', url: 'https://files.example/real/invoice.zip' }]);
     expect(t.path().endsWith(PENDING_SUFFIX)).toBe(true);
-    expect(t.item.pause).toHaveBeenCalled();
-    // Never resumed or opened while it's asked about.
+    // Never paused for the question (the release check: on Windows a pause could outlast your Allow), never opened.
+    expect(t.item.pause).not.toHaveBeenCalled();
     t.downloads.run('d1', 'resume');
     expect(t.item.resume).not.toHaveBeenCalled();
     asked.answer!(true);
     await tick();
-    expect(t.item.resume).toHaveBeenCalled();
     t.finish();
     await tick();
     await tick();
@@ -143,6 +144,16 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
     renames.failing = 0;
   }, 20_000);
 
+  it('finished before you answer: under its pending name until Allow, then its own; never paused, so never stuck paused (the release check, runs 45652920831 to 45658976992)', async () => {
+    const t = setup();
+    expect(t.item.pause).not.toHaveBeenCalled();
+    t.finish();
+    await tick();
+    expect(t.files()).toEqual([`invoicepiz.exe${PENDING_SUFFIX}`]);
+    asked.answer!(true);
+    await vi.waitFor(() => expect(t.files()).toEqual(['invoicepiz.exe']));
+  });
+
   it('Don’t deletes it, finished or not; nothing is left in the folder, nor in the list', async () => {
     for (const finished of [false, true]) {
       const t = setup();
@@ -154,6 +165,37 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
       await vi.waitFor(() => expect(t.files(), `finished ${finished}`).toEqual([]));
       expect(t.commands.at(-1), `finished ${finished}`).toEqual({ t: 'download.remove', id: 'd1' });
     }
+  });
+
+  it('pending while asked, finished or not: never shown as done, never opened from its row (the owner’s release conditions)', async () => {
+    const t = setup();
+    t.finish();
+    await tick();
+    expect(t.row()?.download).toMatchObject({ state: 'paused', endedAt: null });
+    t.downloads.run('d1', 'open');
+    expect(shell.openPath).not.toHaveBeenCalled();
+    asked.answer!(true);
+    await vi.waitFor(() => expect(t.row()?.download).toMatchObject({ state: 'completed' }));
+  });
+
+  it('a crash while asked: what it left under its pending name is deleted at the next launch; one that took its name stays', async () => {
+    const list = join(mkdtempSync(join(tmpdir(), 'chord-dl-list-')), 'pending-downloads.json');
+    dirs.push(dirname(list));
+    const t = setup(undefined, list);
+    t.finish();
+    await tick();
+    const left = t.path();
+    expect(existsSync(left)).toBe(true);
+    // Chord ends here, nobody answered. The next launch:
+    new DownloadManager({ state: () => emptyState(), dispatch: () => undefined, newId: () => 'd2', defaultSession: () => ({}) as never, pendingList: list });
+    expect(existsSync(left)).toBe(false);
+    // One allowed and named before the crash isn't touched.
+    const u = setup(undefined, list);
+    asked.answer!(true);
+    u.finish();
+    await vi.waitFor(() => expect(u.files()).toEqual(['invoicepiz.exe']));
+    new DownloadManager({ state: () => emptyState(), dispatch: () => undefined, newId: () => 'd3', defaultSession: () => ({}) as never, pendingList: list });
+    expect(u.files()).toEqual(['invoicepiz.exe']);
   });
 
   it('nobody answered by quit: discarded, nothing left behind', async () => {
