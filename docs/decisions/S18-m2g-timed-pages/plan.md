@@ -53,6 +53,21 @@ Where the tokens go:
 - The tool list's 1,962 tokens go with every request, so a 10-call journey pays it 10 times: trim it.
 - A 20-field form takes 22 calls: batch steps.
 
+**After the first cuts** (same journeys, every one still succeeding):
+
+| Journey | Tool calls | Result tokens | Change |
+|---|---|---|---|
+| Bot game, one hand | 8 | 817 | (diffs after actions next) |
+| Timed table, two turns | 5 | 476 | wait_for (slice b) already |
+| A 20-field form | 3 (+1 batch that stops at a bad ref, checked) | 736 | **batch**: 22 → 3 calls |
+| A page that draws itself | 5 | 371 | (#154's first look, once on main) |
+| A 300-row list | 4 | 484 | **rows collapsed, find**: 10,291 → 484 tokens |
+| The tool list | | 2,290 | +328 for batch and find |
+
+- **Rows collapsed, and `find`:** past 8 rows alike (the same roles and shape), the outline shows the first 5 and says how many more. `find` gives only the elements named so, with what they're in and their refs, which stay good.
+- **`batch`:** up to 20 element steps on one tab in one call, each through the same layer as its own call (every check, card, the send hold and the guard). It stops at the first refusal, saying which step and what went before it, and gives one compact answer.
+- **The tool list is now the largest fixed cost** (2,290 tokens with every request). Trimming its descriptions needs a gate that a scripted journey can't give: whether a model still picks the right tool. That needs a model-in-the-loop eval (a real agent on these fixtures), which costs model usage: the owner's call.
+
 The connection also logs each result's size (`result <tool> <chars> ~<tokens>`), and `agentResultSizes` reads them per tool.
 
 ## After Neon's design review (2026-11-24, through 7c4e271)

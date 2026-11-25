@@ -1393,13 +1393,15 @@ test('the token eval: five journeys, each as an agent would play it with these t
     });
     await journey('a 20-field form', async () => {
       const tab = await open('/form20');
-      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      for (let i = 1; i <= 20; i++) {
-        const typed = await act('type', { tab_id: tab, ref: refOf(o, `textbox "Field ${i}"`), text: `v${i}` });
-        if (typed.error) o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      }
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // Every field in one call (batch): each step as its own type call would go, gates and all.
+      const filled = await act('batch', { tab_id: tab, steps: Array.from({ length: 20 }, (_, i) => ({ tool: 'type', ref: refOf(o, `textbox "Field ${i + 1}"`), text: `v${i + 1}` })) });
+      if (filled.error) throw new Error(filled.text);
       const values = (await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string;
-      return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
+      // A step refused stops the batch there, and says which went (a ref never given, in the middle).
+      const stopped = await act('batch', { tab_id: tab, steps: [{ tool: 'type', ref: refOf(o, 'textbox "Field 1"'), text: 'w1' }, { tool: 'type', ref: 'e999', text: 'x' }, { tool: 'type', ref: refOf(o, 'textbox "Field 3"'), text: 'w3' }] });
+      const after = (await inPage('/form20', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')) as string;
+      return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',') && stopped.error && /^Step 2 \(type\) was refused: .* Steps 1 to 1 went: Typed in “Field 1”\.$/.test(stopped.text) && after === 'w1,v2,v3';
     });
     await journey('a page that draws itself after it loads', async () => {
       const tab = await open('/drawn');

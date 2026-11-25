@@ -31,8 +31,7 @@ import {
   type Command,
   type Grant,
   type NodeId,
-  type ProfileId,
-} from '@chord/core';
+  type ProfileId, BATCH_STEPS_MAX, BATCH_TOOLS } from '@chord/core';
 import { ControlAgent, type CardPresenter, type ControlCard } from '../control/gate';
 import { controlPage } from '../control/page';
 import type { ToolOutput } from '../control/scope';
@@ -267,6 +266,41 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     return [{ type: 'text', text: JSON.stringify({ trust: 'untrusted', held: list, note }) }];
   };
 
+  /**
+   * batch (M2g-1, the owner's token goal: fewer calls): its steps in order, each through the same layer as its own call
+   * (every check, card, the send hold and the guard), on the batch's tab. The first step refused stops it. One compact
+   * answer: what each step did, and the page after; or which step was refused, and why.
+   */
+  const batch = async (args: Record<string, unknown>, stepScope: typeof scope, cancelled: AbortSignal): Promise<ToolOutput> => {
+    const steps = Array.isArray(args['steps']) ? (args['steps'] as unknown[]) : [];
+    if (steps.length < 1 || steps.length > BATCH_STEPS_MAX) return { text: `batch takes 1 to ${BATCH_STEPS_MAX} steps.`, isError: true };
+    const done: string[] = [];
+    const notes = new Set<string>();
+    let last: Record<string, unknown> = {};
+    for (const [i, raw] of steps.entries()) {
+      const step = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const tool = typeof step['tool'] === 'string' ? step['tool'] : '';
+      if (!(BATCH_TOOLS as readonly string[]).includes(tool)) return { text: `Step ${i + 1}: batch takes ${BATCH_TOOLS.join(', ')}.`, isError: true };
+      if (cancelled.aborted || agent.isStopped) return refused('stopped');
+      const { tool: _tool, ...stepArgs } = step;
+      void _tool;
+      const out = toPlain(await runControlTool(stepScope, deps.browser, tool, { ...stepArgs, tab_id: args["tab_id"] }, cancelled));
+      if (out.isError) {
+        const before = done.length ? ` Steps 1 to ${done.length} went: ${done.join('; ')}.` : ' None before it went.';
+        return { text: `Step ${i + 1} (${tool}) was refused: ${out.text}${before}`, isError: true };
+      }
+      const data = (JSON.parse(out.text ?? '{}') as { data?: Record<string, unknown> }).data ?? {};
+      done.push(String(data['done'] ?? tool));
+      for (const k of ['refound', 'focus', 'dropped', 'note']) if (typeof data[k] === 'string') notes.add(data[k] as string);
+      last = data;
+      // A step that took the page elsewhere: the steps after it name refs of the page before.
+      if (data['navigated'] === true && i < steps.length - 1) {
+        return { text: toolResult({ tab_id: args['tab_id'], done, stopped_after: i + 1, why: 'The page changed: call snapshot before the rest.', url: last['url'], title: last['title'], page_id: last['page_id'] }) };
+      }
+    }
+    return { text: toolResult({ tab_id: args['tab_id'], done, navigated: last['navigated'] === true, page_id: last['page_id'], url: last['url'], title: last['title'], ...(notes.size ? { notes: [...notes] } : {}) }) };
+  };
+
   const call = async (m: Message) => {
     const tool = typeof m.params?.['name'] === 'string' ? m.params['name'] : '';
     const args = (m.params?.['arguments'] && typeof m.params['arguments'] === 'object' ? m.params['arguments'] : {}) as Record<string, unknown>;
@@ -305,6 +339,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
           if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
           if (tool === 'close_tab') return closeTab(args);
+          if (tool === 'batch') return batch(args, callScope, cancel.signal);
           return toPlain(await runControlTool(callScope, deps.browser, tool, args, cancel.signal));
         },
         refused,

@@ -5,6 +5,7 @@
  * its own (`@chord/core/agent-tools`) by the bridge, which must start fast:
  * nothing here pulls in the rest of core.
  */
+import { PRESS_KEYS, TYPE_TEXT_MAX } from './control-act';
 import { CONTROL_REFUSALS } from './control-gate';
 import { ASSISTANT_READ_MAX, CONTROL_TOOLS, type ControlTier, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS } from './control-tools';
 
@@ -125,6 +126,10 @@ export const AGENT_TOOLS: readonly AgentToolSpec[] = [
   },
 ];
 
+/** batch (M2g-1, the owner's token goal): the element tools it takes, and how many steps at most. */
+export const BATCH_TOOLS = ['click', 'type', 'press_key', 'select_option', 'hover'] as const;
+export const BATCH_STEPS_MAX = 20;
+
 /**
  * M2's tools for outside agents (docs/decisions/S18-agent-mcp.md, "M2: plan"), in builds that have M2 (agentActions).
  * Fixed names, never added or taken away as pages come and go (WebMCP's tools, later, come behind fixed meta-tools).
@@ -145,6 +150,35 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
       ['back', 'Go back a page in one of your own tabs. Waits for the page to load.', false],
     ] as const
   ).map(([name, description, destructive]): AgentToolSpec => ({ name, level: 'act', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: false, destructiveHint: destructive, openWorldHint: true } })),
+  {
+    name: 'batch',
+    level: 'act',
+    description: `Several steps on one of your tabs in one call, in order (fill a form's fields, then submit): each a click, type, press_key, select_option or hover by its ref, as that tool takes it, asking the user as that tool would. Stops at the first step refused, and says which; at most ${BATCH_STEPS_MAX} steps.`,
+    inputSchema: object(
+      {
+        tab_id: { type: 'string' },
+        steps: {
+          type: 'array',
+          minItems: 1,
+          maxItems: BATCH_STEPS_MAX,
+          items: object(
+            {
+              tool: { type: 'string', enum: [...BATCH_TOOLS] },
+              ref: { type: 'string', pattern: '^e[1-9][0-9]{0,8}$' },
+              text: { type: 'string', maxLength: TYPE_TEXT_MAX },
+              replace: { type: 'boolean' },
+              submit: { type: 'boolean' },
+              key: { type: 'string', enum: [...PRESS_KEYS] },
+              option: { type: 'string', maxLength: 500 },
+            },
+            ['tool', 'ref'],
+          ),
+        },
+      },
+      ['tab_id', 'steps'],
+    ),
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
   read(
     'wait_for',
     `Wait, instead of polling with snapshots or sleeping, until a text (text) or an element (role and its exact name) shows in one of your tabs, or with gone, stops showing; at most timeout_ms (${WAIT_FOR_MAX_MS} ms, ${WAIT_FOR_DEFAULT_MS} by default). Answers met (true or false) and waited_ms; with snapshot true, the tab's outline and refs when it's met, as snapshot gives them. One wait at a time. For a turn-based page: wait for your turn's controls with snapshot, then act.`,
