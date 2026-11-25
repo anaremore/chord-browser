@@ -53,6 +53,8 @@ export interface DuetHost {
     offScreen(node: TabNode, windowId: WindowId): string | null;
     /** A step refused for a reason latched earlier in the message (the chat may say it now: your taking the tab). */
     latched?(why: string): void;
+    /** What the lease caught in the tab since its last result (ActHost.caught). */
+    caught?(node: TabNode): string[];
     siteOf(url: string): string | null;
     siteAllowed(site: string): boolean;
     keepSite(site: string): void;
@@ -163,6 +165,7 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
             keepSite: acting.keepSite,
             doing: acting.doing,
             lease: acting.lease,
+            ...(acting.caught ? { caught: acting.caught } : {}),
           };
           return { act };
         })()

@@ -139,7 +139,8 @@ const INPUT_LISTENERS: Record<string, (typeof CHECKS | Exempt | Gap)[]> = {
   // S18 A4 (Neon's M2e blocker B2), closed in M2e-2a: the menu's key guard ignores the input Chord sends.
   'passwords/assist.ts': [CHECKS],
   'peek.ts': ["Peek's page: never an agent's (Peek opens from pinned tabs; agent tabs are never pinned); recheck in M2e"],
-  'tabs.ts': ["Peek's link gesture in a pinned tab: agent tabs are never pinned; recheck in M2e, where an assistant's click in your pinned tab would open Peek"],
+  // Peek's link gesture in a pinned tab: closed in M2e-2b, an assistant's click in your pinned tab never opens Peek.
+  'tabs.ts': [CHECKS],
   'window.ts': ["the popover's card (Chord's UI): never an agent's page"],
 };
 

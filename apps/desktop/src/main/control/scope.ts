@@ -58,6 +58,11 @@ export interface ActHost {
    * begun before it (null, or why not) and ended after it. Absent: an agent's own tab, which has them for its life.
    */
   lease?: { begin(node: TabNode): Promise<string | null>; end(node: TabNode): void };
+  /**
+   * What the page did in response that was caught since the last result there (a dialog answered Cancel, a picker or a
+   * window refused, unsaved changes keeping the page), taken: the next result says it (Claude's S1, round 2 of #150).
+   */
+  caught?(node: TabNode): string[];
 }
 
 /** propose_fill's card, which only a front door with a place to show it offers. */

@@ -11,9 +11,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
 /** The lease module, as the service sees it: whose lease is on where, and what was ended (by whom). */
-const leases = vi.hoisted(() => ({ ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on' }));
+const leases = vi.hoisted(() => ({ ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on', deps: null as null | { note(what: string, detail: string): void } }));
 vi.mock('../../src/main/control/user-watch', () => ({
-  beginUserAction: async (contents: unknown, owner: string) => {
+  beginUserAction: async (contents: unknown, owner: string, deps: { note(what: string, detail: string): void }) => {
+    leases.deps = deps;
     const begun = await leases.begin();
     if (begun === 'on') leases.owners.set(contents, owner);
     return { begun, end: () => undefined };
@@ -66,7 +67,7 @@ function setup(acting = true) {
   const pages = new Map<string, { isDestroyed(): boolean }>();
   const page = (id: string) => {
     let p = pages.get(id);
-    if (!p) pages.set(id, (p = { isDestroyed: () => false }));
+    if (!p) pages.set(id, (p = { isDestroyed: () => false, getURL: () => 'https://game.example/table' } as { isDestroyed(): boolean }));
     return p;
   };
   const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-'));
@@ -427,5 +428,68 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       expect(s.actEnded, end).toBe(USER_TAB_REFUSALS.left);
       expect(s.control.isStopped, end).toBe(true);
     }
+  });
+
+  it('the bar over the tab stays on while it works: between steps it says it’s working, never off; off at the turn’s end, or after a long idle (the owner, 2026-11-24)', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      const s = (await t.turn()) as Awaited<ReturnType<typeof t.turn>> & { streaming: { body?: unknown } | null };
+      const host = (t.service as unknown as { actingHost(s: unknown): { doing(nodeId: string, doing: unknown): void } }).actingHost(s);
+      const bar = () => t.store.state.live[t.mine]?.agent?.doing ?? null;
+      host.doing(t.mine, { tool: 'click', name: 'Raise', role: 'button' });
+      expect(bar()).toContain('clicking');
+      host.doing(t.mine, null);
+      expect(bar()).toBe('is working in this tab');
+      host.doing(t.mine, { tool: 'click', name: 'Call', role: 'button' });
+      expect(bar()).toContain('Call');
+      // A long idle between steps: off.
+      host.doing(t.mine, null);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(bar()).toBeNull();
+      // The turn's end: off.
+      host.doing(t.mine, { tool: 'click', name: 'Fold', role: 'button' });
+      host.doing(t.mine, null);
+      s.streaming = { id: 'reply', body: { role: 'assistant', text: '', citations: [], status: 'streaming' } } as never;
+      await (t.service as unknown as { finishTurn(state: unknown, outcome: { status: 'done' }): Promise<void> }).finishTurn(s, { status: 'done' });
+      expect(bar()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the bar never comes back once acting has ended (Stop, your hands, a switch, the panel closed): its step ending clears it (Neon’s S3 on #150)', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const end of ['stop', 'hands', 'switch', 'panel'] as const) {
+        const t = setup();
+        const s = await t.turn();
+        const host = (t.service as unknown as { actingHost(s: unknown): { doing(nodeId: string, doing: unknown): void } }).actingHost(s);
+        const bar = () => t.store.state.live[t.mine]?.agent?.doing ?? null;
+        host.doing(t.mine, { tool: 'click', name: 'Raise', role: 'button' });
+        if (end === 'stop') await t.service.act('w1', { do: 'stop' } as never);
+        else if (end === 'hands') t.service.userUsedTab(t.mine);
+        else if (end === 'switch') t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other });
+        else await t.service.act('w1', { do: 'toggle', open: false } as never);
+        // The step under way ends after: no "working" bar again.
+        host.doing(t.mine, null);
+        expect(bar(), end).toBeNull();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(bar(), end).toBeNull();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('what the lease caught there goes to the next result in that tab, once (Claude’s S1, round 2 of #150)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> }; caught(node: unknown): string[] } }).actingHost(s);
+    await host.lease.begin({ id: t.mine });
+    leases.deps!.note('dialog', 'confirm: “Delete?”');
+    leases.deps!.note('file', 'a file picker');
+    expect(host.caught({ id: t.mine })).toEqual(['The page showed a dialog (confirm: “Delete?”); it was answered Cancel', 'The page tried to open a file picker; it wasn’t shown']);
+    expect(host.caught({ id: t.mine })).toEqual([]);
   });
 });

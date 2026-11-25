@@ -35,11 +35,14 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
   const released = nodeId !== null ? scope.agent.releases(nodeId) : 0;
   const done: string[] = [];
   const notes = new Set<string>();
+  // What the page was caught doing at any step (#150: a tab of yours): never lost behind a later step's done.
+  const caught: string[] = [];
   let changes: unknown;
   let last: Record<string, unknown> = {};
   const went = () => (done.length ? ` Steps 1 to ${done.length} went: ${done.join('; ')}.` : ' None before it went.');
-  const withNotes = (o: Record<string, unknown>) => ({ ...o, ...(notes.size ? { notes: [...notes] } : {}) });
-  const stoppedAt = (i: number, tool: string, why: string): ToolOutput => ({ text: `Step ${i + 1} (${tool}) didn’t run: ${why}${went()}${notes.size ? ` Notes: ${[...notes].join(' ')}` : ''}`, isError: true });
+  const withNotes = (o: Record<string, unknown>) => ({ ...o, ...(notes.size ? { notes: [...notes] } : {}), ...(caught.length ? { caught } : {}) });
+  const tail = () => `${notes.size ? ` Notes: ${[...notes].join(' ')}` : ''}${caught.length ? ` Caught: ${caught.join('; ')}.` : ''}`;
+  const stoppedAt = (i: number, tool: string, why: string): ToolOutput => ({ text: `Step ${i + 1} (${tool}) didn’t run: ${why}${went()}${tail()}`, isError: true });
   for (const [i, { tool, args: stepArgs }] of planned.entries()) {
     if (cancelled.aborted || scope.agent.isStopped) return stoppedAt(i, tool, CONTROL_REFUSALS.stopped);
     if (nodeId !== null && i > 0) {
@@ -57,11 +60,12 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
           return out.text ?? '';
         }
       })();
-      return { text: `Step ${i + 1} (${tool}) was refused: ${why}${went()}${notes.size ? ` Notes: ${[...notes].join(' ')}` : ''}`, isError: true };
+      return { text: `Step ${i + 1} (${tool}) was refused: ${why}${went()}${tail()}`, isError: true };
     }
     const data = (JSON.parse(out.text ?? '{}') as { data?: Record<string, unknown> }).data ?? {};
     done.push(String(data['done'] ?? tool));
     for (const k of NOTES) if (typeof data[k] === 'string') notes.add(data[k] as string);
+    if (Array.isArray(data['caught'])) for (const c of data['caught']) if (typeof c === 'string') caught.push(c);
     last = data;
     if (data['page_changes'] !== undefined) changes = data['page_changes'];
     // A step that took the page elsewhere: the steps after it name refs of the page before.

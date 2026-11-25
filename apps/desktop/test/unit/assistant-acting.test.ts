@@ -14,7 +14,7 @@ const { AGENT_TAB_REFUSALS, duetScope, USER_TAB_REFUSALS } = await import('../..
 const { ControlAgent } = await import('../../src/main/control/gate');
 const { Store } = await import('../../src/main/store');
 const watch = await import('../../src/main/control/user-watch');
-const { COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, TAIL_MS } = watch;
+const { AFTER_MS, askUserTabDownload, COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, userTabCatching, TAIL_MS } = watch;
 /** Each action's own end, by tab, as its begin handed it (round 3 of #147: an end belongs to its own lease). */
 const actionEnds = new Map<object, (() => void)[]>();
 const beginUserAction = async (...args: Parameters<typeof watch.beginUserAction>) => {
@@ -24,7 +24,7 @@ const beginUserAction = async (...args: Parameters<typeof watch.beginUserAction>
 };
 /** The oldest action still under way in the tab, ended. */
 const endUserAction = (contents: object) => actionEnds.get(contents)?.shift()?.();
-const { actCard } = await import('../../src/main/assistant/service');
+const { actCard, downloadShown, outlivesTurn, plainNote } = await import('../../src/main/assistant/service');
 
 afterEach(() => vi.useRealTimers());
 
@@ -116,7 +116,7 @@ describe('Where the assistant may act (S18 M2e-2a, A1)', () => {
 function yourTab() {
   const debug = new EventEmitter();
   let attached = false;
-  const sent: [string, string, string | undefined][] = [];
+  const sent: [string, string, string | undefined, unknown][] = [];
   Object.assign(debug, {
     isAttached: () => attached,
     attach: () => void (attached = true),
@@ -124,37 +124,165 @@ function yourTab() {
       attached = false;
       debug.emit('detach', {}, 'target closed');
     },
-    sendCommand: async (method: string, params: { requestId?: string }, sessionId?: string) => void sent.push([method, params?.requestId ?? '', sessionId]),
+    sendCommand: async (method: string, params: { requestId?: string }, sessionId?: string) => void sent.push([method, params?.requestId ?? '', sessionId, params]),
   });
   const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, getURL: () => 'https://game.example/table', debugger: debug }) as unknown as WebContents;
   const post = (requestId: string) => debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method: 'POST', url: 'https://game.example/move' }, resourceType: 'XHR' });
   const how = (requestId: string) => sent.find(([m, id]) => id === requestId && m.startsWith('Fetch.'))?.[0] ?? 'held';
-  return { contents, debug, sent, post, how, attached: () => attached };
+  const notes: string[] = [];
+  let clip = 'yours';
+  /** The lease's deps with what M2e-2b's catches say (notes) and the clipboard as this tab's test sets it. */
+  /** Whether what's on the clipboard can be put back (false: it held files). */
+  let restorable = true;
+  const tabDeps = (ask: SendHoldDeps['ask'] = async () => 'once') => ({
+    ...deps(ask),
+    note: (what: string, detail: string) => void notes.push(`${what}: ${detail}`),
+    clipboard: { snapshot: async () => ({ text: clip }), same: async (s: unknown) => (s as { text: string }).text === clip, restore: async (s: unknown) => (restorable ? ((clip = (s as { text: string }).text), true) : false) },
+  });
+  /** The page copies (its copy event, from the preload): the clipboard is the page's now. */
+  const pageCopies = (text: string) => {
+    clip = text;
+    watch.userTabCopied(contents);
+  };
+  const bypass = () => sent.filter(([m]) => m === 'Network.setBypassServiceWorker').at(-1)?.[3];
+  return { contents, debug, sent, post, how, notes, deps: tabDeps, bypass, pageCopies, clip: { get: () => clip, set: (text: string) => void (clip = text), unrestorable: () => void (restorable = false) }, attached: () => attached };
 }
 
-const deps = (ask: SendHoldDeps['ask'] = async () => 'once') => ({ siteOf: (u: string) => new URL(u).origin, ask });
+const deps = (ask: SendHoldDeps['ask'] = async () => 'once') => ({ siteOf: (u: string) => new URL(u).origin, ask, note: () => undefined, askDownload: async () => false });
 
 describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
   const tick = () => new Promise((r) => setTimeout(r, 0));
 
-  it('on for an action: the debugger and Fetch (requests only) on, what the page sends held and asked about in the chat; off a moment after', async () => {
+  it('on for an action: the debugger, Fetch (requests only) and its catches on; what the page sends held and asked about for a moment after, then yours; off once its click can set nothing off (M2e-2b)', async () => {
     vi.useFakeTimers();
     const t = yourTab();
     const asked: string[][] = [];
-    expect(await beginUserAction(t.contents, 'chat:1', deps(async (sites) => (asked.push(sites), 'once')))).toBe('on');
+    expect(await beginUserAction(t.contents, 'chat:1', t.deps(async (sites) => (asked.push(sites), 'once')))).toBe('on');
     expect(t.attached()).toBe(true);
     expect(userTabActing(t.contents)).toBe(true);
-    expect(t.sent.map(([m]) => m)).toEqual(expect.arrayContaining(['Fetch.enable', 'Target.setAutoAttach']));
+    expect(t.sent.map(([m]) => m)).toEqual(expect.arrayContaining(['Fetch.enable', 'Target.setAutoAttach', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.setBypassServiceWorker']));
+    expect(t.sent.find(([m]) => m === 'WebAuthn.enable')?.[3]).toEqual({ enableUI: false });
+    expect(t.bypass()).toEqual({ bypass: true });
     endUserAction(t.contents);
     // In the moment after the action, what the page sends is still asked about.
     t.post('r1');
     await vi.advanceTimersByTimeAsync(0);
     expect(asked).toEqual([['https://game.example']]);
     expect(t.how('r1')).toBe('Fetch.continueRequest');
-    await vi.advanceTimersByTimeAsync(TAIL_MS + 100);
-    // Let go of: Chord's own attachment detached, and the tab as it always was.
-    expect(t.attached()).toBe(false);
+    // After it, the page's own sends are yours again (no card), but its click can still set things off.
+    await vi.advanceTimersByTimeAsync(TAIL_MS + 10);
+    t.post('r2');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.how('r2')).toBe('Fetch.continueRequest');
+    expect(asked).toHaveLength(1);
     expect(userTabActing(t.contents)).toBe(false);
+    expect(userTabCatching(t.contents)).toBe(true);
+    await vi.advanceTimersByTimeAsync(AFTER_MS);
+    // Let go of: the service worker back first, Chord's own attachment detached, the tab as it always was.
+    expect(t.bypass()).toEqual({ bypass: false });
+    expect(t.attached()).toBe(false);
+    expect(userTabCatching(t.contents)).toBe(false);
+  });
+
+  it('what its click sets off is caught and said: a file picker, a dialog; FedCM left alone (Electron has no UI for it) (M2e-2b)', async () => {
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    t.debug.emit('message', {}, 'Page.fileChooserOpened', { mode: 'selectSingle' });
+    t.debug.emit('message', {}, 'Page.javascriptDialogOpening', { type: 'confirm', message: 'Leave the table?' });
+    await tick();
+    expect(t.notes).toEqual(['file: a file picker', 'dialog: confirm: “Leave the table?”']);
+    // FedCM is left alone (Electron has no UI for it, and the page's request fails by itself): never enabled, never
+    // dismissed (dismissing takes the app down: Neon's B2 on #150, checked in the build's E2E).
+    expect(t.sent.some(([m]) => m.startsWith('FedCm.'))).toBe(false);
+    endUserLease(t.contents);
+  });
+
+  it('the clipboard the page changed in the window is put back; one you change after your own input is yours (M2e-2b)', async () => {
+    vi.useFakeTimers();
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    endUserAction(t.contents);
+    t.pageCopies('the page’s');
+    await vi.advanceTimersByTimeAsync(AFTER_MS + 10);
+    expect(t.clip.get()).toBe('yours');
+    expect(t.notes).toContain('clipboard: put back');
+    const u = yourTab();
+    await beginUserAction(u.contents, 'chat:1', u.deps());
+    u.clip.set('copied by you');
+    endUserLease(u.contents);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(u.clip.get()).toBe('copied by you');
+  });
+
+  it('the clipboard is put back only when the page copied, only if it’s still what the page put there, and never cleared when it can’t be (Claude’s B2, round 2 of #150)', async () => {
+    vi.useFakeTimers();
+    // Changed with no copy from the page (you, in the chat or another app): yours, left alone.
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    t.clip.set('copied by you elsewhere');
+    endUserAction(t.contents);
+    await vi.advanceTimersByTimeAsync(AFTER_MS + 10);
+    expect(t.clip.get()).toBe('copied by you elsewhere');
+    // Never put back, but said once: a frame's copy (which the page's top frame never sees) changes it the same way
+    // (the final check of #150).
+    expect(t.notes.filter((n) => n.startsWith('clipboard:'))).toEqual(['clipboard: changed']);
+    // The page copied, then you copied elsewhere: yours, left alone.
+    const u = yourTab();
+    await beginUserAction(u.contents, 'chat:1', u.deps());
+    u.pageCopies('the page’s');
+    await vi.advanceTimersByTimeAsync(100);
+    u.clip.set('copied by you after');
+    endUserAction(u.contents);
+    await vi.advanceTimersByTimeAsync(AFTER_MS + 10);
+    expect(u.clip.get()).toBe('copied by you after');
+    // What can't be put back (it held files): never cleared, and the chat says so.
+    const w = yourTab();
+    w.clip.unrestorable();
+    await beginUserAction(w.contents, 'chat:1', w.deps());
+    w.pageCopies('the page’s');
+    await vi.advanceTimersByTimeAsync(100);
+    endUserAction(w.contents);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(w.clip.get()).toBe('the page’s');
+    expect(w.notes).toContain('clipboard: not put back');
+  });
+
+  it('the clipboard is put back as each action ends, and whenever the lease ends but by your own input: Stop, a tab switch, the panel closed, the debugger gone (Neon’s B6 on #150)', async () => {
+    // As the action ends: not 6 s later.
+    vi.useFakeTimers();
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    t.pageCopies('the page’s');
+    await vi.advanceTimersByTimeAsync(100);
+    endUserAction(t.contents);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.clip.get()).toBe('yours');
+    vi.useRealTimers();
+    // Every end that isn't your hands: the chat's Stop (and a tab switch, the panel closed: endActing), the debugger gone.
+    for (const end of ['stop', 'detach', 'gone'] as const) {
+      const u = yourTab();
+      await beginUserAction(u.contents, 'chat:1', u.deps());
+      u.pageCopies('the page’s');
+      await new Promise((r) => setTimeout(r, 100));
+      if (end === 'stop') endUserLease(u.contents, 'chat:1');
+      else if (end === 'detach') (u.contents.debugger as unknown as { detach(): void }).detach();
+      else (u.contents as unknown as EventEmitter).emit('render-process-gone', {}, { reason: 'crashed' });
+      for (let i = 0; i < 4; i++) await tick();
+      expect(u.clip.get(), end).toBe('yours');
+    }
+  });
+
+  it('whatever ends the lease, the service worker is back: your input, a lost renderer (M2e-2b, C3)', async () => {
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    endUserLease(t.contents);
+    for (let i = 0; i < 4; i++) await tick();
+    expect(t.bypass()).toEqual({ bypass: false });
+    const u = yourTab();
+    await beginUserAction(u.contents, 'chat:1', u.deps());
+    (u.contents as unknown as EventEmitter).emit('render-process-gone', {}, { reason: 'crashed' });
+    for (let i = 0; i < 4; i++) await tick();
+    expect(u.bypass()).toEqual({ bypass: false });
   });
 
   it('your input ends it at once: what was held for the assistant fails, and what the page sends while it lets go is yours (Neon’s B4 on #147)', async () => {
@@ -350,9 +478,9 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(t.how('r1')).toBe('Fetch.continueRequest');
     expect([...kept]).toEqual(['https://game.example']);
-    // Past the moment after: the lease ends; the chat's grant doesn't.
-    await vi.advanceTimersByTimeAsync(TAIL_MS + 100);
-    expect(userTabActing(t.contents)).toBe(false);
+    // Past the moment after and its catches: the lease ends; the chat's grant doesn't.
+    await vi.advanceTimersByTimeAsync(AFTER_MS + 100);
+    expect(userTabCatching(t.contents)).toBe(false);
     await beginUserAction(t.contents, 'chat:1', { ...deps(ask), kept });
     t.post('r2');
     await vi.advanceTimersByTimeAsync(0);
@@ -423,6 +551,103 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     expect(t.attached()).toBe(false);
   });
 
+  it('a catch that can’t be turned on fails closed: on the page, no lease; on a frame there as it begins, no lease, the frame left paused (Neon’s B3 on #150)', async () => {
+    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker']) {
+      const t = yourTab();
+      const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<void> }).sendCommand;
+      (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+        if (m === method && !s) throw new Error('not supported');
+        return send(m, p, s);
+      };
+      expect(await beginUserAction(t.contents, 'chat:1', t.deps()), method).toBe('no');
+      expect(t.attached(), method).toBe(false);
+    }
+    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker']) {
+      const t = yourTab();
+      const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<void> }).sendCommand;
+      (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+        if (m === method && s === 'f1') throw new Error('target closed');
+        await send(m, p, s);
+        if (m === 'Target.setAutoAttach' && !s) t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f1', waitingForDebugger: true, targetInfo: { type: 'iframe' } });
+      };
+      expect(await beginUserAction(t.contents, 'chat:1', t.deps()), `frame ${method}`).toBe('no');
+      expect(t.sent.some(([m, , s]) => m === 'Runtime.runIfWaitingForDebugger' && s === 'f1'), `frame ${method}`).toBe(false);
+    }
+  });
+
+  it('a Send data card from the tail answered after the tail: Allow and Allow for this chat still send it (Neon’s B4 on #150)', async () => {
+    for (const answer of ['once', 'until'] as const) {
+      vi.useFakeTimers();
+      const t = yourTab();
+      const kept = new Set<string>();
+      const ask: SendHoldDeps['ask'] = () => new Promise((done) => setTimeout(() => done(answer), TAIL_MS + 500));
+      await beginUserAction(t.contents, 'chat:1', { ...t.deps(ask), kept });
+      endUserAction(t.contents);
+      t.post('r1');
+      await vi.advanceTimersByTimeAsync(TAIL_MS + 600);
+      expect(t.how('r1'), answer).toBe('Fetch.continueRequest');
+      expect([...kept], answer).toEqual(answer === 'until' ? ['https://game.example'] : []);
+      endUserLease(t.contents);
+      vi.useRealTimers();
+    }
+  });
+
+  it('a download card up keeps the lease on past its 6 s (up to 45 s), so the card isn’t taken down under you (Neon’s S1 on #150)', async () => {
+    vi.useFakeTimers();
+    const t = yourTab();
+    let answer: (yes: boolean) => void = () => undefined;
+    const signals: AbortSignal[] = [];
+    const askDownload = (_d: unknown, signal: AbortSignal) => (signals.push(signal), new Promise<boolean>((done) => (answer = done)));
+    await beginUserAction(t.contents, 'chat:1', { ...t.deps(), askDownload });
+    endUserAction(t.contents);
+    const asked = askUserTabDownload(t.contents, { filename: 'file.zip', url: 'https://files.example/file.zip' });
+    await vi.advanceTimersByTimeAsync(AFTER_MS + 5000);
+    expect(userTabCatching(t.contents)).toBe(true);
+    expect(signals[0]!.aborted).toBe(false);
+    answer(true);
+    expect(await asked).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(userTabCatching(t.contents)).toBe(false);
+  });
+
+  it('each action, the lease’s first or one that joins it, tells the vault to close its menu (Neon’s S2 on #150)', async () => {
+    const t = yourTab();
+    const heard: unknown[] = [];
+    const off = onUserLease((contents) => void heard.push(contents));
+    await beginUserAction(t.contents, 'chat:1', deps());
+    await beginUserAction(t.contents, 'chat:1', deps());
+    off();
+    expect(heard).toEqual([t.contents, t.contents]);
+    endUserLease(t.contents);
+  });
+
+  it('a page with unsaved changes that stays put is said in the chat; after the lease, it’s yours alone (Neon’s S4 on #150)', async () => {
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    (t.contents as unknown as EventEmitter).emit('will-prevent-unload', { preventDefault: () => undefined });
+    expect(t.notes).toEqual(['unload: the page has unsaved changes, so it stayed']);
+    endUserLease(t.contents);
+    await tick();
+    (t.contents as unknown as EventEmitter).emit('will-prevent-unload', { preventDefault: () => undefined });
+    expect(t.notes).toHaveLength(1);
+  });
+
+  it('a worker the page starts while the lease is on runs at once, during the lease or after it, never left waiting (Claude’s B1, round 2 of #150)', async () => {
+    const t = yourTab();
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    // Workers are attached (and so paused at their start) as frames are.
+    const auto = t.sent.find(([m, , s]) => m === 'Target.setAutoAttach' && !s)?.[3] as { filter: { type: string }[] };
+    expect(auto.filter.map((f) => f.type)).toEqual(expect.arrayContaining(['iframe', 'worker']));
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'w1', waitingForDebugger: true, targetInfo: { type: 'worker' } });
+    await tick();
+    expect(t.sent.some(([m, , s]) => m === 'Runtime.runIfWaitingForDebugger' && s === 'w1')).toBe(true);
+    // One that comes as the lease lets go (ended, its listener not yet off): run too.
+    endUserLease(t.contents);
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'w2', waitingForDebugger: true, targetInfo: { type: 'worker' } });
+    await tick();
+    expect(t.sent.some(([m, , s]) => m === 'Runtime.runIfWaitingForDebugger' && s === 'w2')).toBe(true);
+  });
+
   it('a debugger it can’t have (your DevTools): no lease, nothing pressed or typed', async () => {
     const t = yourTab();
     (t.contents.debugger as unknown as { attach: () => void }).attach = () => {
@@ -469,5 +694,37 @@ describe('The acting cards in the chat (S18 M2e-2a)', () => {
       'After the assistant’s last step, the page is doing this on its own.',
     );
     expect(actCard({ ...base, kind: 'read', subject: 'read_tab', description: 'Read “Article”' })).toBeNull();
+  });
+});
+
+describe('The page’s words in the chat’s notes (Neon’s N1 on #150)', () => {
+  it('one plain line: no control or bidi characters, at most 120 characters', () => {
+    expect(plainNote('confirm: “Pay\n now?‮”')).toBe('confirm: “Pay now? ”');
+    expect(plainNote('x'.repeat(300))).toHaveLength(120);
+  });
+});
+
+describe('The cards a lease asks on its own outlive the turn; no other card does (Neon’s S5 on #150)', () => {
+  it('by its whole subject, never a match inside an address', () => {
+    expect(outlivesTurn('n1|tail|0a1b2c3d')).toBe(true);
+    expect(outlivesTurn('n1|download|0a1b2c3d')).toBe(true);
+    expect(outlivesTurn('n1|p2|navigate|leave|https://x.example/a|tail|0a1b2c3d')).toBe(false);
+    expect(outlivesTurn('n1|p2|click|sends|https://x.example/|download|00000000')).toBe(false);
+    expect(outlivesTurn('shop.example')).toBe(false);
+  });
+});
+
+describe('A download card’s site and name (Neon’s SF1 and Claude’s S2, round 2 of #150)', () => {
+  it('the site it comes from (a blob’s inner origin, a data: address the page’s), never “?”; the name cut in the middle, its extension kept', () => {
+    const page = 'https://shop.example/orders';
+    expect(downloadShown({ filename: 'invoice.pdf', url: 'https://files.example/x/invoice.pdf' }, page).site).toBe('files.example');
+    expect(downloadShown({ filename: 'a.zip', url: 'blob:https://files.example/0b1c-22' }, page).site).toBe('files.example');
+    expect(downloadShown({ filename: 'a.zip', url: 'data:application/zip;base64,UEs=' }, page).site).toBe('shop.example');
+    expect(downloadShown({ filename: 'a.zip', url: 'not a url' }, page).site).toBe('shop.example');
+    const long = downloadShown({ filename: `report${' '.repeat(3)}final${'x'.repeat(110)}.pdf .exe`, url: 'https://files.example/r' }, page).download;
+    expect(long.endsWith('.exe')).toBe(true);
+    expect(long).toContain('…');
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long).not.toMatch(/\s{2}/);
   });
 });

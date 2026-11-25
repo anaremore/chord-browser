@@ -93,7 +93,7 @@ import { siteOfUrl } from '../agents/shares';
 import { shownOrigin, type SendHoldDeps } from '../control/sends';
 import { buildActs } from './preview';
 import { dropAgentGuard } from '../control/page';
-import { beginUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing } from '../control/user-watch';
+import { beginUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing, type UserTabNote } from '../control/user-watch';
 
 type Decision = 'once' | 'thread' | 'always' | 'denied';
 
@@ -136,6 +136,8 @@ interface ThreadState extends DuetChat {
   sendGrants: Map<NodeId, Set<string>>;
   /** Your key or click ended this message's acting before it acted: said at its first refused step (sayStopped). */
   stopUnsaid: boolean;
+  /** What the lease caught in each tab since its last result there (said in the next one). */
+  caught: Map<NodeId, string[]>;
   /** Each action under way in a tab, its own end (user-watch's UserAction), oldest first. */
   actionEnds: Map<NodeId, (() => void)[]>;
   startedAt: number | null;
@@ -406,6 +408,7 @@ export class AssistantService {
       sentTabs: new Map(),
       sendGrants: new Map(),
       actionEnds: new Map(),
+      caught: new Map(),
       stopUnsaid: false,
       queuedTab: [],
       // The chat is the agent; its cards are approval messages in the chat.
@@ -661,13 +664,20 @@ export class AssistantService {
   }
 
   /** The bar over a tab of yours while the assistant acts there (M2c's words: *The assistant is clicking “Raise”*). */
+  /** A bar between steps, by tab: taken down after BAR_IDLE_MS with no next step. */
+  private readonly barIdle = new Map<NodeId, ReturnType<typeof setTimeout>>();
+
   private barFor(nodeId: NodeId, text: string | null, owner?: string): void {
     // Only its own bars are cleared (never an agent's); off the list first, so a closed tab's never keeps the bars in
     // step for nothing (Claude's S2, round 2).
     if (!text && !this.bars.has(nodeId)) return;
     // Another chat's bar there now is left up (Neon's N4, round 3): only the chat that put it up takes it down.
     if (!text && owner !== undefined && this.bars.get(nodeId) !== owner) return;
-    if (!text) this.bars.delete(nodeId);
+    if (!text) {
+      this.bars.delete(nodeId);
+      clearTimeout(this.barIdle.get(nodeId));
+      this.barIdle.delete(nodeId);
+    }
     const node = nodeOf(this.browser.store.state, nodeId);
     if (node?.kind === 'tab' && text) this.bars.set(nodeId, owner ?? '');
     this.browser.assistantBars = this.bars.size > 0;
@@ -1463,9 +1473,18 @@ export class AssistantService {
     state.streaming = null;
     // The turn's over: no acting until the next message (the lease's own tail still ends what the last action sent).
     state.actTab = null;
+    // Its bars come down with it (they stayed on between its steps).
+    for (const [nodeId, owner] of [...this.bars]) {
+      if (owner !== state.control.id) continue;
+      clearTimeout(this.barIdle.get(nodeId));
+      this.barIdle.delete(nodeId);
+      this.barFor(nodeId, null, owner);
+    }
     state.startedAt = null;
     // Cards still waiting go with the turn, each answered no.
-    state.control.cancelCards();
+    // A tab of yours's lease asks on its own after the turn (what the page still sends, a download its click started:
+    // M2e-2b): those cards stay until answered, or the lease ends.
+    state.control.cancelCards(outlivesTurn);
     const text = streaming.body.text;
     const citations: AssistantCitation[] = [];
     for (const seg of splitCitations(text)) {
@@ -1544,15 +1563,71 @@ export class AssistantService {
       siteOf: siteOfUrl,
       siteAllowed: (site) => this.settings.actSites.includes(site),
       keepSite: (site) => this.browser.store.dispatch({ t: 'settings.set', settings: { assistant: { actSites: [...this.settings.actSites, site] } } }),
+      // The bar stays on from the first step until the turn ends, Stop, your taking the tab or a long idle; between
+      // steps it says it's working (the owner, 2026-11-24: never on and off with each step).
       doing: (nodeId, doing) => {
-        if (doing) this.acted.add(s);
-        this.barFor(nodeId, doing ? barDoing(doing) : null, s.control.id);
+        clearTimeout(this.barIdle.get(nodeId));
+        this.barIdle.delete(nodeId);
+        if (doing) {
+          this.acted.add(s);
+          return this.barFor(nodeId, barDoing(doing), s.control.id);
+        }
+        // Acting over for the message (Stop, your hands, a switch, the panel closed: Neon's S3 on #150): no bar again.
+        if (s.actEnded || !s.streaming || s.control.isStopped || s.actTab?.nodeId !== nodeId) return this.barFor(nodeId, null, s.control.id);
+        this.barFor(nodeId, BAR_BETWEEN, s.control.id);
+        const idle = setTimeout(() => {
+          this.barIdle.delete(nodeId);
+          this.barFor(nodeId, null, s.control.id);
+        }, BAR_IDLE_MS);
+        idle.unref?.();
+        this.barIdle.set(nodeId, idle);
+      },
+      // What the lease caught there since the last result, for the next one (Claude's S1, round 2 of #150).
+      caught: (node) => {
+        const caught = s.caught.get(node.id) ?? [];
+        s.caught.delete(node.id);
+        return caught;
       },
       lease: {
         begin: async (node) => {
           const contents = this.browser.tabs.get(node.id)?.webContents;
           if (!contents || contents.isDestroyed()) return 'That tab could not be loaded.';
-          const action = await beginUserAction(contents, s.control.id, { siteOf: originOf, ask: this.tailCard(s, node.id, contents), kept: this.sendGrantsFor(s, node.id) });
+          const action = await beginUserAction(contents, s.control.id, {
+            siteOf: originOf,
+            ask: this.tailCard(s, node.id, contents),
+            kept: this.sendGrantsFor(s, node.id),
+            // What its click set off, caught in the moment after (M2e-2b, A6): a muted row each.
+            note: (what, detail) => {
+              const said = USER_TAB_NOTES[what](plainNote(detail));
+              // In the chat, and in the next result there, so the model never says done when the page said no.
+              const caught = s.caught.get(node.id) ?? [];
+              if (caught.length < CAUGHT_MAX) s.caught.set(node.id, [...caught, said]);
+              if (s.thread) void this.activity(s, 'act', said, contents.isDestroyed() ? '' : contents.getURL(), false);
+            },
+            askDownload: async (download, signal) => {
+              if (contents.isDestroyed()) return false;
+              const takeDown = new AbortController();
+              signal.addEventListener('abort', () => takeDown.abort(), { once: true });
+              const answer = await s.control.ask(
+                {
+                  kind: 'step',
+                  tool: 'act',
+                  description: 'start a download',
+                  target: [contents.getURL()],
+                  tab: node.id,
+                  subject: `${node.id}|download|${randomBytes(4).toString('hex')}`,
+                  // Its own site, where its redirects end, never the page's (Neon's B5 on #150); its name already made safe.
+                  step: { why: 'confirm', ...downloadShown(download, contents.getURL()), fields: [], more: 0 },
+                  takeDown: takeDown.signal,
+                },
+                signal,
+                CONTROL_WAIT_MS,
+              );
+              if (answer === 'waiting') takeDown.abort();
+              return answer === 'once';
+            },
+            clipboard: electronClipboard,
+          });
           const begun = action.begun;
           if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
           // Acting ended, or Stop, while the lease was being had: let go of at once, never tracked (Neon's B2, round 2).
@@ -2056,6 +2131,121 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
  * The gate's acting card as the chat shows it (S18 M2e-2a; mocks/agents-s18-m2.html §7): the site card, a risky step,
  * or what an action sends. Chord's words only (card.description is Chord's: *click “Raise”*), never the model's.
  */
+/** How long a download's name can be on its card: cut in the middle beyond this, its extension kept. */
+const DOWNLOAD_NAME_MAX = 60;
+
+/**
+ * A download's card: the site it comes from (a `blob:` address's inner origin; a `data:` one, or one that can't be read,
+ * the page's), never a "?" or a throw; and its name on one line, cut in the middle so its extension always shows (a long
+ * name padded before `.exe` would otherwise read as its `.pdf`: Neon's SF1 and Claude's S2, round 2 of #150).
+ */
+export function downloadShown(download: { filename: string; url: string }, pageUrl: string): { site: string; download: string } {
+  const siteOf = (url: string): string | null => {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'blob:') return siteOf(u.pathname);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      return siteOfUrl(url) ?? u.host;
+    } catch {
+      return null;
+    }
+  };
+  const site = siteOf(download.url) ?? siteOf(pageUrl) ?? 'this page';
+  const name = download.filename.replace(/\s+/g, ' ').trim() || 'download';
+  if (name.length <= DOWNLOAD_NAME_MAX) return { site, download: name };
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : '';
+  const keep = DOWNLOAD_NAME_MAX - ext.length - 1;
+  const head = Math.ceil(keep / 2);
+  return { site, download: `${name.slice(0, head)}…${name.slice(name.length - ext.length - (keep - head), name.length - ext.length)}${ext}` };
+}
+
+/**
+ * A card a lease asks on its own (what the page sends in its tail, a download): it outlives the turn. Its whole subject is
+ * `<tab>|tail|<8 hex>` or `<tab>|download|<8 hex>`, never a match inside another card's address (Neon's S5 on #150).
+ */
+export function outlivesTurn(subject: string): boolean {
+  return /^[^|]+\|(tail|download)\|[0-9a-f]{8}$/.test(subject);
+}
+
+/** What's on the clipboard: each item's kinds and their bytes; null when it can't be read (what it holds can't be put back). */
+type ClipboardSnapshot = { type: string; bytes: Uint8Array }[][] | null;
+
+async function readClipboardItems(): Promise<ClipboardSnapshot> {
+  try {
+    const items = await clipboard.read();
+    return await Promise.all(
+      items.map((item) =>
+        Promise.all(
+          item.types.map(async (type) => {
+            const part = await item.getType(type);
+            // A bookmark (or anything else that isn't bytes) can't be written back as it was.
+            if (!(part instanceof Blob)) throw new Error(`can't keep ${type}`);
+            return { type, bytes: new Uint8Array(await part.arrayBuffer()) };
+          }),
+        ),
+      ),
+    );
+  } catch {
+    return null;
+  }
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * The clipboard as the assistant's lease takes and puts it back (control/user-watch.ts): all of it, every item and
+ * kind, never only its text, so what can't be read back (files) is left alone and said, never cleared (Claude's B2,
+ * round 2 of #150). Electron's main-process clipboard is the web's async one.
+ */
+export const electronClipboard = {
+  snapshot: (): Promise<ClipboardSnapshot> => readClipboardItems(),
+  same: async (raw: unknown): Promise<boolean> => {
+    const was = raw as ClipboardSnapshot;
+    const now = await readClipboardItems();
+    if (!was || !now || was.length !== now.length) return false;
+    return was.every((item, i) => item.length === now[i]!.length && item.every((part, j) => part.type === now[i]![j]!.type && sameBytes(part.bytes, now[i]![j]!.bytes)));
+  },
+  restore: async (raw: unknown): Promise<boolean> => {
+    const was = raw as ClipboardSnapshot;
+    if (!was) return false;
+    try {
+      await clipboard.write(was.map((item) => new ClipboardItem(Object.fromEntries(item.map((part) => [part.type, new Blob([part.bytes], { type: part.type })])))));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+
+/**
+ * The page's own words in a note (a dialog's text, an address): one plain line, no control or bidi characters that could
+ * make it read as something else, at most 120 characters (Neon's N1 on #150).
+ */
+export function plainNote(text: string): string {
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what this removes
+  return text.replace(/[\u0000-\u001f\u007f؜‎‏‪-‮⁦-⁩]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+/** What the chat says of something the assistant's click set off (M2e-2b, A6), Chord's words around the page's. */
+export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
+  file: () => 'The page tried to open a file picker; it wasn’t shown',
+  // An alert has no Cancel: it was closed (its OK); a confirm or a prompt was answered Cancel.
+  dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
+  popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,
+  // What happened to the clipboard (control/user-watch.ts), or a clipboard permission refused (permissions.ts).
+  clipboard: (detail) =>
+    detail === 'put back'
+      ? 'The page changed your clipboard; Chord put it back'
+      : detail === 'not put back'
+        ? 'The page changed your clipboard, and what was on it couldn’t be put back; check it before you paste'
+        : detail === 'changed'
+          ? 'The clipboard changed while the assistant acted; check it before you paste'
+          : 'The page asked to use your clipboard; Chord said no',
+  unload: () => 'The page has unsaved changes, so it stayed',
+  external: (detail) => `The page tried to open ${detail} in another program; it wasn’t opened`,
+};
+
 export function actCard(card: ControlCard): AssistantActCard | null {
   if (card.kind === 'site') {
     return {
@@ -2082,6 +2272,10 @@ export function actCard(card: ControlCard): AssistantActCard | null {
       showable: Boolean(card.show),
     };
   }
+  // A download its click started (M2e-2b): saved only if you say so.
+  if (step.download !== undefined) {
+    return { kind: 'step', title: `Save ${step.download} from ${step.site}?`, note: 'The assistant’s click started a download.', lines: [], danger: false, showable: false };
+  }
   const lines: string[] = [];
   if (step.to) lines.push(`It goes to ${step.to}.`);
   if (step.shows) lines.push(`It reads “${step.shows}”.`);
@@ -2103,6 +2297,14 @@ export function actCard(card: ControlCard): AssistantActCard | null {
     showable: Boolean(card.show),
   };
 }
+
+/** At most this many caught notes wait for a tab's next result. */
+const CAUGHT_MAX = 10;
+
+/** The bar between the assistant's steps in a tab (the owner, 2026-11-24: it stays on while it works). */
+const BAR_BETWEEN = 'is working in this tab';
+/** How long the bar stays up with no next step before it comes down (a model thinking long, a card unanswered). */
+const BAR_IDLE_MS = 45_000;
 
 /** An address's origin (scheme, host and port), or empty when it has none. */
 function originOf(url: string): string {
