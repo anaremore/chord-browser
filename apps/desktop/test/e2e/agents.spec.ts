@@ -1438,6 +1438,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     // Played with what this build offers: #145's tools (wait_for, batch, by name), else main's (the before: snapshots,
     // refs, polling). The same spec measures both (on main's build, a copy of it).
     const lean = tools.some((t) => t.name === 'wait_for') && tools.some((t) => t.name === 'batch');
+    // open_tab's snapshot: true (M2g-2 slice 3a, #204): the first look comes with the tab, no call of its own.
+    const opensLooking = Boolean((tools as unknown as { name: string; inputSchema: { properties: Record<string, unknown> } }[]).find((t) => t.name === 'open_tab')?.inputSchema.properties['snapshot']);
     /** What the model gets back from each call: every result's content, counted (tokens, call by call). */
     let meter = { calls: 0, chars: 0, results: [] as number[], pictures: [] as { width: number; height: number }[] };
     /** A picture's size, from its header (a model is charged by a picture's pixels, never its base64). */
@@ -1503,6 +1505,21 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       return (JSON.parse(opened.text) as { data: { tab_id: string } }).data.tab_id;
     };
     /**
+     * Opens a tab and looks at it, as an agent knowing nothing of the page would: with snapshot: true where open_tab takes
+     * it (one call), else open_tab and then snapshot (two).
+     */
+    const look = async (path: string): Promise<{ tab: string; outline: string }> => {
+      if (!opensLooking) {
+        const tab = await open(path);
+        return { tab, outline: outlineOf((await ask('snapshot', { tab_id: tab })).text) };
+      }
+      const opened = await act('open_tab', { url: `${site.origin}${path}`, snapshot: true });
+      tabs++;
+      const body = JSON.parse(opened.text) as { tab_id?: string; content?: string; data?: { no_outline?: string } };
+      if (!body.tab_id || body.content === undefined) throw new Error(`open_tab gave no outline: ${body.data?.no_outline ?? opened.text}`);
+      return { tab: body.tab_id, outline: body.content };
+    };
+    /**
      * What the model reads, estimated (the plan's assumptions): each call is a model turn that sends the tool list and a
      * fixed 8,000 tokens of system prompt and history, and every result so far (each result is read again on every
      * later turn of the journey).
@@ -1538,7 +1555,20 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     };
     void tabs;
 
+    /** The hand, by the refs of the first look. */
+    const played = async (tab: string, o: string) => {
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+      await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
+      await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
+      const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
+      return /Call.*bet 20.*Raise/.test(log);
+    };
     await journey('bot game, one hand', async () => {
+      if (lean && opensLooking) {
+        const { tab, outline } = await look('/game');
+        return played(tab, outline);
+      }
       const tab = await open('/game');
       if (!lean) {
         // Main's tools, played as well as they allow (round 1 of #145, SF5): one look, and its refs throughout (main
@@ -1553,12 +1583,7 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       // As an agent would (Neon's round 1, B-8): it looks first, knowing nothing of the page, then acts by the refs it
       // saw; each action's result says what changed, so no second look.
       const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
-      await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
-      await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
-      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
-      const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
-      return /Call.*bet 20.*Raise/.test(log);
+      return played(tab, o);
     });
     if (lean) {
       const body = await open('/aria-body');
@@ -1583,7 +1608,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       expect(shadow.data.waited_ms).toBeLessThan(800);
     }
     await journey('timed table, two turns', async () => {
-      const tab = await open('/timed?others=1500');
+      // The first look with the tab, where open_tab takes snapshot: true.
+      const tab = lean && opensLooking ? (await look('/timed?others=1500')).tab : await open('/timed?others=1500');
       for (let turn = 0; !lean && turn < 2; turn++) {
         // Polling (main): a snapshot each second until Call shows, then Call by its ref.
         for (;;) {
@@ -1598,7 +1624,7 @@ test('the token eval: its journeys, each as an agent would play it with the tool
         await new Promise((r) => setTimeout(r, 300));
       }
       // A first look, as an agent knowing nothing of the page would (round 1 of #145, SF5); then it waits for its turn.
-      if (lean) await ask('snapshot', { tab_id: tab });
+      if (lean && !opensLooking) await ask('snapshot', { tab_id: tab });
       for (let turn = 0; lean && turn < 2; turn++) {
         const waited = waitAnswer((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
         await act('click', { tab_id: tab, ref: refOf(waited.lines, 'generic "Call"') });
@@ -1607,8 +1633,7 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       return (log.match(/Call after/g) ?? []).length === 2 && !log.includes('auto-folded');
     });
     await journey('a 20-field form', async () => {
-      const tab = await open('/form20');
-      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const { tab, outline: o } = await look('/form20');
       if (!lean) {
         for (let i = 1; i <= 20; i++) await act('type', { tab_id: tab, ref: refOf(o, `textbox "Field ${i}"`), text: `v${i}` });
         return ((await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string) === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
@@ -1630,8 +1655,10 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       expect(await inPage('/form20?again=1', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')).toBe(',,');
     }
     await journey('a page that draws itself after it loads', async () => {
-      const tab = await open('/drawn');
-      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // #154's first look waits for it to draw (snapshot's, and open_tab's with snapshot: true).
+      const first = await look('/drawn');
+      const tab = first.tab;
+      let o = first.outline;
       // Empty at first look: an agent looks again.
       for (let i = 0; i < 5 && !o.includes('Join table'); i++) {
         await new Promise((r) => setTimeout(r, 400));
@@ -1641,14 +1668,15 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       return String(await inPage('/drawn', 'document.getElementById("log").textContent')).includes('joined');
     });
     await journey('a 300-row list', async () => {
-      const tab = await open('/rows-300');
+      // Looking as it opens where open_tab takes snapshot: true (the lean build's way).
+      const { tab, outline: first300 } = lean && opensLooking ? await look('/rows-300') : { tab: await open('/rows-300'), outline: '' };
       if (!lean) {
         const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
         return (await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') })).text.startsWith('{');
       }
       // As an agent would (B-8): it looks first; the outline shows 5 rows of 300 and says how many more, so it asks for
       // the one it wants by its words (find), then clicks it by its ref.
-      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const o = opensLooking ? first300 : outlineOf((await ask('snapshot', { tab_id: tab })).text);
       if (o.includes('Act 150')) throw new Error('the 300 rows weren’t collapsed');
       const found = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Act 150' })).text);
       const clicked = await act('click', { tab_id: tab, ref: refOf(found, 'button "Act 150"') });
@@ -1669,8 +1697,9 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       return false;
     });
     const effects = async (path: string, noDiff: boolean) => {
-      const tab = await open(path);
-      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const first = await look(path);
+      const tab = first.tab;
+      let o = first.outline;
       // [a click whose effect the next step needs, the element that effect shows]
       const steps: [string, string][] = [
         ['button "Delete order 12"', 'button "Delete for good"'],
@@ -1692,8 +1721,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     await journey('an action’s effect, seen in the diff', () => effects('/effects', false));
     await journey('an action’s effect, seen by a snapshot (no diff)', () => effects('/effects?nodiff=1', true));
     await journey('a broad find (300 orders, each with Cancel)', async () => {
-      const tab = await open('/orders300');
-      await ask('snapshot', { tab_id: tab });
+      // It looks first (the outline shows 5 of 300 rows).
+      const { tab } = await look('/orders300');
       // The outline shows 5 of 300 rows: the agent asks for what it wants by its words, as find takes them today.
       const found = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Cancel' })).text).split('\n');
       const row = found.findIndex((l) => l.includes('row "Order 150"'));
@@ -1733,6 +1762,70 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     writeFileSync(join(appDir, 'test-results', 'token-eval.json'), JSON.stringify({ played: lean ? 'lean' : 'main', rows, toolListTokens: defs, context: CONTEXT }, null, 2));
     // Effectiveness is the gate: every journey succeeds.
     for (const r of rows) expect(r.success, r.journey).toBe(true);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('open_tab and navigate with snapshot: true: the page as snapshot gives it, in the same answer, its refs good to act by (M2g-2 slice 3a, #204)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const popover = await pageWhere(app, isPopover);
+    /** A call, with every card it raises allowed as the user would. */
+    const allowed = async (name: string, args: Record<string, unknown>) => {
+      const calling = mcp.call(name, args);
+      for (;;) {
+        const card = popover.getByRole('alertdialog').first();
+        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+        if (next === 'done') return calling;
+        await popover.waitForTimeout(600);
+        for (const label of ['Allow once', 'Allow for now', 'Allow']) {
+          const button = card.getByRole('button', { name: label, exact: true });
+          if (await button.count()) {
+            await button.click();
+            break;
+          }
+        }
+        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+      }
+    };
+    type Look = { source: string; trust: string; tab_id: string; url: string; content: string; open_tab?: Record<string, unknown>; navigate?: Record<string, unknown> };
+
+    // A page that draws itself 600 ms after it loads: open_tab's outline waited for it (#154's first look), and its ref
+    // is good to click by.
+    const opened = await allowed('open_tab', { url: `${site.origin}/drawn`, snapshot: true });
+    expect(opened.isError).toBe(false);
+    const lobby = JSON.parse(opened.text) as Look;
+    expect(lobby).toMatchObject({ source: 'web_snapshot', trust: 'untrusted', url: `${site.origin}/drawn`, open_tab: {} });
+    const join = refOf(lobby.content, 'button "Join table"');
+    expect((await allowed('click', { tab_id: lobby.tab_id, ref: join })).isError).toBe(false);
+    await expect.poll(() => app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/drawn`)).toContain('joined');
+
+    // navigate there and look in one call: the outline, every read rule of snapshot's (a password, code or card field has
+    // its line and no ref; what's in a field never shows); the action's own words under navigate.
+    const went = await allowed('navigate', { tab_id: lobby.tab_id, url: `${site.origin}/snap`, snapshot: true });
+    expect(went.isError).toBe(false);
+    const snap = JSON.parse(went.text) as Look;
+    expect(snap).toMatchObject({ source: 'web_snapshot', trust: 'untrusted', tab_id: lobby.tab_id, url: `${site.origin}/snap`, navigate: { navigated: true } });
+    expect(snap.navigate!['note']).toBeUndefined();
+    const lines = snap.content.split('\n').map((l) => l.trim());
+    expect(lines).toContain('- textbox "Password" [password: the user signs in]');
+    expect(lines).toContain('- textbox "Code" [one-time code: the user types it]');
+    for (const never of ['hunter2-secret', 'secret-note-value', '4242']) expect(snap.content).not.toContain(never);
+    // Its refs are the tab's latest: one of them acts.
+    expect((await allowed('click', { tab_id: lobby.tab_id, ref: refOf(snap.content, 'button "Start a return"') })).isError).toBe(false);
+    // Without it, as before: the action's answer alone.
+    const plain = JSON.parse((await allowed('navigate', { tab_id: lobby.tab_id, url: `${site.origin}/drawn` })).text) as { source?: string; data: Record<string, unknown> };
+    expect(plain.source).toBeUndefined();
+    expect(plain.data).toMatchObject({ navigated: true });
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

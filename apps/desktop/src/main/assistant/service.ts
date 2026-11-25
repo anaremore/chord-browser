@@ -70,6 +70,7 @@ import {
   type NodeId,
   type TabNode,
   type WindowId,
+  assistantGoOutline,
 } from '@chord/core';
 import type { AssistantAction, AssistantView, Toast } from '@chord/ipc';
 import { durations, easing } from '@chord/tokens';
@@ -1392,7 +1393,7 @@ export class AssistantService {
       instructionsFile,
       resumeId,
       newSessionId: randomUUID(),
-      tools: readsPages ? assistantTools(agentActions({ packaged: app.isPackaged }), this.acting()) : [],
+      tools: readsPages ? assistantTools(agentActions({ packaged: app.isPackaged }), this.acting(), assistantGoOutline({ packaged: app.isPackaged })) : [],
       images,
     };
     let resumeFailed = false;
@@ -1709,7 +1710,7 @@ export class AssistantService {
           },
         };
       },
-    }, agentActions({ packaged: app.isPackaged }));
+    }, agentActions({ packaged: app.isPackaged }), assistantGoOutline({ packaged: app.isPackaged }));
     return state.scope;
   }
 

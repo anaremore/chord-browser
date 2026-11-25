@@ -666,11 +666,50 @@ const NOTHING_SHOWN = (again: string) => `The page shows nothing yet (it may sti
 async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>): Promise<ToolOutput> {
   // A tab of yours (the assistant): its lease, begun in actOn once the tab's checked, always ended here.
   const leased: { node: TabNode | null } = { node: null };
+  let out: ToolOutput;
   try {
-    return await actOn(call, tool, args, leased);
+    out = await actOn(call, tool, args, leased);
   } finally {
     if (leased.node) call.scope.act?.lease?.end(leased.node);
   }
+  // With snapshot: true, the page it went to, as snapshot gives it (S18 M2g-2 slice 3a, #204): once the action is over
+  // and its hold let go of, by snapshot's own call, every read rule with it.
+  if (tool !== 'navigate' || args['snapshot'] !== true || !call.scope.outlineOnGo || out.isError) return out;
+  return withOutline(out, 'navigate', () => snapshotTool(call, { tab_id: args['tab_id'] }));
+}
+
+/** No outline for a page still loading when the action answered: never a second wait (open_tab's limit stands). */
+export const STILL_LOADING = 'The page was still loading, so its outline wasn’t taken: call snapshot in a moment.';
+
+/**
+ * An action's answer with the page's outline (S18 M2g-2 slice 3a, #204): snapshot's own answer, its envelope untouched,
+ * with the action's words under the tool's name (less what the envelope says: the tab, page, address and title; and the
+ * note to call snapshot, which the outline answers). No outline (the read refused, or the page still loading): the
+ * action's answer as it was, saying why in `no_outline`, in Chord's words (snapshot's refusal), never the page's. The
+ * action happened either way: never an error.
+ */
+export async function withOutline(action: ToolOutput, tool: 'open_tab' | 'navigate', look: () => Promise<ToolOutput>): Promise<ToolOutput> {
+  if (action.isError || !action.text) return action;
+  const acted = JSON.parse(action.text) as { data: Record<string, unknown> } & Record<string, unknown>;
+  const noOutline = (why: string): ToolOutput => ({ text: JSON.stringify({ ...acted, data: { ...acted.data, no_outline: why } }) });
+  if (acted.data['loading'] === true) return noOutline(STILL_LOADING);
+  const snap = await look();
+  if (snap.isError || !snap.text) return noOutline(refusalOf(snap));
+  // (Its `loading` too: it's false when there's an outline.)
+  const { tab_id: _tab, page_id: _page, url: _url, title: _title, note: _note, loading: _loading, ...rest } = acted.data;
+  return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), [tool]: rest }) };
+}
+
+/** A refusal's sentence: the shared layer's `{data: {refused}}`, or an agent's plain text (toPlain). */
+function refusalOf(out: ToolOutput): string {
+  try {
+    const data = (JSON.parse(out.text ?? '') as { data?: { refused?: unknown; error?: unknown } }).data;
+    if (typeof data?.refused === 'string') return data.refused;
+    if (typeof data?.error === 'string') return data.error;
+  } catch {
+    // Plain words already.
+  }
+  return out.text || 'That page could not be read.';
 }
 
 async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, leased: { node: TabNode | null }): Promise<ToolOutput> {

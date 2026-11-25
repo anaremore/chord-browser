@@ -37,7 +37,7 @@ import {
 import { ControlAgent, type CardPresenter, type ControlCard } from '../control/gate';
 import { controlPage } from '../control/page';
 import type { ToolOutput } from '../control/scope';
-import { runControlTool, type ControlBrowser, pageLoaded } from '../control/tools';
+import { runControlTool, type ControlBrowser, pageLoaded, withOutline } from '../control/tools';
 import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
 import { siteOfUrl, type AgentShares } from './shares';
@@ -315,7 +315,14 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
           if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
-          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
+          if (tool === 'open_tab') {
+            const opened = await openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
+            // With snapshot: true, the page as snapshot gives it (S18 M2g-2 slice 3a, #204): snapshot's own call, through
+            // the gate on the new tab, every read rule with it. Only where snapshot is (M2's tools).
+            if (args['snapshot'] !== true || !actions || opened.isError) return opened;
+            const tab = (JSON.parse(opened.text ?? '{}') as { data?: { tab_id?: unknown } }).data?.tab_id;
+            return withOutline(opened, 'open_tab', () => runControlTool(callScope, deps.browser, 'snapshot', { tab_id: tab }, cancel.signal));
+          }
           if (tool === 'close_tab') return closeTab(args, cancel.signal);
           if (tool === 'batch') return runBatch(callScope, deps.browser, args, cancel.signal);
           return toPlain(await runControlTool(callScope, deps.browser, tool, args, cancel.signal));

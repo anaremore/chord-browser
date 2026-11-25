@@ -778,8 +778,15 @@ type Reply = { id?: number; result?: { content: { text: string }[]; isError: boo
 /** An agent connected to `t`'s chords, its tabs' page the one `contents` (loading, at no address yet), the Never list bank.test. */
 function connected(t: ReturnType<typeof setup>, loadMs?: number) {
   const events = new EventEmitter();
-  const page = { at: '', loading: true };
-  const contents = Object.assign(events, { isDestroyed: () => false, isLoading: () => page.loading, getURL: () => page.at, getTitle: () => 'Statements for Ada' }) as unknown as WebContents;
+  // `nodes`: what the snapshot script answers (S18 M2g-2 slice 3a), from `read` (else where the page is).
+  const page = { at: '', loading: true, nodes: [] as unknown[], read: '' };
+  const contents = Object.assign(events, {
+    isDestroyed: () => false,
+    isLoading: () => page.loading,
+    getURL: () => page.at,
+    getTitle: () => 'Statements for Ada',
+    executeJavaScriptInIsolatedWorld: async () => ({ url: page.read || page.at, title: 'Lobby', nodes: page.nodes, cut: {} }),
+  }) as unknown as WebContents;
   const sent: Reply[] = [];
   const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
     present: async () => 'once',
@@ -827,6 +834,56 @@ describe('open_tab and a Never site (security review)', () => {
     expect(a.tabs()).toHaveLength(stays ? 1 : 0);
     // Nothing of it comes later either.
     expect(JSON.stringify(await a.reply(2, 'list_tabs'))).not.toMatch(PRIVATE);
+  });
+
+  it('with snapshot: true, a Never site is refused as without it: the tab goes, and nothing of the site is said (#204)', async () => {
+    for (const [asked, landed] of [['https://bank.test/', 'https://bank.test/'], ['https://agent.test/go', 'https://www.bank.test/statements']] as const) {
+      const t = setup(['bank.test']);
+      const a = connected(t);
+      a.page.nodes = [{ depth: 0, role: 'button', name: 'Statements for Ada', key: 0, sid: 1 }];
+      const replied = a.reply(1, 'open_tab', { url: asked, snapshot: true });
+      await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading') + a.sent.length).toBeGreaterThan(0));
+      a.page.at = landed;
+      a.page.loading = false;
+      a.events.emit('did-stop-loading');
+      const result = await replied;
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toBe('That site is one the user keeps private, so it can’t be opened for you.');
+      expect(JSON.stringify(result)).not.toMatch(PRIVATE);
+      expect(a.tabs()).toHaveLength(0);
+    }
+  });
+
+  it('with snapshot: true, the page as snapshot gives it, through snapshot’s own read (S18 M2g-2 slice 3a, #204)', async () => {
+    const PASSWORD = { depth: 0, role: 'textbox', name: 'Password', key: 1, sid: 2, field: { type: 'password', autocomplete: 'current-password', name: 'pw', id: 'pw', label: 'Password', placeholder: '' } };
+    const opened = async (read = '') => {
+      const t = setup(['bank.test']);
+      const a = connected(t);
+      a.page.nodes = [{ depth: 0, role: 'button', name: 'Join table', key: 0, sid: 1 }, PASSWORD];
+      a.page.read = read;
+      const replied = a.reply(1, 'open_tab', { url: 'https://agent.test/lobby', snapshot: true });
+      await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBeGreaterThan(0));
+      a.page.at = 'https://agent.test/lobby';
+      a.page.loading = false;
+      a.events.emit('did-stop-loading');
+      return { a, result: await replied };
+    };
+    // A page that reads: snapshot's envelope, untouched; open_tab's own words under its name; the password field's line
+    // with no ref.
+    const { a, result } = await opened();
+    expect(result.isError).toBe(false);
+    const body = JSON.parse(result.content[0]!.text) as Record<string, unknown> & { content: string };
+    expect(body).toMatchObject({ source: 'web_snapshot', trust: 'untrusted', tab_id: 'a1', url: 'https://agent.test/lobby', refs: 1, open_tab: {} });
+    expect(body.content).toMatch(/^- button "Join table" \[ref=e\d+\]$/m);
+    expect(body.content.split('\n').find((l) => l.includes('textbox "Password"'))).not.toMatch(/\[ref=/);
+    expect(a.tabs()).toHaveLength(1);
+    // Its read came back from a Never site (the page went there as it was read): the tab was opened, so its answer
+    // stands, with no outline and why, in Chord's words; nothing of the site.
+    const never = await opened('https://bank.test/statements');
+    expect(never.result.isError).toBe(false);
+    const said = JSON.parse(never.result.content[0]!.text) as { data: Record<string, unknown> };
+    expect(said.data).toMatchObject({ tab_id: 'a1', no_outline: 'This page can never be read (a private window, a Chord page, or a site the user keeps private).' });
+    expect(JSON.stringify(said)).not.toMatch(/bank|Join table/);
   });
 
   it('the client giving up while open_tab’s page loads answers at once, never at the load’s limit (round 2 of #145)', async () => {
