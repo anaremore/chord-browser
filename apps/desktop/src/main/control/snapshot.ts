@@ -267,7 +267,7 @@ export const SNAPSHOT_LIB = String.raw`
  * How many snapshots a diff took (after an action, M2g-1) are kept behind an agent's latest, besides its own last one
  * (pinned until its next): its refs, core's ElementRefs, the same.
  */
-export const SNAPSHOT_HISTORY = 4;
+const SNAPSHOT_HISTORY = 4;
 
 /**
  * An owner's snapshot by its token, in the page: the latest, or one kept behind it (SNAPSHOT_HISTORY). For act.ts' and
@@ -504,7 +504,7 @@ export type WaitAnswer = { met: boolean; cut: boolean; editor?: boolean; ms?: nu
  * once now, then again as the page changes: at most one look each max(150 ms, 4 × the last look's time), by a timer
  * (Neon's review of M2g-1, B5). A look that was cut short never proves something gone.
  */
-export function waitScript(want: WaitFor, ms: number): string {
+function waitScript(want: WaitFor, ms: number): string {
   const args = { ...want, ms, scan: SNAPSHOT_SCAN, scanMs: SNAPSHOT_SCAN_MS };
   return String.raw`new Promise((done) => {
   const args = ${JSON.stringify(args)};
