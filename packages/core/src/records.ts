@@ -400,7 +400,7 @@ type Group = (typeof GROUPS)[number];
  * depend on which CLI is installed here; when passwords lock is a security
  * setting of each computer's (*Never* on one mustn't stop locking on the others).
  */
-const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { assistant: ['provider', 'model'], passwords: ['lockAfter'] };
+const NOT_EXPORTED: Partial<Record<Group, readonly string[]>> = { assistant: ['provider', 'model', 'acting', 'actSites'], passwords: ['lockAfter'] };
 
 const isGroup = (key: string): key is Group => (GROUPS as readonly string[]).includes(key);
 const groupParts = (group: Group): string[] => Object.keys(DEFAULT_SETTINGS[group]).filter((part) => !NOT_EXPORTED[group]?.includes(part));

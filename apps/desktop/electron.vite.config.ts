@@ -46,7 +46,12 @@ export default defineConfig({
   main: {
     // Google's Safe Browsing API key (ARCHITECTURE.md §14.5), from the environment at build time: the
     // release workflow passes the `release` environment's secret. Without it Safe Browsing is unavailable.
-    define: { __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? '') },
+    // A preview installer for the owner (the chord-preview skill) may turn the assistant's acting on before its release
+    // flag does (S18 M2e: CHORD_PREVIEW_ACTING=1); the release workflow never sets it (assistant-preview.test.ts).
+    define: {
+      __CHORD_SAFE_BROWSING_KEY__: JSON.stringify(process.env['CHORD_SAFE_BROWSING_KEY'] ?? ''),
+      __CHORD_PREVIEW_ACTING__: JSON.stringify(process.env['CHORD_PREVIEW_ACTING'] === '1'),
+    },
     // Bundle everything (workspace packages are TypeScript sources); only
     // electron and Node built-ins stay external. The entries: main itself,
     // chord-data's utility process (ARCHITECTURE.md §4), the PDF reader
