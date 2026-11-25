@@ -16,7 +16,9 @@ import type { AccountsAnswer, CandidateAnswer, SaveAnswer } from '../../src/main
 /** The assistant acting in the tab (control/user-watch.ts), and a key Chord sends for it (control/input.ts), as a test sets them. */
 const assistant = vi.hoisted(() => ({ acting: false, sendsKey: false, leases: [] as ((contents: unknown) => void)[] }));
 vi.mock('../../src/main/control/user-watch', () => ({
-  userTabActing: () => assistant.acting,
+  // The assistant's lease on the tab, its after-window included (Neon's S2 on #150): not only its action and tail.
+  userTabActing: () => false,
+  userTabCatching: () => assistant.acting,
   onUserLease: (listener: (contents: unknown) => void) => {
     assistant.leases.push(listener);
     return () => void assistant.leases.splice(assistant.leases.indexOf(listener), 1);

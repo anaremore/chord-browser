@@ -5,6 +5,8 @@ import { safeFilename, uniquePath } from '../../src/main/files';
 describe('safeFilename', () => {
   it('keeps the name but never a folder or a reserved character', () => {
     expect(safeFilename('report.pdf')).toBe('report.pdf');
+    // Bidi controls and marks dropped, never left as `_`: the name reads as it is (Neon's B5 on #150).
+    expect(safeFilename('in‎voice‮piz.exe')).toBe('invoicepiz.exe');
     expect(safeFilename('../../etc/passwd')).toBe('passwd');
     expect(safeFilename('C:\\Windows\\evil.exe')).toBe('evil.exe');
     expect(safeFilename('a:b?c*.txt')).toBe('a_b_c_.txt');

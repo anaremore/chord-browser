@@ -491,6 +491,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (after) return refuse(after);
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
     await call.activity(tool, what, page.url());
+    const caught = host.caught?.(node) ?? [];
     return {
       text: toolResult({
         tab_id: ref,
@@ -507,6 +508,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         ...(refoundElement ? { refound: 'The page had redrawn that element; Chord found it again by its role, name, place and target.' } : {}),
         // Enter's keydown went, and the page then moved the focus (its handler did): done, once; never press it again.
         ...(focusTaken ? { focus: 'The page moved the focus away from that field after Enter. Enter was pressed once: call snapshot to see what it did, and don’t press it again.' } : {}),
+        // What the page's response was caught doing (a tab of yours): never say done when the page said no.
+        ...(caught.length ? { caught } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
       }),
     };

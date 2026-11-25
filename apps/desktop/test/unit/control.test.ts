@@ -1750,6 +1750,13 @@ describe('acting through the gate (S18 M2c)', () => {
       leaseLost.delete(box.contents);
     });
 
+    it('what the page’s response to an action was caught doing (a dialog, a picker, unload) goes in the next result, so the model never says done when the page said no (Claude’s S1, round 2 of #150)', async () => {
+      const caught = ['The page showed a dialog (confirm: “Delete?”); it was answered Cancel'];
+      const t = await acting({ act: { siteAllowed: () => true, caught: () => caught.splice(0) } });
+      expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ caught: ['The page showed a dialog (confirm: “Delete?”); it was answered Cancel'] });
+      expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data['caught']).toBeUndefined();
+    });
+
     it('a send card no one answers in an action comes down (Neon’s S11): no card left at the head of the queue', async () => {
       const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 30, act: { siteAllowed: () => true } });
       expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.');
