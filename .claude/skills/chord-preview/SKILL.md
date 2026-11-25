@@ -28,6 +28,8 @@ pnpm install --frozen-lockfile > "$LOG" 2>&1; echo "install exit=$?"
 pnpm --filter @chord/desktop package --win --x64 >> "$LOG" 2>&1; echo "package exit=$?"
 ```
 
+**A slice behind a release flag:** to let the owner try the assistant clicking and typing (S18 M2e) before `ASSISTANT_ACTING_RELEASED` is on, run `export CHORD_PREVIEW_ACTING=1` before the package step (Settings → Assistant then shows *Acting on pages*), and add `-acting` to `LABEL`. Only previews set it; the release workflow never does (assistant-preview.test.ts).
+
 Both exit codes must be 0. On anything else, read the end of `$LOG` (`tail -40 "$LOG"`, after the run, never a pipe on the build itself), report it, and skip the copy. The build takes several minutes: run it in the background and wait for it.
 
 **Copy only a real installer** (exit 0, and over 50 MB; a Chord installer is about 139 MB):

@@ -25,6 +25,8 @@ function setup() {
     refs: new TabRefs<NodeId>('t'),
     attached: new Set(),
     pointed: new Set(),
+    actTab: null,
+    actEnded: null,
     windowId: 'w1',
     control: new ControlAgent('chat:1', async () => 'once'),
     pdfs: new Map(),

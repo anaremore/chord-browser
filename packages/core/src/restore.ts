@@ -6,7 +6,7 @@
  * always at least one chord and one window.
  */
 import { isAssistantScope } from './assistant';
-import { cleanNeverSites } from './control-tools';
+import { cleanActSites, cleanNeverSites } from './control-tools';
 import {
   DEFAULT_PROFILE,
   defaultSettings,
@@ -257,6 +257,8 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
     settings.assistant.neverSites = cleanNeverSites(strings(assistant['neverSites']));
     settings.assistant.offChords = strings(assistant['offChords']);
     if (typeof assistant['codexImages'] === 'boolean') settings.assistant.codexImages = assistant['codexImages'];
+    if (typeof assistant['acting'] === 'boolean') settings.assistant.acting = assistant['acting'];
+    settings.assistant.actSites = cleanActSites(strings(assistant['actSites']));
   }
   settings.reader = cleanReaderSettings(settings.reader, saved['reader']);
   const effects = saved['effects'] as Record<string, unknown> | undefined;
