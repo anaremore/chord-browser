@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import {
   agentChords,
   barAddress,
+  wholeAddress,
   barDoing,
   CONTROL_WAIT_MS,
   sendTitle,
@@ -51,6 +52,7 @@ import {
   userTurnText,
   uuidv7,
   nodeOf,
+  nextReplyText,
   nodeList,
   type AssistantAttachment,
   type AssistantCitation,
@@ -93,7 +95,7 @@ import { siteOfUrl } from '../agents/shares';
 import { shownOrigin, type SendHoldDeps } from '../control/sends';
 import { buildActs } from './preview';
 import { dropAgentGuard } from '../control/page';
-import { beginUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing, type UserTabNote } from '../control/user-watch';
+import { beginUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing, userTabGoing, type UserTabNote } from '../control/user-watch';
 
 type Decision = 'once' | 'thread' | 'always' | 'denied';
 
@@ -136,6 +138,8 @@ interface ThreadState extends DuetChat {
   sendGrants: Map<NodeId, Set<string>>;
   /** Your key or click ended this message's acting before it acted: said at its first refused step (sayStopped). */
   stopUnsaid: boolean;
+  /** What of yours stopped its acting (a key and its code, a click, Back…), said with *Stopped: you used the tab*. */
+  stoppedBy: string | null;
   /** What the lease caught in each tab since its last result there (said in the next one). */
   caught: Map<NodeId, string[]>;
   /** Each action under way in a tab, its own end (user-watch's UserAction), oldest first. */
@@ -403,6 +407,9 @@ export class AssistantService {
       pointed: new Set(),
       actTab: null,
       actEnded: null,
+      elsewhere: false,
+      readFrom: new Set(),
+      listed: new Set(),
       shows: new Map(),
       leased: new Set(),
       sentTabs: new Map(),
@@ -410,6 +417,7 @@ export class AssistantService {
       actionEnds: new Map(),
       caught: new Map(),
       stopUnsaid: false,
+      stoppedBy: null,
       queuedTab: [],
       // The chat is the agent; its cards are approval messages in the chat.
       control: new ControlAgent(`duet:${randomUUID()}`, (card, signal) => this.showCard(state, card, signal)),
@@ -443,6 +451,9 @@ export class AssistantService {
     const result = await this.persistence.assistant({ op: 'thread', threadId });
     const state = this.blank(chordId, result.thread ?? null);
     state.messages = result.messages ?? [];
+    // Turns from before this session (resumed, continued, imported) may have read anything: what it types, and where it
+    // goes, are shown first (failing closed: Neon's B3 on #151).
+    state.elsewhere = state.messages.some((m) => m.body.role === 'user' || m.body.role === 'assistant');
     // Handles and attachments carry over, so earlier tabs stay readable and citations resolve.
     for (const m of state.messages) {
       if (m.body.role === 'user') {
@@ -528,7 +539,7 @@ export class AssistantService {
    * there ends at once, whatever the chat is doing, so nothing of yours is held or caught (Claude's and Neon's B2 on
    * #147). A chat acting there for this message stops, and says so once.
    */
-  userUsedTab(nodeId: NodeId): void {
+  userUsedTab(nodeId: NodeId, why = 'your input'): void {
     const contents = this.browser.tabs.get(nodeId)?.webContents;
     const acting = Boolean(contents && !contents.isDestroyed() && userTabActing(contents));
     if (contents && !contents.isDestroyed()) {
@@ -548,16 +559,18 @@ export class AssistantService {
       // Your key or click there ends this message's acting (the owner's answer 5). The chat says so: now, if it was acting
       // there; else at the first step it refuses because of it (Claude's S1, round 3): never silent, never for nothing.
       this.endActing(state, USER_TAB_REFUSALS.tookOver);
+      // What of yours it was, said with it (the owner's test of 9d1ad40: so the next preview tells which).
+      state.stoppedBy = why;
       if (busy) this.sayStopped(state);
       else state.stopUnsaid = true;
     }
   }
 
   /** Your reload, back, forward, Stop or address for a page (browser.ts' userNavigates): as your key or click there. */
-  userMovedPage(contents: WebContents): void {
+  userMovedPage(contents: WebContents, why = 'a reload'): void {
     // As userUsedTab, with the tab's node: whether it was acting is asked there before anything ends (Neon's N2).
     const nodeId = contents.isDestroyed() ? undefined : this.browser.tabs.nodeFor(contents);
-    if (nodeId) return this.userUsedTab(nodeId);
+    if (nodeId) return this.userUsedTab(nodeId, why);
     // A page no tab knows (one being adopted): its lease, whoever's, ends.
     if (!contents.isDestroyed()) endUserLease(contents);
   }
@@ -583,7 +596,8 @@ export class AssistantService {
           target: [page],
           tab: nodeId,
           subject: `${nodeId}|tail|${randomBytes(4).toString('hex')}`,
-          step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
+          // Leaving: the whole address (Neon's B1 on #151); another step's, the bar's short one.
+          step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: why === 'leave' ? wholeAddress(going) : barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
           takeDown: takeDown.signal,
         },
         signal,
@@ -631,7 +645,7 @@ export class AssistantService {
   /** *Stopped: you used the tab*, once for the message. */
   private sayStopped(state: ThreadState): void {
     state.stopUnsaid = false;
-    if (state.thread) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
+    if (state.thread) void this.activity(state, 'act', `Stopped: you used the tab${state.stoppedBy ? ` (${state.stoppedBy})` : ''}`, '', false);
   }
 
   /** Stops hearing leases end (quit). */
@@ -742,6 +756,7 @@ export class AssistantService {
       codexImages: this.codexMakesImages(),
       firstUse: !this.firstUseSeen,
       lookingInWsl: this.lookingInWsl,
+      acting: this.acting(),
     };
     if (!chordId || privateWindow)
       return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null, pendingImages: [], imageThumbs: {}, tabNames: {} };
@@ -1302,6 +1317,8 @@ export class AssistantService {
     this.pending.delete(windowId);
     for (const p of pending) await this.images.save(p.image, p.bytes, p.thumb);
     const images = nothing ? [] : (reuseImages ?? pending.map((p) => p.image));
+    // What's in an image came from elsewhere (Neon's B3 on #151).
+    if (images.length > 0) state.elsewhere = true;
     const sent = await this.addMessage(state, images.length > 0 ? { role: 'user', text: trimmed, attachments, images: [...images] } : { role: 'user', text: trimmed, attachments });
     state.sentTabs.set(sent.id, state.actTab);
     delete this.drafts[thread.id];
@@ -1379,6 +1396,8 @@ export class AssistantService {
       images,
     };
     let resumeFailed = false;
+    /** A tool ran since the reply's last text: its next text is a new paragraph. */
+    let afterTool = false;
     const events = {
       onSessionId: (id: string) => {
         if (thread.providerSessionId !== id) {
@@ -1388,10 +1407,16 @@ export class AssistantService {
       },
       onText: (delta: string) => {
         if (!state.streaming || state.streaming.body.role !== 'assistant') return;
-        state.streaming.body = { ...state.streaming.body, text: state.streaming.body.text + delta };
+        // After a tool call, a new paragraph (the owner's card-game run: never "to act.Only Arthur called").
+        const next = nextReplyText(state.streaming.body.text, delta, afterTool);
+        afterTool = next.newBlock;
+        state.streaming.body = { ...state.streaming.body, text: next.text };
         this.schedulePush();
       },
-      onTool: (name: string, args: Record<string, unknown>) => this.runTool(state, name, args),
+      onTool: (name: string, args: Record<string, unknown>) => {
+        afterTool = true;
+        return this.runTool(state, name, args);
+      },
       onUsage: (usage: AssistantContextUsage) => {
         state.context = usage;
         this.schedulePush();
@@ -1627,6 +1652,7 @@ export class AssistantService {
               return answer === 'once';
             },
             clipboard: electronClipboard,
+            siteOfPage: siteOfUrl,
           });
           const begun = action.begun;
           if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
@@ -1644,6 +1670,11 @@ export class AssistantService {
         },
         // This action's own end: it does nothing to a lease that came after it (Neon's B3, round 3 of #147).
         end: (node) => s.actionEnds.get(node.id)?.shift()?.(),
+        // Where navigate or back goes (M2e-2c): a page there sending the tab on to another site asks.
+        going: (node, url) => {
+          const contents = this.browser.tabs.get(node.id)?.webContents;
+          if (contents && !contents.isDestroyed()) userTabGoing(contents, url);
+        },
       },
     };
   }
@@ -2234,13 +2265,15 @@ export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
   popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,
   // What happened to the clipboard (control/user-watch.ts), or a clipboard permission refused (permissions.ts).
+  // Which case it was, so the model says what happened, never "probably" (the owner's card-game run on 982ce10): the page
+  // copied and Chord put yours back; it couldn't; or it changed with no copy of the page's own (a frame's, or yours).
   clipboard: (detail) =>
     detail === 'put back'
-      ? 'The page changed your clipboard; Chord put it back'
+      ? 'The page copied something to your clipboard while the assistant acted; Chord put back what you had'
       : detail === 'not put back'
-        ? 'The page changed your clipboard, and what was on it couldn’t be put back; check it before you paste'
+        ? 'The page copied something to your clipboard while the assistant acted, and Chord couldn’t put back what you had; check it before you paste'
         : detail === 'changed'
-          ? 'The clipboard changed while the assistant acted; check it before you paste'
+          ? 'Your clipboard changed while the assistant acted, but not by the page itself: a frame inside the page copied something, or you copied something elsewhere. Chord left it as it is; check it before you paste'
           : 'The page asked to use your clipboard; Chord said no',
   unload: () => 'The page has unsaved changes, so it stayed',
   external: (detail) => `The page tried to open ${detail} in another program; it wasn’t opened`,
@@ -2269,6 +2302,25 @@ export function actCard(card: ControlCard): AssistantActCard | null {
       note: step.idle ? `After the assistant’s last step, the page is sending something to ${where}.` : `The assistant ${did}, and the page is sending something to ${where}.`,
       lines: [`Goes to: ${step.sends.join(', ')}`],
       danger: other,
+      showable: Boolean(card.show),
+    };
+  }
+  // Leaving the site (M2e-2c, B3): the whole address, which can carry data out; a redirect says what sent the tab on
+  // (Neon's N5 on #151).
+  if (step.why === 'leave') {
+    const note = step.idle ? 'After the assistant’s last step, the page is sending your tab to:' : step.from ? `${step.from} sends your tab to:` : 'The assistant wants to open this in your tab:';
+    return { kind: 'step', title: stepTitle('leave', step.site), note, lines: [step.going ?? ''], danger: false, showable: false };
+  }
+  // What it types, in a chat that read anything but this tab (M2e-2c, B3): shown in full first.
+  if (step.taint) {
+    return {
+      kind: 'step',
+      title: `Type this ${card.description.replace(/^type /, '')}?`,
+      note: 'It read another tab, history or the archive in this chat, so it shows what it types first.',
+      // All of it, in a box that scrolls (Neon's B2 and SF1 on #151).
+      lines: [],
+      long: `“${step.typed ?? ''}”`,
+      danger: false,
       showable: Boolean(card.show),
     };
   }

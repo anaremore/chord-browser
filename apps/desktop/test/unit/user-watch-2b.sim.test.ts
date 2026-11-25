@@ -25,6 +25,7 @@ import type { SendHoldDeps } from '../../src/main/control/sends';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
 const watch = await import('../../src/main/control/user-watch');
+const { TAIL_MS } = watch;
 
 afterEach(() => vi.useRealTimers());
 
@@ -111,8 +112,10 @@ async function run(seed: number, steps: number): Promise<string[]> {
     ask: (() => {
       const answer = pick(ANSWERS);
       const after = Math.floor(rnd() * 3000);
-      return () => new Promise<Awaited<ReturnType<SendHoldDeps['ask']>>>((done) => setTimeout(() => done(answer), after));
+      return (_sites: string[], why: string | null) => (asked.push(why), new Promise<Awaited<ReturnType<SendHoldDeps['ask']>>>((done) => setTimeout(() => done(answer), after)));
     })(),
+    // The site an address is on (for what leaves it: M2e-2c).
+    siteOfPage: (u: string) => new URL(u).hostname,
     note: () => undefined,
     // A download card: answered after a while, or not before the lease would end.
     askDownload: () => new Promise<boolean>((done) => setTimeout(() => done(rnd() < 0.5), Math.floor(rnd() * 50_000))),
@@ -120,6 +123,14 @@ async function run(seed: number, steps: number): Promise<string[]> {
     kept: owner === 'chat:1' ? new Set<string>() : undefined,
   });
   let requests = 0;
+  /**
+   * Where navigate went (M2e-2c), as the sim sees it: its lease, and when that lease's last action ended (its tail's
+   * start), or null while one is under way. A page's own redirect away is held while it's live: an action under way,
+   * or inside the tail, with no action begun since (Neon's SF3 on #151).
+   */
+  let went: { lease: number; tailFrom: number | null } | null = null;
+  /** Why each card was asked (null: data), in order. */
+  const asked: (string | null)[] = [];
   const pending = new Set<string>();
 
   let lastClipAtBegin = clip;
@@ -149,7 +160,9 @@ async function run(seed: number, steps: number): Promise<string[]> {
   };
 
   for (let i = 0; i < steps; i++) {
-    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'elsewhere', 'download', 'frame', 'failing', 'time', 'time'] as const);
+    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'elsewhere', 'download', 'frame', 'failing', 'going', 'going', 'redirect', 'redirect', 'time', 'time'] as const);
+    // Whatever ends or replaces the action navigate went in: where it went is no longer the sim's to check.
+    if (op === 'begin' || op === 'stop' || op === 'hands' || op === 'detach' || op === 'gone') went = null;
     if (op === 'begin') {
       const owner = pick(['chat:1', 'chat:2']);
       log.push(`begin ${owner}`);
@@ -176,6 +189,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
       a.end();
       // Ending twice is never a second end.
       if (rnd() < 0.3) a.end();
+      if (went && went.tailFrom === null && !actions.some((x) => x.lease === went!.lease)) went.tailFrom = Date.now();
     } else if (op === 'stop') {
       const owner = pick(['chat:1', 'chat:2']);
       log.push(`stop ${owner}`);
@@ -217,6 +231,56 @@ async function run(seed: number, steps: number): Promise<string[]> {
     } else if (op === 'failing') {
       log.push('the next catch fails');
       t.state.failNext = true;
+    } else if (op === 'going' && t.state.fetch && watch.userTabActing(t.contents) && actions.some((a) => a.lease === current)) {
+      // navigate is going to the site's own page; that page sends the tab on to another site (an open redirect: M2e-2c).
+      watch.userTabGoing(t.contents, 'https://game.example/out');
+      went = { lease: current!, tailFrom: null };
+      const id = `r${++requests}`;
+      pending.add(id);
+      t.state.paused.add(id);
+      const before = asked.filter((w) => w === 'leave').length;
+      t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId: id, request: { method: 'GET', url: 'https://tracker.example/collect' }, resourceType: 'Document' });
+      log.push(`going, then sent on: ${id}`);
+      await flush();
+      // Held, and asked as leaving is: never let go on its own.
+      expect(t.state.answered.get(id) === 'Fetch.continueRequest' && asked.filter((w) => w === 'leave').length === before, `seed ${seed}: an open redirect went unasked (${log.slice(-6).join(' · ')})`).toBe(false);
+      if (rnd() < 0.5 && inflight.length === 0) {
+        // Its load done, the action ends; a moment later (inside the tail) the page sends the tab on by itself (a meta
+        // refresh, a timer): still held (Neon's SF3 on #151).
+        for (const a of actions.filter((x) => x.lease === current)) {
+          actions.splice(actions.indexOf(a), 1);
+          a.end();
+        }
+        await vi.advanceTimersByTimeAsync(pick([0, 50, 600, 1200]));
+        if (watch.userTabCatching(t.contents) && t.state.fetch) {
+          const later = `r${++requests}`;
+          pending.add(later);
+          t.state.paused.add(later);
+          const asks = asked.filter((w) => w === 'leave').length;
+          t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId: later, request: { method: 'GET', url: pick(['https://tracker.example/collect', 'http://game.example/collect']) }, resourceType: 'Document' });
+          log.push(`ended, then sent on in the tail: ${later}`);
+          await flush();
+          expect(t.state.answered.get(later) === 'Fetch.continueRequest' && asked.filter((w) => w === 'leave').length === asks, `seed ${seed}: a redirect in the tail went unasked (${log.slice(-6).join(' · ')})`).toBe(false);
+        }
+        went = null;
+      }
+    } else if (
+      op === 'redirect' &&
+      went &&
+      t.state.fetch &&
+      current === went.lease &&
+      (went.tailFrom === null ? actions.some((a) => a.lease === went!.lease) : Date.now() - went.tailFrom < TAIL_MS - 100)
+    ) {
+      // Later, the page it went to sends the tab on by itself (a meta refresh, a timer), to another site or to plain http.
+      const id = `r${++requests}`;
+      pending.add(id);
+      t.state.paused.add(id);
+      const before = asked.filter((w) => w === 'leave').length;
+      const away = pick(['https://tracker.example/collect', 'http://game.example/collect']);
+      t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId: id, request: { method: 'GET', url: away }, resourceType: 'Document' });
+      log.push(`sent on later: ${id} ${away}`);
+      await flush();
+      expect(t.state.answered.get(id) === 'Fetch.continueRequest' && asked.filter((w) => w === 'leave').length === before, `seed ${seed}: a later redirect away went unasked (${log.slice(-6).join(' · ')})`).toBe(false);
     } else if (op === 'download') {
       log.push('a download');
       void watch.askUserTabDownload(t.contents, { filename: 'file.zip', url: 'https://files.example/file.zip' });

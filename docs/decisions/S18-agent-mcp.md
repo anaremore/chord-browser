@@ -654,6 +654,67 @@ The owner answered every open question, each as recommended. Settled:
 - **A debugger detaching mid-lease** (your DevTools taking the tab): Chromium lets go of the requests it had paused, so they go on. The lease is lost at once, nothing more is pressed or typed, and the action says so.
 - **A slow cancelled action can hold a newer lease's tail** (Neon, the final pass on #147): each action's end is its own, and a chat's are ended oldest first, so a newer action's end can wait behind an older, cancelled one still unwinding. It fails closed (the lease stays on, what the page sends stays held and asked about), and your key, click or page move still lets go of it at once.
 
+## M2e-2: as built (2026-11-24)
+
+The assistant clicks and types in the tab on screen, in three stacked PRs: #147 (M2e-2a), #150 (M2e-2b) and #151 (M2e-2c, which turns `ASSISTANT_ACTING_RELEASED` on). Each part names its checklist item.
+
+- **The tools and where (A1):**
+  - With Settings → Assistant's *Click and type on pages* on (the default), the assistant gets the eight acting tools (core's `assistantTools(actions, acting)`) and the acting lines in its instructions (`ACTING_LINES`).
+  - It acts only in the message's tab: the tab on screen in the window the message came from, taken as it's sent (a queued message keeps its own). It acts only while that tab is shown alone in a window that isn't minimized; once it's off screen, acting ends for the message.
+  - It never acts in an agent's tab. The refusals are `USER_TAB_REFUSALS`, in assistant/scope.ts.
+- **The lease (C1, C3, A6):** `control/user-watch.ts` takes a tab of yours's debugger for an action and 6 s after its last one (`AFTER_MS`). It never holds the debugger queue between its own two steps, and a second action joins it. During the lease:
+  - `Fetch` is on, for requests only (your pages keep their own headers). Frames in other processes are auto-attached.
+  - What the page sends is the assistant's for the action and 1.5 s after (`TAIL_MS`): held, and asked about in the chat.
+  - For the whole 6 s:
+    - file pickers are intercepted;
+    - passkeys are refused with `WebAuthn.enable({enableUI:false})`;
+    - FedCM is left alone: Electron has no UI for it and fails the page's request by itself (`NetworkError`); turning the domain on stalls the request past the lease, and dismissing its chooser takes the app down (the M2e-2 spike's row);
+    - dialogs and `beforeunload` are noted;
+    - the service worker is bypassed, and the bypass is always turned off first on release.
+  - Also during the 6 s:
+    - **Popups:** a window, or a new tab of any kind (in front or behind), is denied and said in the chat (tabs.ts). A pinned tab's cross-site click that Chord sends opens no Peek.
+    - **Clipboard:** its permissions are refused, and what the page's top frame copied is put back as each action ends, only while it's still what the page put there; a change no top-frame copy made is said, never put back.
+    - **Downloads:** a download its click started asks in the chat first (downloads.ts).
+  - Your key, click, reload, back, forward or typed address ends the lease at once (F1, F2). These come through `before-input-event` and `before-mouse-event`, since Electron's `input-event` never fired for a key there. What was held fails.
+- **The cards (A2, D1, B3, F6):** in the chat, from `actCard` in Chord's words:
+  - the site card offers *Always on this site* (`settings.assistant.actSites`), *Allow for this chat* and *No*;
+  - a risky step offers *Allow* (red for paying and deleting), *Don't* and *Show me*;
+  - *Send data* offers *Allow*, *Allow for this chat* (the agents' *Allow until done*, for the chat), *Don't* and *Show me*;
+  - leaving the site shows the whole address, every time (a same-site address that redirects to another site asks the same);
+  - a tainted chat's `type` shows the exact text, every time;
+  - a download asks with the file's name.
+
+  A card takes no key or click in its first 500 ms, and keys only once it has focus; the composer's shortcut never answers one. The cards a lease asks on its own outlive the turn.
+- **The vault (A4):** `PasswordAssist` ignores input Chord sends, and keeps its menu shut while the assistant acts in the tab.
+- **The typing guard (F4):** dormant in every tab's top frame, armed only while the assistant types.
+- **Settings → Assistant → Acting on pages:** the switch and the sites list, each site with *Remove*. Both stay on this computer. Removing a site takes back its *Allow for this chat* in open chats; turning the switch off ends acting at once.
+- **Stated limits:** those of the checklist (C4–C6, E5), and these:
+  - a passkey request still pending at the lease's end runs to its own timeout (*M2e-2 spike*);
+  - `window.print()` blocks the page until you close its dialog;
+  - a page's own `alert`, `confirm` and `prompt` are answered by Electron at once in a tab of yours today (filed separately).
+- **Tests:**
+  - `assistant-acting.test.ts`: where it may act, the lease and its catches with fake timers, leaving, the taint, the cards.
+  - `passwords-assist.test.ts`: the assistant acting, 2 rows.
+  - `assistant-agent-tabs.test.ts`: the queued tab.
+  - `assistant-acting.spec.ts`, three journeys: the card table (site card, *Send data*, *Allow for this chat* lasting, your key stopping it) with a checkout's risky step; what a click sets off; leaving, an open redirect, and a tainted `type`.
+
+## M2e-2c: the pre-release security pass (#151, 2026-11-25)
+
+Claude and Neon in parallel, at a3a331a; both said not ready. Each fix has a unit row that fails without it; the flag flip stays the last commit.
+
+- **Addresses on cards are whole** (Neon's B1, SF2): leaving, from navigate, back, an open redirect held mid-action or in the tail, shows the whole address (core's `wholeAddress`: parsed and written back, query and fragment kept, no control or bidi characters, at most 2048), never the bar's `barAddress`. A redirect's card says what sent the tab on (*shop.example/out sends your tab to:*, *A page on shop.example …*, or *After the assistant’s last step, the page is sending your tab to:*: N5). Back is checked again after the leaving card (a pushState while it was up refuses).
+- **What it types is shown whole** (B2, SF1, SF4): the tainted `type` card carries all of it (up to `TYPE_TEXT_MAX`, 5,000), in a box that scrolls; it has *Show me*, and after it the page, the element and the site are checked again, as after the site card.
+- **The taint, failing closed** (Neon's B3, Claude's C-B3): `DuetChat.elsewhere` (was `searched`) is set by a history or archive search, a message with an image, and a chat loaded with earlier turns (resumed, continued, imported: an import drops what's loaded, so it's loaded again the same). Reads are kept by origin too (`ToolMemory.readFrom`), so this tab read on another site taints; `list_tabs` keeps what it named (`listed`), so another tab named there taints. In a tainted chat every `navigate` and `back` shows the whole-address card, the same site too (an address can carry data out as well as a field).
+- **Leaving includes https to http** (SF5), on the same site, for navigate and for a redirect.
+- **Where it went is held through the tail** (SF3): `lease.going` (site and scheme) lasts the action and its 1.5 s tail, so a meta refresh or a timer right after the load still asks; each new action starts with none. The 2b sim models it (an action ending on its load, then a redirect inside the tail).
+- **Copy** (B4, N3, N4; mock `assistant-acting-copy-s18-m2e2c.html`, approved): Settings → Assistant no longer says *it only reads* where acting is built; the first-use note adds a sentence while acting is on; with *Nothing*, the acting switch shows off and can't be changed, and says why. Screen readers hear *Show me* only on a card that has it. The default stays on (the owner confirms at go/no-go).
+- **Order** (N2): navigate tells the lease where it goes only once its hold is on.
+- **Gates only the E2E caught** (Claude): unit rows for the search's taint, `lease.going`, and the service's `userTabGoing`, each failing without it. The redirect journey now checks that the tab stayed where it was.
+- **The owner's preview (6dc0ad7), 2026-11-25:**
+  - *Stopped: you used the tab* after Alt+Tab to another app, twice: the Alt keydown reaches the page (its Tab goes to the OS), and every keydown counted as your using the tab. A modifier or a lock alone no longer does (`control/input.ts`' `usesTheTab`), for the assistant and for an agent's pause alike; a key the page gets (a letter, Enter, Alt+F, Ctrl+A, an IME's) still does. Losing the window's focus never did; minimizing does.
+  - A navigate that leaves the site asked the destination's site card first, with the bar's short address (no query), and *Always on this site* granted the destination from a navigation. Now it's one card, the leaving card with the whole address, and nothing is granted there: going to a page isn't acting on it, so acting on its page later asks its site card then. Leaving to an address that signs out or deletes is the same one card (the address is on it). On the same site, the site card as before (and, in a chat that read elsewhere, the whole address after it). An outside agent's own tabs keep the destination's site card.
+- **Stated limits, unchanged:** Neon's section 6 is the record's list above (live connections, delayed saves and background channels, the frame typing race and frame copies, print and lingering passkey requests, a detach while a request is held, undo on non-text controls, extensions).
+
 ## Antigravity (2026-11-21, before 0.14.0)
 
 Settings → Agents adds Chord to Antigravity's MCP config itself (the owner's mock B; ARCHITECTURE.md §11.3). A Gemini review of the plan made claims about Antigravity; here is what was checked:

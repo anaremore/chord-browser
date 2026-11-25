@@ -137,6 +137,11 @@ async function turn(sent, images = []) {
         await new Promise((done) => setTimeout(done, step.sleep));
         continue;
       }
+      // Words between its steps, as a model writes them in a long task (the owner's card-game run).
+      if (step.say) {
+        await say(step.say);
+        continue;
+      }
       const args = { tab_id: tab, ...(step.args ?? {}) };
       // The element's ref, by its name as the outline quotes it: `button "Raise" [ref=e3]`.
       if (step.name) args.ref = outline.split('\n').find((line) => line.includes(`"${step.name}" [ref=`))?.match(/\[ref=(e\d+)\]/)?.[1] ?? 'e0';

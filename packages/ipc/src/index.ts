@@ -1419,6 +1419,8 @@ export interface AssistantView {
   tabNames: Record<string, AssistantTabName>;
   /** Providers Setup is still looking for inside WSL (Windows). */
   lookingInWsl: AssistantProvider[];
+  /** It clicks and types when asked (S18 M2e: a build with it, Settings' switch on, not *Nothing*): the first-use note says so. */
+  acting: boolean;
 }
 
 /* ---------- Import from other browsers (ARCHITECTURE.md §9) ---------- */

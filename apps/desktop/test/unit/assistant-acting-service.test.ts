@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
 /** The lease module, as the service sees it: whose lease is on where, and what was ended (by whom). */
-const leases = vi.hoisted(() => ({ ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on', deps: null as null | { note(what: string, detail: string): void } }));
+const leases = vi.hoisted(() => ({ going: [] as [unknown, string][], ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on', deps: null as null | { note(what: string, detail: string): void } }));
 vi.mock('../../src/main/control/user-watch', () => ({
   beginUserAction: async (contents: unknown, owner: string, deps: { note(what: string, detail: string): void }) => {
     leases.deps = deps;
@@ -28,6 +28,7 @@ vi.mock('../../src/main/control/user-watch', () => ({
   onUserLeaseEnd: () => () => undefined,
   userLeaseOwner: (contents: unknown) => leases.owners.get(contents) ?? null,
   userTabActing: (contents: unknown) => leases.owners.has(contents),
+  userTabGoing: (contents: unknown, url: string) => void leases.going.push([contents, url]),
 }));
 const guards = vi.hoisted(() => ({ dropped: [] as unknown[] }));
 vi.mock('../../src/main/control/page', async (actual) => ({ ...(await actual<Record<string, unknown>>()), dropAgentGuard: (contents: unknown) => void guards.dropped.push(contents) }));
@@ -48,9 +49,12 @@ afterEach(() => {
 });
 
 interface Inner {
-  stateFor(chordId: string): Promise<{ streaming: unknown; actTab: { nodeId: string; windowId: string } | null; actEnded: string | null; leased: Set<string>; queue: string[]; sendGrants: Map<string, Set<string>> }>;
-  send(windowId: string, state: unknown, text: string): Promise<void>;
+  load(threadId: string, chordId: string): Promise<{ elsewhere: boolean }>;
+  stateFor(chordId: string): Promise<{ elsewhere: boolean; streaming: unknown; actTab: { nodeId: string; windowId: string } | null; actEnded: string | null; leased: Set<string>; queue: string[]; sendGrants: Map<string, Set<string>> }>;
+  send(windowId: string, state: unknown, text: string, reuse?: unknown[], reuseImages?: unknown[]): Promise<void>;
   barFor(nodeId: string, text: string | null): void;
+  actingHost(s: unknown): { lease: { going(node: { id: string }, url: string): void } };
+  importChanged(removed?: unknown[]): Promise<void>;
   tailCard(s: unknown, nodeId: string, contents: unknown): (sites: string[], why: string | null, signal: AbortSignal, going?: string) => Promise<string>;
 }
 
@@ -165,12 +169,47 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     expect(actCard(cards[0] as never)?.note).toContain('its site');
     expect(cards[0]!.takeDown?.aborted).toBe(true);
     answer = 'always';
-    expect(await ask(['https://shop.example'], 'leave', new AbortController().signal, 'https://shop.example/checkout')).toBe('once');
-    expect(cards[1]!.step).toMatchObject({ site: 'shop.example', going: expect.stringContaining('shop.example') });
+    expect(await ask(['https://shop.example'], 'leave', new AbortController().signal, 'https://shop.example/checkout?secret=W-104388#done')).toBe('once');
+    // Leaving: the whole address, never the bar's short one (Neon's B1 on #151).
+    expect(cards[1]!.step).toMatchObject({ site: 'shop.example', going: 'https://shop.example/checkout?secret=W-104388#done' });
     expect(await ask(['https://shop.example'], null, new AbortController().signal)).toBe('until');
     gone = true;
     expect(await ask(['https://shop.example'], null, new AbortController().signal)).toBe('deny');
     expect(cards).toHaveLength(3);
+  });
+
+  it('what it types is shown first in a chat with earlier turns (resumed, continued, imported) or an image attached (Neon’s B3 on #151)', async () => {
+    const t = setup();
+    const thread = { id: 'th1', chordId: 'c1', title: 'Earlier', provider: 'claude', createdAt: 0, updatedAt: 0, lastUsedAt: 0 };
+    const earlier = [{ id: 'm1', threadId: 'th1', createdAt: 0, body: { role: 'user', text: 'Read my mail tab', attachments: [] } }];
+    (t.service as unknown as { persistence: unknown }).persistence = { assistant: async (q: { op: string; threadId?: string }) => (q.op === 'thread' ? (q.threadId === 'th1' ? { thread, messages: earlier } : { thread: { ...thread, id: q.threadId }, messages: [] }) : { threads: [] }) };
+    const resumed = await t.inner.load('th1', 'c1');
+    expect(resumed.elsewhere).toBe(true);
+    expect((await t.inner.load('th2', 'c1')).elsewhere).toBe(false);
+    // An import drops what's loaded (Claude's review of #151): loaded again, it's the same.
+    await t.inner.importChanged();
+    const again = await t.inner.load('th1', 'c1');
+    expect(again).not.toBe(resumed);
+    expect(again.elsewhere).toBe(true);
+    // An image with a message: what's in it came from elsewhere.
+    const u = setup();
+    u.store.dispatch({ t: 'settings.set', settings: { assistant: { provider: 'claude' } } } as never);
+    const s = await u.inner.stateFor('c1');
+    expect(s.elsewhere).toBe(false);
+    // Stopped as the message is added: no provider is started here.
+    (u.service as unknown as { addMessage: () => Promise<never> }).addMessage = async () => {
+      throw new Error('stop here');
+    };
+    await u.inner.send('w1', s, 'What does this say?', [], [{ id: 'i1', mime: 'image/png', width: 10, height: 10 }]).catch(() => undefined);
+    expect(s.elsewhere).toBe(true);
+  });
+
+  it('where navigate or back goes is told to the tab’s lease, so a page there sending the tab on asks (Claude’s review of #151: a gate only the E2E caught)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    t.inner.actingHost(s).lease.going({ id: t.mine }, 'https://game.example/out');
+    expect(leases.going).toEqual([[t.page(t.mine), 'https://game.example/out']]);
+    leases.going.length = 0;
   });
 
   it('Allow for this chat is the chat’s, per tab: your using the tab, the chat ending, or Settings’ Remove ends it (the reviews of #147)', async () => {
@@ -345,6 +384,17 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     t.service.screenChanged();
     expect(s.actEnded).toBeNull();
     expect(inner.scopeOf(s).act!.mayAct(node())).toBeNull();
+  });
+
+  it('the chat says what of yours stopped it: a key, a click, Back, a reload (the owner’s test of 9d1ad40: the next preview tells which)', async () => {
+    const t = setup();
+    const s = (await t.inner.stateFor('c1')) as unknown as { actEnded: string | null; streaming: unknown; actTab: unknown; thread: unknown; messages: { body: { role: string; summary?: string } }[] };
+    s.thread = { id: 'th1', chordId: 'c1', title: 't', provider: 'claude', model: null, scope: 'ask', createdAt: 0, updatedAt: 0, lastUsedAt: 0, providerSessionId: null };
+    s.streaming = { id: 'reply' };
+    s.actTab = { nodeId: t.mine, windowId: 'w1' };
+    (t.service as unknown as { acted: WeakSet<object> }).acted.add(s);
+    t.service.userUsedTab(t.mine, 'a key: KeyA');
+    await vi.waitFor(() => expect(s.messages.map((m) => m.body.summary)).toContain('Stopped: you used the tab (a key: KeyA)'));
   });
 
   it('your key or click in the tab during a reply ends its acting there; the chat says Stopped now if it was acting there, else at the first step it refuses (the owner’s answer 5; Claude’s S1, round 3)', async () => {

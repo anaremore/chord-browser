@@ -47,6 +47,8 @@ test.beforeAll(async () => {
       '<button onclick="try { new PaymentRequest([{ supportedMethods: \'https://pay.example/\' }], { total: { label: \'x\', amount: { currency: \'USD\', value: \'1\' } } }).show().then(() => (log.textContent += \'pay-ok \'), (e) => (log.textContent += \'pay-\' + e.name + \' \')) } catch (e) { log.textContent += \'pay-\' + e.name + \' \' }">Open sheet</button>' +
       // FedCM: an identity provider on this origin (the spike's). Electron has no FedCM UI: the request fails by itself.
       '<button onclick="navigator.credentials.get({ identity: { providers: [{ configURL: location.origin + \'/fedcm.json\', clientId: \'x\' }] } }).then(() => (log.textContent += \'signin-ok \'), (e) => (log.textContent += \'signin-\' + e.name + \' \'))">Identity</button>',
+    // M2e-2c: a field to type into (a GET page: nothing it types is sent until you submit).
+    '/order': '<title>Returns</title><label>Order number <input name=order></label>',
     // M2e-2b, C3: a page whose service worker sends its POSTs itself (the worker's own fetch, which no page hold sees).
     '/sw':
       '<title>Worker</title><p id=log></p><script>navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).then(() => (log.textContent += navigator.serviceWorker.controller ? "controlled " : "ready "))</script>' +
@@ -78,6 +80,12 @@ test.beforeAll(async () => {
     if (req.method === 'GET' && idpPath in idp) {
       res.writeHead(200, { 'content-type': 'application/json', 'set-login': 'logged-in' });
       res.end(JSON.stringify(idp[idpPath]));
+      return;
+    }
+    // An open redirect: the same site, sending you on to wherever `to` says.
+    if (req.url?.startsWith('/out?to=')) {
+      res.writeHead(302, { location: decodeURIComponent(req.url.slice('/out?to='.length)) });
+      res.end();
       return;
     }
     if (req.url === '/file.zip') {
@@ -400,7 +408,8 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(3);
     // Don't: nothing in the folder, not even its pending name (Neon's S1 on #150).
     const folder = join(profile, 'downloads');
-    expect(readdirSync(folder)).toEqual([]);
+    // (Chromium deletes a cancelled download's partial file a moment after the cancel.)
+    await expect.poll(() => readdirSync(folder), { timeout: 10_000 }).toEqual([]);
     // Allow: saved under its name.
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Download' }]));
     const again = panel.getByRole('group', { name: /^Save file\.zip from / }).last();
@@ -408,7 +417,18 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await shell.waitForTimeout(700);
     await again.getByRole('button', { name: 'Allow', exact: true }).click();
     // The folder's listing, so a failure shows what's there (a name left pending: main's Windows run 45585360658).
-    await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
+    // What the store says of it, always printed: a Windows run that fails here tells whether the file was finished and
+    // couldn't take its name, or never finished (the owner's release check, 2026-11-25).
+    const downloadState = () =>
+      shell.evaluate(async () => {
+        const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { downloads: Record<string, { filename: string; path: string; state: string; received: number; total: number }> } }> } } }).chord.state.snapshot();
+        return Object.values(state.downloads).map((d) => `${d.filename} ${d.state} ${d.received}/${d.total} ${d.path.split(/[\\/]/).pop()}`);
+      });
+    try {
+      await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
+    } finally {
+      console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}]`);
+    }
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
@@ -452,6 +472,168 @@ test('a page with no title: the tab and the assistant name its host, never the l
     await expect(panel.getByText(`Looked over “${host}”`)).toBeVisible();
     await expect(panel.getByText('Sign up')).toHaveCount(0);
     await expect(page.locator('input[name=customer]')).toHaveValue('Ada');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('leaving the site asks with the address, an open redirect away asks too, and a chat that searched history shows what it types (M2e-2c)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    const card = (title: RegExp) => panel.getByRole('group', { name: title });
+    const answer = async (title: RegExp, button: string) => {
+      const c = card(title).last();
+      await expect(c).toBeVisible({ timeout: 20_000 });
+      await shell.waitForTimeout(700);
+      await c.getByRole('button', { name: button, exact: true }).click();
+      return c;
+    };
+    /** A card's words, read while it waits (answered, it's no longer a group), then the answer. */
+    const readThenAnswer = async (title: RegExp, words: string[], button: string) => {
+      const c = card(title).last();
+      await expect(c).toBeVisible({ timeout: 20_000 });
+      for (const w of words) await expect(c).toContainText(w);
+      await shell.waitForTimeout(700);
+      await c.getByRole('button', { name: button, exact: true }).click();
+    };
+    const tabUrl = () => app.evaluate(({ webContents }, o) => webContents.getAllWebContents().find((w) => w.getURL().startsWith(o))?.getURL() ?? '', site.origin);
+
+    // navigate to another site: one card, the leaving card, with the whole address, never that site's own card (going
+    // to a page isn't acting on it: the owner's test of the 0.15 preview). Don't: it stays.
+    const away = `${site.other}/checkout?from=table`;
+    await send(panel, act([{ tool: 'navigate', args: { url: away } }]));
+    await readThenAnswer(/^Go to localhost:\d+\?$/, [away], 'Don’t');
+    await expect(card(/^Let the assistant click and type on /)).toHaveCount(0);
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
+    expect(lastActing(config)[0]?.result).toContain('The user said no to this step');
+    expect(await tabUrl()).toBe(`${site.origin}/table`);
+
+    // The same site's address that sends you on to another: held at the redirect, and asks as leaving does.
+    await send(panel, act([{ tool: 'navigate', args: { url: `${site.origin}/out?to=${encodeURIComponent(away)}` } }]));
+    await answer(/^Let the assistant click and type on 127\.0\.0\.1:\d+\?$/, 'Allow for this chat');
+    // The whole address the redirect goes to, its query too, and what sent it on (Neon's B1 and N5 on #151).
+    await readThenAnswer(/^Go to /, [away, 'sends your tab to:'], 'Don’t');
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(2);
+    // Still where it was (Claude's review of #151: tabUrl finds only this origin's tab, so not-localhost proved nothing).
+    expect(await tabUrl()).toBe(`${site.origin}/table`);
+
+    // A chat that searched history: what it types is shown first, in full.
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/order` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/order`))).toBe(true);
+    await send(panel, act([{ tool: 'search_history', args: { query: 'order' } }, { tool: 'snapshot' }, { tool: 'type', name: 'Order number', args: { text: 'W-104388' } }]));
+    // Reading history asks first in this chat's scope.
+    const read = panel.getByRole('group', { name: 'Asking permission' }).last();
+    await expect(read).toBeVisible({ timeout: 20_000 });
+    await read.getByRole('button', { name: 'Allow once' }).click();
+    await readThenAnswer(/^Type this in “Order number”\?$/, ['“W-104388”'], 'Allow');
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(3);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
+    await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('Alt+Tab to another app while it acts: Alt alone in the tab isn’t your using it, and the step goes on (the owner’s test of the 0.15 preview)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/order` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/order`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'type', name: 'Order number', args: { text: 'W-104388' } }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    // Alt+Tab away and back: the Alt goes to the page (its Tab to the OS), as a key you press there would.
+    await app.evaluate(({ webContents }, origin) => {
+      const tab = webContents.getAllWebContents().find((w) => w.getURL().startsWith(origin))!;
+      tab.sendInputEvent({ type: 'keyDown', keyCode: 'Alt', modifiers: ['alt'] });
+      tab.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
+    }, `${site.origin}/order`);
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
+    expect(lastActing(config).find((x) => x.tool === 'type')?.result).not.toContain('refused');
+    await expect(panel.getByText('Stopped: you used the tab')).toHaveCount(0);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('read another tab, then type: each card answered with a click in the panel, the pointer left over the page, and nothing stops it (the owner’s test of 9d1ad40)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/order` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/order`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
+    // The list of tabs, the other tab read, a look at this one, then typing: as the owner asked it.
+    await send(panel, act([{ tool: 'list_tabs' }, { tool: 'read_tab', args: { tab_id: 't2' } }, { tool: 'snapshot' }, { tool: 'type', name: 'Order number', args: { text: 'W-104388' } }]));
+    // Every card answered with a real click in the panel; then the pointer rests over the page, as a hand on the mouse leaves it.
+    const deadline = Date.now() + 90_000;
+    const answered: string[] = [];
+    while ((await actingTurns(config)) < 1 && Date.now() < deadline) {
+      const pending = panel.locator('[data-pending]').last();
+      if ((await pending.count()) > 0 && (await pending.isVisible())) {
+        await shell.waitForTimeout(700);
+        for (const name of ['Allow once', 'Allow for this chat', 'Allow']) {
+          const button = pending.getByRole('button', { name, exact: true });
+          if ((await button.count()) > 0) {
+            answered.push(`${(await pending.getAttribute('aria-label')) ?? ''}: ${name}`);
+            await button.click();
+            break;
+          }
+        }
+        await page.mouse.move(40, 40);
+        await page.mouse.move(80, 60);
+      }
+      await shell.waitForTimeout(200);
+    }
+    console.log(`cards: ${answered.join(' | ')}`);
+    const steps = lastActing(config);
+    expect(steps.find((x) => x.tool === 'read_tab')?.result, 'the other tab was read').not.toContain('error');
+    expect(steps.find((x) => x.tool === 'type')?.result).not.toContain('took');
+    await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
+    await expect(panel.getByText(/Stopped: you used the tab/)).toHaveCount(0);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('what the assistant writes between its steps is a paragraph each, never glued together (the owner’s card-game run on 982ce10)', async () => {
+  test.setTimeout(90_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await send(panel, act([{ say: 'Waiting for the bots to act.' }, { tool: 'snapshot' }, { say: 'Only Arthur called. ' }]));
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    await expect(panel.getByText('Waiting for the bots to act.', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Only Arthur called. Done.', { exact: true })).toBeVisible();
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

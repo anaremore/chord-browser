@@ -3,7 +3,7 @@
  * refused, what counts as the agent's, and the menu's accelerators, off from an agent's keys until your next key.
  */
 import { describe, expect, it } from 'vitest';
-import { AgentInputRefused, isAgentInput, sendAgentInput, yourKey, type AgentInputEvent } from '../../src/main/control/input';
+import { AgentInputRefused, clicksTheTab, inputWhy, isAgentInput, sendAgentInput, usesTheTab, yourKey, type AgentInputEvent } from '../../src/main/control/input';
 
 function page() {
   const log: string[] = [];
@@ -25,6 +25,59 @@ const escape: AgentInputEvent[] = [
   { type: 'keyDown', keyCode: 'Escape' },
   { type: 'keyUp', keyCode: 'Escape' },
 ];
+
+describe('Your key in a tab: what counts as using it (the owner’s Alt+Tab in the 0.15 preview)', () => {
+  it('a modifier alone never does (Alt+Tab’s Alt reaches the page, its Tab goes to the OS); a key the page gets does', () => {
+    // [the key, with which modifiers held, whether it's using the tab]
+    const rows: [string, Partial<Record<'alt' | 'control' | 'shift' | 'meta', boolean>>, boolean][] = [
+      ['Alt', { alt: true }, false],
+      ['Control', { control: true }, false],
+      ['Shift', { shift: true }, false],
+      ['Meta', { meta: true }, false],
+      ['OS', {}, false],
+      ['AltGraph', {}, false],
+      ['CapsLock', {}, false],
+      ['NumLock', {}, false],
+      ['f', { alt: true }, true],
+      ['a', { control: true }, true],
+      ['a', {}, true],
+      ['Enter', {}, true],
+      ['Tab', {}, true],
+      ['Escape', {}, true],
+      ['Process', {}, true],
+      ['Dead', {}, true],
+      // No key the page could act on (Windows sends some with none): not using the tab.
+      ['Unidentified', {}, false],
+      ['', {}, false],
+    ];
+    for (const [key, held, uses] of rows) expect(usesTheTab({ type: 'keyDown', key, ...held }), `${key} ${JSON.stringify(held)}`).toBe(uses);
+    // A key let go of is no new use of the tab.
+    expect(usesTheTab({ type: 'keyUp', key: 'a' })).toBe(false);
+    expect(usesTheTab({ type: 'keyUp', key: 'Alt' })).toBe(false);
+  });
+
+  it('a click is a button pressed: never the pointer moving, entering, leaving, a release alone, or the wheel (the owner’s test of 9d1ad40)', () => {
+    // [the event, whether it's using the tab]
+    const rows: [{ type: string; button?: string }, boolean][] = [
+      [{ type: 'mouseDown', button: 'left' }, true],
+      [{ type: 'mouseDown', button: 'right' }, true],
+      [{ type: 'mouseDown', button: 'middle' }, true],
+      [{ type: 'mouseDown' }, false],
+      [{ type: 'mouseUp', button: 'left' }, false],
+      [{ type: 'mouseMove' }, false],
+      [{ type: 'mouseEnter' }, false],
+      [{ type: 'mouseLeave' }, false],
+      [{ type: 'mouseWheel' }, false],
+    ];
+    for (const [event, uses] of rows) expect(clicksTheTab(event), JSON.stringify(event)).toBe(uses);
+  });
+
+  it('what it was, said: a key by its code, a click by its button (so the next preview tells which)', () => {
+    expect(inputWhy({ type: 'keyDown', key: 'a', code: 'KeyA' })).toBe('a key: KeyA');
+    expect(inputWhy({ type: 'keyDown', key: 'Enter', code: 'Enter', control: true })).toBe('a key: Ctrl+Enter');
+    expect(inputWhy({ type: 'mouseDown', button: 'left' })).toBe('a click: left');
+  });
+});
 
 describe('Input Chord sends a page for an agent', () => {
   it('counts as the agent’s while it’s sent, and only then', () => {

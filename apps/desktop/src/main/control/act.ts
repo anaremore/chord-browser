@@ -47,7 +47,8 @@ export type ActOp =
 
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 /** A form's field, as risk needs it (never its value): its description for sensitiveField, and whether it takes text. */
-export type ActFormField = SnapshotField & { text: boolean };
+/** `goes`: a submit would send it (filled, chosen, checked, not disabled): a state, never its value (the owner's test of 982ce10). */
+export type ActFormField = SnapshotField & { text: boolean; goes: boolean };
 
 /** What the step is, from the page (S18 M2d): main builds core's RiskElement from it (control-risk.ts). */
 export interface ActRisk {
@@ -222,7 +223,10 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
         if (fields.length >= 50) { overflow = true; break; }
         const seen = visibleField(f, t);
         if (seen && t === 'search') searchFields++;
-        fields.push({ ...fieldOf(f), text: seen && (f.localName === 'textarea' || (f.localName === 'input' && TEXTY.has(t))) });
+        // Whether a submit sends it: a box or a radio checked, a select, a field with something in it; never a disabled one.
+        // Only that it would, never what (its value stays in the page).
+        const goes = !f.disabled && (t === 'checkbox' || t === 'radio' ? Boolean(f.checked) : f.localName === 'select' ? f.selectedIndex >= 0 : f.isContentEditable ? Boolean((f.textContent || '').trim()) : String(f.value ?? '') !== '');
+        fields.push({ ...fieldOf(f), text: seen && (f.localName === 'textarea' || (f.localName === 'input' && TEXTY.has(t))), goes });
       }
       // As it would be sent: a submit button's own formaction and formmethod win over its form's (a GET to a delete
       // address is no search).
