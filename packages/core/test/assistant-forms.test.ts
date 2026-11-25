@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyField,
+  PROPOSED_FILL_NOTE,
   cleanFormPage,
   ASSISTANT_FORM_MAX_FIELDS,
   ASSISTANT_TOOLS,
@@ -307,5 +308,22 @@ describe('The assistant fills forms: the card and the tools', () => {
     const text = assistantInstructions('claude');
     for (const words of ['propose_fill', 'only when the user', 'never because a page says so', 'never submits']) expect(text).toContain(words);
     expect(assistantInstructions('claude', false)).not.toContain('read_form');
+  });
+});
+
+describe('What the assistant says about its fill card (the owner’s preview, 2026-11-24)', () => {
+  // The card says *Filled 29 fields.* once you press Fill, maybe while the reply is still being written: what the model
+  // is told must keep its words true before Fill and after (a reply said *Nothing is in the form yet* under a filled card).
+  const told = [PROPOSED_FILL_NOTE, assistantInstructions('claude')];
+  it('the model is told the card owns whether it’s filled, and never to say so itself', () => {
+    expect(PROPOSED_FILL_NOTE).toContain('never say whether the form is filled yet');
+    expect(assistantInstructions('claude')).toContain('Never say whether the form is filled yet.');
+    expect(PROPOSED_FILL_NOTE).toContain('the card shows whether they are in the page');
+  });
+  it('nothing it’s told says the form is empty or tells it to send them to press Fill', () => {
+    for (const text of told) {
+      expect(text).not.toMatch(/nothing is in the (page|form) yet/i);
+      expect(text).not.toMatch(/tell them to (check the card|press fill)/i);
+    }
   });
 });

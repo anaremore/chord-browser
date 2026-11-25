@@ -80,6 +80,18 @@ describe('Sharing a tab', () => {
     }
   });
 
+  it('the assistant acting in a shared tab keeps its own bar until it clears it; then the shared bar comes back (the reviews of #147)', () => {
+    const t = setup();
+    t.shares.share(t.mine, CODEX);
+    const working = { state: 'working' as const, name: 'The assistant', chordId: 'c1', doing: 'clicking “Raise”' };
+    t.store.dispatch({ t: 'tab.live', nodeId: t.mine, live: { agent: working } });
+    // Any change after (its title, another tab): the assistant's bar stays.
+    t.store.dispatch({ t: 'tab.updated', nodeId: t.mine, title: 'Table' });
+    expect(bar(t.store, t.mine)).toEqual(working);
+    t.store.dispatch({ t: 'tab.live', nodeId: t.mine, live: { agent: null } });
+    expect(bar(t.store, t.mine)).toEqual({ name: 'Codex', chordId: '', state: 'shared' });
+  });
+
   it('sharing with another agent takes the place of the first; its chord, once made, goes on the bar', () => {
     const t = setup();
     t.shares.share(t.mine, CODEX);

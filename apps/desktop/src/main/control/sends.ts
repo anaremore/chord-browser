@@ -89,6 +89,12 @@ export interface SendHoldDeps {
   ask(sites: string[], why: RiskWhy | null, signal: AbortSignal, going?: string): Promise<SendAnswer>;
   /** A request's origin: what a card covers (the owner, 2026-11-23: exactly that origin, never its whole site). */
   siteOf(url: string): string;
+  /**
+   * Where *Allow for this chat* is kept (the assistant: control/user-watch.ts): the chat's own origins for this tab, so
+   * a grant outlives the lease (the reviews of #147). The hold covers them and adds to them; failHeld lets go of them
+   * for this hold, never empties them (the chat does, as it ends or you take the tab).
+   */
+  kept?: Set<string>;
 }
 
 /** What one action sent, held, so far. */
@@ -149,6 +155,8 @@ interface Hold {
   once: Set<string>;
   go(p: Paused): void;
   drop(p: Paused): void;
+  /** Stops answering the tab's requests (unholdSends: a lease on a tab of yours ending, S18 M2e-2a). */
+  stop(): void;
 }
 
 const holds = new WeakMap<object, Hold>();
@@ -189,6 +197,7 @@ export function holdSends(contents: WebContents): void {
     card: null,
     until: new Set(),
     once: new Set(),
+    stop: () => undefined,
     go: (p) => answer('Fetch.continueRequest', { requestId: p.requestId }, p.sessionId),
     drop: (p) =>
       p.type === 'Document'
@@ -196,7 +205,7 @@ export function holdSends(contents: WebContents): void {
         : answer('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, p.sessionId),
   };
   holds.set(contents, hold);
-  debug.on('message', (_event, method: string, params: unknown, sessionId?: string) => {
+  const onMessage = (_event: unknown, method: string, params: unknown, sessionId?: string) => {
     if (method !== 'Fetch.requestPaused') return;
     const at = params as {
       requestId?: string;
@@ -250,13 +259,37 @@ export function holdSends(contents: WebContents): void {
       return;
     }
     heldBetween(hold, [p]);
-  });
+  };
+  debug.on('message', onMessage);
   // Gone with its page: nothing held outlives it (a closed tab's requests go with its renderer).
-  contents.once('destroyed', () => {
+  const gone = () => {
     hold.card?.cancel.abort();
     hold.action?.cancel.abort();
     holds.delete(contents);
-  });
+  };
+  contents.once('destroyed', gone);
+  hold.stop = () => {
+    debug.off('message', onMessage);
+    contents.off('destroyed', gone);
+    gone();
+  };
+}
+
+/**
+ * The hold on a tab of yours ends (the assistant's lease: control/user-watch.ts). What's still held fails first (its
+ * cards come down); the caller then turns Fetch off, so the tab's requests go as they always did.
+ */
+export function unholdSends(contents: object): void {
+  const hold = holds.get(contents);
+  if (!hold) return;
+  failHeld(contents);
+  hold.stop();
+}
+
+/** Whether something is held, or on a card, now: a lease waits for it before it ends. */
+export function holding(contents: object): boolean {
+  const hold = holds.get(contents);
+  return Boolean(hold && (hold.card || hold.idle.length || hold.action));
 }
 
 /** The tab's chord, once its page is wired (agents/chords.ts): what was held meanwhile is asked about now. */
@@ -264,6 +297,7 @@ export function sendHoldDeps(contents: object, deps: SendHoldDeps): void {
   const hold = holds.get(contents);
   if (!hold) return;
   hold.deps = deps;
+  if (deps.kept) hold.until = deps.kept;
   askNext(hold);
 }
 
@@ -318,8 +352,10 @@ function settleCard(hold: Hold, card: NonNullable<Hold['card']>, answer: SendAns
 export function failHeld(contents: object): void {
   const hold = holds.get(contents);
   if (!hold) return;
-  // Allow until done ends too: you took the tab, or the agent was stopped.
-  hold.until.clear();
+  // Allow until done ends too: you took the tab, or the agent was stopped. A chat's own set (kept) is let go of, never
+  // emptied here: the chat ends it.
+  if (hold.deps?.kept === hold.until) hold.until = new Set();
+  else hold.until.clear();
   const failed = [...hold.idle.splice(0), ...(hold.card ? hold.card.held.splice(0) : []), ...(hold.action ? hold.action.held.splice(0) : [])];
   if (hold.card) {
     const card = hold.card;

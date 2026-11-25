@@ -144,6 +144,9 @@ if ((protocol === 'https:' || protocol === 'http:') && isTop) {
   const report = (badge: Badge) => ipcRenderer.send('page:badge', badge);
   contextBridge.executeInMainWorld({ func: compatibility, args: [report] });
 }
+// A tab of yours: the same typing guard as an agent's tab's, dormant until the assistant types or presses a key here
+// (S18 M2e-2a, F4), in the top frame only (your tabs' frames get no preload: focus that ends in one is refused).
+if (!agentTab && isTop && (protocol === 'https:' || protocol === 'http:')) installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
 // An outside agent's tab: every frame of it, whatever its address (an about:blank, srcdoc or blob: frame takes its
 // parent's origin, and its pickers and dialogs would be the page's), but never an extension's or DevTools' page.
 if (agentTab && protocol !== 'chrome-extension:' && protocol !== 'devtools:') {

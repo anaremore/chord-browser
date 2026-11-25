@@ -54,7 +54,8 @@ pnpm deadcode                  # Knip, on demand only
   Remove one only after its PR shows MERGED.
 - **Docker for the container runner** is Docker Engine in WSL 2. Don't `wsl --shutdown` casually: other threads'
   containers run there.
-- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges.
+- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges, with `gh pr merge <n> --merge` once the
+  `E2E` status is success (main's ruleset requires it).
 
 ## Invariants (never broken; reviewers check every one)
 
@@ -138,7 +139,11 @@ New decision records (S20 and on) are a small folder each, not one growing file:
 - **Threat checklist first.** A slice that touches agents, passwords, IPC, sessions or anything web content can
   reach starts with a threat checklist and a design review, before code (S18's *M2e: threat checklist* is the
   model).
-- **CI is tiered.** Every push gets the fast tier (Linux X11); the `ready` label adds every other platform. The
-  merge gate is the `E2E` commit status (`.github/workflows/ci.yml`).
+- **CI is tiered.** Work as a draft (the checks only), then mark it ready for review: every push gets the fast
+  tier (Linux X11). When review settles, label it `ready`: the merge tier adds Windows x64 and macOS arm64, which a
+  platform-sensitive PR's `E2E` needs. An Electron change gets every platform; the rest run nightly. A PR stacked on
+  another's branch runs the checks only; a draft labeled `ready` fails *What changed* (mark it ready first). One platform's E2E alone, with no throwaway
+  branch: `gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=<file> -f grep=<title> -f repeat=5`. The merge gate is the `E2E`
+  commit status (`.github/workflows/ci.yml`).
 - **PR descriptions** say what changed, what was measured, which invariants it touches and how each is tested.
   Commits use Conventional Commits prefixes.

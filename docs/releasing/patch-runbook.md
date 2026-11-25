@@ -76,13 +76,13 @@ git commit -am "fix(deps): update electron to X (security)"
 git push -u origin HEAD                           # then open a PR
 ```
 
-- **Patch and minor updates** automerge once every CI check passes. If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
+- **Patch and minor updates** automerge once every CI check passes: an Electron change runs the full tier on its PR with no label, and main's ruleset requires `E2E` before anything merges. If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
 - **A new major** (our major reached end of life) is a manual PR. Read Electron's breaking changes for the jump; the same suites must pass.
 - After the merge, check the Chromium version. The issue names it; `releases.electronjs.org` lists it per Electron version. In a running Chord, Settings → About shows both.
 
 ## 4. The suites that must pass
 
-Every one, on the bump's commit. CI runs the first two on every push to `main`, each night, and on PRs: every platform's E2E only on a platform-sensitive or `ready`-labeled PR (an Electron bump is platform-sensitive, so its PR gets every platform with no label), Linux x64 X11 alone on the rest.
+Every one, on the bump's commit. CI runs the first two each night (every platform), on every push to `main` (Linux, Windows x64, macOS arm64), and on PRs: Linux x64 X11, Windows x64 and macOS arm64 on a `ready`-labeled PR, Linux x64 X11 alone on the rest. An Electron bump's PR gets every platform with no label.
 
 | Suite | Where | Command |
 |---|---|---|
@@ -109,7 +109,7 @@ Releases come only from CI, from a `v*` tag (§15.3). The tag must match `apps/d
 - [ ] Refresh the ad-blocking lists every build bundles: `pnpm --filter @chord/desktop lists` (ARCHITECTURE.md §9). Installed copies refresh their own, so a security release can skip it.
 - [ ] If the release adds or changes a major feature, update chordbrowser.com in this commit: its copy, and the README's and the site's screenshots ([site/README.md](../../site/README.md#with-each-release)). The download links update themselves when the release is published.
 - [ ] Commit to `main` (through a PR if `main` is protected): `chore(release): vA.B.C`.
-- [ ] **Every platform green on that commit.** A PR that isn't platform-sensitive merges on Linux x64 X11 alone, so the last full CI run on the commit you tag (the push to `main`, the nightly run, or `gh workflow run ci.yml --ref main`) must have passed every E2E platform and Chord Player, with no open *Nightly full tier failed on main* issue. Check with `gh run list --workflow ci.yml --branch main --commit <sha>`. Not green: fix it, or rerun to rule out a flake, before tagging. release.yml's builds and smoke tests don't run E2E.
+- [ ] **Every platform green on that commit.** A merge runs Linux x64 X11, plus Windows x64 and macOS arm64 when it's platform-sensitive, so the last full CI run on the commit you tag (the nightly run, `gh workflow run ci.yml --ref main`, or an Electron change's merge group) must have passed every E2E platform and Chord Player, with no open *Nightly full tier failed on main* issue. Check with `gh run list --workflow ci.yml --branch main --commit <sha>`. Not green: fix it, or rerun to rule out a flake, before tagging. release.yml's builds and smoke tests don't run E2E.
 - [ ] Tag that commit and push only the tag:
   ```sh
   git switch main && git pull --ff-only
