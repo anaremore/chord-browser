@@ -101,6 +101,10 @@ export const AGENT_PROGRESS = {
 /** What open_tab waits for its page: at most this long (S18 §5). */
 const LOAD_MS = 30_000;
 const WEB_ADDRESS = /^https?:\/\/\S+$/i;
+/** open_tab's refusal for a site the user keeps private: never anything of the site. */
+const NEVER_OPEN = 'That site is one the user keeps private, so it can’t be opened for you.';
+/** snapshot's own refusal for a page that may never be read (control/tools.ts). */
+const NEVER_READ = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
 
 /** The client's name as it gives it (`clientInfo.title`, else `name`): a hint, never proof (S18 §3). */
 export function clientName(hello: Pick<AgentHello, 'initialize'>): string {
@@ -178,7 +182,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal, cardWait: () => number): Promise<ToolOutput> => {
     const url = typeof args['url'] === 'string' ? args['url'].trim() : '';
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
-    if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
+    if (isNeverReadable(url, neverSites())) return { text: NEVER_OPEN, isError: true };
     // Still a read (no site card), but an address that deletes or signs out asks first, as navigate's does (the owner,
     // 2026-11-23): opening it would do it.
     const why = actions ? addressWhy(url) : null;
@@ -228,18 +232,38 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         // Redirected to a site the user keeps private: the tab goes, and nothing of where it ended up is said.
         // (Only a web address counts: a page still loading at the wait's end may show none yet.)
         const landed = page.url();
-        if (WEB_ADDRESS.test(landed) && isNeverReadable(landed, neverSites())) {
-          // Nor what it held on the way (a sign-in box, a dialog, a download): those would name the site.
-          deps.chords?.dropNotes(nodeId);
-          deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
-          return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
-        }
+        if (WEB_ADDRESS.test(landed) && isNeverReadable(landed, neverSites())) return closeNever(nodeId);
         return { text: toolResult({ tab_id: ref, url: WEB_ADDRESS.test(page.url()) ? page.url() : url, title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
       },
       refused,
       // The client giving up ends its wait for the page too (round 2 of #145).
       callSignal,
     );
+  };
+
+  /**
+   * A tab of its own that went to a site the user keeps private: it goes, with what it held on the way (a sign-in box, a
+   * dialog, a download: those would name the site), and the agent hears only that it's private.
+   */
+  const closeNever = (nodeId: string): ToolOutput => {
+    deps.chords?.dropNotes(nodeId);
+    if (nodeOf(deps.browser.store.state, nodeId)?.kind === 'tab') deps.dispatch?.({ t: 'agent.tab.remove', nodeId });
+    return { text: NEVER_OPEN, isError: true };
+  };
+
+  /**
+   * open_tab's snapshot: true, once the outline is taken or refused (round 1 of #232, B1): a page that went to a Never
+   * site meanwhile (a client redirect as it was read), or whose read came from one, is as open_tab landing there.
+   */
+  const afterLook = (ref: unknown, looked: ToolOutput): ToolOutput => {
+    const found = scope.refs.resolve(ref, () => true);
+    if (!found.ok) return looked;
+    const node = nodeOf(deps.browser.store.state, found.id);
+    const urls = [pageOf(deps.browser.tabs.get(found.id))?.getURL() ?? '', node?.kind === 'tab' ? node.url : ''];
+    const body = (JSON.parse(looked.text ?? '{}') as { url?: unknown; data?: { no_outline?: unknown } });
+    if (typeof body.url === 'string') urls.push(body.url);
+    const never = body.data?.no_outline === NEVER_READ || urls.some((u) => WEB_ADDRESS.test(u) && isNeverReadable(u, neverSites()));
+    return never ? closeNever(found.id) : looked;
   };
 
   /** close_tab: one of its own tabs, never yours; through the gate on that tab, so it waits while you're using it. */
@@ -321,7 +345,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
             // the gate on the new tab, every read rule with it. Only where snapshot is (M2's tools).
             if (args['snapshot'] !== true || !actions || opened.isError) return opened;
             const tab = (JSON.parse(opened.text ?? '{}') as { data?: { tab_id?: unknown } }).data?.tab_id;
-            return withOutline(opened, 'open_tab', () => runControlTool(callScope, deps.browser, 'snapshot', { tab_id: tab }, cancel.signal));
+            const looked = await withOutline(opened, 'open_tab', () => runControlTool(callScope, deps.browser, 'snapshot', { tab_id: tab }, cancel.signal, true));
+            return afterLook(tab, looked);
           }
           if (tool === 'close_tab') return closeTab(args, cancel.signal);
           if (tool === 'batch') return runBatch(callScope, deps.browser, args, cancel.signal);

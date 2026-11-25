@@ -6,7 +6,7 @@ The plan's item 3, its first win: an agent that opens or goes to a page gets the
 
 - `open_tab` and `navigate` take `snapshot: true` and return the page's outline in the same result, with the same read, caps, envelope and refs as `snapshot`.
 - A page that draws itself after it loads gets #154's first look before the outline.
-- Refs: only lines shown enter the agent's table (plan rule 1); the tab's untrusted envelope is intact.
+- Refs: the same refs as `snapshot` issues; the tab's untrusted envelope is intact. (The issue said *only lines shown enter the agent's table*. That isn't so for rows a long run collapses, or an outline cut at its cap: `snapshot` issues refs for them too. That limit predates this slice and was recorded in #145's round 2; the role, name and items check at act time still guards against a wrong target. Fixing it is #208's.)
 - Journeys: one call fewer on every journey whose first look after `open_tab` or `navigate` is a snapshot (eight of the ten: the bot hand, the timed table, the form, the page that draws itself, the 300-row list, both action-effect journeys and the broad find); no success lost on any. *Reading one section of 50* reads with `read_tab`, and *a picture of the view* takes `tab_screenshot`: neither looks at an outline, so `snapshot: true` can't save them a call.
 - Unit tests (a table over page states) and an agents E2E journey.
 - The assistant, which has `navigate` and no `open_tab`: `navigate`'s `snapshot: true`, behind its own flag.
@@ -54,7 +54,8 @@ The plan's line (threat-checklist.md, *The outline-only snapshot and `snapshot: 
   - The action's words go under a name of their own, never into `content`.
   - *Tests:* the answer's `trust` is `untrusted`, `source` is `web_snapshot`, and the action's words are under `navigate` or `open_tab`, less the envelope's (unit and E2E).
 - **Refs:**
-  - Only the lines shown are issued (`snapshot`'s own call).
+  - The same refs as `snapshot` issues (its own call).
+  - Not *only the lines shown*: rows a long run collapses, and an outline cut at its cap, get refs the agent wasn't shown. The limit predates this slice (#145's round 2), and the act-time check of role, name and items guards against a wrong target. It moves to #208's *Done when*.
   - *Tests:* a ref from the outline returned resolves (unit), and acts (E2E: *Join table* after `open_tab`, *Start a return* after `navigate`).
 - **The first look (#154):**
   - Bounded as it is today (`FIRST_LOOK_MS`).

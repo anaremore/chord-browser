@@ -219,6 +219,8 @@ function fakePage(url: string, read: Answer) {
     sent?: boolean;
     /** Every debugger command, with its parameters. */
     commands?: [string, unknown][];
+    /** Where a load of an address lands instead (a server redirect). */
+    redirects?: Record<string, string>;
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
   let attached = false;
@@ -252,7 +254,7 @@ function fakePage(url: string, read: Answer) {
         await new Promise((r) => setTimeout(r, 5));
       }
       at.loads.push(to);
-      at.history = [...at.history.slice(0, at.active + 1), { url: to }];
+      at.history = [...at.history.slice(0, at.active + 1), { url: at.redirects?.[to] ?? to }];
       go(at.history.length - 1);
     },
     navigationHistory: {
@@ -1208,7 +1210,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] } };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1284,7 +1286,7 @@ describe('acting through the gate (S18 M2c)', () => {
       return { ok: true, ...said };
     }
     if (code.includes('__chordSnapshots')) twist.read?.meanwhile?.(events);
-    if (code.includes('__chordSnapshots')) return { url: twist.read?.url ?? 'https://news.test/a', title: 'Shop', nodes: [...ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1 })), ...(twist.read?.extra ?? [])], cut: twist.read?.cut ?? {} };
+    if (code.includes('__chordSnapshots')) return { url: twist.read?.url ?? twist.at?.url ?? 'https://news.test/a', title: 'Shop', nodes: [...ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1 })), ...(twist.read?.extra ?? [])], cut: twist.read?.cut ?? {} };
     return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
@@ -1306,6 +1308,8 @@ describe('acting through the gate (S18 M2c)', () => {
     const tab = t.scope.refs.refFor('n1');
     await t.call('snapshot', { tab_id: tab });
     const at = t.pages.get('n1')!.at;
+    // The snapshot reads where the page is (round 1 of #232, SF4).
+    twist.at = at;
     twist.sent ??= () => at.input as { type: string }[];
     at.deep = opts.deep ?? {};
     // An agent's tab: its debugger attached for its whole life, and what it sends held (agents/pickers.ts, sends.ts).
@@ -2908,11 +2912,14 @@ describe('acting through the gate (S18 M2c)', () => {
     const PASSWORD = { depth: 0, role: 'textbox', name: 'Password', key: 5, sid: 6, field: { type: 'password', autocomplete: 'current-password', name: 'pw', id: 'pw', label: 'Password', placeholder: '' } };
     type Body = { source?: string; trust?: string; content?: string; page_id?: string; refs?: number; navigate?: Record<string, unknown>; data?: Record<string, unknown> };
     /** An agent's tab of its own, gone to another page of the site; the read after it answering as the row says. */
-    const go = async (row: { offered?: boolean; asked?: boolean; read?: NonNullable<Twist['read']> & { extra?: unknown[] } }) => {
+    const go = async (row: { offered?: boolean; asked?: boolean; read?: NonNullable<Twist['read']> & { extra?: unknown[] }; redirect?: string; off?: boolean }) => {
       const twist: Twist = {};
       const t = await acting({ twist });
       if (row.offered !== false) (t.scope as { outlineOnGo?: boolean }).outlineOnGo = true;
       if (row.read) twist.read = row.read;
+      if (row.redirect) t.at.redirects = { 'https://news.test/b': row.redirect };
+      // Settings' Nothing, turned on as the outline is read (round 1 of #232, SF2).
+      if (row.off) twist.read = { meanwhile: () => void ((t.scope as { off: () => string | null }).off = () => 'The user set you to read nothing, in Settings → Assistant.') };
       const out = await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b', ...(row.asked === false ? {} : { snapshot: true }) });
       return { t, out, body: JSON.parse(out.text!) as Body };
     };
@@ -2923,7 +2930,7 @@ describe('acting through the gate (S18 M2c)', () => {
         'a page that reads: snapshot’s envelope, untouched, its refs issued; the action’s words under navigate, less what the envelope says',
         {},
         (body, t) => {
-          expect(body).toMatchObject({ source: 'web_snapshot', trust: 'untrusted', tab_id: t.tab, url: 'https://news.test/a' });
+          expect(body).toMatchObject({ source: 'web_snapshot', trust: 'untrusted', tab_id: t.tab, url: 'https://news.test/b' });
           const home = /link "Home" \[ref=(e\d+)\]/.exec(body.content!)?.[1];
           expect(home).toBeDefined();
           expect(body.navigate).toEqual({ done: 'Went to news.test/b', navigated: true });
@@ -2976,6 +2983,37 @@ describe('acting through the gate (S18 M2c)', () => {
       // The action happened either way: never an error.
       expect(out.isError).toBeFalsy();
       check(body, t);
+    });
+
+    it('it went to a Never site (redirected as it loaded): refused, as without snapshot, and no outline (round 1 of #232, SF4)', async () => {
+      for (const asked of [true, false]) {
+        const { out } = await go({ redirect: 'https://private.test/x', asked });
+        expect(out.isError).toBe(true);
+        expect(refusal(out).refused).toBe(NEVER_READ);
+        expect(out.text).not.toContain('web_snapshot');
+      }
+    });
+
+    it('a navigation that starts as the outline is read: no outline (never the page it’s leaving), and no second wait (round 1 of #232, SF1)', async () => {
+      // The page goes elsewhere as it's read (a new document), and is loading.
+      const started = await go({ read: { meanwhile: (events) => events.emit('did-navigate') } });
+      expect(started.body.source).toBeUndefined();
+      expect(started.body.data).toMatchObject({ navigated: true, no_outline: STILL_LOADING });
+      // Loading when the outline would be taken: none, and no wait for it.
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { outlineOnGo?: boolean }).outlineOnGo = true;
+      twist.read = { meanwhile: () => void (t.at.loading = true) };
+      // No second wait: a wait for the load (15 s) would outlast the test's own time limit.
+      const out = JSON.parse((await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b', snapshot: true })).text!) as Body;
+      expect(out.source).toBeUndefined();
+      expect(out.data).toMatchObject({ no_outline: STILL_LOADING });
+    });
+
+    it('Settings’ Nothing, turned on as the outline is read: no outline, in its words (round 1 of #232, SF2)', async () => {
+      const { body } = await go({ off: true });
+      expect(body.source).toBeUndefined();
+      expect(body.data).toMatchObject({ navigated: true, no_outline: 'The user set you to read nothing, in Settings → Assistant.' });
     });
 
     it('a page still loading when the action answered: no outline and no second wait; a refusal’s words are Chord’s, never the page’s', async () => {

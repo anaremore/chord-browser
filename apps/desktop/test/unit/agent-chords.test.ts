@@ -776,24 +776,29 @@ describe('Review 1 of #77', () => {
 type Reply = { id?: number; result?: { content: { text: string }[]; isError: boolean } };
 
 /** An agent connected to `t`'s chords, its tabs' page the one `contents` (loading, at no address yet), the Never list bank.test. */
-function connected(t: ReturnType<typeof setup>, loadMs?: number) {
+function connected(t: ReturnType<typeof setup>, loadMs?: number, actions = true) {
   const events = new EventEmitter();
-  // `nodes`: what the snapshot script answers (S18 M2g-2 slice 3a), from `read` (else where the page is).
-  const page = { at: '', loading: true, nodes: [] as unknown[], read: '' };
+  // `nodes`: what the snapshot script answers (S18 M2g-2 slice 3a), from `read` (else where the page is); `during`, what
+  // happens as it reads (the page goes elsewhere: round 1 of #232, B1).
+  const page = { at: '', loading: true, nodes: [] as unknown[], read: '', during: undefined as (() => void) | undefined };
   const contents = Object.assign(events, {
     isDestroyed: () => false,
     isLoading: () => page.loading,
     getURL: () => page.at,
     getTitle: () => 'Statements for Ada',
-    executeJavaScriptInIsolatedWorld: async () => ({ url: page.read || page.at, title: 'Lobby', nodes: page.nodes, cut: {} }),
+    executeJavaScriptInIsolatedWorld: async () => {
+      page.during?.();
+      return { url: page.read || page.at, title: 'Lobby', nodes: page.nodes, cut: {} };
+    },
   }) as unknown as WebContents;
   const sent: Reply[] = [];
-  const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+  const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(actions)) }, (m) => void sent.push(m as never), {
     present: async () => 'once',
-    browser: { store: t.store, tabs: { get: () => undefined, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
+    browser: { store: t.store, tabs: { get: () => ({ webContents: contents }) as never, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
     chords: t.chords,
     dispatch: (c) => t.store.dispatch(c),
     neverSites: () => ['bank.test'],
+    actions,
     ...(loadMs ? { loadMs } : {}),
   });
   const reply = async (id: number, name: string, args: Record<string, unknown> = {}) => {
@@ -856,17 +861,18 @@ describe('open_tab and a Never site (security review)', () => {
 
   it('with snapshot: true, the page as snapshot gives it, through snapshot’s own read (S18 M2g-2 slice 3a, #204)', async () => {
     const PASSWORD = { depth: 0, role: 'textbox', name: 'Password', key: 1, sid: 2, field: { type: 'password', autocomplete: 'current-password', name: 'pw', id: 'pw', label: 'Password', placeholder: '' } };
-    const opened = async (read = '') => {
+    const opened = async (read = '', during?: (a: ReturnType<typeof connected>, t: ReturnType<typeof setup>) => void) => {
       const t = setup(['bank.test']);
       const a = connected(t);
       a.page.nodes = [{ depth: 0, role: 'button', name: 'Join table', key: 0, sid: 1 }, PASSWORD];
       a.page.read = read;
+      if (during) a.page.during = () => during(a, t);
       const replied = a.reply(1, 'open_tab', { url: 'https://agent.test/lobby', snapshot: true });
       await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBeGreaterThan(0));
       a.page.at = 'https://agent.test/lobby';
       a.page.loading = false;
       a.events.emit('did-stop-loading');
-      return { a, result: await replied };
+      return { a, t, result: await replied };
     };
     // A page that reads: snapshot's envelope, untouched; open_tab's own words under its name; the password field's line
     // with no ref.
@@ -877,13 +883,46 @@ describe('open_tab and a Never site (security review)', () => {
     expect(body.content).toMatch(/^- button "Join table" \[ref=e\d+\]$/m);
     expect(body.content.split('\n').find((l) => l.includes('textbox "Password"'))).not.toMatch(/\[ref=/);
     expect(a.tabs()).toHaveLength(1);
-    // Its read came back from a Never site (the page went there as it was read): the tab was opened, so its answer
-    // stands, with no outline and why, in Chord's words; nothing of the site.
-    const never = await opened('https://bank.test/statements');
-    expect(never.result.isError).toBe(false);
-    const said = JSON.parse(never.result.content[0]!.text) as { data: Record<string, unknown> };
-    expect(said.data).toMatchObject({ tab_id: 'a1', no_outline: 'This page can never be read (a private window, a Chord page, or a site the user keeps private).' });
-    expect(JSON.stringify(said)).not.toMatch(/bank|Join table/);
+    // The page went to a Never site as it was read (a client redirect: round 1 of #232, B1), its sign-in box held on the
+    // way; or its read came back from one: as open_tab landing there, the tab goes, what it held with it, and the
+    // agent hears the Never refusal, nothing of the site, now or later.
+    const NEVER_OPEN = 'That site is one the user keeps private, so it can’t be opened for you.';
+    const ways: [string, string, ((a: ReturnType<typeof connected>, t: ReturnType<typeof setup>) => void) | undefined][] = [
+      [
+        'redirected as it was read',
+        '',
+        (a, t) => {
+          a.page.at = 'https://bank.test/statements';
+          t.chords.note(a.tabs()[0]!.id, 'signin', signIn('https://bank.test/statements'));
+        },
+      ],
+      ['its read from a Never site', 'https://bank.test/statements', undefined],
+    ];
+    for (const [way, read, during] of ways) {
+      const never = await opened(read, during);
+      expect(never.result.isError, way).toBe(true);
+      expect(never.result.content[0]!.text, way).toBe(NEVER_OPEN);
+      expect(JSON.stringify(never.result), way).not.toMatch(PRIVATE);
+      expect(never.a.tabs(), way).toHaveLength(0);
+      expect(JSON.stringify(await never.a.reply(2, 'list_tabs')), way).not.toMatch(PRIVATE);
+    }
+  });
+
+  it('with snapshot: true in a build without M2’s tools (no snapshot), open_tab answers as it always did (round 1 of #232, SF3)', async () => {
+    const t = setup(['bank.test']);
+    const a = connected(t, undefined, false);
+    a.page.nodes = [{ depth: 0, role: 'button', name: 'Join table', key: 0, sid: 1 }];
+    const replied = a.reply(1, 'open_tab', { url: 'https://agent.test/lobby', snapshot: true });
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBeGreaterThan(0));
+    a.page.at = 'https://agent.test/lobby';
+    a.page.loading = false;
+    a.events.emit('did-stop-loading');
+    const result = await replied;
+    expect(result.isError).toBe(false);
+    const body = JSON.parse(result.content[0]!.text) as Record<string, unknown> & { data: Record<string, unknown> };
+    expect(body.source).toBeUndefined();
+    expect(body.content).toBeUndefined();
+    expect(body.data).toEqual({ tab_id: 'a1', url: 'https://agent.test/lobby', title: 'Statements for Ada', page_id: expect.any(String), loading: false });
   });
 
   it('the client giving up while open_tab’s page loads answers at once, never at the load’s limit (round 2 of #145)', async () => {

@@ -218,6 +218,9 @@ const WEB_PAGE = /^https?:\/\/[^\s/]/i;
 const IDLE_MS = (!app.isPackaged && Number(process.env['CHORD_ASSISTANT_IDLE_MS'])) || undefined;
 const PUSH_MS = 33;
 
+/** navigate's snapshot: true for this build (S18 M2g-2 slice 3a): its tools, its instructions and its scope, alike. */
+const goOutline = (): boolean => assistantGoOutline({ packaged: app.isPackaged });
+
 export class AssistantService {
   private statuses: Partial<Record<AssistantProvider, ProviderStatus>> = {};
   /** How to start each provider: never sent to a page (a launch holds the environment). */
@@ -481,6 +484,11 @@ export class AssistantService {
   /** Whether the assistant clicks and types (S18 M2e): a build with M2, Settings → Assistant's switch on, and not *Nothing*. */
   private acting(): boolean {
     return buildActs() && this.settings.enabled && this.settings.acting && !this.settings.readsNothing;
+  }
+
+  /** The tools a session is given when it reads pages: with acting as Settings has it, and this build's flags. */
+  private tools(): readonly AssistantToolSpec[] {
+    return assistantTools(agentActions({ packaged: app.isPackaged }), this.acting(), goOutline());
   }
 
   /** The tab on screen as a message is sent: the one it may act in (S18 M2e-2a, A1). */
@@ -1381,7 +1389,7 @@ export class AssistantService {
     const making: AssistantImageMaking = thread.provider === 'codex' ? (images ? 'codex' : 'codex-off') : 'claude';
     // Settings' "Nothing": no tools at all, so the model has no way to ask for a page (ARCHITECTURE.md §11.3).
     const readsPages = !this.settings.readsNothing;
-    const instructions = assistantInstructions(making, readsPages, this.acting());
+    const instructions = assistantInstructions(making, readsPages, this.acting(), goOutline());
     const instructionsFile = join(this.root, 'instructions', `${thread.id}.md`);
     await writeFile(instructionsFile, instructions, { encoding: 'utf8', mode: 0o600 });
     const resumeId = thread.providerSessionId;
@@ -1393,7 +1401,7 @@ export class AssistantService {
       instructionsFile,
       resumeId,
       newSessionId: randomUUID(),
-      tools: readsPages ? assistantTools(agentActions({ packaged: app.isPackaged }), this.acting(), assistantGoOutline({ packaged: app.isPackaged })) : [],
+      tools: readsPages ? this.tools() : [],
       images,
     };
     let resumeFailed = false;
@@ -1710,7 +1718,7 @@ export class AssistantService {
           },
         };
       },
-    }, agentActions({ packaged: app.isPackaged }), assistantGoOutline({ packaged: app.isPackaged }));
+    }, agentActions({ packaged: app.isPackaged }), goOutline());
     return state.scope;
   }
 

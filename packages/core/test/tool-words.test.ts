@@ -4,7 +4,7 @@
  * can't drop one unseen.
  */
 import { describe, expect, it } from 'vitest';
-import { AGENT_INSTRUCTIONS, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantTools } from '../src';
+import { ACTING_LINES_GO_OUTLINE, AGENT_INSTRUCTIONS, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantInstructions, assistantTools } from '../src';
 
 /** Tokens, as the eval counts them: characters ÷ 4. */
 const tokens = (v: unknown) => Math.ceil((typeof v === 'string' ? v : JSON.stringify(v)).length / 4);
@@ -36,7 +36,8 @@ describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
 
 describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', () => {
   const agents = new Map(agentToolList(true).map((t) => [t.name, t.description]));
-  const assistant = new Map(assistantTools(true, true).map((t) => [t.name, t.description]));
+  // With every flag a build may turn on (round 1 of #232's nit): the words a session may be sent.
+  const assistant = new Map(assistantTools(true, true, true).map((t) => [t.name, t.description]));
   // [list, tool, phrase it must keep]
   const pins: [string, string, RegExp][] = [
     ...['read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'snapshot'].map((t): [string, string, RegExp] => ['agents', t, /untrusted/i]),
@@ -55,6 +56,7 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     ['agents', 'wait_for', /One wait at a time/],
     ['agents', 'open_tab', /with snapshot, its outline as snapshot gives it/],
     ['agents', 'navigate', /with snapshot, returns its outline as snapshot gives it/],
+    ['assistant', 'navigate', /with snapshot, returns its outline as snapshot gives it/],
     ...['read_tab', 'read_selection', 'tab_screenshot', 'read_form', 'page_diagnostics', 'snapshot'].map((t): [string, string, RegExp] => ['assistant', t, /untrusted/i]),
     ['assistant', 'read_tab', /ask the user first/],
     ['assistant', 'read_form', /only when the user's own message asks/],
@@ -89,8 +91,12 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     expect(assistantTools(true, true).find((t) => t.name === 'navigate')!.description).not.toMatch(/snapshot/);
     expect(props(assistantTools(true, true, true), 'navigate')).toEqual(['tab_id', 'url', 'snapshot']);
     expect(assistantTools(true, true, true).find((t) => t.name === 'navigate')!.description).toMatch(/with snapshot, returns its outline as snapshot gives it/);
-    // The flag: development builds have it; packaged ones not until it's released.
+    // The flag: development builds have it; packaged ones not until it's released; only with M2 in the build.
     expect([assistantGoOutline({ packaged: false }), assistantGoOutline({ packaged: true }), assistantGoOutline({ packaged: true }, true)]).toEqual([true, ASSISTANT_GO_OUTLINE_RELEASED, true]);
+    // Its instructions say so, only when it's on.
+    expect(assistantInstructions('claude', true, true, true)).toContain('navigate with snapshot: true');
+    expect(assistantInstructions('claude', true, true)).not.toContain('snapshot: true');
+    expect(assistantInstructions('claude', true, true, true)).toContain(ACTING_LINES_GO_OUTLINE);
   });
 
   it('the press keys said once: batch’s steps take a key as press_key does, the server checks it', () => {

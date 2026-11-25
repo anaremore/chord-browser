@@ -205,7 +205,6 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
   },
 ];
 
-/** The assistant's tools in this build: snapshot too when it has M2 (agentActions); acting comes to it in M2e. */
 /**
  * The assistant's navigate with `snapshot: true` (S18 M2g-2 slice 3a, #204): the page's outline with its answer, behind
  * its own flag (assistantGoOutline).

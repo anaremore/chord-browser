@@ -76,7 +76,7 @@ export const assistantActing = (build: { packaged: boolean }, released = ASSISTA
 export const ASSISTANT_GO_OUTLINE_RELEASED = false as boolean;
 
 /** Whether this build offers the assistant `navigate`'s `snapshot: true` (ASSISTANT_GO_OUTLINE_RELEASED, or any build that isn't packaged). */
-export const assistantGoOutline = (build: { packaged: boolean }, released = ASSISTANT_GO_OUTLINE_RELEASED): boolean => !build.packaged || released;
+export const assistantGoOutline = (build: { packaged: boolean }, released = ASSISTANT_GO_OUTLINE_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
 
 /** Whether this build has M2's slices (AGENT_ACTIONS_RELEASED, or any build that isn't packaged). */
 export const agentActions = (build: { packaged: boolean }, released = AGENT_ACTIONS_RELEASED): boolean => !build.packaged || released;
