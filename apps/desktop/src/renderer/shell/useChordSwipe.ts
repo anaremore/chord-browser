@@ -12,7 +12,7 @@
 import { animate, motionValue, type AnimationPlaybackControls, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api } from './api';
-import { IDLE_END_MAX_MS, MOMENTUM_GAP_MS, VelocityTracker, gestureIdle, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
+import { IDLE_END_MAX_MS, MOMENTUM_GAP_MS, PHASED_END_MAX_MS, VelocityTracker, gestureIdle, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
 
 /** How a chord pane comes and goes: the usual slide, a swipe's commit, or a crossfade (reduced motion). */
 export type PaneMotion = { kind: 'slide'; dir: 1 | -1 } | { kind: 'swipe'; exitTo: number; transition: Transition } | { kind: 'fade'; transition: Transition };
@@ -89,6 +89,8 @@ export function useChordSwipe(options: Options): ChordSwipe {
     endTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     endFrame: 0,
     framesSince: 0,
+    /** The OS said this gesture began (`gesture:phase`): it ends on the OS's end, not on a pause. */
+    phased: false,
     commitTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     tracker: new VelocityTracker(),
     context: null as null | { currentId: string; prevId: string | null; nextId: string | null; width: number },
@@ -117,6 +119,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
     };
     const reset = () => {
       stopEnd();
+      s.phased = false;
       clearTimeout(s.commitTimer);
       s.phase = 'idle';
       s.context = null;
@@ -198,8 +201,10 @@ export function useChordSwipe(options: Options): ChordSwipe {
       }, COMMIT_TIMEOUT_MS);
     };
 
-    const release = (now: number) => {
+    /** The gesture ended at `now`: settled or committed with `speed` (the tracker's as of `now` if not given). */
+    const release = (now: number, speed?: number) => {
       stopEnd();
+      s.phased = false;
       if (s.phase === 'deciding' || s.phase === 'vertical') {
         s.phase = 'idle';
         return;
@@ -212,7 +217,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
       if (s.phase !== 'tracking' || !s.context) return;
       s.ignoreUntil = now + MOMENTUM_GAP_MS;
       const c = s.context;
-      const velocity = s.tracker.velocity(now);
+      const velocity = speed ?? s.tracker.velocity(now);
       const dir = settle(s.shown, velocity, c.width, Boolean(c.prevId), Boolean(c.nextId));
       if (dir === 0) springBack(velocity);
       else commit(dir, velocity);
@@ -222,6 +227,11 @@ export function useChordSwipe(options: Options): ChordSwipe {
       stopEnd();
       // No end phase from the OS: the gesture ends when the events stop (velocity as of the last one): IDLE_END_MS
       // and IDLE_END_FRAMES frames with none, so a busy renderer's late frames never end it early (gestureIdle).
+      // One the OS said began ends on the OS's end, never on a pause: only an end that never comes ends it.
+      if (s.phased) {
+        s.endTimer = setTimeout(() => release(s.lastAt), PHASED_END_MAX_MS);
+        return;
+      }
       s.framesSince = 0;
       const tick = () => {
         s.framesSince += 1;
@@ -305,11 +315,18 @@ export function useChordSwipe(options: Options): ChordSwipe {
     const unsubscribe = api.gestures.onPhase((phase) => {
       const now = performance.now();
       if (phase === 'begin') {
-        // A new gesture, not momentum from the last one.
+        // A new gesture, not momentum from the last one; it ends when the OS says. A busy renderer can read the begin
+        // after the gesture's first events: it's still this gesture's, and its end is the OS's too.
         if (s.phase === 'idle' || s.phase === 'settling') s.ignoreUntil = 0;
+        if (s.phase !== 'committing') {
+          s.phased = true;
+          if (s.phase !== 'idle' && s.phase !== 'settling') scheduleEnd();
+        }
         return;
       }
-      release(now);
+      // A fling: the fingers left moving, at their speed as of the last event, however late a busy renderer reads it.
+      // An end: they stopped, or lifted slowly; the speed is as of now, so a rest before the lift reads as one.
+      release(now, phase === 'fling' ? s.tracker.velocity(s.lastAt) : undefined);
     });
 
     // The switch arrived: the committed chord's pane is the current one now, and settles to 0.

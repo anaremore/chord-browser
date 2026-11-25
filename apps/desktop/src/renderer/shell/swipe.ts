@@ -23,6 +23,11 @@ export const IDLE_END_MS = 80;
 export const IDLE_END_FRAMES = 3;
 /** A window that draws no frames (hidden) ends a gesture after this long anyway. */
 export const IDLE_END_MAX_MS = 1000;
+/**
+ * A gesture the OS said began (a trackpad's phases, macOS): it ends on the OS's end, never on a pause, however busy
+ * the renderer; after this long with no event and no end, it ends anyway (an end that never came).
+ */
+export const PHASED_END_MAX_MS = 3000;
 
 /** Whether a gesture with no end phase from the OS has ended: `sinceLastMs` since its last event, `frames` drawn since. */
 export function gestureIdle(sinceLastMs: number, frames: number): boolean {

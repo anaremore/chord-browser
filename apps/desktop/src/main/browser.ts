@@ -1041,6 +1041,14 @@ export class Browser {
     return this.windows.size;
   }
 
+  /**
+   * A trackpad's gesture phase, for tests (chordTestHooks.gesturePhase): what the OS sends with a two-finger swipe on
+   * macOS, which a test's own wheel events don't have. To every window's shell, as the input-event handler sends it.
+   */
+  gesturePhaseForTests(phase: GesturePhase): void {
+    for (const w of this.windows.values()) if (!w.shell.webContents.isDestroyed()) send(w.shell.webContents, 'gesture:phase', phase);
+  }
+
   /** Each window's last snapshot fallback, for tests (chordTestHooks). */
   snapshotFallbacks(): AppWindow['snapshotFallback'][] {
     return [...this.windows.values()].map((w) => w.snapshotFallback);

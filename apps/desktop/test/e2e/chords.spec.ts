@@ -17,7 +17,8 @@ const appDir = resolve(import.meta.dirname, '../..');
 
 async function launch(): Promise<ElectronApplication> {
   // A fresh profile per launch, on a page that needs no network.
-  const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-e2e-')), CHORD_HOME_URL: 'about:blank' };
+  // The hooks: a trackpad's gesture phases (chordTestHooks.gesturePhase).
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-e2e-')), CHORD_HOME_URL: 'about:blank', CHORD_E2E_HOOKS: '1' };
   delete env['ELECTRON_RUN_AS_NODE'];
   return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir], env, cwd: appDir }));
 }
@@ -33,21 +34,46 @@ const isSettings = (url: string) => url.startsWith('chord://settings') || url.in
 const runAction = (shell: Page, action: string) =>
   shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 
-/** Wheel events as a trackpad sends them, `gapMs` apart, over an element of the shell. */
-async function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]') {
-  // Each wheel event sent on its own, paced from here, as a trackpad's arrive: an evaluate is handled ahead of the
-  // shell's own work, as input is. Events made with setTimeout in the shell itself stall on a busy machine behind its
-  // renders, which a trackpad's never do: the swipe then read as lifted midway (#198).
-  for (const d of deltas) {
-    await shell.evaluate(
-      ({ d, over }) => {
+/** A trackpad's gesture phase, as macOS sends it with a two-finger swipe (main's input-event handler). */
+const gesturePhase = (app: ElectronApplication, phase: 'begin' | 'end' | 'fling') =>
+  app.evaluate((_, p) => (globalThis as unknown as { chordTestHooks: { gesturePhase(p: string): void } }).chordTestHooks.gesturePhase(p), phase);
+
+/**
+ * A two-finger swipe as macOS sends it: the OS's begin, wheel events `gapMs` apart over an element of the shell, and
+ * the OS's end (`fling` when the fingers left moving). The gesture ends on the OS's end, never on a pause between
+ * events: a busy machine delays the events, as it does a trackpad's, and the swipe still ends when the fingers lift
+ * (#198). `phases: false` for a mouse's wheel, which has none.
+ */
+async function swipe(
+  app: ElectronApplication,
+  shell: Page,
+  deltas: { x: number; y?: number }[],
+  gapMs: number,
+  { over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]', end = 'end', phases = true }: { over?: string; end?: 'end' | 'fling'; phases?: boolean } = {},
+) {
+  if (phases) await gesturePhase(app, 'begin');
+  await shell.evaluate(
+    async ({ deltas, gapMs, over }) => {
+      for (const d of deltas) {
+        // Looked up for each event: once the panes follow the fingers, the element under them is a new one, and an
+        // event sent to the one that was there reaches nothing.
         const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
         target!.dispatchEvent(new WheelEvent('wheel', { deltaX: d.x, deltaY: d.y ?? 0, deltaMode: 0, bubbles: true, cancelable: true }));
-      },
-      { d, over },
-    );
-    await new Promise((resolve) => setTimeout(resolve, gapMs));
-  }
+        if (gapMs > 4) {
+          await new Promise((r) => setTimeout(r, gapMs));
+        } else {
+          // A flick's events come as a burst, faster than a busy machine's timers fire: paced here without yielding,
+          // as a trackpad sends them whatever the renderer is doing.
+          const until = performance.now() + gapMs;
+          while (performance.now() < until) {
+            // The burst's few milliseconds.
+          }
+        }
+      }
+    },
+    { deltas, gapMs, over },
+  );
+  if (phases) await gesturePhase(app, end);
 }
 const steps = (count: number, x: number, y = 0) => Array.from({ length: count }, () => ({ x, y }));
 
@@ -79,7 +105,7 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     const personalTint = await tint();
 
     // A slow swipe past half the width: the next chord comes in beside the current one, and wins.
-    const swiping = swipe(shell, steps(32, 6), 16);
+    const swiping = swipe(app, shell, steps(32, 6), 16);
     await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
     await swiping;
     await selected('Work');
@@ -87,26 +113,26 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     expect(await tint()).not.toBe(personalTint);
 
     // A short, slow one springs back.
-    await swipe(shell, steps(5, 4), 20);
+    await swipe(app, shell, steps(5, 4), 20);
     await expect.poll(() => paneCount(shell)).toBe(1);
     await selected('Work');
 
-    // A quick flick commits however short.
-    await swipe(shell, steps(4, 12), 4);
+    // A quick flick commits however short: the fingers leave moving (the OS's fling).
+    await swipe(app, shell, steps(4, 12), 4, { end: 'fling' });
     await selected('Play');
     await expect.poll(() => paneCount(shell)).toBe(1);
 
     // Past the last chord it rubber-bands, and stays.
-    await swipe(shell, steps(30, 8), 12);
+    await swipe(app, shell, steps(30, 8), 12);
     await expect.poll(() => paneCount(shell)).toBe(1);
     await selected('Play');
 
     // Back the other way.
-    await swipe(shell, steps(32, -6), 16);
+    await swipe(app, shell, steps(32, -6), 16);
     await selected('Work');
 
     // Up and down scrolls the list; it never switches chords.
-    await swipe(shell, steps(20, 1, 12), 12);
+    await swipe(app, shell, steps(20, 1, 12), 12);
     await expect.poll(() => paneCount(shell)).toBe(1);
     await selected('Work');
   } finally {
@@ -123,7 +149,7 @@ test("a mouse's tilt wheel steps one chord per notch, and the minimal bar swipes
 
     // One notch (a single big step) held for a moment, its repeats 20 ms apart: one chord, the repeats
     // don't run away with it. (One hold: a pause between them past the notch's cooldown is a second notch.)
-    await swipe(shell, steps(4, 120), 20);
+    await swipe(app, shell, steps(4, 120), 20, { phases: false });
     await shell.waitForTimeout(400);
     await selected('Work');
 
@@ -131,7 +157,7 @@ test("a mouse's tilt wheel steps one chord per notch, and the minimal bar swipes
     await runAction(shell, 'view.toggleSidebar');
     await expect(shell.getByRole('button', { name: 'Show sidebar' })).toBeVisible();
     const before = await shell.evaluate(() => document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label'));
-    await swipe(shell, steps(32, -6), 16, '[data-swipe-area]:not(nav)');
+    await swipe(app, shell, steps(32, -6), 16, { over: '[data-swipe-area]:not(nav)' });
     await expect
       .poll(() => shell.evaluate(() => document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label')))
       .not.toBe(before);
