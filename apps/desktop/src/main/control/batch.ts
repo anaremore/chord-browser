@@ -22,7 +22,8 @@ function stepWrong(tool: string, a: Record<string, unknown>): string | null {
   if (typeof a['ref'] !== 'string' || !/^e[1-9][0-9]{0,8}$/.test(a['ref'])) return 'ref is an element’s ref from a snapshot (e1, e2…).';
   if (tool === 'type' && (typeof a['text'] !== 'string' || a['text'].length > TYPE_TEXT_MAX)) return `type takes text, at most ${TYPE_TEXT_MAX} characters.`;
   if (tool === 'type' && [a['submit'], a['replace']].some((v) => v !== undefined && typeof v !== 'boolean')) return 'submit and replace are true or false.';
-  if (tool === 'press_key' && !isPressKey(a['key'])) return 'press_key takes a key from its list.';
+  // press_key's own refusal, which lists the keys (the schema no longer does in batch's steps: M2g-2 slice 2).
+  if (tool === 'press_key' && !isPressKey(a['key'])) return ACT_REFUSALS.key;
   if (tool === 'select_option' && (typeof a['option'] !== 'string' || !a['option'] || a['option'].length > 500)) return 'select_option takes option, its label (at most 500 characters).';
   return null;
 }
