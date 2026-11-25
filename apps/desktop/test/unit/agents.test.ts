@@ -14,8 +14,10 @@ import { PassThrough } from 'node:stream';
 import {
   AGENT_ENDPOINT_FILE,
   AGENTS_RELEASED,
+  AGENT_ACTIONS_RELEASED,
   CONTROL_REFUSALS,
   DEFAULT_SETTINGS,
+  agentActions,
   agentToolList,
   agentToolsVersion,
   agentsServe,
@@ -78,7 +80,7 @@ async function chord(userData: string, ask: Ask = answering('once'), waitMs = 20
 }
 
 /** An MCP client on a bridge in this process: as an agent would talk to `chord mcp`. */
-function client(userData: string, closed?: boolean, cwd = userData) {
+function client(userData: string, closed?: boolean, cwd = userData, actions?: boolean) {
   const input = new PassThrough();
   const output = new PassThrough();
   const waiting = new Map<number, (m: Record<string, unknown>) => void>();
@@ -89,7 +91,7 @@ function client(userData: string, closed?: boolean, cwd = userData) {
     if (m.method) notifications.push(m.method);
     if (typeof m.id === 'number') waiting.get(m.id)?.(m);
   });
-  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd, closed });
+  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd, closed, ...(actions === undefined ? {} : { actions }) });
   let id = 0;
   const request = (method: string, params: unknown = {}) =>
     new Promise<{ result: Record<string, unknown> }>((done) => {
@@ -129,6 +131,16 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     const listed = await c.call('list_tabs');
     expect(listed.error).toBe(false);
     expect(JSON.parse(listed.text)).toEqual({ trust: 'untrusted', data: { tabs: [] } });
+  });
+
+  it('a packaged build lists the tools it releases: the bridge as mcp-main.ts runs it, against agentToolList (v0.15.0)', async () => {
+    // v0.15.0's release run failed here only: the packaged smoke test held a count (8) written before acting shipped,
+    // and no PR tier runs it. This is the same list, every push.
+    const actions = agentActions({ packaged: true });
+    expect(actions).toBe(AGENT_ACTIONS_RELEASED);
+    const c = client(profile(), undefined, undefined, actions);
+    await c.initialize();
+    expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList(actions));
   });
 
   it('a build without Agents (packaged, before AGENTS_RELEASED): calls say Chord isn’t open even while one serves', async () => {

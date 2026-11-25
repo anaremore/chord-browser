@@ -59,11 +59,13 @@ describe(`${BIG} rows`, () => {
     const stageId = stage(file);
     // The longest stretch chord-data's thread is held: the gaps between turns of a loop that yields as often as it can.
     let longest = 0;
+    let turns = 0;
     let last = performance.now();
     let watching = true;
     const watch = () => {
       const now = performance.now();
       longest = Math.max(longest, now - last);
+      turns++;
       last = now;
       if (watching) setImmediate(watch);
     };
@@ -71,16 +73,27 @@ describe(`${BIG} rows`, () => {
     const t0 = performance.now();
     const { importPreview } = await run({ op: 'importPreview', stageId });
     const t1 = performance.now();
+    const turnsBefore = turns;
     const { imported } = await run({ op: 'importRun', stageId, importId: 'big', choices: choose('file') });
     const t2 = performance.now();
     watching = false;
     // The file's note differs from every saved one's: all 500 differ, the half with the same password by their note.
     expect(importPreview).toMatchObject({ added: BIG - SAVED, same: 0, different: SAVED });
     expect(imported).toEqual({ added: BIG - SAVED, updated: SAVED, kept: 0, same: 0, stopped: false });
-    console.log(`${BIG} rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms`);
-    // The budget (S17, Phase 2: import and export): CI's own step runs this alone at full size, where a tenfold regression
-    // of the 9.4 ms measured there (10.6 ms on an SSD, 40 ms on a slower drive, on Windows) fails. At a tenth of the size (`pnpm test:perf`), only a loose bound.
-    expect(longest).toBeLessThan(process.env['CHORD_PASSWORD_PERF'] === '1' ? 100 : 1000);
+    const importTurns = turns - turnsBefore;
+    console.log(`${BIG} rows: preview ${(t1 - t0).toFixed(0)} ms, import ${(t2 - t1).toFixed(0)} ms, longest task ${longest.toFixed(1)} ms, ${importTurns} turns in the import`);
+    const full = process.env['CHORD_PASSWORD_PERF'] === '1';
+    // That it's sliced, on every runner (#230): a count, which a stalled runner can't change. The import reads the vault
+    // a page (100) at a time and then writes for SLICE_MS (4 ms) before each yield, so it turns SAVED / 100 + 1 times
+    // without slicing (6 at full size), and once more every few milliseconds with it: 30-odd on CI's Linux runner, 140 on
+    // Windows. At full size only: a tenth of it can be written in one slice on a fast machine.
+    if (full) expect(importTurns).toBeGreaterThanOrEqual(SAVED / 100 + 10);
+    // The budget (S17, Phase 2: import and export), at full size: a tenfold regression of the 9.4 ms measured on CI (10.6
+    // ms on an SSD, 40 ms on a slower drive, on Windows) fails. Held off CI and with CHORD_PERF_ENFORCE=1, as #182's are:
+    // a shared runner can stall the thread for reasons of its own (302.6 ms once on #188's checks job, against 8-29 ms on
+    // main's), so CI holds only a bound no sliced import comes near. At a tenth of the size (`pnpm test:perf`), only that.
+    const held = !process.env['CI'] || process.env['CHORD_PERF_ENFORCE'] === '1';
+    expect(longest).toBeLessThan(full && held ? 100 : 1000);
     const undo0 = performance.now();
     expect((await run({ op: 'importUndo', importId: 'big' })).undone).toEqual({ removed: BIG - SAVED, restored: SAVED, changed: 0 });
     console.log(`${BIG} rows: undo ${(performance.now() - undo0).toFixed(0)} ms`);
