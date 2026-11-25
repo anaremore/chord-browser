@@ -1312,6 +1312,132 @@ test('a timed table: played as an agent does today (polling snapshots), then wit
   }
 });
 
+test('the token eval: five journeys, each as an agent would play it with these tools; success, tool calls, result tokens and wall time (the owner, 2026-11-24)', async () => {
+  test.setTimeout(300_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const popover = await pageWhere(app, isPopover);
+    const toolList = JSON.stringify((await mcp.request('tools/list', {})).result['tools']).length;
+    /** What the model gets back from a call: every result's content, counted. */
+    let meter = { calls: 0, chars: 0 };
+    const ask = async (name: string, args: Record<string, unknown>) => {
+      const r = (await mcp.request('tools/call', { name, arguments: args })).result as { content: { type: string; text?: string }[]; isError?: boolean };
+      meter.calls++;
+      meter.chars += JSON.stringify(r.content).length;
+      return { text: r.content[0]?.text ?? '', error: r.isError === true };
+    };
+    /** A call, with any card it raises allowed as the user would (the site's for now, a step's, a connection's once). */
+    const act = async (name: string, args: Record<string, unknown>) => {
+      const calling = ask(name, args);
+      for (;;) {
+        const card = popover.getByRole('alertdialog').first();
+        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+        if (next === 'done') return calling;
+        await popover.waitForTimeout(600);
+        for (const label of ['Allow once', 'Allow for now', 'Allow']) {
+          const button = card.getByRole('button', { name: label, exact: true });
+          if (await button.count()) {
+            await button.click();
+            break;
+          }
+        }
+        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+      }
+    };
+    const inPage = (prefix: string, code: string) => app.evaluate(({ webContents }, [p, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(p))!.executeJavaScript(js), [`${site.origin}${prefix}`, code] as const);
+    const outlineOf = (text: string) => (JSON.parse(text) as { content: string }).content;
+    let tabs = 0;
+    const open = async (path: string) => {
+      const opened = await act('open_tab', { url: `${site.origin}${path}` });
+      tabs++;
+      return (JSON.parse(opened.text) as { data: { tab_id: string } }).data.tab_id;
+    };
+    const rows: { journey: string; success: boolean; calls: number; tokens: number; ms: number }[] = [];
+    const journey = async (name: string, play: () => Promise<boolean>) => {
+      meter = { calls: 0, chars: 0 };
+      const began = Date.now();
+      let success = false;
+      try {
+        success = await play();
+      } catch (e) {
+        console.log(`[token eval] ${name} failed: ${String(e)}`);
+      }
+      rows.push({ journey: name, success, calls: meter.calls, tokens: Math.ceil(meter.chars / 4), ms: Date.now() - began });
+    };
+    void tabs;
+
+    await journey('bot game, one hand', async () => {
+      const tab = await open('/game');
+      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+      o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
+      await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
+      o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
+      const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
+      return /Call.*bet 20.*Raise/.test(log);
+    });
+    await journey('timed table, two turns', async () => {
+      const tab = await open('/timed?others=1500');
+      for (let turn = 0; turn < 2; turn++) {
+        const waited = JSON.parse((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text) as { content: string };
+        await act('click', { tab_id: tab, ref: refOf(waited.content, 'generic "Call"') });
+      }
+      const log = String(await inPage('/timed', 'document.getElementById("log").textContent'));
+      return (log.match(/Call after/g) ?? []).length === 2 && !log.includes('auto-folded');
+    });
+    await journey('a 20-field form', async () => {
+      const tab = await open('/form20');
+      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      for (let i = 1; i <= 20; i++) {
+        const typed = await act('type', { tab_id: tab, ref: refOf(o, `textbox "Field ${i}"`), text: `v${i}` });
+        if (typed.error) o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      }
+      const values = (await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string;
+      return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
+    });
+    await journey('a page that draws itself after it loads', async () => {
+      const tab = await open('/drawn');
+      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // Empty at first look: an agent looks again.
+      for (let i = 0; i < 5 && !o.includes('Join table'); i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      }
+      await act('click', { tab_id: tab, ref: refOf(o, 'button "Join table"') });
+      return String(await inPage('/drawn', 'document.getElementById("log").textContent')).includes('joined');
+    });
+    await journey('a 300-row list', async () => {
+      const tab = await open('/rows-300');
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const clicked = await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') });
+      return clicked.text.startsWith('{');
+    });
+
+    const table = [
+      `| Journey | Success | Tool calls | Result tokens | Wall (s) |`,
+      `|---|---|---|---|---|`,
+      ...rows.map((r) => `| ${r.journey} | ${r.success ? 'yes' : 'no'} | ${r.calls} | ${r.tokens} | ${(r.ms / 1000).toFixed(1)} |`),
+      `| the tool list (sent with every request) | | | ${Math.ceil(toolList / 4)} | |`,
+    ].join('\n');
+    console.log(`[token eval] ${process.env['CHORD_E2E_DISPLAY'] ?? ''}\n${table}`);
+    mkdirSync(join(appDir, 'test-results'), { recursive: true });
+    writeFileSync(join(appDir, 'test-results', 'token-eval.json'), JSON.stringify({ rows, toolListTokens: Math.ceil(toolList / 4) }, null, 2));
+    // Effectiveness is the gate: every journey succeeds.
+    for (const r of rows) expect(r.success, r.journey).toBe(true);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('a game whose action controls are pointer divs, re-rendered every 100 ms and every frame; a bet field the page takes the focus from (the owner’s retest of #117)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -2176,6 +2302,9 @@ test.beforeAll(async () => {
     // from on its tick; a real button beside them.
     // A timed table (M2g-1's acceptance journey): your turn comes after the others', a shot clock of 15 s then, and
     // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
+    // The token eval (the owner, 2026-11-24): a 20-field form, and a lobby that draws itself 600 ms after it loads.
+    '/form20': `<title>Sign up</title><main><form onsubmit="return false"><h1>Sign up</h1>${Array.from({ length: 20 }, (_, i) => `<label>Field ${i + 1} <input name=f${i + 1}></label>`).join('')}</form></main>`,
+    '/drawn': '<title>Lobby</title><div id=app></div><p id=log></p><script>setTimeout(() => { document.getElementById("app").innerHTML = "<h1>Lobby</h1><button>Join table</button>"; document.querySelector("#app button").onclick = () => { document.getElementById("log").textContent += " joined"; }; }, 600)</script>',
     '/timed': '<title>Timed table</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div role=region aria-label="Table 9"><p id=status>Waiting for the others</p><div id=controls></div></div><p id=log></p></main><script src="/timed.js"></script>',
     '/game': '<title>Game</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div id=table role=region aria-label="Table 3" tabindex=-1><div id=controls></div><label>Bet <input id=bet></label> <button id=rankings>Hand rankings</button></div><p id=log></p></main><script src="/game.js"></script>',
     // The press tried again (the review of #117, round 3): the page replaces its button as the pointer arrives, once

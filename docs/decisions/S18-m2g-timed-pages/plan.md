@@ -12,6 +12,49 @@ The owner, on a real-time online table (main plus #117): the agent played a full
 3. *A compact snapshot with each action's result.* Optional (`snapshot: true` on an action), it's the page's outline after the action has settled, bounded (refs and characters) and cut the same way `snapshot` is, so the next step needs no extra call.
 4. *#143, card waits.* A tool call waiting on a card answers before the client's timeout: *Waiting for the user to approve on Chord's card. Try the same step again in a moment.* The card stays up, and the user's Allow is kept for that exact step (the late Allow `stepKey`), so the retry goes straight through, once. Where a client sends a `progressToken`, Chord sends MCP progress notifications to keep the call alive instead.
 
+## Acceptance: as effective, for as few tokens (the owner, 2026-11-24)
+
+The owner asked how agents can control Chord just as well while costing as few tokens as possible. This is the same work as being fast enough for a timed page: every extra call is another model turn, and the model re-reads its whole context each turn.
+
+- **The gate is effectiveness:** every eval journey succeeds as often as before. No token cut lands if any journey's success drops.
+- **The score is tokens and wall time:** total result tokens, tool calls, and seconds, for each journey.
+- **Measured first:**
+  - Each tool result's size (bytes, and tokens at about 4 characters each) is kept per step, next to its phases (`control/phases.ts`).
+  - The eval journeys, each on a fixture: the bot game's hand, the timed table, a 20-field form, a page that draws itself after it loads, and a 300-row list. For each one: success, tool calls, result tokens, wall time.
+  - Their table goes in this record before and after each change.
+  - CI gets a budget on result tokens per journey (tokens are deterministic; ms on shared runners aren't).
+- **What's tried, each measured against the table:**
+  1. *A diff after an action* (default for click, type and press): what changed since the agent's last snapshot (nodes added, removed, changed, with refs kept), not a whole outline.
+  2. *`wait_for`* (built: slice b), returning the outline (and then a diff) when its condition is met: no polling, no sleeps.
+  3. *Smaller snapshots:*
+     - a scope (a subtree by ref, or interactive elements only);
+     - repeated rows collapsed (*row × 300, first 5 shown*, with a cursor for more);
+     - terse lines (role, name, ref, state);
+     - no page text unless asked, and capped when it is.
+  4. *Screenshots by exception:* an element or region, downscaled, JPEG or WebP. The tool's description says a snapshot is cheaper and usually enough. Measured in tokens per screenshot, before and after.
+  5. *Fewer calls:* an optional batch of steps in one call (type then Enter, or several fields), returning one diff. Every step keeps every gate (cards, the send hold, the guard), and the batch stops at the first refusal.
+  6. *The tool list's cost:* its descriptions go with every request, so they're measured and trimmed to the least that keeps every journey's success.
+
+### The token eval: baseline (2026-11-24, before any cut)
+
+agents.spec's *the token eval* plays each journey through the relay, counting every result's content as the model gets it (tokens at about 4 characters each). Linux container, X11:
+
+| Journey | Success | Tool calls | Result tokens | Wall (s) |
+|---|---|---|---|---|
+| Bot game, one hand (Call, a bet of 20 with Enter, Raise) | yes | 8 | 790 | 4.5 |
+| Timed table, two turns (wait_for with snapshot, then Call) | yes | 5 | 476 | 3.7 |
+| A 20-field form | yes | 22 | 1,610 | 5.5 |
+| A page that draws itself after it loads | yes | 5 | 371 | 1.1 |
+| A 300-row list (click row 150) | yes | 3 | 10,291 | 0.4 |
+| The tool list (sent with every request) | | | 1,962 | |
+
+Where the tokens go:
+- One snapshot of a 300-row list is about 10,000 tokens: collapse repeated rows, and scope.
+- The tool list's 1,962 tokens go with every request, so a 10-call journey pays it 10 times: trim it.
+- A 20-field form takes 22 calls: batch steps.
+
+The connection also logs each result's size (`result <tool> <chars> ~<tokens>`), and `agentResultSizes` reads them per tool.
+
 ## After Neon's design review (2026-11-24, through 7c4e271)
 
 Each claim checked against the code; what was decided, and where Neon's reading was off.

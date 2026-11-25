@@ -13,6 +13,7 @@
  * downloads) comes with its next result. Loaded only when the first connection
  * arrives.
  */
+import { noteResult, tokensOf } from '../control/phases';
 import {
   ACT_REFUSALS,
   CONTROL_REFUSALS,
@@ -310,7 +311,13 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       );
       const answer = output(out);
       if (beat) clearInterval(beat);
-      reply(m.id, { ...answer, content: [...answer.content, ...held()] });
+      const result = { ...answer, content: [...answer.content, ...held()] };
+      // What the result costs the agent, by tool (the owner, 2026-11-24: as few tokens as can be): in the log, and kept
+      // for the eval journeys (phases.ts).
+      const chars = JSON.stringify(result.content).length;
+      noteResult(tool, chars);
+      deps.log?.('result', tool, `${chars} chars`, `~${tokensOf(chars)} tokens`);
+      reply(m.id, result);
     } finally {
       if (beat) clearInterval(beat);
       calls.delete(m.id);
