@@ -76,13 +76,13 @@ git commit -am "fix(deps): update electron to X (security)"
 git push -u origin HEAD                           # then open a PR
 ```
 
-- **Patch and minor updates** automerge once every CI check passes. With main's merge queue on, Renovate has to queue them through GitHub's auto-merge (`platformAutomerge: true`, turned on right after the ruleset), where the merge group runs every platform (an Electron change gets the full tier). If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
+- **Patch and minor updates** automerge once every CI check passes: an Electron change runs the full tier on its PR with no label, and main's ruleset requires `E2E` before anything merges. If the PR is green and still open, merge it yourself (squash); don't wait for Renovate's next run.
 - **A new major** (our major reached end of life) is a manual PR. Read Electron's breaking changes for the jump; the same suites must pass.
 - After the merge, check the Chromium version. The issue names it; `releases.electronjs.org` lists it per Electron version. In a running Chord, Settings → About shows both.
 
 ## 4. The suites that must pass
 
-Every one, on the bump's commit. CI runs the first two on every push to `main`, each night, and on PRs: every platform's E2E only on a platform-sensitive or `ready`-labeled PR (an Electron bump is platform-sensitive, so its PR gets every platform with no label), Linux x64 X11 alone on the rest.
+Every one, on the bump's commit. CI runs the first two each night (every platform), on every push to `main` (Linux, Windows x64, macOS arm64), and on PRs: Linux x64 X11, Windows x64 and macOS arm64 on a `ready`-labeled PR, Linux x64 X11 alone on the rest. An Electron bump's PR gets every platform with no label.
 
 | Suite | Where | Command |
 |---|---|---|

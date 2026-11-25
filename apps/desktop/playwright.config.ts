@@ -34,6 +34,7 @@ export default defineConfig({
   // One app at a time: each test launches its own Electron instance.
   workers: 1,
   // On CI, a JSON report too: scripts/ci/flaky-summary.mjs lists every test that passed only on its retry in the job's
-  // summary, so a repeat flake shows before it fails twice in one run.
-  reporter: process.env['CI'] ? [['list'], ['github'], ['json', { outputFile: 'playwright-report/results.json' }]] : 'list',
+  // summary, so a repeat flake shows before it fails twice in one run. And the step times (test/e2e/step-times-reporter.ts):
+  // where each shard's time goes, by kind of step.
+  reporter: process.env['CI'] ? [['list'], ['github'], ['json', { outputFile: 'playwright-report/results.json' }], ['./test/e2e/step-times-reporter.ts']] : 'list',
 });
