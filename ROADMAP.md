@@ -1,5 +1,7 @@
 # Chord — Roadmap
 
+Each item links its GitHub issue; releases are milestones ([github.com/anaremore/chord-browser/milestones](https://github.com/anaremore/chord-browser/milestones)).
+
 Last updated 2026-11-25 · Latest release: **0.14.1** (2026-11-24, security) · Companions: [README.md](README.md), [RELEASE_NOTES.md](RELEASE_NOTES.md), [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md)
 
 Chord is a calm, fast, private desktop browser for Windows, macOS, and Linux (X11 and Wayland). Every milestone here is framed as what changes for the person using Chord. For release-by-release history, see [RELEASE_NOTES.md](RELEASE_NOTES.md); for technical background and spikes, see [docs/decisions/](docs/decisions/).
@@ -29,7 +31,7 @@ Everything below is shipped in a preview release or merged on `main`.
 
 Work actively in flight on open branches and pull requests.
 
-- **Acting docs and the 0.15.0 release (S18 M2f).** [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md), this roadmap, the release notes, and [chordbrowser.com](site/public/index.html) for page acting by outside agents and the assistant; the README and site screenshots are regenerated from fixtures in the Linux container before the release.
+- **Acting docs and the 0.15.0 release (S18 M2f).** [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md), this roadmap, the release notes, and [chordbrowser.com](site/public/index.html) for page acting by outside agents and the assistant; the README and site screenshots are regenerated from fixtures in the Linux container before the release. ([0.15.0 milestone](https://github.com/anaremore/chord-browser/milestone/1), release [#191](https://github.com/anaremore/chord-browser/pull/191))
 
 ---
 
@@ -37,9 +39,9 @@ Work actively in flight on open branches and pull requests.
 
 Planned in order after the work in flight lands.
 
-- **Long acting tasks that read as they go.** Each update between the assistant's steps is a short paragraph, the latest one or two stay in view, the earlier ones fold into *Earlier in this task (N)*, and the final answer is always shown whole; the activity rows fold the same way (the owner approved the mock, 2026-11-25). The first item after 0.15.0.
-- **Acting polish and context-based risk checks (S18 M2g).** Make acting hold up on real-world pages (same-site iframes, late-loading controls, duplicate labels, and the remaining M2d follow-ups in [#115](https://github.com/anaremore/chord-browser/issues/115)), and replace coarse word lists with context-based risk checks: page structure, payment context Chord observed on this computer, a per-site *No real money here* choice, and escalation-only hints from the model, for outside agents and the assistant alike ([S18](docs/decisions/S18-agent-mcp.md#risk-from-context-for-agents-and-the-assistant-the-owner-2026-11-24-in-m2g)).
-- **Fewer steps and tokens per task (S18 M2g-2).** Find an element or read a page's text without a full snapshot, results that stay the same between calls so models can cache them, a smaller tool list, refusals that say what to do next, and the assistant matching outside agents' tools.
+- **Long acting tasks that read as they go.** Each update between the assistant's steps is a short paragraph, the latest one or two stay in view, the earlier ones fold into *Earlier in this task (N)*, and the final answer is always shown whole; the activity rows fold the same way (the owner approved the mock, 2026-11-25). The first item after 0.15.0. ([#194](https://github.com/anaremore/chord-browser/issues/194), 0.15.1)
+- **Acting polish and context-based risk checks (S18 M2g).** Make acting hold up on real-world pages (same-site iframes, late-loading controls, duplicate labels, and the remaining M2d follow-ups in [#115](https://github.com/anaremore/chord-browser/issues/115)), and replace coarse word lists with context-based risk checks: page structure, payment context Chord observed on this computer, a per-site *No real money here* choice, and escalation-only hints from the model, for outside agents and the assistant alike ([S18](docs/decisions/S18-agent-mcp.md#risk-from-context-for-agents-and-the-assistant-the-owner-2026-11-24-in-m2g)). ([#209](https://github.com/anaremore/chord-browser/issues/209), 0.16.0)
+- **Fewer steps and tokens per task (S18 M2g-2).** Find an element or read a page's text without a full snapshot, results that stay the same between calls so models can cache them, a smaller tool list, refusals that say what to do next, and the assistant matching outside agents' tools. ([#202](https://github.com/anaremore/chord-browser/issues/202), 0.16.0)
 
 ---
 
@@ -49,26 +51,26 @@ Queued work without fixed dates, grouped by what it unlocks.
 
 ### Engine, security, and distribution
 
-- **Electron 46 upgrade (expected 2027-01-05).** Chord's first major Electron upgrade, rehearsing the 8-week cadence on the 72-hour security clock ([docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md)).
-- **macOS signing, notarization, and in-app updates.** Remove first-launch Gatekeeper warnings and turn on automatic updates on macOS (plus Touch ID for passkeys and passwords) once an Apple Developer account is set up ([docs/releasing/signing.md](docs/releasing/signing.md)).
-- **Linux package channels (Flathub, apt, and dnf).** Publish Chord on Flathub and turn on signed Cloudsmith apt and dnf repositories so Linux users update through their package manager ([docs/releasing/flathub.md](docs/releasing/flathub.md), [docs/releasing/linux-repos.md](docs/releasing/linux-repos.md)).
+- **Electron 46 upgrade (expected 2027-01-05).** Chord's first major Electron upgrade, rehearsing the 8-week cadence on the 72-hour security clock ([docs/releasing/patch-runbook.md](docs/releasing/patch-runbook.md)). ([#220](https://github.com/anaremore/chord-browser/issues/220), 0.18.0)
+- **macOS signing, notarization, and in-app updates.** Remove first-launch Gatekeeper warnings and turn on automatic updates on macOS (plus Touch ID for passkeys and passwords) once an Apple Developer account is set up ([docs/releasing/signing.md](docs/releasing/signing.md)). ([#225](https://github.com/anaremore/chord-browser/issues/225))
+- **Linux package channels (Flathub, apt, and dnf).** Publish Chord on Flathub and turn on signed Cloudsmith apt and dnf repositories so Linux users update through their package manager ([docs/releasing/flathub.md](docs/releasing/flathub.md), [docs/releasing/linux-repos.md](docs/releasing/linux-repos.md)). ([#224](https://github.com/anaremore/chord-browser/issues/224))
 
 ### Agents and the assistant
 
-- **Share a tab and let an agent act in it.** Opt-in acting on a tab you explicitly share with an outside agent, extending today's read-only tab sharing ([S18](docs/decisions/S18-agent-mcp.md#owners-answers-2026-11-22)).
-- **WebMCP pass-through.** Expose sites' own structured page tools (`document.modelContext`) to outside agents and the assistant through Chord's approval gate once Chromium ships WebMCP on by default ([S18](docs/decisions/S18-agent-mcp.md#webmcp-later)).
-- **Optional extension-free profile for agents.** An opt-in setting to run agent tabs in a dedicated profile (you sign in there once) without user extensions, closing Electron's current limit where extension content scripts still run inside agent tabs ([S18](docs/decisions/S18-agent-mcp.md#m2d-as-built-2026-11-23)).
+- **Share a tab and let an agent act in it.** Opt-in acting on a tab you explicitly share with an outside agent, extending today's read-only tab sharing ([S18](docs/decisions/S18-agent-mcp.md#owners-answers-2026-11-22)). ([#215](https://github.com/anaremore/chord-browser/issues/215), 0.17.0)
+- **WebMCP pass-through.** Expose sites' own structured page tools (`document.modelContext`) to outside agents and the assistant through Chord's approval gate once Chromium ships WebMCP on by default ([S18](docs/decisions/S18-agent-mcp.md#webmcp-later)). ([#222](https://github.com/anaremore/chord-browser/issues/222))
+- **Optional extension-free profile for agents.** An opt-in setting to run agent tabs in a dedicated profile (you sign in there once) without user extensions, closing Electron's current limit where extension content scripts still run inside agent tabs ([S18](docs/decisions/S18-agent-mcp.md#m2d-as-built-2026-11-23)). ([#223](https://github.com/anaremore/chord-browser/issues/223))
 - **Antigravity as a built-in assistant app (on hold).** Revisit when `agy acp` can disable or gate its built-in web search, timers, and subagents; Antigravity remains supported as an outside agent ([S19](docs/decisions/S19-antigravity-assistant.md)).
 
 ### Browsing and passwords
 
 - **Passwords follow-ups and optional sync.** Fix remaining form-detection, subframe, and generator edge cases ([#39](https://github.com/anaremore/chord-browser/issues/39), [#41](https://github.com/anaremore/chord-browser/issues/41), [#60](https://github.com/anaremore/chord-browser/issues/60), [#66](https://github.com/anaremore/chord-browser/issues/66), [#68](https://github.com/anaremore/chord-browser/issues/68), [#71](https://github.com/anaremore/chord-browser/issues/71)), and revisit opt-in encrypted password sync ([S17](docs/decisions/S17-passwords.md#15-build-plan)).
 - **User scripts (Tampermonkey) and upstream engine gaps.** Enable `chrome.userScripts` upstream in Electron—or build Tampermonkey's subset in Chord if upstream stalls ([S16](docs/decisions/S16-user-scripts.md), [electron/electron#55337](https://github.com/electron/electron/issues/55337))—and track upstream back/forward cache support ([electron/electron#55333](https://github.com/electron/electron/issues/55333)).
-- **Everyday browsing additions.** Full-text search of pages you've read, page translation, floating multi-video players, compact density, faster signed site-rule and UI updates, and remaining manual verification passes (real-cloud sync in [docs/testing/sync.md](docs/testing/sync.md), macOS hardware checks in [docs/testing/macos.md](docs/testing/macos.md), and screen readers).
+- **Everyday browsing additions.** Full-text search of pages you've read, page translation, floating multi-video players, compact density, faster signed site-rule and UI updates, and remaining manual verification passes (real-cloud sync in [docs/testing/sync.md](docs/testing/sync.md), macOS hardware checks in [docs/testing/macos.md](docs/testing/macos.md), and screen readers). ([#227](https://github.com/anaremore/chord-browser/issues/227))
 
 ### Tooling and maintenance
 
-- **Code quality and dependency hygiene.** Adopt Oxfmt at 1.0, evaluate type-aware Oxlint (`oxlint-tsgolint`), run a Knip unused-code cleanup ([#111](https://github.com/anaremore/chord-browser/pull/111)), keep Renovate's automated update PRs (installed 2026-11-24) flowing, and close open bug, test, and CI follow-ups ([#27](https://github.com/anaremore/chord-browser/issues/27), [#44](https://github.com/anaremore/chord-browser/issues/44), [#64](https://github.com/anaremore/chord-browser/issues/64), [#80](https://github.com/anaremore/chord-browser/issues/80), [#85](https://github.com/anaremore/chord-browser/issues/85), [#87](https://github.com/anaremore/chord-browser/issues/87)).
+- **Code quality and dependency hygiene.** Adopt Oxfmt at 1.0, evaluate type-aware Oxlint (`oxlint-tsgolint`), run a Knip unused-code cleanup ([#111](https://github.com/anaremore/chord-browser/pull/111), [#214](https://github.com/anaremore/chord-browser/issues/214)), split the agents' biggest files ([#213](https://github.com/anaremore/chord-browser/issues/213)), keep Renovate's automated update PRs (installed 2026-11-24) flowing, and close open bug, test, and CI follow-ups ([#27](https://github.com/anaremore/chord-browser/issues/27), [#44](https://github.com/anaremore/chord-browser/issues/44), [#64](https://github.com/anaremore/chord-browser/issues/64), [#80](https://github.com/anaremore/chord-browser/issues/80), [#85](https://github.com/anaremore/chord-browser/issues/85), [#87](https://github.com/anaremore/chord-browser/issues/87)).
 
 ---
 
