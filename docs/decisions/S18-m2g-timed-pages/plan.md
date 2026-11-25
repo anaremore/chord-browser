@@ -226,11 +226,14 @@ Wayland gives the same counts.
 - Every journey still succeeds.
 - *The form* (−86%) and *the timed table* (−21%) save calls, with `batch` and `wait_for`.
 - *The 300-row list* (−14%): collapsed rows and `find` cut its results from 10,290 to 510 tokens, at one more call.
-- *The bot hand* is **8% worse**. Played honestly, main needs one snapshot too, so #145 saves no call there. The diffs after its four actions cost 361 result tokens more, and the larger tool list costs the rest.
+- *The bot hand* is **8% worse: on a scripted hand that never needs to look again; a model that would look again saves a snapshot.** Played honestly, main needs one snapshot too, so #145 saves no call there. Most of the 8% is the larger tool list (+605 tokens a call, M2g-2's diet); the diffs after its four actions cost 361 result tokens more.
 - *The two journeys #145 doesn't change* read 6% more: the larger tool list alone (+605 tokens a call), M2g-2's diet.
 
 **By change** (each kept only where a journey shows it pays):
-- *The diff after each action* pays on no journey now. It saves calls only where an agent would otherwise look again, and with main's refs surviving, no journey has it look again. `wait_for`'s diff (the timed table) is the one place it saves tokens. The planner's call: keep the diff after an action, or make it ask-for (`changes: true`).
+- *The diff after each action:* **kept on by default, with no parameter** (the planner, 2026-11-25: a parameter costs schema tokens on every call).
+  - A scripted journey can't show its value. A real model that can't see an action's effect (a dialog opening, a row moving) calls snapshot, and a whole snapshot costs far more than a diff.
+  - M2g-2 adds a journey that measures exactly that (#176).
+  - When nothing changed, it says nothing: no `page_changes` at all, so it costs nothing then.
 - *`wait_for`:* the timed table.
 - *`batch`:* the form.
 - *Rows collapsed and `find`:* the 300-row list.

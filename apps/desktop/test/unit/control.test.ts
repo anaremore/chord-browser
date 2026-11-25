@@ -1412,7 +1412,7 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(out.data['page_changes'], JSON.stringify(read)).toEqual(says);
       // Nothing of it kept: the agent's refs are its own snapshot's still.
       twist.read = {};
-      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'], JSON.stringify(read)).toMatchObject({ lines: [] });
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'], JSON.stringify(read)).toBeUndefined();
     }
   });
 
@@ -1420,7 +1420,8 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     // acting() took a snapshot: nothing changed after a hover.
     // Its own envelope (S-4): which page and address it's of, and its lines.
-    expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toEqual({ page_id: expect.any(String), url: 'https://news.test/a', lines: [] });
+    // Nothing changed: nothing extra at all, so a diff costs nothing then (the planner, round 2 of #145).
+    expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toBeUndefined();
     // The page shows a new button: its line, with its ref.
     ELEMENTS.push({ role: 'button', name: 'Raise' });
     try {
@@ -2417,7 +2418,7 @@ describe('acting through the gate (S18 M2c)', () => {
       const t = await acting({ act: { siteAllowed: () => true } });
       const out = ok(await batch(t, [{ tool: 'click', ref: 'e1', tab_id: 'a9' }, { tool: 'hover', ref: 'e1' }]));
       expect(out).toMatchObject({ tab_id: t.tab, done: ['Clicked “Home”', 'Pointed at “Home”'] });
-      expect(out['page_changes']).toMatchObject({ lines: [] });
+      expect(out['page_changes']).toBeUndefined();
     });
 
     it('the site card once for the batch; a risky step asks its own, and a no stops the batch there', async () => {

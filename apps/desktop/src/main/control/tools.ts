@@ -460,6 +460,12 @@ function sidsOf(read: SnapshotRead): Map<number, number> {
   return new Map(read.nodes.filter((n) => n.key !== undefined && n.sid !== undefined).map((n) => [n.key!, n.sid!]));
 }
 
+/** A diff that found nothing changed (its lines empty): said by saying nothing. */
+const emptyDiff = (changes: Record<string, unknown>): boolean => {
+  const lines = (changes['page_changes'] as { lines?: unknown } | undefined)?.lines;
+  return Array.isArray(lines) && lines.length === 0;
+};
+
 /** A diff past this many lines says to call snapshot instead (M2g-1: never more than the outline would have cost). */
 const DIFF_MAX_LINES = 60;
 
@@ -610,7 +616,7 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   const changes = moved ? null : await pageChanges(call, node.id, page);
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   // A diff with lines; one too big to show, or a cut read, is only a note: the outline instead (round 1 of #145, SF1).
-  if (changes && Array.isArray((changes['page_changes'] as { lines?: unknown }).lines)) return { text: toolResult({ ...result, ...changes }) };
+  if (changes && Array.isArray((changes['page_changes'] as { lines?: unknown }).lines)) return { text: toolResult({ ...result, ...(emptyDiff(changes) ? {} : changes) }) };
   const snap = await snapshotTool(call, { tab_id: args['tab_id'] });
   if (snap.isError || !snap.text) return snap;
   return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), wait: result }) };
@@ -699,7 +705,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // What the page's response was caught doing (a tab of yours): never say done when the page said no.
         ...(caught.length ? { caught } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
-        ...(changes ?? {}),
+        // Nothing changed: nothing extra (round 2 of #145: a diff costs nothing then).
+        ...(changes && !emptyDiff(changes) ? changes : {}),
       }),
     };
   };
