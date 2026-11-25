@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emptyState, type Command } from '@chord/core';
+import type * as FsPromises from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '' }, shell: { openPath: vi.fn(async () => ''), showItemInFolder: vi.fn() } }));
@@ -18,6 +19,22 @@ vi.mock('../../src/main/control/user-watch', () => ({
     return new Promise<boolean>((done) => (asked.answer = done));
   },
 }));
+/** How many renames fail first, as a file Windows' scan still holds does (EPERM), then go. */
+const renames = vi.hoisted(() => ({ failing: 0, tries: 0 }));
+vi.mock('node:fs/promises', async (actual) => {
+  const real = await actual<typeof FsPromises>();
+  return {
+    ...real,
+    rename: async (from: string, to: string) => {
+      renames.tries++;
+      if (renames.failing > 0) {
+        renames.failing--;
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return real.rename(from, to);
+    },
+  };
+});
 const { DownloadManager, PENDING_SUFFIX } = await import('../../src/main/downloads');
 const { shell } = await import('electron');
 
@@ -101,6 +118,30 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
     await tick();
     expect(t.files()).toEqual(['invoicepiz.exe']);
   });
+
+  it('Allow, just as Windows’ scan holds the finished file: its rename is tried again until it goes, never left under its pending name (main’s Windows E2E, run 45585360658)', async () => {
+    const t = setup();
+    asked.answer!(true);
+    await tick();
+    renames.failing = 3;
+    renames.tries = 0;
+    t.finish();
+    await vi.waitFor(() => expect(t.files()).toEqual(['invoicepiz.exe']), { timeout: 5_000 });
+    expect(renames.tries).toBe(4);
+    // One that never lets go: it stays where it is, under its pending name, after a bounded number of tries.
+    const u = setup();
+    asked.answer!(true);
+    await tick();
+    renames.failing = 1_000;
+    renames.tries = 0;
+    u.finish();
+    await vi.waitFor(() => expect(renames.tries).toBeGreaterThan(5), { timeout: 10_000 });
+    await new Promise((r) => setTimeout(r, 4_000));
+    const tried = renames.tries;
+    expect(tried).toBeLessThan(20);
+    expect(u.files()).toEqual([`invoicepiz.exe${PENDING_SUFFIX}`]);
+    renames.failing = 0;
+  }, 20_000);
 
   it('Don’t deletes it, finished or not; nothing is left in the folder, nor in the list', async () => {
     for (const finished of [false, true]) {

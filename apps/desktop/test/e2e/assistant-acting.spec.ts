@@ -4,7 +4,7 @@
  * lasting for the chat, a risky step asking every time, and your own key in the tab stopping it. On fixtures: a card
  * table (one use among many), and a checkout on another site.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -364,7 +364,8 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await expect(again).toBeVisible({ timeout: 20_000 });
     await shell.waitForTimeout(700);
     await again.getByRole('button', { name: 'Allow', exact: true }).click();
-    await expect.poll(() => existsSync(join(folder, 'file.zip')), { timeout: 20_000 }).toBe(true);
+    // The folder's listing, so a failure shows what's there (a name left pending: main's Windows run 45585360658).
+    await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

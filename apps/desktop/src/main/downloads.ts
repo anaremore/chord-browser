@@ -25,6 +25,26 @@ const REPORT_MS = 250;
 /** What a checked download is called until it's finished and cleared, as in Chrome. */
 export const PENDING_SUFFIX = '.crdownload';
 
+/** How many times a finished download's rename is tried, a moment apart, while something holds the file. */
+const RENAME_TRIES = 10;
+
+/**
+ * A finished file takes its name. On Windows, the system's scan of a file just written (Defender, Attachment Services)
+ * can hold it for a moment, and a rename then fails (EPERM, EBUSY, EACCES): tried again, up to RENAME_TRIES over about
+ * 6.5 s, before it's left under its pending name (main's Windows E2E, run 45585360658).
+ */
+async function renameWhenFree(from: string, to: string): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      return await rename(from, to);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (i >= RENAME_TRIES - 1 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw error;
+      await new Promise((r) => setTimeout(r, Math.min(100 * 2 ** i, 1000)));
+    }
+  }
+}
+
 /** The Downloads folder. Development builds can point it elsewhere so tests never touch the real one. */
 export function downloadsDir(): string {
   const override = process.env['CHORD_DOWNLOADS_DIR'];
@@ -195,7 +215,7 @@ export class DownloadManager {
     // Someone may have made a file with that name meanwhile: then the next free one.
     const to = existsSync(screen.finalPath) ? uniquePath(downloadsDir(), basename(screen.finalPath), existsSync) : screen.finalPath;
     try {
-      await rename(from, to);
+      await renameWhenFree(from, to);
       screen.finalPath = to;
     } catch {
       // Couldn't rename: it stays where it is, and its row says so.
