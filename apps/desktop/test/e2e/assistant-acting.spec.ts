@@ -427,7 +427,9 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     try {
       await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
     } finally {
-      console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}]`);
+      // And whether its card took the Allow: still waiting (the click didn't count) or answered (the release check).
+      const cardsWaiting = await panel.getByRole('group', { name: /^Save file\.zip from / }).count();
+      console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}] cards waiting [${cardsWaiting}]`);
     }
   } finally {
     await app.close();
