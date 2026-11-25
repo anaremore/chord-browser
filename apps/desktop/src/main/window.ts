@@ -381,7 +381,7 @@ export class AppWindow {
     // Back in front: the OS gives the focus back to the view that had it last, which can be an agent's page parked
     // here (it took it, or a view just shown became first responder). Never a parked page: the page you see, or this
     // window's own (Claude's review 8 of #110). Within a window in front, focusing a page activates nothing.
-    this.window.on('focus', () => setTimeout(() => this.keepFocusOffParked(), 0));
+    this.window.on('focus', () => setTimeout(() => this.keepFocusOffParked(true), 0));
     if (platform === 'darwin') this.window.on('leave-full-screen', () => this.refreshPageFullScreen());
     for (const event of ['move', 'minimize', 'restore', 'show', 'hide', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'focus'] as const) {
       this.window.on(event as 'move', () => this.placementChanged());
@@ -605,14 +605,16 @@ export class AppWindow {
    * they're on screen here.
    */
   /**
-   * This window in front, with the focus on a page parked here (an agent's), or on one of its own views that isn't
-   * shown (a hidden popover, preview or overlay: macOS can make one the window's first responder as the window comes
-   * back, agents.spec's "coming back to Chord"): to the page you see, or this window's own.
+   * This window in front, with the focus on a page parked here (an agent's): to the page you see, or this window's own.
+   * And as the window comes back (`comingBack`, its focus event), on the popover when it has no card: macOS can make it
+   * the window's first responder then (agents.spec's "coming back to Chord", arm64 and Intel), and your keys would go
+   * nowhere. A popover with a card keeps it, shown or hidden for a moment.
    */
-  keepFocusOffParked(): void {
+  keepFocusOffParked(comingBack = false): void {
     if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
     const now = webContents?.getFocusedWebContents?.() ?? null;
-    if (now && !this.isParkedOnly(now) && !this.isHiddenView(now)) return;
+    const cardless = comingBack && now !== null && now === pageOf(this.popover) && (this.popoverSize.width === 0 || this.popoverSize.height === 0);
+    if (now && !this.isParkedOnly(now) && !cardless) return;
     // The page of yours that had it (or the window's own), only while it's one you see (Claude's S7, round 4 of #112:
     // after a tab switch it isn't, and focusing it would put your keys in a tab you left).
     const seen = (c: WebContents) => c === this.shell.webContents || this.panes.some((v) => v.webContents === c);
@@ -622,11 +624,6 @@ export class AppWindow {
     if (!now) return void (this.parked.length > 0 && own?.focus());
     const page = this.activeTabContents;
     (own ?? (page && !page.isDestroyed() ? page : this.shell.webContents)).focus();
-  }
-
-  /** One of this window's own views, not shown now: a hidden popover (no card up), preview or overlay. */
-  private isHiddenView(contents: WebContents): boolean {
-    return [this.popover, this.preview, this.overlay].some((v) => pageOf(v) === contents && !v.getVisible());
   }
 
   /** A page parked here and not shown (an agent's tab working behind your page). */

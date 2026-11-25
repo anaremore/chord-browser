@@ -1,7 +1,8 @@
 /**
  * Coming back to a window (macOS, agents.spec's "coming back to Chord"): AppKit can make a view of the window its first
- * responder when the window becomes key, the popover among them, though it's hidden (no card up). A hidden popover,
- * preview or overlay never keeps the focus: it goes to your page (keepFocusOffParked). A popover showing a card keeps it.
+ * responder when the window becomes key, the popover among them though it has no card. A popover with no card never
+ * keeps the focus as the window comes back: it goes to your page (keepFocusOffParked). A popover with a card keeps it,
+ * even hidden for a moment (a frame snapshot moving hides it): its card is what you answer.
  */
 import { EventEmitter } from 'node:events';
 import type { WindowId } from '@chord/core';
@@ -70,27 +71,41 @@ function newWindow() {
   w.markShellPainted();
   const page = new FakeView();
   w.showTabs([page as unknown as WebContentsView], 0, null, []);
-  focus.window = (w as unknown as { window: FakeWindow }).window;
-  // Only what keepFocusOffParked does counts (showing the tab focused it already).
+  const window = (w as unknown as { window: FakeWindow }).window;
+  focus.window = window;
+  // Only what the window's coming back does counts (showing the tab focused it already).
   page.page.focus.mockClear();
-  return { w, page, popover: w.popover as unknown as FakeView, preview: w.preview as unknown as FakeView, overlay: w.overlay as unknown as FakeView };
+  return { w, page, window, popover: w.popover as unknown as FakeView };
 }
 
-describe('coming back to a window, the focus is on a view you can see (agents.spec’s “coming back to Chord”)', () => {
-  it('a hidden popover, preview or overlay never keeps it: it goes to your page', () => {
-    for (const which of ['popover', 'preview', 'overlay'] as const) {
-      const made = newWindow();
-      const view = made[which];
-      view.setVisible(false);
-      focus.contents = view.page;
-      made.w.keepFocusOffParked();
-      expect(made.page.page.focus, which).toHaveBeenCalled();
-    }
+describe('coming back to a window, never the focus on a popover with no card (agents.spec’s “coming back to Chord”)', () => {
+  it('a popover with no card, given the focus as the window comes back: it goes to your page', () => {
+    vi.useFakeTimers();
+    const { page, window, popover } = newWindow();
+    focus.contents = popover.page;
+    window.emit('focus');
+    vi.runAllTimers();
+    expect(page.page.focus).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
-  it('a popover showing a card keeps it (its card is what you answer)', () => {
+  it('a popover with a card keeps it, shown or hidden for a moment', () => {
+    vi.useFakeTimers();
+    const { w, page, window, popover } = newWindow();
+    // A card is up: the popover has a size.
+    (w as unknown as { popoverSize: { width: number; height: number } }).popoverSize = { width: 360, height: 200 };
+    for (const visible of [true, false]) {
+      popover.setVisible(visible);
+      focus.contents = popover.page;
+      window.emit('focus');
+      vi.runAllTimers();
+      expect(page.page.focus, String(visible)).not.toHaveBeenCalled();
+    }
+    vi.useRealTimers();
+  });
+
+  it('only as the window comes back: parking a page never takes the focus off the popover', () => {
     const { w, page, popover } = newWindow();
-    popover.setVisible(true);
     focus.contents = popover.page;
     w.keepFocusOffParked();
     expect(page.page.focus).not.toHaveBeenCalled();
