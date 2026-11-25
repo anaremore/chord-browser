@@ -69,7 +69,8 @@ export function pressKeyEvents(key: PressKey): (AgentInputLike & { keyCode: stri
 
 /** A name from the page, for Chord's own words: cut to 60 characters, in curly quotes. Empty names say what the element is. */
 export function quotedName(name: string, role: string): string {
-  const clean = name.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim();
+  // A field's label's trailing colon (*Customer name:*) isn't part of its name on a card (the owner's test of 0.15's preview).
+  const clean = name.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim().replace(/\s*:$/, '');
   if (!clean) return `the ${role === 'generic' ? 'element' : role}`;
   return `“${clean.length > 60 ? `${clean.slice(0, 59)}…` : clean}”`;
 }
