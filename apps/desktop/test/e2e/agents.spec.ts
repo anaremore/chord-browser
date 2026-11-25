@@ -1446,14 +1446,24 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       }
       return null;
     };
-    const ask = async (name: string, args: Record<string, unknown>) => {
+    /**
+     * A call, metered. `noDiff`: counted as a build with no diff after an action would have sent it (its page_changes
+     * left out), for the journey that plays an agent with no diff (M2g-2 slice 1).
+     */
+    const ask = async (name: string, args: Record<string, unknown>, opts: { noDiff?: boolean } = {}) => {
       const r = (await mcp.request('tools/call', { name, arguments: args })).result as { content: { type: string; text?: string; data?: string; mimeType?: string }[]; isError?: boolean };
       meter.calls++;
       let chars = 0;
       for (const c of r.content) {
         const size = c.type === 'image' ? pictureSize(Buffer.from(c.data ?? '', 'base64')) : null;
+        let counted: unknown = c;
+        if (opts.noDiff && c.type === 'text' && c.text?.includes('"page_changes"')) {
+          const parsed = JSON.parse(c.text) as { data?: Record<string, unknown> };
+          if (parsed.data) delete parsed.data['page_changes'];
+          counted = { ...c, text: JSON.stringify(parsed) };
+        }
         // A picture: a token for each 750 pixels (counted here as characters, four to a token).
-        chars += size ? Math.ceil((size.width * size.height) / 750) * 4 : JSON.stringify(c).length;
+        chars += size ? Math.ceil((size.width * size.height) / 750) * 4 : JSON.stringify(counted).length;
         if (size) meter.pictures.push(size);
       }
       meter.chars += chars;
@@ -1461,8 +1471,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       return { text: r.content[0]?.text ?? '', error: r.isError === true };
     };
     /** A call, with any card it raises allowed as the user would (the site's for now, a step's, a connection's once). */
-    const act = async (name: string, args: Record<string, unknown>) => {
-      const calling = ask(name, args);
+    const act = async (name: string, args: Record<string, unknown>, opts: { noDiff?: boolean } = {}) => {
+      const calling = ask(name, args, opts);
       for (;;) {
         const card = popover.getByRole('alertdialog').first();
         const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
@@ -1494,7 +1504,21 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     const CONTEXT = 8000;
     const defs = Math.ceil(toolList / 4);
     const modelInput = (results: number[]) => results.reduce((sum, _, k) => sum + defs + CONTEXT + results.slice(0, k + 1).reduce((a, b) => a + b, 0), 0);
-    const rows: { journey: string; success: boolean; calls: number; tokens: number; defs: number; input: number; ms: number }[] = [];
+    /**
+     * The same with full-prefix prompt caching (M2g-2 slice 1), as Anthropic's API prices it: each turn's prompt is the
+     * turn before's (read from the cache at 0.1 x) plus what's new (written to it at 1.25 x); the first turn writes it all.
+     */
+    const cachedInput = (results: number[]) => {
+      let total = 0;
+      let before = 0;
+      results.forEach((r, k) => {
+        const now = (k === 0 ? defs + CONTEXT : before) + r;
+        total += k === 0 ? 1.25 * now : 0.1 * before + 1.25 * (now - before);
+        before = now;
+      });
+      return Math.round(total);
+    };
+    const rows: { journey: string; success: boolean; calls: number; tokens: number; defs: number; input: number; cached: number; ms: number }[] = [];
     const journey = async (name: string, play: () => Promise<boolean>) => {
       meter = { calls: 0, chars: 0, results: [], pictures: [] };
       const began = Date.now();
@@ -1504,7 +1528,7 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       } catch (e) {
         console.log(`[token eval] ${name} failed: ${String(e)}`);
       }
-      rows.push({ journey: name, success, calls: meter.calls, tokens: meter.results.reduce((a, b) => a + b, 0), defs, input: modelInput(meter.results), ms: Date.now() - began });
+      rows.push({ journey: name, success, calls: meter.calls, tokens: meter.results.reduce((a, b) => a + b, 0), defs, input: modelInput(meter.results), cached: cachedInput(meter.results), ms: Date.now() - began });
     };
     void tabs;
 
@@ -1624,6 +1648,54 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const clicked = await act('click', { tab_id: tab, ref: refOf(found, 'button "Act 150"') });
       return clicked.text.startsWith('{');
     });
+    // M2g-2 slice 1: the honest baseline's new journeys. Every one looks first.
+    await journey('reading one section of 50', async () => {
+      const tab = await open('/article50');
+      // As an agent reads a long page: the first range, then the next, until it finds what it was asked for.
+      let start = 0;
+      for (let i = 0; i < 6; i++) {
+        const read = JSON.parse((await ask('read_tab', { tab_id: tab, start })).text) as { content: string; range: { end: number; total: number } };
+        const found = /The code word is (\w+)\./.exec(read.content);
+        if (found) return found[1] === 'saffron';
+        if (read.range.end >= read.range.total) return false;
+        start = read.range.end;
+      }
+      return false;
+    });
+    const effects = async (path: string, noDiff: boolean) => {
+      const tab = await open(path);
+      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // [a click whose effect the next step needs, the element that effect shows]
+      const steps: [string, string][] = [
+        ['button "Delete order 12"', 'button "Delete for good"'],
+        ['button "Show details of order 15"', 'button "Refund order 15"'],
+      ];
+      for (const [first, then] of steps) {
+        const clicked = await act('click', { tab_id: tab, ref: refOf(o, first) }, { noDiff });
+        if (noDiff) {
+          // No diff: it looks again to see what the click did.
+          o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+          await act('click', { tab_id: tab, ref: refOf(o, then) }, { noDiff });
+        } else {
+          const lines = ((JSON.parse(clicked.text) as { data: { page_changes?: { lines?: string[] } } }).data.page_changes?.lines ?? []).filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).join('\n');
+          await act('click', { tab_id: tab, ref: refOf(lines, then) });
+        }
+      }
+      return String(await inPage(path, 'document.getElementById("log").textContent')).trim() === 'deleted 12 refunded 15';
+    };
+    await journey('an action’s effect, seen in the diff', () => effects('/effects', false));
+    await journey('an action’s effect, seen by a snapshot (no diff)', () => effects('/effects?nodiff=1', true));
+    await journey('a broad find (300 orders, each with Cancel)', async () => {
+      const tab = await open('/orders300');
+      await ask('snapshot', { tab_id: tab });
+      // The outline shows 5 of 300 rows: the agent asks for what it wants by its words, as find takes them today.
+      const found = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Cancel' })).text).split('\n');
+      const row = found.findIndex((l) => l.includes('row "Order 150"'));
+      const cancel = found.slice(row).find((l) => l.includes('button "Cancel"'));
+      if (row < 0 || !cancel) return false;
+      await act('click', { tab_id: tab, ref: /\[ref=(e\d+)\]/.exec(cancel)![1]! });
+      return String(await inPage('/orders300', 'document.getElementById("log").textContent')).trim() === 'cancelled 150';
+    });
     await journey('a picture of the view', async () => {
       const tab = await open('/game');
       await ask('tab_screenshot', { tab_id: tab });
@@ -1646,9 +1718,9 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     }
 
     const table = [
-      `| Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |`,
-      `|---|---|---|---|---|---|---|`,
-      ...rows.map((r) => `| ${r.journey} | ${r.success ? 'yes' : 'no'} | ${r.calls} | ${r.tokens} | ${r.defs} | ${r.input} | ${(r.ms / 1000).toFixed(1)} |`),
+      `| Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Cached (est.) | Wall (s) |`,
+      `|---|---|---|---|---|---|---|---|`,
+      ...rows.map((r) => `| ${r.journey} | ${r.success ? 'yes' : 'no'} | ${r.calls} | ${r.tokens} | ${r.defs} | ${r.input} | ${r.cached} | ${(r.ms / 1000).toFixed(1)} |`),
     ].join('\n');
     console.log(`[token eval] ${lean ? 'this build' : 'main'} ${process.env['CHORD_E2E_DISPLAY'] ?? ''}\n${table}`);
     mkdirSync(join(appDir, 'test-results'), { recursive: true });
@@ -2555,6 +2627,21 @@ test.beforeAll(async () => {
     // A name that isn't what it shows (Neon's B3 for M2g-1): never found by it.
     // A button the page renames in place (round 1 of #145, B1), and a list it grows.
     '/rename': '<title>Rename</title><main><ul id=list></ul><button id=d onclick="document.getElementById(\'log\').textContent += \' clicked \' + this.textContent">Draft 1</button><button id=x>Other</button><p id=log></p></main>',
+    // M2g-2 slice 1: a long article (its answer in section 37, past read_tab's first range), a page whose clicks have
+    // effects the next step needs (a dialog, a row's details), and 300 orders each with View and Cancel.
+    '/article50':
+      '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
+      Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +
+      '</main>',
+    '/effects':
+      '<title>Orders</title><main><ul id=list>' +
+      [11, 12, 13, 14, 15, 16].map((n) => `<li id=o${n}>Order ${n} <button data-del=${n}>Delete order ${n}</button> <button data-show=${n}>Show details of order ${n}</button><span hidden><button data-refund=${n}>Refund order ${n}</button></span></li>`).join('') +
+      '</ul><div role=dialog aria-label="Confirm" id=dlg hidden><p>Delete this order?</p><button id=yes>Delete for good</button> <button id=no>Keep</button></div><p id=log></p></main>' +
+      '<script>let pending = 0; const log = (s) => { document.getElementById("log").textContent += " " + s; }; document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; if (b.dataset.del) { pending = b.dataset.del; document.getElementById("dlg").hidden = false; } else if (b.id === "yes") { document.getElementById("o" + pending).remove(); document.getElementById("dlg").hidden = true; log("deleted " + pending); } else if (b.id === "no") { document.getElementById("dlg").hidden = true; } else if (b.dataset.show) { b.parentElement.querySelector("span").hidden = false; } else if (b.dataset.refund) { log("refunded " + b.dataset.refund); } });</script>',
+    '/orders300':
+      '<title>Orders</title><main><table><tbody>' +
+      Array.from({ length: 300 }, (_, i) => `<tr aria-label="Order ${i + 1}"><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
+      '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',

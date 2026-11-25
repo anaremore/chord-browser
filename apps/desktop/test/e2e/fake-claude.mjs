@@ -127,6 +127,9 @@ async function turn(sent, images = []) {
     const tab = ref ?? 't1';
     const steps = JSON.parse(text.slice(5).split('\n')[0]);
     const results = [];
+    // What the turn costs a model (M2g-2 slice 1): its tool list, and each result whole (acting-sizes.jsonl).
+    const listed = await mcp('tools/list', {});
+    const sizes = { tools: JSON.stringify(listed?.mcp_response?.result?.tools ?? []).length, steps: [] };
     let outline = '';
     for (const step of steps) {
       // A model thinking before its first step: the test does something meanwhile (the owner's preview).
@@ -143,8 +146,10 @@ async function turn(sent, images = []) {
         outline = String(parsed.content ?? parsed.data?.content ?? result);
       }
       results.push({ tool: step.tool, result: result.slice(0, 600) });
+      sizes.steps.push({ tool: step.tool, chars: result.length });
     }
     appendFileSync(join(config, 'acting.jsonl'), `${JSON.stringify(results)}\n`);
+    appendFileSync(join(config, 'acting-sizes.jsonl'), `${JSON.stringify(sizes)}\n`);
     return finish(await say('Done.'));
   }
   // Asked to fill a form (D16): it lists Chord's tools, reads the form on the attached tab (t1 when nothing's attached,
