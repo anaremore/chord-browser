@@ -3,7 +3,7 @@
  * (src/main/index.ts). Any one fails the test that caused it, with its stack,
  * so a bug in main can't hide behind a test that otherwise passed.
  */
-import { expect, test, type ElectronApplication } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 
 const MAIN_ERROR = /\[chord\] (Uncaught exception|Unhandled rejection) in main/;
 const mainErrors: string[] = [];
@@ -38,7 +38,30 @@ export function watchForMainErrors(app: ElectronApplication): ElectronApplicatio
   app.process().once('exit', (code, signal) => {
     if ((code !== 0 || signal) && !killed.has(app)) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
   });
+  throttlePages(app);
   return app;
+}
+
+/**
+ * `pnpm test:e2e:linux --throttle <rate>` (CHORD_E2E_CPU_THROTTLE): every web page's renderer runs that many times
+ * slower (CDP's Emulation.setCPUThrottlingRate, through a session of Playwright's own, so Chord's own debugger clients
+ * are untouched). Chord's own views (chord://) keep their speed: the page is what's slow, as on a busy machine's
+ * heavy site. Here, beside the error watch, because every spec's launch goes through watchForMainErrors.
+ */
+function throttlePages(app: ElectronApplication): void {
+  const rate = Number(process.env['CHORD_E2E_CPU_THROTTLE'] ?? '');
+  if (!(rate > 1)) return;
+  const throttle = async (page: Page) => {
+    if (page.url().startsWith('chord://')) return;
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate });
+    } catch {
+      // A page closed before it could be slowed: nothing to slow.
+    }
+  };
+  for (const page of app.windows()) void throttle(page);
+  app.on('window', (page) => void throttle(page));
 }
 
 /** Call once per spec file: each test fails if its run logged an error in main. */
