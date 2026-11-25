@@ -633,7 +633,7 @@ test('a long task: earlier updates fold into one row that opens in place; the fi
     const steps = ['Hand 1: seven-two, I folded.', 'Hand 2: I called.', 'Hand 3: I won the pot.', 'Hand 4: dealing now.'].flatMap((say) => [{ say }, { tool: 'snapshot' }]);
     await send(panel, act([...steps, { say: 'Done: I’m at 512. ' }]));
     await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
-    const earlier = panel.getByRole('button', { name: 'Earlier in this task, 4 updates' });
+    const earlier = panel.getByRole('button', { name: 'Earlier in this task (4)' });
     await expect(earlier).toBeVisible();
     await expect(earlier).toHaveAttribute('aria-expanded', 'false');
     await expect(panel.getByText('Done: I’m at 512. Done.', { exact: true })).toBeVisible();

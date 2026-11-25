@@ -40,7 +40,7 @@ import {
 import type { AssistantAction, AssistantView, SystemInfo } from '@chord/ipc';
 import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, ChevronRight, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { durations } from '@chord/tokens';
 import { useMenu } from '../shared/a11y';
 import { AssistantIcon } from '../shared/icons';
@@ -169,11 +169,16 @@ function Markdown({ text, onLink, marks }: { text: string; onLink(url: string): 
 
 /** A reply: Markdown with numbered citation pills, in the sentence where the assistant quoted a tab. */
 function Reply({ message, onLink, names, offerCodex, text: part, images: withImages = true }: { message: AssistantMessage; onLink(url: string): void; names: AssistantView['tabNames']; offerCodex: boolean; text?: string; images?: boolean }) {
+  const whole = message.body.role === 'assistant' ? message.body.text : '';
+  // Citations are numbered from the whole reply, once, whichever update of it this shows (Claude's review of #190).
+  const numbers = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const seg of splitCitations(whole)) if (seg.kind === 'citation') map.set(`${seg.ref}:${seg.quote}`, seg.n);
+    return map;
+  }, [whole]);
   if (message.body.role !== 'assistant') return null;
-  // One update of a long turn (`part`), or the whole reply; citations are numbered from the whole of it either way.
+  // One update of a long turn (`part`), or the whole reply.
   const shown = part ?? message.body.text;
-  const numbers = new Map<string, number>();
-  for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
   const citations = message.body.citations;
   const cite: Marks['cite'] = (ref, quote, quoted) => {
     const n = numbers.get(`${ref}:${quote}`);
@@ -285,15 +290,24 @@ function MadeImage({ image }: { image: AssistantImage }) {
  * *Earlier in this task (N)* (mocks/assistant-long-turns.html, approved 2026-11-25): closed, the folded steps' quiet row;
  * open, the earlier updates in place, muted, with their steps between them. Its own state, so it stays as you left it.
  */
-function EarlierRow({ count, tools, children }: { count: number; tools: AssistantMessage[]; children: ReactNode }) {
+function EarlierRow({ count, tools, notes, children }: { count: number; tools: AssistantMessage[]; notes: AssistantMessage[]; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={styles.earlier}>
-      <button type="button" className={styles.earlierButton} aria-expanded={open} aria-label={`Earlier in this task, ${count} updates`} onClick={() => setOpen(!open)}>
+      {/* Its words are its name (Claude's review of #190). */}
+      <button type="button" className={styles.earlierButton} aria-expanded={open} onClick={() => setOpen(!open)}>
         <ChevronRight size={13} strokeWidth={2} className={styles.earlierChevron} data-open={open || undefined} aria-hidden />
         Earlier in this task ({count})
       </button>
-      {open ? <div className={styles.folded}>{children}</div> : tools.length > 0 && <ToolRow messages={tools} />}
+      {open ? (
+        <div className={styles.folded}>{children}</div>
+      ) : (
+        <>
+          {tools.length > 0 && <ToolRow messages={tools} />}
+          {/* What the page set off, and your stopping it, stay in view, never in the line above (Claude's review of #190). */}
+          {notes.length > 0 && <ToolRow messages={notes} />}
+        </>
+      )}
     </div>
   );
 }
@@ -635,7 +649,6 @@ function MessageView({ message, last, onLink, onEdit, view, update }: { message:
   return (
     <div className={styles.assistant}>
       {working ? <Working startedAt={view.startedAt} /> : <Reply message={message} {...(update ? { text: update.text } : {})} onLink={onLink} names={view.tabNames} offerCodex={last && view.codexImages && !view.busy} />}
-      {update && body.status === 'streaming' && <Working startedAt={view.startedAt} />}
       {body.status === 'interrupted' && (
         <p className={styles.statusLine}>
           Interrupted.
@@ -710,22 +723,24 @@ function Timeline({ view, onLink, onEdit }: { view: AssistantView; onLink(url: s
         aria-label="Conversation"
         tabIndex={0}
       >
-        {timelineRows(view.messages).map(function row(r: TimelineRow, i: number): ReactNode {
+        {timelineRows(view.messages).map(function row(r: TimelineRow): ReactNode {
           if (r.kind === 'tools') return <ToolRow key={r.messages[0]!.id} messages={r.messages} />;
           if (r.kind === 'earlier') {
             return (
-              <EarlierRow key={`earlier:${i}`} count={r.count} tools={r.tools}>
+              <EarlierRow key={`${r.message.id}:earlier`} count={r.count} tools={r.tools} notes={r.notes}>
                 {r.rows.map(row)}
               </EarlierRow>
             );
           }
           if (r.kind === 'update') {
             return (
-              <MessageView key={`${r.message.id}:${i}`} message={r.message} update={{ text: r.text, last: r.last }} view={view} last={r.last && r.message === lastAssistant} onLink={onLink} onEdit={onEdit} />
+              <MessageView key={`${r.message.id}:${r.index}`} message={r.message} update={{ text: r.text, last: r.last }} view={view} last={r.last && r.message === lastAssistant} onLink={onLink} onEdit={onEdit} />
             );
           }
           return <MessageView key={r.message.id} message={r.message} view={view} last={r.message === lastUser || r.message === lastAssistant} onLink={onLink} onEdit={onEdit} />;
         })}
+        {/* A long turn under way: Working… under everything, the step under way included (the mock; Claude's review of #190). */}
+        {lastAssistant?.body.role === 'assistant' && lastAssistant.body.status === 'streaming' && Boolean(lastAssistant.body.blocks?.length) && <Working startedAt={view.startedAt} />}
       </div>
       {!following && (
         <button

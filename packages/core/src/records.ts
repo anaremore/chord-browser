@@ -11,7 +11,7 @@
  * that's a path on this computer.
  */
 import { generateKeyBetween } from 'fractional-indexing';
-import { ASSISTANT_PROVIDERS, isAssistantScope, type AssistantAttachment, type AssistantCitation, type AssistantImage, type AssistantMessage, type AssistantMessageBody, type AssistantThread } from './assistant';
+import { ASSISTANT_PROVIDERS, isAssistantScope, replyBlocks, type AssistantAttachment, type AssistantCitation, type AssistantImage, type AssistantMessage, type AssistantMessageBody, type AssistantThread } from './assistant';
 import { routeKey } from './links';
 import {
   DEFAULT_PROFILE,
@@ -654,7 +654,9 @@ function bodyFrom(raw: unknown): AssistantMessageBody | null {
         }));
       const status = STATUSES.includes(b['status'] as (typeof STATUSES)[number]) ? (b['status'] as (typeof STATUSES)[number]) : 'done';
       const error = text(b['error'], 4000);
-      return { role: 'assistant', text: value, citations, status, ...(error ? { error } : {}), ...(images ? { images } : {}) };
+      // Where its updates start, kept only when well formed (a long acting turn's layout; none: one message, as before).
+      const blocks = replyBlocks(b['blocks'], value.length);
+      return { role: 'assistant', text: value, citations, status, ...(error ? { error } : {}), ...(images ? { images } : {}), ...(blocks ? { blocks } : {}) };
     }
     case 'tool': {
       const tool = text(b['tool'], 100);

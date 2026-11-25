@@ -54,6 +54,16 @@ describe('The assistant store (migration 9)', () => {
     expect(db.assistant({ op: 'thread', threadId: 'e' }).thread?.scope).toBe('every');
   });
 
+  it('a reply’s updates are read back when well formed; a corrupt row is one message, never a broken chat (Claude’s review of #190)', () => {
+    db.assistant({ op: 'saveThread', thread: thread('a', 1) });
+    const reply = (id: string, blocks: unknown): AssistantMessage => ({ ...message(id, 'a', 'One.\n\nTwo.', 'assistant'), body: { role: 'assistant', text: 'One.\n\nTwo.', citations: [], status: 'done', blocks } as never });
+    db.assistant({ op: 'saveMessage', message: reply('good', [{ at: 0, after: null }, { at: 6, after: 'x' }]) });
+    db.assistant({ op: 'saveMessage', message: reply('bad', [{ at: 'six', after: null }]) });
+    const loaded = db.assistant({ op: 'thread', threadId: 'a' }).messages ?? [];
+    expect(loaded.find((m) => m.id === 'good')?.body).toMatchObject({ blocks: [{ at: 0, after: null }, { at: 6, after: 'x' }] });
+    expect(loaded.find((m) => m.id === 'bad')?.body).not.toHaveProperty('blocks');
+  });
+
   it('finds messages by their words for @chats, and forgets them when the thread goes', () => {
     db.assistant({ op: 'saveThread', thread: thread('a', 1) });
     db.assistant({ op: 'saveMessage', message: message('m1', 'a', 'Compare these laptops') });

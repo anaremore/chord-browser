@@ -4,7 +4,7 @@
  * times it looked at one tab, never that one tab was 69 tabs.
  */
 import { describe, expect, it } from 'vitest';
-import { nextReplyText, toolRowLabel } from '../src';
+import { nextReplyText, replyBlocks, replyBlockStart, toolRowLabel } from '../src';
 
 describe('A reply’s text across tool calls', () => {
   it('text after a tool call starts a paragraph; within one block it runs on', () => {
@@ -19,6 +19,26 @@ describe('A reply’s text across tool calls', () => {
       ['', 'Let me look.', true, 'Let me look.', false],
     ];
     for (const [text, delta, newBlock, after, waiting] of rows) expect(nextReplyText(text, delta, newBlock), JSON.stringify([text, delta])).toEqual({ text: after, newBlock: waiting });
+  });
+});
+
+describe('Where an update starts (Claude’s review of #190)', () => {
+  it('its first words, or the first after a step; never within a block, never on space alone', () => {
+    // [the reply so far, the reply then, a tool ran since, still waiting for a block, where an update starts (or null)]
+    const rows: [string, string, boolean, boolean, number | null][] = [
+      ['', 'Let me look.', false, false, 0],
+      ['', '  ', false, false, null],
+      ['Waiting.', 'Waiting.\n\nOnly Arthur called.', true, false, 'Waiting.'.length + 2],
+      ['Waiting.', 'Waiting. Still.', false, false, null],
+      // A tool ran, but only space came: the update waits for its words.
+      ['Waiting.', 'Waiting.', true, true, null],
+    ];
+    for (const [was, next, afterTool, newBlock, at] of rows) expect(replyBlockStart(was, next, afterTool, newBlock), JSON.stringify([was, next])).toBe(at);
+  });
+
+  it('saved or imported, kept only when each is an update’s start in order and what came before it', () => {
+    expect(replyBlocks([{ at: 0, after: null }, { at: 12, after: 'm1' }])).toEqual([{ at: 0, after: null }, { at: 12, after: 'm1' }]);
+    for (const bad of [null, 'x', [{ at: -1, after: null }], [{ at: 1.5, after: null }], [{ at: 0, after: 3 }], [{ at: 5, after: null }, { at: 2, after: null }], [{}]]) expect(replyBlocks(bad), JSON.stringify(bad)).toBeUndefined();
   });
 });
 

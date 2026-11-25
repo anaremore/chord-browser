@@ -53,6 +53,7 @@ import {
   uuidv7,
   nodeOf,
   nextReplyText,
+  replyBlockStart,
   nodeList,
   type AssistantAttachment,
   type AssistantCitation,
@@ -1412,7 +1413,7 @@ export class AssistantService {
         const next = nextReplyText(was, delta, afterTool);
         // Where an update starts (its first words, or the first after a step), and what in the chat came just before it,
         // so a long turn shows each update in its place (mocks/assistant-long-turns.html, approved 2026-11-25).
-        const starts = !was.trim() && next.text.trim() ? 0 : afterTool && !next.newBlock && was.trim() ? was.trimEnd().length + 2 : null;
+        const starts = replyBlockStart(was, next.text, afterTool, next.newBlock);
         afterTool = next.newBlock;
         const streamingId = state.streaming.id;
         const blocks = state.streaming.body.blocks ?? [];
@@ -1537,7 +1538,7 @@ export class AssistantService {
       });
     }
     const images = streaming.body.images ?? [];
-    const body: AssistantMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}), ...(streaming.body.blocks && streaming.body.blocks.length > 1 ? { blocks: streaming.body.blocks } : {}) };
+    const body: AssistantMessageBody = { role: 'assistant', text, citations, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : {}), ...(images.length ? { images } : {}), ...(streaming.body.blocks?.length ? { blocks: streaming.body.blocks } : {}) };
     if (outcome.status === 'error') state.lastError = outcome.error ?? null;
     if (text.trim() || images.length || outcome.status !== 'done') {
       const message = { ...streaming, body };
