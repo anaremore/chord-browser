@@ -40,10 +40,26 @@ export const COMMAND_MS = 3000;
 /** Requests only, never responses: a tab of yours keeps its pages' own headers (agents' tabs get AGENT_POLICY). */
 const PATTERNS = [{ urlPattern: '*', requestStage: 'Request' }];
 /** Auto-attach to frames in other processes (and theirs), held at their start until their requests are held too. */
-const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe', exclude: false }] };
+/**
+ * Auto-attach to frames in other processes (and theirs), held at their start until their requests are held too; and to
+ * dedicated workers, which are paused at their start by the same setting and run at once (what they send goes through
+ * their page's hold: Claude's B1, round 2 of #150; agents/pickers.ts attaches them the same way).
+ */
+const AUTO_ATTACH = {
+  autoAttach: true,
+  waitForDebuggerOnStart: true,
+  flatten: true,
+  filter: [
+    { type: 'iframe', exclude: false },
+    { type: 'worker', exclude: false },
+  ],
+};
+
+/** Network's buffers while the lease has it on (only for the service-worker bypass): small, no bodies kept. */
+const NETWORK_BUFFERS = { maxTotalBufferSize: 64 * 1024, maxResourceBufferSize: 16 * 1024, maxPostDataSize: 0 };
 
 /** What the lease caught, for the chat (a muted row each). */
-export type UserTabNote = 'file' | 'dialog' | 'popup' | 'download' | 'clipboard' | 'unload' | 'external';
+export type UserTabNote = 'file' | 'dialog' | 'popup' | 'clipboard' | 'unload' | 'external';
 
 /** A download the assistant's click started: its name (made safe) and where it comes from (its redirects' end). */
 export interface UserTabDownload {
@@ -56,8 +72,12 @@ export interface UserTabDeps extends Omit<SendHoldDeps, 'whose'> {
   note(what: UserTabNote, detail: string): void;
   /** A download its click started: the chat's card (*Save invoice.pdf from shop.example?*). */
   askDownload(download: UserTabDownload, signal: AbortSignal): Promise<boolean>;
-  /** The clipboard's text (Electron's), to put back what the page changed in the window. */
-  clipboard?: { read(): Promise<string> | string; write(text: string): void };
+  /**
+   * The clipboard (Electron's), to put back what the page copied in the window: a snapshot of everything on it (text,
+   * HTML, RTF, an image), whether it's still as a snapshot was, and putting one back (false: it held what can't be put
+   * back, files; it's left as it is then).
+   */
+  clipboard?: { snapshot(): Promise<unknown>; same(snapshot: unknown): Promise<boolean>; restore(snapshot: unknown): Promise<boolean> };
 }
 
 /** Whether a lease could be had: on (or joined), another chat's (E8), or not (the debugger can't be had, Fetch failed). */
@@ -80,8 +100,11 @@ interface Lease {
   deps: UserTabDeps;
   /** Until when what the page sends is the assistant's (held): its last action's end and TAIL_MS. */
   sendsUntil: number;
-  /** The clipboard's text as the lease began. */
-  clipboard: string | null;
+  /** The clipboard as the lease began (a snapshot), and what the page copied onto it since, if it did. */
+  clipboard: unknown;
+  pageCopy: unknown;
+  /** The page's copy being taken now (putBackClipboard waits for it). */
+  copying?: Promise<void>;
   /** Its downloads' cards, to take down when it ends. */
   cancel: AbortController;
   /** Download cards up now: the lease waits for them (up to CARD_WAIT_MS) before it ends by time. */
@@ -223,7 +246,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     owner,
     deps,
     sendsUntil: 0,
-    clipboard: await readClipboard(deps),
+    clipboard: await takeClipboard(deps),
+    pageCopy: undefined,
     cancel: new AbortController(),
     asking: 0,
     mine,
@@ -247,7 +271,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
       command(debug, 'Page.enable', {}, sessionId),
       command(debug, 'Page.setInterceptFileChooserDialog', { enabled: true }, sessionId),
       command(debug, 'WebAuthn.enable', { enableUI: false }, sessionId),
-      command(debug, 'Network.enable', {}, sessionId).then(() => command(debug, 'Network.setBypassServiceWorker', { bypass: true }, sessionId)),
+      // Network is on only for the bypass: it keeps no bodies (small buffers).
+      command(debug, 'Network.enable', NETWORK_BUFFERS, sessionId).then(() => command(debug, 'Network.setBypassServiceWorker', { bypass: true }, sessionId)),
     ]);
   };
   lease.onMessage = (_event, method, params) => {
@@ -259,6 +284,16 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     if (method === 'Target.detachedFromTarget' && p.sessionId) return void lease.sessions.delete(p.sessionId);
     if (method !== 'Target.attachedToTarget' || !p.sessionId) return;
     const frame = p.sessionId;
+    // A dedicated worker: run at once, during the lease or as it lets go; never left waiting (it would stall the page's
+    // feature until a reload: Claude's B1, round 2 of #150).
+    if ((params as { targetInfo?: { type?: string } }).targetInfo?.type === 'worker') {
+      void (async () => {
+        // Its own requests held too while the lease is on, where its session takes them (best effort: never a stall).
+        if (!lease.ended) await command(debug, 'Fetch.enable', { patterns: PATTERNS }, frame).catch(() => undefined);
+        if (p.waitingForDebugger) await command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
+      })();
+      return;
+    }
     if (lease.ended) return;
     lease.sessions.add(frame);
     // A frame in another process: its requests held (and its own frames attached) before it runs; one that can't
@@ -340,23 +375,49 @@ function onUnload(this: WebContents): void {
 }
 
 /**
- * The clipboard the page changed in the window (execCommand('copy') on the click's activation isn't a permission), put
- * back to what it was as the lease began: as each action ends, and as the lease ends unless by your own input (what you
- * copy then is yours). Neon's B6 on #150: never left changed for the whole 6 s, nor after a Stop.
+ * The page copied (its copy or cut event, from the page preload: execCommand('copy') on the click's activation isn't a
+ * permission): what it put there is taken a moment later, once it's written, to know it again (Claude's B2, round 2 of
+ * #150). Your own copy never comes here: your key ends the lease first.
  */
-async function putBackClipboard(lease: Lease): Promise<void> {
-  if (lease.clipboard === null) return;
-  const now = await readClipboard(lease.deps);
-  if (now === null || now === lease.clipboard) return;
-  lease.deps.clipboard?.write(lease.clipboard);
-  lease.deps.note('clipboard', 'the clipboard, put back');
+export function userTabCopied(contents: object): void {
+  const lease = leases.get(contents as WebContents);
+  if (!lease || lease.ended) return;
+  // Taken a moment later (once it's written); a put-back meanwhile waits for it.
+  lease.copying = new Promise<void>((done) => {
+    const timer = setTimeout(done, COPY_SETTLE_MS);
+    timer.unref?.();
+  }).then(async () => void (lease.pageCopy = await takeClipboard(lease.deps)));
 }
 
-async function readClipboard(deps: UserTabDeps): Promise<string | null> {
+/** How long after the page's copy event its copy is on the clipboard. */
+const COPY_SETTLE_MS = 50;
+
+async function takeClipboard(deps: UserTabDeps): Promise<unknown> {
   try {
-    return (await deps.clipboard?.read()) ?? null;
+    return await deps.clipboard?.snapshot();
   } catch {
-    return null;
+    return undefined;
+  }
+}
+
+/**
+ * The page's copy, put back to what was there as the lease began: as each action ends, and as the lease ends unless by
+ * your own input (Neon's B6 on #150). Only if the page copied, and only while what's there is still the page's copy:
+ * anything you copied since (in the chat, another app) is yours (Claude's B2, round 2 of #150). What can't be put back
+ * (files) is left as it is, and said.
+ */
+async function putBackClipboard(lease: Lease): Promise<void> {
+  await lease.copying;
+  const page = lease.pageCopy;
+  const clipboard = lease.deps.clipboard;
+  if (page === undefined || lease.clipboard === undefined || !clipboard) return;
+  lease.pageCopy = undefined;
+  try {
+    if (!(await clipboard.same(page)) || (await clipboard.same(lease.clipboard))) return;
+    if (await clipboard.restore(lease.clipboard)) lease.deps.note('clipboard', 'the clipboard, put back');
+    else lease.deps.note('clipboard', 'what was on it couldn’t be put back');
+  } catch {
+    // Unreadable now: left as it is.
   }
 }
 
@@ -457,6 +518,8 @@ async function turnOff(contents: WebContents, lease: Lease): Promise<void> {
   await quiet('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
   for (const sessionId of [...lease.sessions, undefined]) {
     await quiet('Fetch.disable', {}, sessionId);
+    await quiet('Network.disable', {}, sessionId);
+    await quiet('Page.disable', {}, sessionId);
     await quiet('WebAuthn.disable', {}, sessionId);
     await quiet('Page.setInterceptFileChooserDialog', { enabled: false }, sessionId);
   }

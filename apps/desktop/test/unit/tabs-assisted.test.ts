@@ -29,6 +29,8 @@ vi.mock('../../src/main/control/user-watch', () => ({
   noteUserTab: (_c: unknown, what: string, detail: string) => void assisted.notes.push(`${what}: ${detail}`),
 }));
 
+const agentInput = vi.hoisted(() => ({ on: false }));
+vi.mock('../../src/main/control/input', () => ({ isAgentInput: () => agentInput.on }));
 const { TabManager } = await import('../../src/main/tabs');
 const NODE = 'n1' as NodeId;
 
@@ -52,7 +54,14 @@ function setup(pinned = false) {
   const view = manager.ensure(NODE) as unknown as FakeView;
   const handler = view.page.setWindowOpenHandler.mock.calls[0]![0] as (d: HandlerDetails) => WindowOpenHandlerResponse;
   const open = (details: Partial<HandlerDetails>) => handler({ url: 'https://files.example/file.zip', disposition: 'foreground-tab', features: '', frameName: '', referrer: { url: '', policy: 'default' }, postBody: undefined, ...details } as HandlerDetails);
-  return { open, commands, peeks };
+  /** A click in the page (yours, or one Chord sends), then the page going to a link's address. */
+  const clickThenNavigate = (url: string) => {
+    view.page.emit('input-event', {}, { type: 'mouseUp', x: 5, y: 5 });
+    const event = { isMainFrame: true, isSameDocument: false, url, preventDefault: vi.fn() };
+    view.page.emit('will-navigate', event);
+    return event;
+  };
+  return { open, commands, peeks, clickThenNavigate };
 }
 
 describe('What the assistant’s click opens from a tab of yours (S18 M2e-2b)', () => {
@@ -86,5 +95,17 @@ describe('What the assistant’s click opens from a tab of yours (S18 M2e-2b)', 
     expect(t.open({ url: 'https://news.example/a', disposition: 'foreground-tab' })).toEqual({ action: 'deny' });
     expect(t.peeks).toEqual([]);
     assisted.on = false;
+  });
+
+  it('a pinned tab’s cross-site link: your click opens Peek; a click Chord sends for the assistant leaves it to the page (Claude’s S4, round 2 of #150)', () => {
+    agentInput.on = false;
+    const yours = setup(true);
+    expect(yours.clickThenNavigate('https://news.example/a').preventDefault).toHaveBeenCalled();
+    expect(yours.peeks).toEqual(['https://news.example/a']);
+    agentInput.on = true;
+    const its = setup(true);
+    expect(its.clickThenNavigate('https://news.example/a').preventDefault).not.toHaveBeenCalled();
+    expect(its.peeks).toEqual([]);
+    agentInput.on = false;
   });
 });

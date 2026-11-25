@@ -11,9 +11,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
 /** The lease module, as the service sees it: whose lease is on where, and what was ended (by whom). */
-const leases = vi.hoisted(() => ({ ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on' }));
+const leases = vi.hoisted(() => ({ ended: [] as unknown[], owners: new Map<unknown, string>(), begin: async (): Promise<string> => 'on', deps: null as null | { note(what: string, detail: string): void } }));
 vi.mock('../../src/main/control/user-watch', () => ({
-  beginUserAction: async (contents: unknown, owner: string) => {
+  beginUserAction: async (contents: unknown, owner: string, deps: { note(what: string, detail: string): void }) => {
+    leases.deps = deps;
     const begun = await leases.begin();
     if (begun === 'on') leases.owners.set(contents, owner);
     return { begun, end: () => undefined };
@@ -66,7 +67,7 @@ function setup(acting = true) {
   const pages = new Map<string, { isDestroyed(): boolean }>();
   const page = (id: string) => {
     let p = pages.get(id);
-    if (!p) pages.set(id, (p = { isDestroyed: () => false }));
+    if (!p) pages.set(id, (p = { isDestroyed: () => false, getURL: () => 'https://game.example/table' } as { isDestroyed(): boolean }));
     return p;
   };
   const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-'));
@@ -479,5 +480,16 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('what the lease caught there goes to the next result in that tab, once (Claude’s S1, round 2 of #150)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> }; caught(node: unknown): string[] } }).actingHost(s);
+    await host.lease.begin({ id: t.mine });
+    leases.deps!.note('dialog', 'confirm: “Delete?”');
+    leases.deps!.note('file', 'a file picker');
+    expect(host.caught({ id: t.mine })).toEqual(['The page showed a dialog (confirm: “Delete?”); it was answered Cancel', 'The page tried to open a file picker; it wasn’t shown']);
+    expect(host.caught({ id: t.mine })).toEqual([]);
   });
 });

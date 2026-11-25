@@ -1,17 +1,19 @@
 /** File naming for downloads (pure, so it's unit-testable). */
 import { extname, join, posix } from 'node:path';
 
-/**
- * Characters no OS allows in a file name, plus control characters, and the bidi ones that make a name read as another
- * (`invoice\u202Epiz.exe` shows as "invoiceexe.zip": Neon's B5 on #150).
- */
+/** Characters no OS allows in a file name, plus control characters. */
 // eslint-disable-next-line no-control-regex -- control characters are exactly what this removes
-const UNSAFE = /[<>:"/\\|?*\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const UNSAFE = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;
+/**
+ * Bidi controls and marks: dropped, never replaced, so a name reads as it is (`invoice\u202Epiz.exe` would show as
+ * "invoiceexe.zip": Neon's B5 on #150), and a mark (\u200E) leaves no `_` behind.
+ */
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** A suggested name made safe to save: no folders, no reserved characters, not empty. */
 export function safeFilename(suggested: string): string {
   // POSIX rules after normalizing slashes, so "a:b" isn't read as a Windows drive.
-  const name = posix.basename(suggested.replace(/\\/g, '/')).replace(UNSAFE, '_').replace(/^[.\s]+|[.\s]+$/g, '');
+  const name = posix.basename(suggested.replace(/\\/g, '/')).replace(BIDI, '').replace(UNSAFE, '_').replace(/^[.\s]+|[.\s]+$/g, '');
   return name || 'download';
 }
 

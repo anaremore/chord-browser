@@ -166,7 +166,9 @@ export class DownloadManager {
     if (!entry || entry.asked !== null) return;
     entry.asked = yes;
     if (!yes) return this.dropAsked(id);
-    if (entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
+    // Held by Safe Browsing too: it stays held until you keep it there (Neon's SF2, round 2 of #150).
+    if (!entry.screen?.verdict && entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
+    this.report(id);
     void this.settle(id);
   }
 
@@ -212,8 +214,10 @@ export class DownloadManager {
     const { item, screen } = entry;
     const raw = item.getState();
     const path = screen?.settled ? screen.finalPath : item.getSavePath();
-    // A held one still shows as on its way until you decide, even if all its bytes are in.
+    // A held one still shows as on its way until you decide, even if all its bytes are in; so does one asked about in the
+    // chat (no end, no "new" dot, nothing to open: Neon's SF2, round 2 of #150).
     const held = screen?.verdict || undefined;
+    const waiting = Boolean(held) || entry.asked === null;
     return {
       id,
       url: item.getURL(),
@@ -221,12 +225,12 @@ export class DownloadManager {
       filename: screen ? basename(screen.finalPath) : path ? basename(path) : safeFilename(item.getFilename()),
       path,
       mime: item.getMimeType(),
-      state: held && raw === 'completed' ? 'paused' : raw === 'progressing' && item.isPaused() ? 'paused' : raw,
+      state: waiting && raw === 'completed' ? 'paused' : raw === 'progressing' && item.isPaused() ? 'paused' : raw,
       received: item.getReceivedBytes(),
       total: item.getTotalBytes(),
       speed: raw === 'progressing' && !item.isPaused() ? item.getCurrentBytesPerSecond() : 0,
       startedAt: Math.round(item.getStartTime() * 1000),
-      endedAt: entry.ended && !held ? Date.now() : null,
+      endedAt: entry.ended && !waiting ? Date.now() : null,
       ...(held ? { threat: held } : {}),
     };
   }
@@ -281,7 +285,8 @@ export class DownloadManager {
     const entry = this.entries.get(id);
     if (!entry?.screen?.verdict) return;
     entry.screen.verdict = false;
-    if (entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
+    // Asked in the chat and not yet allowed there: it waits for that too (Neon's SF2, round 2 of #150).
+    if (entry.asked !== null && entry.asked !== false && entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
     this.report(id);
     void this.settle(id);
   }

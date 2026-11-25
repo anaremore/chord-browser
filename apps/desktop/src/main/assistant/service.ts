@@ -136,6 +136,8 @@ interface ThreadState extends DuetChat {
   sendGrants: Map<NodeId, Set<string>>;
   /** Your key or click ended this message's acting before it acted: said at its first refused step (sayStopped). */
   stopUnsaid: boolean;
+  /** What the lease caught in each tab since its last result there (said in the next one). */
+  caught: Map<NodeId, string[]>;
   /** Each action under way in a tab, its own end (user-watch's UserAction), oldest first. */
   actionEnds: Map<NodeId, (() => void)[]>;
   startedAt: number | null;
@@ -406,6 +408,7 @@ export class AssistantService {
       sentTabs: new Map(),
       sendGrants: new Map(),
       actionEnds: new Map(),
+      caught: new Map(),
       stopUnsaid: false,
       queuedTab: [],
       // The chat is the agent; its cards are approval messages in the chat.
@@ -1579,6 +1582,12 @@ export class AssistantService {
         idle.unref?.();
         this.barIdle.set(nodeId, idle);
       },
+      // What the lease caught there since the last result, for the next one (Claude's S1, round 2 of #150).
+      caught: (node) => {
+        const caught = s.caught.get(node.id) ?? [];
+        s.caught.delete(node.id);
+        return caught;
+      },
       lease: {
         begin: async (node) => {
           const contents = this.browser.tabs.get(node.id)?.webContents;
@@ -1588,7 +1597,13 @@ export class AssistantService {
             ask: this.tailCard(s, node.id, contents),
             kept: this.sendGrantsFor(s, node.id),
             // What its click set off, caught in the moment after (M2e-2b, A6): a muted row each.
-            note: (what, detail) => void this.activity(s, 'act', USER_TAB_NOTES[what](plainNote(detail)), contents.isDestroyed() ? '' : contents.getURL(), false),
+            note: (what, detail) => {
+              const said = USER_TAB_NOTES[what](plainNote(detail));
+              // In the chat, and in the next result there, so the model never says done when the page said no.
+              const caught = s.caught.get(node.id) ?? [];
+              if (caught.length < CAUGHT_MAX) s.caught.set(node.id, [...caught, said]);
+              if (s.thread) void this.activity(s, 'act', said, contents.isDestroyed() ? '' : contents.getURL(), false);
+            },
             askDownload: async (download, signal) => {
               if (contents.isDestroyed()) return false;
               const takeDown = new AbortController();
@@ -1602,7 +1617,7 @@ export class AssistantService {
                   tab: node.id,
                   subject: `${node.id}|download|${randomBytes(4).toString('hex')}`,
                   // Its own site, where its redirects end, never the page's (Neon's B5 on #150); its name already made safe.
-                  step: { why: 'confirm', site: siteOfUrl(download.url) ?? new URL(download.url).host, fields: [], more: 0, download: download.filename.slice(0, 120) },
+                  step: { why: 'confirm', ...downloadShown(download, contents.getURL()), fields: [], more: 0 },
                   takeDown: takeDown.signal,
                 },
                 signal,
@@ -1611,7 +1626,7 @@ export class AssistantService {
               if (answer === 'waiting') takeDown.abort();
               return answer === 'once';
             },
-            clipboard: { read: () => clipboard.readText(), write: (text) => clipboard.writeText(text) },
+            clipboard: electronClipboard,
           });
           const begun = action.begun;
           if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
@@ -2116,6 +2131,35 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
  * The gate's acting card as the chat shows it (S18 M2e-2a; mocks/agents-s18-m2.html §7): the site card, a risky step,
  * or what an action sends. Chord's words only (card.description is Chord's: *click “Raise”*), never the model's.
  */
+/** How long a download's name can be on its card: cut in the middle beyond this, its extension kept. */
+const DOWNLOAD_NAME_MAX = 60;
+
+/**
+ * A download's card: the site it comes from (a `blob:` address's inner origin; a `data:` one, or one that can't be read,
+ * the page's), never a "?" or a throw; and its name on one line, cut in the middle so its extension always shows (a long
+ * name padded before `.exe` would otherwise read as its `.pdf`: Neon's SF1 and Claude's S2, round 2 of #150).
+ */
+export function downloadShown(download: { filename: string; url: string }, pageUrl: string): { site: string; download: string } {
+  const siteOf = (url: string): string | null => {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'blob:') return siteOf(u.pathname);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      return siteOfUrl(url) ?? u.host;
+    } catch {
+      return null;
+    }
+  };
+  const site = siteOf(download.url) ?? siteOf(pageUrl) ?? 'this page';
+  const name = download.filename.replace(/\s+/g, ' ').trim() || 'download';
+  if (name.length <= DOWNLOAD_NAME_MAX) return { site, download: name };
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 && name.length - dot <= 12 ? name.slice(dot) : '';
+  const keep = DOWNLOAD_NAME_MAX - ext.length - 1;
+  const head = Math.ceil(keep / 2);
+  return { site, download: `${name.slice(0, head)}…${name.slice(name.length - ext.length - (keep - head), name.length - ext.length)}${ext}` };
+}
+
 /**
  * A card a lease asks on its own (what the page sends in its tail, a download): it outlives the turn. Its whole subject is
  * `<tab>|tail|<8 hex>` or `<tab>|download|<8 hex>`, never a match inside another card's address (Neon's S5 on #150).
@@ -2123,6 +2167,56 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
 export function outlivesTurn(subject: string): boolean {
   return /^[^|]+\|(tail|download)\|[0-9a-f]{8}$/.test(subject);
 }
+
+/** What's on the clipboard: each item's kinds and their bytes; null when it can't be read (what it holds can't be put back). */
+type ClipboardSnapshot = { type: string; bytes: Uint8Array }[][] | null;
+
+async function readClipboardItems(): Promise<ClipboardSnapshot> {
+  try {
+    const items = await clipboard.read();
+    return await Promise.all(
+      items.map((item) =>
+        Promise.all(
+          item.types.map(async (type) => {
+            const part = await item.getType(type);
+            // A bookmark (or anything else that isn't bytes) can't be written back as it was.
+            if (!(part instanceof Blob)) throw new Error(`can't keep ${type}`);
+            return { type, bytes: new Uint8Array(await part.arrayBuffer()) };
+          }),
+        ),
+      ),
+    );
+  } catch {
+    return null;
+  }
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * The clipboard as the assistant's lease takes and puts it back (control/user-watch.ts): all of it, every item and
+ * kind, never only its text, so what can't be read back (files) is left alone and said, never cleared (Claude's B2,
+ * round 2 of #150). Electron's main-process clipboard is the web's async one.
+ */
+export const electronClipboard = {
+  snapshot: (): Promise<ClipboardSnapshot> => readClipboardItems(),
+  same: async (raw: unknown): Promise<boolean> => {
+    const was = raw as ClipboardSnapshot;
+    const now = await readClipboardItems();
+    if (!was || !now || was.length !== now.length) return false;
+    return was.every((item, i) => item.length === now[i]!.length && item.every((part, j) => part.type === now[i]![j]!.type && sameBytes(part.bytes, now[i]![j]!.bytes)));
+  },
+  restore: async (raw: unknown): Promise<boolean> => {
+    const was = raw as ClipboardSnapshot;
+    if (!was) return false;
+    try {
+      await clipboard.write(was.map((item) => new ClipboardItem(Object.fromEntries(item.map((part) => [part.type, new Blob([part.bytes], { type: part.type })])))));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
 
 /**
  * The page's own words in a note (a dialog's text, an address): one plain line, no control or bidi characters that could
@@ -2136,9 +2230,9 @@ export function plainNote(text: string): string {
 /** What the chat says of something the assistant's click set off (M2e-2b, A6), Chord's words around the page's. */
 export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   file: () => 'The page tried to open a file picker; it wasn’t shown',
-  dialog: (detail) => `The page showed a dialog (${detail}); it was answered Cancel`,
+  // An alert has no Cancel: it was closed (its OK); a confirm or a prompt was answered Cancel.
+  dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
   popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,
-  download: (detail) => `The page tried to download ${detail}`,
   clipboard: () => 'The page changed your clipboard; Chord put it back',
   unload: () => 'The page has unsaved changes, so it stayed',
   external: (detail) => `The page tried to open ${detail} in another program; it wasn’t opened`,
@@ -2195,6 +2289,9 @@ export function actCard(card: ControlCard): AssistantActCard | null {
     showable: Boolean(card.show),
   };
 }
+
+/** At most this many caught notes wait for a tab's next result. */
+const CAUGHT_MAX = 10;
 
 /** The bar between the assistant's steps in a tab (the owner, 2026-11-24: it stays on while it works). */
 const BAR_BETWEEN = 'is working in this tab';

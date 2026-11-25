@@ -37,6 +37,8 @@ test.beforeAll(async () => {
       '<button onclick="getSelection().selectAllChildren(copyme); document.execCommand(\'copy\'); log.textContent += \'copied \'">Copy</button>' +
       '<button onclick="const t = Date.now(); navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32), timeout: 20000, userVerification: \'discouraged\', allowCredentials: [] } }).then(() => (log.textContent += \'passkey-ok \'), (e) => (log.textContent += \'passkey-\' + e.name + \'-\' + Math.round((Date.now() - t) / 1000) + \'s \'))">Passkey</button>' +
       '<button onclick="file.click()">Download</button>' +
+      // Claude's B1, round 2 of #150: a worker the click starts runs (never left waiting at its start).
+      `<button onclick="const w = new Worker('/w.js'); w.onmessage = (e) => (log.textContent += 'worker-' + e.data + ' ')">Start worker</button>` +
       // Neon's B1 on #150: a link that opens a file in a new tab.
       '<a href="/file.zip" target=_blank>Get file</a>' +
       // The PaymentRequest row: Electron has no payment service (the M2e-2 spike); a later one that adds it fails here.
@@ -51,6 +53,11 @@ test.beforeAll(async () => {
     '/checkout': '<title>Checkout</title><form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> <button>Place order</button></form>',
   };
   const server = createServer((req, res) => {
+    if (req.url === '/w.js') {
+      res.writeHead(200, { 'content-type': 'text/javascript' });
+      res.end("postMessage('ok');");
+      return;
+    }
     if (req.url === '/sw.js') {
       res.writeHead(200, { 'content-type': 'text/javascript' });
       // What the worker sends itself is marked (?sw), so a test can tell it from the page's own (Neon's N2 on #150).
@@ -317,7 +324,7 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     // The clipboard the page changed is put back once its click can set nothing off.
     await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 15_000 }).toBe('yours');
     // A link opening a file in a new tab, a payment, a sign-in with another site (Neon's B1 and B2 on #150).
-    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Get file' }, { tool: 'click', name: 'Open sheet' }, { tool: 'click', name: 'Identity' }]));
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Get file' }, { tool: 'click', name: 'Open sheet' }, { tool: 'click', name: 'Identity' }, { tool: 'click', name: 'Start worker' }]));
     await expect.poll(() => actingTurns(config), { timeout: 40_000 }).toBe(2);
     // No tab, no download, said.
     await expect(panel.getByText(/file\.zip in a new tab or window; it wasn’t opened/)).toBeVisible();
@@ -327,6 +334,8 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await expect(page.locator('#log')).toContainText(/pay-\w+/);
     await expect(page.locator('#log')).not.toContainText('pay-ok');
     await expect(page.locator('#log')).toContainText('signin-NetworkError', { timeout: 15_000 });
+    // A worker the click started: it ran.
+    await expect(page.locator('#log')).toContainText('worker-ok', { timeout: 15_000 });
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(windows);
     // A download its click starts asks first; Don't, and nothing is saved.
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Download' }]));

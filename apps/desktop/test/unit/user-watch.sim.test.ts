@@ -1,16 +1,21 @@
 /**
- * The lease on a tab of yours (control/user-watch.ts), under seeded interleavings: two chats beginning and ending
- * actions, a chat's Stop, your hands, the debugger let go, the renderer gone, the page sending, the clipboard changed and
- * time passing, in every order a seed picks. After each step, what must always hold (the reviews of #147; M2e-2b):
+ * The lease on a tab of yours (control/user-watch.ts), under seeded interleavings: two chats beginning (some left in
+ * flight) and ending actions, a chat's Stop, your hands, the debugger let go, the renderer gone, the page sending, the
+ * page copying, you copying elsewhere, a download card, a frame, a catch that fails, and time, in every order a seed
+ * picks. After each step:
  *
- * - one owner at most, and `userTabActing` only while it's catching;
- * - nothing the page sends is left unanswered once no lease is on, and nothing sent outside an action's tail is held;
- * - once every lease is over: Chord's own attachment let go, the service worker back, the clipboard as you left it
- *   unless you changed it.
+ * - an owner exactly while the lease is catching, and acting only while catching;
+ * - an action under way on the lease that's on: acting;
+ * - a lease that's on holds the tab (attached, Fetch on);
+ * - nothing the page sent left unanswered once Fetch is off;
+ * - once no lease is on: the page's copy put back (unless your input ended it), and what you copied never undone.
+ *
+ * At the end, every lease over: Chord's attachment let go, the service worker back, nothing unanswered.
  *
  * A failure names its seed and the steps that led there: `SIM_SEED=<n>` runs that one alone; `SIM_SEEDS=<n>` runs more.
- * Checked against two broken leases: an action's end that reaches a later lease fails here (seed 47). A stale cleanup
- * that tears the next lease down only makes that lease lost (closed, not open), and needs a stop at the very moment of
+ * Checked against broken leases: an action's end that reaches a later lease fails here (seed 47); so does a put-back
+ * over what you copied after the page (seed 33), and the clipboard never put back on Stop (seed 1). A stale cleanup that
+ * tears the next lease down only makes that lease lost (closed, not open), and needs a stop at the very moment of
  * handout, which a step here can't reach: assistant-acting.test.ts covers it (Neon's B4, round 3 of #147).
  */
 import { EventEmitter } from 'node:events';
@@ -97,6 +102,8 @@ async function run(seed: number, steps: number): Promise<string[]> {
   /** The clipboard as the lease that's on began, and whether the page changed it during that lease (not you since). */
   let clipAtStart = clip;
   let clipDirty = false;
+  /** What should be on the clipboard once no lease is on: the last thing put there, or what a lease put back. */
+  let clipShould = clip;
   let wasCatching = false;
   const deps = (owner: string) => ({
     siteOf: (u: string) => new URL(u).origin,
@@ -109,7 +116,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
     note: () => undefined,
     // A download card: answered after a while, or not before the lease would end.
     askDownload: () => new Promise<boolean>((done) => setTimeout(() => done(rnd() < 0.5), Math.floor(rnd() * 50_000))),
-    clipboard: { read: () => clip, write: (text: string) => void (clip = text) },
+    clipboard: { snapshot: async () => clip, same: async (s: unknown) => s === clip, restore: async (s: unknown) => ((clip = s as string), true) },
     kept: owner === 'chat:1' ? new Set<string>() : undefined,
   });
   let requests = 0;
@@ -130,7 +137,10 @@ async function run(seed: number, steps: number): Promise<string[]> {
     if (!catching && clipDirty) {
       expect(clip, `${where}: the clipboard left as the page made it`).toBe(clipAtStart);
       clipDirty = false;
+      clipShould = clipAtStart;
     }
+    // Never put back over yours (Claude's B2, round 2 of #150): what you copied stays.
+    if (!catching) expect(clip, `${where}: the clipboard isn't what was last put there`).toBe(clipShould);
     wasCatching = catching;
     // An action still under way on the lease that's on: it's acting there (never its tail started early, never let go).
     if (current !== null && actions.some((a) => a.lease === current)) expect(watch.userTabActing(t.contents), `${where}: an action under way, not acting`).toBe(true);
@@ -139,7 +149,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
   };
 
   for (let i = 0; i < steps; i++) {
-    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'download', 'frame', 'failing', 'time', 'time'] as const);
+    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'elsewhere', 'download', 'frame', 'failing', 'time', 'time'] as const);
     if (op === 'begin') {
       const owner = pick(['chat:1', 'chat:2']);
       log.push(`begin ${owner}`);
@@ -150,6 +160,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
         if (rnd() < 0.5) {
           watch.endUserLease(t.contents);
           clipDirty = false;
+          clipShould = clip;
         } else watch.endUserLease(t.contents, owner);
         log.push('…ended while beginning');
       }
@@ -174,6 +185,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
       watch.endUserLease(t.contents);
       // What's on the clipboard as you take the tab is yours from here.
       clipDirty = false;
+      clipShould = clip;
     } else if (op === 'detach') {
       log.push('detach');
       (t.debug as unknown as { detach(): void }).detach();
@@ -187,9 +199,21 @@ async function run(seed: number, steps: number): Promise<string[]> {
       log.push(`post ${id}`);
       t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId: id, request: { method: 'POST', url: 'https://game.example/move' }, resourceType: 'XHR' });
     } else if (op === 'clipboard') {
+      // The page copies (its copy event, reported): during a lease, put back by the time it's over.
       clip = `page-${i}`;
-      if (watch.userTabCatching(t.contents)) clipDirty = true;
-      log.push('the page wrote the clipboard');
+      clipShould = clip;
+      if (watch.userTabCatching(t.contents)) {
+        clipDirty = true;
+        watch.userTabCopied(t.contents);
+      }
+      log.push('the page copied');
+      await vi.advanceTimersByTimeAsync(60);
+    } else if (op === 'elsewhere') {
+      // You copy in the chat or another app: yours, never put back (Claude's B2, round 2 of #150).
+      clip = `you-${i}`;
+      clipShould = clip;
+      clipDirty = false;
+      log.push('you copied elsewhere');
     } else if (op === 'failing') {
       log.push('the next catch fails');
       t.state.failNext = true;

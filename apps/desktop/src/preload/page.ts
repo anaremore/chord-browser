@@ -146,7 +146,13 @@ if ((protocol === 'https:' || protocol === 'http:') && isTop) {
 }
 // A tab of yours: the same typing guard as an agent's tab's, dormant until the assistant types or presses a key here
 // (S18 M2e-2a, F4), in the top frame only (your tabs' frames get no preload: focus that ends in one is refused).
-if (!agentTab && isTop && (protocol === 'https:' || protocol === 'http:')) installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
+if (!agentTab && isTop && (protocol === 'https:' || protocol === 'http:')) {
+  installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
+  // The page copying (its copy or cut event): main puts the clipboard back only if the assistant's click set it off
+  // (control/user-watch.ts' userTabCopied; Claude's B2, round 2 of #150). Your own copy ends any lease first.
+  const win = globalThis as unknown as { addEventListener(type: string, listener: () => void, capture: boolean): void };
+  for (const type of ['copy', 'cut']) win.addEventListener(type, () => ipcRenderer.send('page:copied'), true);
+}
 // An outside agent's tab: every frame of it, whatever its address (an about:blank, srcdoc or blob: frame takes its
 // parent's origin, and its pickers and dialogs would be the page's), but never an extension's or DevTools' page.
 if (agentTab && protocol !== 'chrome-extension:' && protocol !== 'devtools:') {

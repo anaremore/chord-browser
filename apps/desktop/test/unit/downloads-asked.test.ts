@@ -29,13 +29,19 @@ afterEach(() => {
   delete process.env['CHORD_DOWNLOADS_DIR'];
 });
 
-function setup() {
+function setup(threat: 'malware' | null | undefined = undefined) {
   const dir = mkdtempSync(join(tmpdir(), 'chord-dl-'));
   dirs.push(dir);
   process.env['CHORD_DOWNLOADS_DIR'] = dir;
   const session = new EventEmitter();
   const commands: Command[] = [];
-  const downloads = new DownloadManager({ state: () => emptyState(), dispatch: (c) => void commands.push(c), newId: () => 'd1', defaultSession: () => session as never });
+  const downloads = new DownloadManager({
+    state: () => emptyState(),
+    dispatch: (c) => void commands.push(c),
+    newId: () => 'd1',
+    defaultSession: () => session as never,
+    ...(threat !== undefined ? { screen: () => Promise.resolve(threat) } : {}),
+  });
   downloads.attach(session as never);
   let state: 'progressing' | 'completed' | 'cancelled' = 'progressing';
   let paused = false;
@@ -71,7 +77,9 @@ function setup() {
     item.emit('done', {}, 'completed');
   };
   session.emit('will-download', { preventDefault: vi.fn() }, item, page);
-  return { dir, downloads, item, finish, commands, path: () => path, files: () => readdirSync(dir) };
+  /** The row the list shows now. */
+  const row = () => [...commands].reverse().find((c) => c.t === 'download.update') as { download: { state: string; endedAt: number | null } } | undefined;
+  return { dir, downloads, item, finish, commands, row, path: () => path, files: () => readdirSync(dir) };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -79,7 +87,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 describe('A download the assistant’s click started (S18 M2e-2b)', () => {
   it('is asked about with its own site and a name that can’t spoof one; pending until you say; Allow saves it under its name', async () => {
     const t = setup();
-    expect(asked.calls).toEqual([{ filename: 'invoice_piz.exe', url: 'https://files.example/real/invoice.zip' }]);
+    expect(asked.calls).toEqual([{ filename: 'invoicepiz.exe', url: 'https://files.example/real/invoice.zip' }]);
     expect(t.path().endsWith(PENDING_SUFFIX)).toBe(true);
     expect(t.item.pause).toHaveBeenCalled();
     // Never resumed or opened while it's asked about.
@@ -91,7 +99,7 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
     t.finish();
     await tick();
     await tick();
-    expect(t.files()).toEqual(['invoice_piz.exe']);
+    expect(t.files()).toEqual(['invoicepiz.exe']);
   });
 
   it('Don’t deletes it, finished or not; nothing is left in the folder, nor in the list', async () => {
@@ -114,5 +122,28 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
     t.downloads.discardHeld();
     await vi.waitFor(() => expect(existsSync(t.path())).toBe(false));
     expect(t.files()).toEqual([]);
+  });
+
+  it('held by Safe Browsing too: your Allow in the chat doesn’t resume it, Keep doesn’t before you’ve answered; it shows as waiting, finished or not (Neon’s SF2, round 2 of #150)', async () => {
+    const t = setup('malware');
+    await tick();
+    // Suspected while it's asked about: Allow in the chat doesn't resume it.
+    asked.answer!(true);
+    await tick();
+    expect(t.item.resume).not.toHaveBeenCalled();
+    // Keep (Safe Browsing's) now: it resumes, as you've allowed it too.
+    t.downloads.run('d1', 'keep');
+    expect(t.item.resume).toHaveBeenCalled();
+    // Kept before the chat's answer: no resume until you answer.
+    const u = setup('malware');
+    await tick();
+    u.downloads.run('d1', 'keep');
+    expect(u.item.resume).not.toHaveBeenCalled();
+    // Waiting on the chat, its bytes all in: it shows as waiting, not done.
+    const w = setup(null);
+    w.finish();
+    await tick();
+    expect(w.row()?.download.state).toBe('paused');
+    expect(w.row()?.download.endedAt).toBeNull();
   });
 });
