@@ -6,7 +6,8 @@
  */
 import { durations } from '@chord/tokens';
 import { X } from 'lucide-react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { cardWait } from './card-guard';
 import styles from './AgentCard.module.css';
 
 export interface AgentCardAction {
@@ -22,13 +23,18 @@ export interface AgentCardAction {
  * The card's body. Buttons ignore clicks for a moment after it appears, as Chord's prompts over a page do, so
  * a click meant for the page can't answer it.
  */
-export function AgentCardBody({ title, note, list, actions, onClose, closeLabel }: { title: string; note?: ReactNode; list?: readonly string[]; actions: readonly AgentCardAction[]; onClose(): void; closeLabel: string }) {
-  const shownAt = useRef(Date.now());
+export function AgentCardBody({ id, title, note, list, actions, onClose, closeLabel }: { id: string; title: string; note?: ReactNode; list?: readonly string[]; actions: readonly AgentCardAction[]; onClose(): void; closeLabel: string }) {
+  // Its first moment counts from when this card (`id`) was first shown, never from a redraw (card-guard.ts), and its
+  // buttons say they can't be pressed yet (the release check, 2026-11-25).
+  const wait = () => cardWait(id, performance.now(), durations.promptInputDelay);
+  const [waiting, setWaiting] = useState(() => wait() > 0);
   useEffect(() => {
-    shownAt.current = Date.now();
-  }, []);
+    if (!waiting) return;
+    const timer = setTimeout(() => setWaiting(false), wait());
+    return () => clearTimeout(timer);
+  });
   const ready = (run: () => void) => () => {
-    if (Date.now() - shownAt.current >= durations.promptInputDelay) run();
+    if (wait() === 0) run();
   };
   return (
     <>
@@ -49,7 +55,7 @@ export function AgentCardBody({ title, note, list, actions, onClose, closeLabel 
       )}
       <div className={styles.actions}>
         {actions.map((a) => (
-          <button key={a.label} type="button" className={a.left ? `${styles[a.look]} ${styles.left}` : styles[a.look]} onClick={ready(a.onClick)}>
+          <button key={a.label} type="button" className={a.left ? `${styles[a.look]} ${styles.left}` : styles[a.look]} aria-disabled={waiting || undefined} data-waiting={waiting || undefined} onClick={ready(a.onClick)}>
             {a.label}
           </button>
         ))}

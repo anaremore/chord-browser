@@ -635,6 +635,9 @@ jobs:
       CHORD_E2E_SPEC: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.spec || '' }}
       CHORD_E2E_GREP: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.grep || '' }}
       CHORD_E2E_REPEAT: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.repeat || '' }}
+      # A repro runs its E2E alone: not the once-per-platform unit and perf steps of a first shard, whose own flakes
+      # (agents.test's on Windows, #107) would stop it before its E2E ran.
+      CHORD_E2E_REPRO: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && '1' || '' }}
     steps: &e2e-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -661,15 +664,15 @@ jobs:
       # looked up for real on each OS, and the lookup's budget per OS (agent-peer.perf.test.ts). Once per OS: in its first
       # shard. Not on Linux x64, where the checks job's pnpm test and pnpm test:perf already run them, on the same OS.
       - name: Agents' transport
-        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64')
+        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64') && env.CHORD_E2E_REPRO != '1'
         run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/agent-peer.test.ts apps/desktop/test/unit/control.test.ts
       - name: Who's calling, timed
-        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64')
+        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64') && env.CHORD_E2E_REPRO != '1'
         run: pnpm test:perf apps/desktop/test/unit/agent-peer.perf.test.ts
       # chord-data's perf rows on Windows' disks too, where a sync to disk costs most: a new profile's database (and
       # its migrations committed one by one, as before 2026-11-20, for comparison) and a big import's Undo.
       - name: chord-data's perf rows
-        if: runner.os == 'Windows' && matrix.shard == 1
+        if: runner.os == 'Windows' && matrix.shard == 1 && env.CHORD_E2E_REPRO != '1'
         run: pnpm test:perf packages/data
 
       # E2E's spelling dictionary: a pinned, hash-checked download served to Chord from this machine
