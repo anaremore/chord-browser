@@ -604,11 +604,15 @@ export class AppWindow {
    * shared doesn't change shape. Ones not listed any more are let go, unless
    * they're on screen here.
    */
-  /** This window in front, with the focus on a page parked here (an agent's): to the page you see, or this window's own. */
+  /**
+   * This window in front, with the focus on a page parked here (an agent's), or on one of its own views that isn't
+   * shown (a hidden popover, preview or overlay: macOS can make one the window's first responder as the window comes
+   * back, agents.spec's "coming back to Chord"): to the page you see, or this window's own.
+   */
   keepFocusOffParked(): void {
     if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
     const now = webContents?.getFocusedWebContents?.() ?? null;
-    if (now && !this.isParkedOnly(now)) return;
+    if (now && !this.isParkedOnly(now) && !this.isHiddenView(now)) return;
     // The page of yours that had it (or the window's own), only while it's one you see (Claude's S7, round 4 of #112:
     // after a tab switch it isn't, and focusing it would put your keys in a tab you left).
     const seen = (c: WebContents) => c === this.shell.webContents || this.panes.some((v) => v.webContents === c);
@@ -618,6 +622,11 @@ export class AppWindow {
     if (!now) return void (this.parked.length > 0 && own?.focus());
     const page = this.activeTabContents;
     (own ?? (page && !page.isDestroyed() ? page : this.shell.webContents)).focus();
+  }
+
+  /** One of this window's own views, not shown now: a hidden popover (no card up), preview or overlay. */
+  private isHiddenView(contents: WebContents): boolean {
+    return [this.popover, this.preview, this.overlay].some((v) => pageOf(v) === contents && !v.getVisible());
   }
 
   /** A page parked here and not shown (an agent's tab working behind your page). */
