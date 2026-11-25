@@ -69,7 +69,8 @@ export function pressKeyEvents(key: PressKey): (AgentInputLike & { keyCode: stri
 
 /** A name from the page, for Chord's own words: cut to 60 characters, in curly quotes. Empty names say what the element is. */
 export function quotedName(name: string, role: string): string {
-  const clean = name.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim();
+  // A field's label's trailing colon (*Customer name:*) isn't part of its name on a card (the owner's test of 0.15's preview).
+  const clean = name.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim().replace(/\s*:$/, '');
   if (!clean) return `the ${role === 'generic' ? 'element' : role}`;
   return `“${clean.length > 60 ? `${clean.slice(0, 59)}…` : clean}”`;
 }
@@ -132,6 +133,26 @@ export function barDoing(d: BarDoing): string {
     case 'hover':
       return `is pointing at ${quotedName(d.name, d.role)}`;
   }
+}
+
+/** The URL parser (core has no DOM lib: as control-risk.ts declares it). */
+declare const URL: unknown;
+
+/**
+ * An address on a card that asks before the tab goes there (leaving the site, or any address in a chat that read
+ * elsewhere: S18 M2e-2c): the whole of it, query and fragment too, since they can carry data out (Neon's B1 on #151).
+ * Parsed and written back as the URL parser has it, with no control or bidi characters that could make it read as
+ * another (SF2), at most 2048 characters (navigate's own limit).
+ */
+export function wholeAddress(url: string): string {
+  let href = url.trim();
+  try {
+    href = new (URL as unknown as new (url: string) => { href: string })(href).href;
+  } catch {
+    // Not an address the parser takes: shown as it was given, made plain.
+  }
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what this removes
+  return href.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 2048);
 }
 
 /** A navigation's target for the bar: host and path, no query or fragment, cut to 60 characters. */

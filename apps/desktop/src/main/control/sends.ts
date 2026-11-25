@@ -89,6 +89,8 @@ export interface SendHoldDeps {
   ask(sites: string[], why: RiskWhy | null, signal: AbortSignal, going?: string): Promise<SendAnswer>;
   /** A request's origin: what a card covers (the owner, 2026-11-23: exactly that origin, never its whole site). */
   siteOf(url: string): string;
+  /** A page of the tab's own going to `url` leaves where the assistant asked to go (a tab of yours: M2e-2c), so it asks. */
+  leaving?(url: string): boolean;
   /**
    * Where *Allow for this chat* is kept (the assistant: control/user-watch.ts): the chat's own origins for this tab, so
    * a grant outlives the lease (the reviews of #147). The hold covers them and adds to them; failHeld lets go of them
@@ -232,7 +234,9 @@ export function holdSends(contents: WebContents): void {
     // What a step it is: a document going to, or anything sent to, an address that deletes or signs out; a DELETE
     // always (round 4 of #112: Allow until done never covers one). A script's read of such an address isn't.
     const why: RiskWhy | null = how === 'DELETE' ? 'delete' : !read || type === 'Document' ? pageAddressWhy(url) : null;
-    const p: Paused = { requestId: at.requestId, sessionId: sessionId || undefined, url, type, why };
+    // The tab's own page going on to another site than the one the assistant asked to go to (an open redirect: B3).
+    const leave: RiskWhy | null = !why && read && type === 'Document' && !sessionId && hold.deps?.leaving?.(url) ? 'leave' : null;
+    const p: Paused = { requestId: at.requestId, sessionId: sessionId || undefined, url, type, why: why ?? leave };
     // A document the agent already asked about (open_tab): its first load goes.
     if (read && type === 'Document' && hold.once.delete(normalUrl(url))) return hold.go(p);
     if (read && !p.why) return hold.go(p);

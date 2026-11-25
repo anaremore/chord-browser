@@ -124,6 +124,10 @@ describe('The bar, throttling and your hands', () => {
     // You leave the tab: it goes on.
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.mine });
     expect(agentLive(t.store, 'a1')).toBeNull();
+    // Alt+Tab to another app (its Alt reaches the page), or a modifier held alone: not your using the tab.
+    t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: 'a1' });
+    for (const key of ['Alt', 'Control', 'Shift', 'Meta']) (contents as unknown as EventEmitter).emit('before-input-event', {}, { type: 'keyDown', key });
+    expect(agentLive(t.store, 'a1')).toBeNull();
     // Paused again, then "Let Claude Code continue".
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: 'a1' });
     (contents as unknown as EventEmitter).emit('before-input-event', {}, { type: 'keyDown', key: 'b' });

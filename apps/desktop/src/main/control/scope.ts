@@ -34,6 +34,13 @@ export interface ToolMemory {
   nextField: number;
   /** Tabs it read: the assistant shows a badge on them in the sidebar. */
   read: Set<NodeId>;
+  /**
+   * Where those reads were, by origin (the assistant: a tab read on one site and acted on after it went to another is
+   * reading elsewhere: Neon's B3 on #151). Absent for outside agents.
+   */
+  readFrom?: Set<string>;
+  /** Tabs list_tabs named (the assistant: their titles and sites are read from elsewhere too). Absent for outside agents. */
+  listed?: Set<NodeId>;
   /** Each tab's element refs (snapshot, M2b): only the latest snapshot's are good. Made with a tab's first snapshot. */
   elements?: Map<NodeId, ElementRefs>;
 }
@@ -57,7 +64,19 @@ export interface ActHost {
    * A tab of yours (the assistant, S18 M2e-2a): the tab's debugger and send hold for the action (control/user-watch.ts),
    * begun before it (null, or why not) and ended after it. Absent: an agent's own tab, which has them for its life.
    */
-  lease?: { begin(node: TabNode): Promise<string | null>; end(node: TabNode): void };
+  lease?: {
+    begin(node: TabNode): Promise<string | null>;
+    end(node: TabNode): void;
+    /** navigate or back is going to `url` (M2e-2c): a page there sending the tab to another site asks, as leaving does. */
+    going(node: TabNode, url: string): void;
+  };
+  /** Going from `from` to `to` leaves the site (the assistant in a tab of yours, M2e-2c, B3): asks every time, showing the address. */
+  leaving?(from: string, to: string): boolean;
+  /**
+   * The chat read something besides this tab as it is (`url` the page's address now): what it types is shown first, and
+   * every address it goes to (the assistant: M2e-2c, B3; Neon's B3 and Claude's C-B3 on #151).
+   */
+  typeAsks?(node: TabNode, url: string): boolean;
   /**
    * What the page did in response that was caught since the last result there (a dialog answered Cancel, a picker or a
    * window refused, unsaved changes keeping the page), taken: the next result says it (Claude's S1, round 2 of #150).

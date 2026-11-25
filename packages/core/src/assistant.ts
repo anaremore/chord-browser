@@ -133,6 +133,8 @@ export interface AssistantActCard {
   note: string;
   /** More lines: what goes with it (by label), where it goes, what it reads or types. */
   lines: string[];
+  /** Text shown whole in a box that scrolls: what it types, in a chat that read elsewhere (S18 M2e-2c; Neon's B2 on #151). */
+  long?: string;
   /** Allow in the danger color (paying, deleting, data to another site). */
   danger: boolean;  /** Show me: the card has an element to point at in its page (an action's step, not a load's or a tail's). */
   showable: boolean;
@@ -498,4 +500,31 @@ function browsingLines(images: AssistantImageMaking, acting = false): string {
       : "- Apart from that, you can only read. You can't open, close or move tabs, click or submit; if the user wants that, tell them how to do it in Chord.",
     IMAGE_LINES[images],
   ].join('\n');
+}
+
+/**
+ * The reply as its next piece streams in. Text the model writes after a tool call is a block of its own: a new paragraph,
+ * never glued to the last sentence ("to act.Only Arthur called": the owner's card-game run on 982ce10). A block's first
+ * piece that's only space waits for its words (`newBlock` stays).
+ */
+export function nextReplyText(text: string, delta: string, newBlock: boolean): { text: string; newBlock: boolean } {
+  if (!newBlock || !text.trim()) return { text: text + delta, newBlock: newBlock && !text.trim() ? false : newBlock };
+  if (!delta.trim()) return { text, newBlock: true };
+  return { text: `${text.trimEnd()}\n\n${delta.trimStart()}`, newBlock: false };
+}
+
+/**
+ * A run of tool steps' quiet row (the owner's card-game run: "Read 69 tabs · 44 more" for one tab looked at 69 times):
+ * tabs read are counted as tabs only when they're different tabs; the same step again is counted, not repeated.
+ */
+export function toolRowLabel(steps: readonly { tool: string; summary: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const s of steps) counts.set(s.summary, (counts.get(s.summary) ?? 0) + 1);
+  const tabs = new Set(steps.filter((s) => s.tool === 'read_tab' || s.tool === 'tab_screenshot').map((s) => s.summary)).size;
+  if (tabs > 1) {
+    const others = counts.size - tabs;
+    return `Read ${tabs} tabs${others > 0 ? ` · ${others} more` : ''}`;
+  }
+  // Every different step stays in the row (what the page set off is said there: a picker refused, a window not opened).
+  return [...counts].map(([summary, n]) => (n > 1 ? `${summary} (${n} times)` : summary)).join(' · ');
 }

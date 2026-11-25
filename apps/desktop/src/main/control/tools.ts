@@ -13,6 +13,7 @@ import {
   VALUE_TYPES,
   valueFits,
   classifyStep,
+  sentLabels,
   stepFields,
   type RiskAction,
   type RiskClass,
@@ -33,6 +34,7 @@ import {
   actDone,
   actPhrase,
   barAddress,
+  wholeAddress,
   ELEMENT_REFUSALS,
   ElementRefs,
   isActionTool,
@@ -81,8 +83,8 @@ import type { PageRead } from './extract';
 import type { WaitAnswer } from './snapshot';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
-import type { ControlAgent } from './gate';
-import type { ControlScope, ToolOutput } from './scope';
+import type { ControlAgent, ControlCard } from './gate';
+import type { ControlScope, ToolMemory, ToolOutput } from './scope';
 
 /** What of the browser the tools use: its state, its tabs' pages and reader view. */
 export interface ControlBrowser {
@@ -256,6 +258,26 @@ function currentPage(browser: ControlBrowser, nodeId: NodeId): ControlPage | nul
   return contents ? controlPage(contents) : null;
 }
 
+/** A tab read, and where (the assistant's readFrom: its origin then, Neon's B3 on #151). */
+function markRead(memory: ToolMemory, nodeId: NodeId, url: string): void {
+  memory.read.add(nodeId);
+  const origin = originOf(url);
+  if (origin) memory.readFrom?.add(origin);
+}
+
+/**
+ * The card's step for what an action's page held (askHeld): its sites, or the step a document's address is. Leaving:
+ * the whole address, and what sent the tab on (`from`: the address navigate went to; else a page on the site), never the
+ * bar's short one (Neon's B1 and N5 on #151). Another step (a delete or sign-out address): the short one.
+ */
+export function heldStep(held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, pageUrl: string, from?: string): NonNullable<ControlCard['step']> {
+  if (!why) return { why: 'send', site: shownOrigin(originOf(pageUrl), pageUrl), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, pageUrl)) };
+  const url = held.find((h) => h.why)?.url ?? '';
+  const site = shownOrigin(sites[0] ?? '', pageUrl);
+  if (why === 'leave') return { why, site, fields: [], more: 0, going: wholeAddress(url), from: from ?? `A page on ${shownOrigin(originOf(pageUrl), pageUrl)}` };
+  return { why, site, fields: [], more: 0, going: barAddress(url) };
+}
+
 /* ---------- Reading: list_tabs, searches, read_tab, read_selection, tab_screenshot ---------- */
 
 async function readTool(call: Call, tool: AssistantToolName, args: Record<string, unknown>): Promise<ToolOutput> {
@@ -266,7 +288,10 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
     const refused = await call.card(tool, null, what, [], 'The user said no to this. Carry on without it, or ask them.');
     if (refused) return refused;
     if (tool === 'list_tabs') {
-      const tabs = scope.tabs().map(({ node, given }) => ({ tab_id: scope.refs.refFor(node.id), title: node.title, site: safeHost(node.url), attached: given }));
+      const listed = scope.tabs();
+      // Their titles and sites are read now (Neon's B3 on #151): a tab named here besides the one it acts on taints.
+      for (const { node } of listed) scope.memory.listed?.add(node.id);
+      const tabs = listed.map(({ node, given }) => ({ tab_id: scope.refs.refFor(node.id), title: node.title, site: safeHost(node.url), attached: given }));
       await call.activity(tool, `Listed ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`);
       return { text: toolResult({ tabs }) };
     }
@@ -309,7 +334,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     const taken = blockedNow(call, node.id, page, 'Could not take the picture.');
     if (taken) return refuse(taken);
-    if (shot) scope.memory.read.add(node.id);
+    if (shot) markRead(scope.memory, node.id, page.url());
     await call.activity(tool, `Looked at “${node.title || safeHost(node.url)}”`, node.url, Boolean(shot));
     return shot ? { image: shot } : refuse('Could not take the picture.');
   }
@@ -319,7 +344,7 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
   // A PDF's read is the viewer's: readPdf checks the address it fetches itself.
   const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read && !pdf ? [read.url] : []));
   if (after) return refuse(after);
-  scope.memory.read.add(node.id);
+  markRead(scope.memory, node.id, read?.url ?? page.url());
   if (pdf) {
     if (tool === 'read_selection') return refuse('What’s selected inside a PDF can’t be seen. Read the PDF with read_tab instead.');
     return readPdf(call, node, page, ref, args, pageId);
@@ -450,7 +475,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   // Its later ranges are of the page's whole outline, never a find's (N-3).
   const whole = find ? snapshotOutline(read, issued) : outline;
   refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}), ...(read.cut.elements || read.cut.time || read.cut.refs ? { cut: true } : {}) });
-  scope.memory.read.add(node.id);
+  markRead(scope.memory, node.id, read.url);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
 }
@@ -602,7 +627,7 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   }
   const waited = Date.now() - began;
   const met = looked?.met === true;
-  scope.memory.read.add(node.id);
+  markRead(scope.memory, node.id, page.url());
   await call.activity('wait_for', `Watched “${node.title || safeHost(node.url)}” for a change`, met ? `met after ${waited} ms` : `not met after ${waited} ms`, met);
   const moved = page.id !== pageId;
   // Every note that's so (S-3): a cut look says what it couldn't tell, waiting to show or to go; a pushState, that refs
@@ -728,12 +753,16 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (!/^https?:\/\//i.test(back.url) || isNeverReadable(back.url, scope.neverSites())) return refuse(NEVER);
     }
     const goingTo = tool === 'navigate' ? target : (back?.url ?? '');
-    // The site it goes to asks first, as any action on a site does (Neon's review of #112): the site card, once.
     const goingSite = host.siteOf(goingTo);
     if (!goingSite) return refuse(ACT_REFUSALS.noSite);
-    const remembered = scope.agent.granted('site', goingSite);
+    // Leaving the site (the assistant in a tab of yours): one card, the leaving card with the whole address, below. Going
+    // to a page isn't acting on it: never that site's own card, nor its grant; acting on its page later asks it then (the
+    // owner's test of the 0.15 preview). An outside agent's own tabs: the site card for where it goes, as before.
+    const leavesSite = host.leaving?.(page.url(), goingTo) ?? false;
+    // The site it goes to asks first, as any action on a site does (Neon's review of #112): the site card, once.
+    const remembered = leavesSite ? null : scope.agent.granted('site', goingSite);
     if (remembered === 'deny') return refuse(ACT_REFUSALS.siteDenied(goingSite));
-    if (!remembered && !host.siteAllowed(goingSite)) {
+    if (!leavesSite && !remembered && !host.siteAllowed(goingSite)) {
       const released = scope.agent.releases(node.id);
       const answer = await scope.agent.ask({ kind: 'site', tool, description: `go to ${barAddress(goingTo)}`, target: [page.url()], tab: node.id, subject: goingSite }, call.signal, scope.cardWaitMs);
       if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
@@ -743,9 +772,10 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       scope.agent.keep('site', goingSite, answer);
       if (answer === 'always') host.keepSite(goingSite);
     }
-    // An address that deletes or signs out (core's addressWhy, as a link's): the step card first (#112 review 1).
+    // An address that deletes or signs out (core's addressWhy, as a link's): the step card first (#112 review 1). Leaving
+    // the site, the leaving card names the whole address instead: one card.
     const goingWhy = addressWhy(goingTo);
-    if (goingWhy) {
+    if (goingWhy && !leavesSite) {
       const released = scope.agent.releases(node.id);
       const answer = await scope.agent.ask(
         {
@@ -767,6 +797,31 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // Back must still go to the entry the card named.
       if (tool === 'back' && page.backEntry()?.url !== goingTo) return refuse(ELEMENT_REFUSALS.stale);
     }
+    // Leaving the site (the assistant in a tab of yours, M2e-2c, B3): every time, showing the whole address, which can
+    // carry data out. In a chat that read elsewhere, any address does, the same site's too (Claude's C-B3 on #151).
+    const leaves = leavesSite || (host.typeAsks?.(node, page.url()) ?? false);
+    if (leaves) {
+      const released = scope.agent.releases(node.id);
+      const answer = await scope.agent.ask(
+        {
+          kind: 'step',
+          tool,
+          description: `go to ${barAddress(goingTo)}`,
+          target: [page.url()],
+          tab: node.id,
+          subject: JSON.stringify([node.id, page.id, tool, 'leave', goingTo]),
+          step: { why: 'leave', site: goingSite, fields: [], more: 0, going: wholeAddress(goingTo) },
+        },
+        call.signal,
+        scope.cardWaitMs,
+      );
+      if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+      if (answer === 'deny') return refuse(notTheirNo(call, scope.agent, node.id, released) ?? ACT_REFUSALS.stepDenied);
+      if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+      if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+      // Back must still go to the entry the card named (a pushState while it was up: Neon's SF2 on #151).
+      if (tool === 'back' && page.backEntry()?.url !== goingTo) return refuse(ELEMENT_REFUSALS.stale);
+    }
     // The list may have gained its site while a card was up (Neon's review 2 of #112).
     if (isNeverReadable(goingTo, scope.neverSites())) return refuse(NEVER);
     // Its hold on (Neon's final pass): a tab whose hold is lost, or never finished, loads nothing for the agent.
@@ -786,8 +841,11 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // the card named goes (the address itself, when it asked).
       const notNow = notHereNow() ?? (await leaseOn());
       if (notNow) return refuse(notNow);
-      const w = page.watchSends(goingWhy ? { urls: new Set(), documents: new Set([normalUrl(goingTo)]) } : null);
+      const w = page.watchSends(goingWhy || leaves || host.lease ? { urls: new Set(), documents: new Set([normalUrl(goingTo)]) } : null);
       if (!w) return refuse(ACT_REFUSALS.noCheck);
+      // Where it goes: a page there sending the tab on to another site asks too (an open redirect, M2e-2c). Told once
+      // the hold is on (Neon's N2 on #151).
+      host.lease?.going(node, goingTo);
       let went: { loading: boolean } | null;
       let sent: string | null;
       try {
@@ -807,7 +865,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
                 target: [page.url()],
                 tab: node.id,
                 subject: JSON.stringify([node.id, tool, 'sends', randomBytes(4).toString('hex')]),
-                step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
+                step: heldStep(held, sites, why, page.url(), barAddress(goingTo)),
                 takeDown,
               },
               AbortSignal.any([call.signal, w.cancelled]),
@@ -950,6 +1008,35 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // what it sends is held and the card asks then (control/sends.ts). No description from the page: as a form's submit.
   // A late Allow is for this very step: its tab, page, ref, action, and for type what it types (#112 review 1).
   const typed = tool === 'type' && typeof text === 'string' ? createHash('sha256').update(`${args['replace'] !== false}|${text}`).digest('hex').slice(0, 16) : '';
+  // Typing in a chat that read anything but this tab (M2e-2c, B3; the owner's answer 6): the text shown first, every time.
+  if (tool === 'type' && typeof text === 'string' && host.typeAsks?.(node, page.url())) {
+    const released = scope.agent.releases(node.id);
+    const answer = await scope.agent.ask(
+      {
+        kind: 'step',
+        tool,
+        description: actPhrase(description),
+        target: [page.url()],
+        tab: node.id,
+        subject: JSON.stringify([node.id, page.id, String(refArg), 'taint', createHash('sha256').update(text).digest('hex').slice(0, 16)]),
+        // Every character it will type (at most TYPE_TEXT_MAX, checked above): nothing typed that the card didn't show
+        // (Neon's B2 on #151).
+        step: { why: 'confirm', site, fields: [], more: 0, typed: text, taint: true },
+        show: () => void actOn({ op: 'point', highlight: true }),
+      },
+      call.signal,
+      scope.cardWaitMs,
+    );
+    if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
+    if (answer === 'deny') return refuse(notTheirNo(call, scope.agent, node.id, released) ?? ACT_REFUSALS.stepDenied);
+    const halted = halt();
+    if (halted) return refuse(halted);
+    // As after the site card (Neon's SF4 on #151): the page as it is now, the element still the one, the same site.
+    const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+    if (after) return refuse(after);
+    if (!scope.memory.elements?.get(node.id)?.resolve(refArg, page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
+  }
   const step: RiskClass = stepOf(tool, args, element);
   // And what the card showed (Neon's review of #112): why it asks, and the element's shape (its link, its form's
   // address, method and fields). Any of it changed, it's another step: a late Allow never covers it.
@@ -957,7 +1044,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // As JSON (Neon's review of M2g-1, B4): no value can run into the next.
   const stepKey = JSON.stringify([node.id, page.id, String(refArg), tool, isPressKey(key) ? key : '', args['submit'] === true, typed, shown]);
   if (step.class === 'risky') {
-    const { fields, more } = stepFields(element.risk?.form?.fields.map((f) => f.label) ?? []);
+    // Only what the submit sends (the owner's test of 982ce10): the risk checks above still see every field.
+    const { fields, more } = stepFields(sentLabels(element.risk?.form?.fields ?? []));
     const released = scope.agent.releases(node.id);
     const answer = await scope.agent.ask(
       {
@@ -1260,7 +1348,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           // Subjects as JSON (N-5): no value runs into the next.
           subject: JSON.stringify([stepKey, 'sends', randomBytes(4).toString('hex')]),
           // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or isn't the page's.
-          step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
+          step: heldStep(held, sites, why, page.url()),
           show: () => void actOn({ op: 'point', highlight: true }),
           takeDown,
         },
@@ -1711,7 +1799,7 @@ async function diagnosticsTool(call: Call, args: Record<string, unknown>): Promi
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   // A frame of a *Never read* site inside the page (mail.example.com in www.example.com): its problems are left out.
   const { entries, total } = diagnosticsEntries(read.events, read.types, { sites: scope.neverSites(), contexts: read.contexts, page: url });
-  scope.memory.read.add(node.id);
+  markRead(scope.memory, node.id, url);
   const note = total > entries.length ? `The page has ${total} problems; the newest ${entries.length} are here.` : entries.length ? '' : 'Chromium kept no errors, warnings or failed requests for this page since it loaded.';
   await call.activity('page_diagnostics', `Checked “${title}” for problems`, diagnosticsSummary(entries));
   return { text: diagnosticsResult({ ref: scope.refs.refFor(node.id), url, retrievedAt: Date.now(), entries, total, ...(note ? { note } : {}), pageId: sameId(page, pageId) }) };
@@ -1760,7 +1848,7 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
     const form = formRead(read, memory.nextField);
     memory.nextField += form.fields.length;
     memory.form = { nodeId: node.id, token, read: form };
-    memory.read.add(node.id);
+    markRead(memory, node.id, read.url);
     await call.activity(tool, `Read the form on “${title}”`, `${fieldCount(form.fields.length)}${form.leftOut.length ? ` · ${form.leftOut.length} left out` : ''}`);
     return { text: formResult(form, { ref: scope.refs.refFor(node.id), retrievedAt: Date.now(), ...(sameId(page, pageId) ? { pageId } : {}) }) };
   }

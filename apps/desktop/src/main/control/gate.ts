@@ -52,14 +52,18 @@ export interface ControlCard {
     more: number;
     shows?: string;
     typed?: string;
+    /** The assistant typing in a chat that read anything but the tab it acts on (S18 M2e-2c, B3): the card shows the text. */
+    taint?: boolean;
     /** A download the assistant's click started in a tab of yours (S18 M2e-2b): its file's name. */
     download?: string;
     /** What the page is sending, by site (control/sends.ts). */
     sends?: string[];
     /** Sent between actions (the tab's, not an action's: sends.ts). */
     idle?: boolean;
-    /** Where the page itself is going (a script sending it to an address that deletes or signs out). */
+    /** Where the page itself is going (a script sending it to an address that deletes or signs out), or, leaving, the whole address. */
     going?: string;
+    /** Leaving by a redirect (S18 M2e-2c; Neon's N5 on #151): what sent the tab on (*shop.example/out*, *A page on shop.example*). */
+    from?: string;
     /** Where a form or link goes, when that's another site than the page's (Neon's review 2 of #112). */
     to?: string;
   };

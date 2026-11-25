@@ -12,7 +12,7 @@
  * asks you to keep or delete it. Chord never opens a download by itself. A
  * held one still undecided when Chord quits is deleted.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command, Download, DownloadAction, State, ThreatKind, WindowId } from '@chord/core';
@@ -57,6 +57,11 @@ export interface DownloadDeps {
   newId(): string;
   /** For retrying a download from an earlier session, which has no live item. */
   defaultSession(): Session;
+  /**
+   * A file in the profile listing the downloads written under their pending names now (asked about, or being checked):
+   * what a crash or a kill leaves there is deleted at the next launch (the owner's release conditions, 2026-11-25).
+   */
+  pendingList?: string;
   /** Safe Browsing: what the download's addresses are suspected of (null: nothing). Null instead of a promise when it's off. */
   screen?(urls: string[]): Promise<ThreatKind | null> | null;
   /** A download is held: show it where it started (`privateWindow`, or the window used last). */
@@ -75,8 +80,11 @@ interface Entry {
   ended: boolean;
   timer?: ReturnType<typeof setTimeout>;
   /**
-   * The assistant's click started it in a tab of yours (S18 M2e-2b): null while the chat asks, then your answer. It
-   * stays under its pending name, paused, never opened or resumed, until you allow it; Don't deletes it.
+   * The assistant's click started it in a tab of yours (S18 M2e-2b): null while the chat asks, then your answer. It's
+   * written under its pending name, never opened, and takes its own name only once you allow it; Don't deletes it,
+   * finished or not. Never paused for the question: on Windows a pause asked at its start could land after your Allow and
+   * keep it paused for good with every byte in (the release check, 2026-11-25), and the pending name is what keeps it
+   * from being opened, as for a download Safe Browsing is still checking.
    */
   asked?: boolean | null;
   /** Checked by Safe Browsing: written as `<finalPath>.crdownload` until it's finished and cleared. */
@@ -94,7 +102,41 @@ export class DownloadManager {
   /** Final names promised to downloads still under their pending names, so two never take the same one. */
   private readonly reserved = new Set<string>();
 
-  constructor(private readonly deps: DownloadDeps) {}
+  /** The pending files now, as the profile's list keeps them. */
+  private readonly pendingPaths = new Set<string>();
+
+  constructor(private readonly deps: DownloadDeps) {
+    // What the last run left under a pending name (it ended with a download still asked about or being checked): gone.
+    for (const path of this.readPendingList()) if (path.endsWith(PENDING_SUFFIX)) rmSync(path, { force: true });
+    this.writePendingList();
+  }
+
+  private readPendingList(): string[] {
+    if (!this.deps.pendingList) return [];
+    try {
+      const list: unknown = JSON.parse(readFileSync(this.deps.pendingList, 'utf8'));
+      return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Written at once (synchronously): a crash right after still finds it. */
+  private writePendingList(): void {
+    if (!this.deps.pendingList) return;
+    try {
+      writeFileSync(this.deps.pendingList, JSON.stringify([...this.pendingPaths]), { encoding: 'utf8', mode: 0o600 });
+    } catch {
+      // A profile it can't write to: nothing to clean next time either.
+    }
+  }
+
+  private pendingFile(path: string, on: boolean): void {
+    if (on === this.pendingPaths.has(path)) return;
+    if (on) this.pendingPaths.add(path);
+    else this.pendingPaths.delete(path);
+    this.writePendingList();
+  }
 
   /** `privateWindow`: the session is that private window's, so its downloads are listed only there and never saved. */
   attach(session: Session, privateWindow: WindowId | null = null): void {
@@ -108,7 +150,6 @@ export class DownloadManager {
       const filename = safeFilename(item.getFilename());
       const chain = item.getURLChain();
       const asking = contents ? askUserTabDownload(contents, { filename, url: chain[chain.length - 1] ?? item.getURL() }) : null;
-      if (asking) item.pause();
       const id = this.deps.newId();
       const finalPath = uniquePath(downloadsDir(), filename, (p) => existsSync(p) || this.reserved.has(p));
       const screening = this.deps.screen?.(chain) ?? null;
@@ -116,6 +157,7 @@ export class DownloadManager {
       const entry: Entry = { item, session, privateWindow, ended: false, screen: pending ? { finalPath, verdict: screening ? null : false, settled: false } : null, ...(asking ? { asked: null } : {}) };
       if (pending) this.reserved.add(finalPath);
       item.setSavePath(pending ? `${finalPath}${PENDING_SUFFIX}` : finalPath);
+      if (pending) this.pendingFile(`${finalPath}${PENDING_SUFFIX}`, true);
       void asking?.then((yes) => this.answeredAsk(id, yes));
       this.entries.set(id, entry);
       item.on('updated', () => {
@@ -186,8 +228,8 @@ export class DownloadManager {
     if (!entry || entry.asked !== null) return;
     entry.asked = yes;
     if (!yes) return this.dropAsked(id);
-    // Held by Safe Browsing too: it stays held until you keep it there (Neon's SF2, round 2 of #150).
-    if (!entry.screen?.verdict && entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
+    // Finished already, or once it is: it takes its name (settle), unless Safe Browsing holds it (Neon's SF2, round 2 of
+    // #150), which only Keep lets go.
     this.report(id);
     void this.settle(id);
   }
@@ -200,6 +242,7 @@ export class DownloadManager {
     if (entry.screen) this.reserved.delete(entry.screen.finalPath);
     if (entry.item.getState() === 'progressing') entry.item.cancel();
     else void rm(entry.item.getSavePath(), { force: true }).catch(() => {});
+    this.pendingFile(entry.item.getSavePath(), false);
     this.deps.dispatch({ t: 'download.remove', id });
   }
 
@@ -221,6 +264,8 @@ export class DownloadManager {
       // Couldn't rename: it stays where it is, and its row says so.
       screen.finalPath = from;
     }
+    // Allowed (and cleared): never one a launch deletes, named or not.
+    this.pendingFile(from, false);
     this.report(id);
   }
 
@@ -319,6 +364,7 @@ export class DownloadManager {
     this.reserved.delete(entry.screen.finalPath);
     if (entry.item.getState() === 'progressing') entry.item.cancel();
     else void rm(entry.item.getSavePath(), { force: true }).catch(() => {});
+    this.pendingFile(entry.item.getSavePath(), false);
     this.deps.dispatch({ t: 'download.remove', id });
   }
 

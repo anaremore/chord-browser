@@ -469,10 +469,14 @@ export class TabManager {
       // site, the icon Chord has for that one, or none until the page's own arrives: never the last site's.
       const before = nodeOf(this.deps.state(), nodeId);
       const site = siteOf(url);
+      // The new entry's own title, never the last page's: a page with no <title> gets no page-title-updated, so the last
+      // one stayed and named the wrong page in the sidebar and the assistant's cards (the owner's test of the 0.15
+      // preview). A reload or Back keeps the entry's title; one with only its address has none, and its host shows.
+      const title = committedTitle(contents.getTitle(), url);
       if (before?.kind === 'tab' && siteOf(before.url) !== site) {
-        dispatch({ t: 'tab.updated', nodeId, url, favicon: site ? this.knownIcon(contents.session, site) : null });
+        dispatch({ t: 'tab.updated', nodeId, url, title, favicon: site ? this.knownIcon(contents.session, site) : null });
       } else {
-        dispatch({ t: 'tab.updated', nodeId, url });
+        dispatch({ t: 'tab.updated', nodeId, url, title });
       }
       live(history());
       visited = null;
@@ -671,3 +675,14 @@ export class TabManager {
   }
 }
 
+/**
+ * A committed page's title as Chromium's entry shows it: its own, or (none set yet, or ever) its address, which is no
+ * title: empty, so the host shows.
+ */
+export function committedTitle(shown: string, url: string): string {
+  const title = shown.trim();
+  const bare = (s: string) => s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/$/, '');
+  // Its address as Chromium shows it: whole, or cut (it may elide a long one), never a word that only appears in it.
+  if (!title || bare(url) === bare(title) || (/[./]/.test(title) && bare(url).startsWith(bare(title)))) return '';
+  return title;
+}

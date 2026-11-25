@@ -486,7 +486,11 @@ test('risky steps: the step card every time, Show me, Don’t and Allow; the pag
     const order = stepCardOf(popover, new RegExp(`^Place the order on ${host.replace(/\./g, '\\.')}\\?$`));
     await expect(order).toBeVisible({ timeout: 15_000 });
     await expect(order).toContainText('Codex is about to click “Place order · $48.20”.');
-    await expect(order).toContainText('Goes with it: Shipping, Gift note, Card number');
+    // Only what the submit sends: the select, the filled note (no colon), the checked radio; not Small, Large, the
+    // unchecked box nor the empty card field (the owner's test of 982ce10).
+    await expect(order).toContainText('Goes with it: Shipping, Gift note, Medium');
+    await expect(order).not.toContainText('Small');
+    await expect(order).not.toContainText('Gift wrap');
     // Show me: the agent's tab over your chord (its bar says it's waiting for you), the card still up.
     await popover.waitForTimeout(600);
     await order.getByRole('button', { name: 'Show me', exact: true }).click();
@@ -2527,7 +2531,10 @@ test.beforeAll(async () => {
     '/checkout':
       '<title>Checkout</title><main>' +
       '<form method=post action=/order><label>Shipping <select name=ship><option>Standard</option><option>Express</option></select></label> ' +
-      '<label>Gift note <input name=note></label> <label>Card number <input name=card autocomplete=cc-number></label> <button>Place order · $48.20</button></form>' +
+      // What goes with it (the owner's test of 982ce10): a filled note, one radio of three checked, a box left unchecked,
+      // an empty card field.
+      '<label>Gift note: <input name=note value="For Ada"></label> <fieldset><legend>Size</legend><label><input type=radio name=size value=s> Small</label> <label><input type=radio name=size value=m checked> Medium</label> <label><input type=radio name=size value=l> Large</label></fieldset> ' +
+      '<label><input type=checkbox name=wrap> Gift wrap</label> <label>Card number <input name=card autocomplete=cc-number></label> <button>Place order · $48.20</button></form>' +
       // A misleading button: a form's submit called Continue (to a delete address, for good measure).
       '<form method=post action=/account/close><button>Continue</button></form>' +
       // A JS submit on click: no submit button, the page's own form.submit().

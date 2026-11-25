@@ -202,6 +202,8 @@ const downloads = new DownloadManager({
   dispatch: (command) => browser!.store.dispatch(command),
   newId: () => uuidv7(),
   defaultSession: () => profileSession('default'),
+  // Downloads under their pending names now: a crash's leftovers deleted at the next launch.
+  pendingList: join(app.getPath('userData'), 'pending-downloads.json'),
   // Every download, a private window's too, is checked while Safe Browsing is on (its final address and redirects).
   screen: (urls) => (safeBrowsing.active ? safeBrowsing.check(urls, 'download').then((v) => (v.verdict === 'unsafe' ? v.kind : null)) : null),
   onHeld: (download) => browser?.showHeldDownload(download.privateWindow),
@@ -341,7 +343,7 @@ function registerIpc(): void {
     // and you take the tab over (S18 M2e-1), as a reload of yours does.
     if (command.t === 'tab.navigate') {
       agents?.service?.chords?.takeOver(command.nodeId, undefined, { url: command.url });
-      assistant?.userUsedTab(command.nodeId);
+      assistant?.userUsedTab(command.nodeId, 'an address you typed');
     }
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
@@ -371,7 +373,7 @@ function registerIpc(): void {
     }
     else if (action === 'stop') {
       // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
-      assistant?.userMovedPage(contents);
+      assistant?.userMovedPage(contents, 'Stop');
       contents.stop();
     }
   });
@@ -1205,9 +1207,9 @@ if (!app.requestSingleInstanceLock()) {
     browser.agentHeld = (nodeId, what, detail, from) => agents?.service?.chords?.note(nodeId, what, detail, from);
     browser.userNavigates = (contents, going) => {
       agents?.service?.chords?.takeOverPage(contents, going);
-      assistant?.userMovedPage(contents);
+      assistant?.userMovedPage(contents, going === 'back' ? 'Back' : going === 'forward' ? 'Forward' : typeof going === 'object' ? 'a page you opened' : going === 'stay' ? 'your answer to a warning' : 'a reload');
     };
-    browser.userInput = (nodeId) => assistant?.userUsedTab(nodeId);
+    browser.userInput = (nodeId, why) => assistant?.userUsedTab(nodeId, why);
     browser.screenChanged = () => assistant?.screenChanged();
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {

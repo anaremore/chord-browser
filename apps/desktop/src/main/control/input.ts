@@ -73,6 +73,37 @@ export function sendAgentInput(contents: Page, events: readonly AgentInputEvent[
 /** The input event being handled now is one Chord is sending for an agent, not yours. */
 export const isAgentInput = (contents: Page): boolean => (sending.get(contents) ?? 0) > 0;
 
+/** Keys that alone aren't using the page: a modifier held (Alt+Tab's Alt, which reaches the page while its Tab goes to the OS), or a lock. */
+const LONE_KEYS = new Set(['Alt', 'AltGraph', 'Control', 'Shift', 'Meta', 'OS', 'Super', 'Hyper', 'Fn', 'FnLock', 'CapsLock', 'NumLock', 'ScrollLock', 'Symbol', 'SymbolLock']);
+
+/**
+ * A key of yours in a tab that is using it (the assistant stops acting there, an agent pauses: F1): a key pressed, not
+ * a modifier or a lock alone. Alt+Tab to another app sends the page its Alt, and that's no use of the tab (the owner's
+ * test of the 0.15 preview); Alt+F, Ctrl+A, a letter, Enter or an IME's composition is.
+ */
+export function usesTheTab(input: { type: string; key?: string }): boolean {
+  // No key the page could act on (Windows sends some with none, or `Unidentified`): not your using the tab either.
+  const key = input.key ?? '';
+  return input.type === 'keyDown' && key !== '' && key !== 'Unidentified' && !LONE_KEYS.has(key);
+}
+
+/**
+ * Your click in a tab that is using it: a button pressed. Never the pointer moving, entering or leaving the page (as it
+ * does when a card in the panel goes and the page is under it), a release alone, or the wheel (the owner's test of
+ * 9d1ad40).
+ */
+export function clicksTheTab(mouse: { type: string; button?: string }): boolean {
+  return mouse.type === 'mouseDown' && (mouse.button === 'left' || mouse.button === 'middle' || mouse.button === 'right');
+}
+
+/** What of yours it was, in a few words, for the chat's *Stopped: you used the tab (…)*: `a key: Ctrl+Enter`, `a click: left`. */
+export function inputWhy(input: { type: string; key?: string; code?: string; button?: string; control?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }): string {
+  if (input.type === 'mouseDown') return `a click: ${input.button ?? 'no button'}`;
+  const held = [input.control && 'Ctrl', input.alt && 'Alt', input.shift && 'Shift', input.meta && 'Meta'].filter(Boolean).join('+');
+  const key = input.code || input.key || 'unknown';
+  return `a key: ${held ? `${held}+` : ''}${key}`;
+}
+
 /** Your key in this page (keyboard.ts, before the page or the menu sees it): its menu shortcuts are yours again. */
 export function yourKey(contents: Page): void {
   if (!menuOff.delete(contents) || contents.isDestroyed()) return;
