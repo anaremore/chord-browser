@@ -31,7 +31,7 @@ const toAccelerator = (keys: string) =>
     .join('+');
 
 /** Every key combination for an action (with your changes), as Electron accelerators (first is the primary). */
-export function acceleratorsFor(id: ActionId, p: Platform = platform): string[] {
+function acceleratorsFor(id: ActionId, p: Platform = platform): string[] {
   const shortcut = shortcutById(id);
   return shortcut ? keysFor(shortcut, p, shortcutOverrides()).map(toAccelerator) : [];
 }

@@ -18,7 +18,7 @@ import { decodeRice32, RiceError } from './rice';
 import { urlExpressions } from './url';
 
 /** The desktop threat lists, 4-byte prefixes: social engineering, malware, unwanted software. Their names never change. */
-export const LIST_NAMES = ['se-4b', 'mw-4b', 'uws-4b'] as const;
+const LIST_NAMES = ['se-4b', 'mw-4b', 'uws-4b'] as const;
 export type ListName = (typeof LIST_NAMES)[number];
 
 /** What an address is being checked for: a page or frame, or a file's download. */
@@ -117,7 +117,7 @@ function threatOf(details: readonly FullHashDetail[], purpose: Purpose): ThreatK
   return worst;
 }
 
-export class ListError extends Error {}
+class ListError extends Error {}
 
 export class SafeBrowsingDatabase {
   private readonly lists = new Map<ListName, List>();

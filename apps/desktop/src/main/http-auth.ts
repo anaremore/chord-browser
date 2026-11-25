@@ -57,7 +57,7 @@ import { HOLD_MS } from './passwords/saving';
 import type { HttpAccountsAnswer, SaveAnswer } from './passwords/service';
 
 /** The vault, as the box uses it (`PasswordService`'s `http…` methods and `askUnlock`). */
-export interface AuthVault {
+interface AuthVault {
   accounts(origin: string, realm: string, chordId: string | null): Promise<HttpAccountsAnswer>;
   password(id: string, origin: string, realm: string, chordId: string | null): Promise<string | null>;
   remember(signIn: { origin: string; realm: string; username: string; password: string; chordId: string | null }): Promise<SaveAnswer>;
@@ -65,13 +65,13 @@ export interface AuthVault {
 }
 
 /** The tab (or Peek) a box is over, as the vault needs it. */
-export interface AuthTab {
+interface AuthTab {
   chordId: string | null;
   private: boolean;
 }
 
 /** A sign-in typed with *Remember* ticked, for the first save's card, which chooses the passphrase. */
-export interface FirstHttpSave {
+interface FirstHttpSave {
   origin: string;
   realm: string;
   username: string;

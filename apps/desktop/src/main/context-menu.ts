@@ -53,7 +53,7 @@ function preview(text: string): string {
 
 const accel = (id: ActionId, p: Platform = platform) => acceleratorFor(id, p);
 
-export function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps: ContextMenuDeps): Item[] {
+function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps: ContextMenuDeps): Item[] {
   const items: Item[] = [];
   const section = (...entries: Item[]) => {
     if (entries.length === 0) return;

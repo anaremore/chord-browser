@@ -69,7 +69,7 @@ export const titleBarOverlay = (forced: ForcedAppearance = null, barHeight: numb
 /** macOS: the traffic lights, centered in a bar this tall (in Chord's UI units). */
 export const trafficLightPosition = (barHeight: number, x: number) => ({ x, y: Math.round((barHeight * scale - 12) / 2) });
 
-export function usesTranslucentMaterial(): boolean {
+function usesTranslucentMaterial(): boolean {
   if (nativeTheme.prefersReducedTransparency) return false;
   return platform === 'darwin' || windowsSupportsMica();
 }

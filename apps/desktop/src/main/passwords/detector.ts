@@ -77,16 +77,16 @@ export interface PasswordsFocusEvent extends PasswordsFocus {
   /** The page's zoom when the field took focus: the menu places the rect with it. */
   readonly zoomFactor: number;
 }
-export interface PasswordsBlurEvent {
+interface PasswordsBlurEvent {
   readonly contents: WebContents;
   readonly formId: string;
 }
 /** The page's credential forms and their kinds, as the agent last reported them (`forms`). */
-export interface PasswordsFormsEvent {
+interface PasswordsFormsEvent {
   readonly contents: WebContents;
   readonly forms: readonly { readonly formId: string; readonly kind: string }[];
 }
-export interface PasswordsFilledEvent {
+interface PasswordsFilledEvent {
   readonly contents: WebContents;
   readonly formId: string;
   readonly ok: boolean;
@@ -97,7 +97,7 @@ export interface PasswordsFilledEvent {
  * A first step was submitted with this username (`step`, S17 §4, phase 3): the assist keeps it for the tab and site, for a
  * password step with no username of its own. Never from a private window.
  */
-export interface PasswordsFirstStepEvent {
+interface PasswordsFirstStepEvent {
   readonly contents: WebContents;
   readonly origin: string;
   readonly formId: string;

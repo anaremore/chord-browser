@@ -26,7 +26,7 @@ const ASKED_ELSEWHERE = new Set(['display-capture']);
 const CLIPBOARD = new Set(['clipboard-sanitized-write', 'clipboard-read']);
 
 /** What a Chromium permission request asks Chord's user for. Null means deny without asking. */
-export function sitePermissionsFor(permission: string, mediaTypes: readonly string[] = []): SitePermission[] | null {
+function sitePermissionsFor(permission: string, mediaTypes: readonly string[] = []): SitePermission[] | null {
   switch (permission) {
     case 'media': {
       const wanted: SitePermission[] = [];
@@ -47,7 +47,7 @@ export function sitePermissionsFor(permission: string, mediaTypes: readonly stri
 }
 
 /** The remembered answer for all of `wanted`: allow only if every one is allowed; block if any is blocked. */
-export function rememberedDecision(sites: SitePermissions, origin: string, wanted: readonly SitePermission[]): PermissionDecision | null {
+function rememberedDecision(sites: SitePermissions, origin: string, wanted: readonly SitePermission[]): PermissionDecision | null {
   const site = sites[origin];
   if (!site) return null;
   if (wanted.some((p) => site[p] === 'block')) return 'block';
