@@ -417,7 +417,18 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await shell.waitForTimeout(700);
     await again.getByRole('button', { name: 'Allow', exact: true }).click();
     // The folder's listing, so a failure shows what's there (a name left pending: main's Windows run 45585360658).
-    await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
+    // What the store says of it, always printed: a Windows run that fails here tells whether the file was finished and
+    // couldn't take its name, or never finished (the owner's release check, 2026-11-25).
+    const downloadState = () =>
+      shell.evaluate(async () => {
+        const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { downloads: Record<string, { filename: string; path: string; state: string; received: number; total: number }> } }> } } }).chord.state.snapshot();
+        return Object.values(state.downloads).map((d) => `${d.filename} ${d.state} ${d.received}/${d.total} ${d.path.split(/[\\/]/).pop()}`);
+      });
+    try {
+      await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
+    } finally {
+      console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}]`);
+    }
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
