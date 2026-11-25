@@ -649,6 +649,26 @@ describe('Review 1 of #77', () => {
     vi.useRealTimers();
   });
 
+  it('tools/list is the same bytes for every connection, and what the bridge sends from its build (M2g-2 slice 2: prompt caching)', async () => {
+    const t = setup();
+    const listed = async (client: string) => {
+      const sent: { id?: number; result?: { tools: unknown[] } }[] = [];
+      const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: client } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+        present: async () => 'once',
+        browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+        chords: t.chords,
+        dispatch: (c) => t.store.dispatch(c),
+      });
+      connection.message({ id: 1, method: 'tools/list', params: {} });
+      await vi.waitFor(() => expect(sent.find((m) => m.id === 1)).toBeDefined());
+      return JSON.stringify(sent.find((m) => m.id === 1)!.result!.tools);
+    };
+    // Two connections, two clients (and two chords): the same bytes, and the bridge's own (agentToolList, its build's).
+    const [a, b] = [await listed('Claude Code'), await listed('Codex')];
+    expect(a).toBe(b);
+    expect(a).toBe(JSON.stringify(agentToolList(true)));
+  });
+
   it('close_tab waits while you use the tab: it answers paused, and the tab stays', async () => {
     vi.useFakeTimers();
     const t = setup();
