@@ -45,7 +45,7 @@ import { AssistantIcon } from '../shared/icons';
 import { announce } from './announce';
 import { api } from './api';
 import styles from './Assistant.module.css';
-import { cardWait, forgetCard } from './card-guard';
+import { cardWait, forgetCard } from '../shared/card-guard';
 
 const act = (action: AssistantAction) => void api.assistant.act(action);
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
