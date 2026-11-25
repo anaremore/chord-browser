@@ -20,6 +20,8 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+/** The big import's Undo on CI's Windows runners (see the test). */
+const UNDO_WINDOWS_MS = 8_000;
 
 describe('chord-data', () => {
   // A new profile's first launch creates chord.db and every table in it. In one transaction since 2026-11-20, not one
@@ -89,9 +91,10 @@ describe('chord-data', () => {
       db.undoImport('big', t0);
       const ms = performance.now() - started;
       console.log(`undo of 10,000 pages, 50,000 visits: ${ms.toFixed(0)} ms`);
-      // Held where main held it before #84 (the Linux checks job). CI's Windows runners measure about 5.01 s, at the
-      // edge of the budget (2026-11-21, #84 follow-up), so it's reported there until a Windows budget is measured.
-      if (process.platform !== 'win32') expect(ms).toBeLessThan(5_000);
+      // Held where main held it before #84 (the Linux checks job): 5 s. CI's Windows runners, where a sync to disk costs
+      // most, took 2.3 to 5.5 s over 24 runs (x64 and arm64, 2026-11-22 to 24; #85): their budget is 8 s, about 1.5
+      // times the worst seen, which a regression of the old kind (an Undo of every row one by one) still fails.
+      expect(ms).toBeLessThan(process.platform === 'win32' ? UNDO_WINDOWS_MS : 5_000);
       expect(db.search('many', null, t0).history).toEqual([]);
     } finally {
       db.close();
