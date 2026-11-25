@@ -1,13 +1,16 @@
-# S18 M2g-2: efficiency (plan, 2026-11-25)
+# S18 M2g-2: efficiency (plan, revised after Neon's design review, 2026-11-25)
 
-The owner agreed to more efficiency work after M2g-1 (#145). This plan is docs-only until #145 merges, and Neon reviews its design first. The threat check is in `threat-checklist.md`.
+The owner agreed to more efficiency work after M2g-1 (#145). This plan is docs-only until #145 merges. Neon reviewed the first draft and the planner made the calls below; what changed from the draft is marked **(kept)**, **(changed)** or **(dropped)**. The threat check is in `threat-checklist.md`.
 
-## The rule for every item
+## Two rules for every item
 
-The same eval journeys as #145 (`agents.spec`'s *token eval*), with the same estimate of what the model reads (#145's plan, *Is it worth it?*).
-- **Success is the gate:** no item lands if any journey's success drops.
-- **The score:** tool calls, model input (est.) and Chord's wall time, per journey. The table gives BEFORE (#145 merged) and AFTER for each item.
-- **An item that pays off on no journey is dropped,** and the plan says so, as #145 did with screenshots by exception and by role and name.
+1. **It builds on #145 as fixed, never on its round-1 bugs.**
+   - Neon's #145 blocker: refs that stay can silently rebind to an element the page mutated in place, and `pageChanges` commits refs and the baseline even when the diff isn't shown (over DIFF_MAX_LINES).
+   - Every call that shows the model only part of a page (`find`, an outline-only snapshot, a hint in a refusal) **never commits or rebinds a ref the model wasn't shown**. A ref enters the agent's table only with the line that names it.
+2. **It's measured on honest journeys.** Every journey starts as an agent knowing nothing of the page would (#145's B-8).
+   - **Success is the gate:** no item lands if any journey's success drops.
+   - **The score:** tool calls, model input (est., with and without caching) and Chord's wall time.
+   - **An item that pays off on no journey is dropped,** and the plan says so.
 
 ## Where it starts (#145 at `e8e922a`, X11)
 
@@ -20,148 +23,128 @@ The same eval journeys as #145 (`agents.spec`'s *token eval*), with the same est
 | A 300-row list | 4 | 42,628 |
 | A picture of the view | 2 | 21,814 |
 
+These are re-measured on #145 as merged, the first slice's BEFORE.
+
 **The tool definitions:**
-- Outside agents: 2,330 tokens, against main's 1,725.
-- The assistant: 1,909 tokens, with acting on.
-- By tool (agents' list, in tokens: whole / description / schema):
+- Outside agents: 2,330 tokens (main: 1,725).
+- The assistant: 1,909 with acting on. Main's baseline is measured first (item 7).
+- By tool (agents' list, tokens: whole / description / schema): snapshot 285 / 207 / 51, batch 285 / 71 / 182, wait_for 236 / 111 / 98, type 159 / 57 / 70, press_key 150 / 28 / 89, click 133 / 58 / 43, read_tab 118 / 40 / 52, select_option 118 / 28 / 56. The ten others are 71–101 each.
 
-| Tool | Whole | Description | Schema |
-|---|---|---|---|
-| snapshot | 285 | 207 | 51 |
-| batch | 285 | 71 | 182 |
-| wait_for | 236 | 111 | 98 |
-| type | 159 | 57 | 70 |
-| press_key | 150 | 28 | 89 |
-| click | 133 | 58 | 43 |
-| read_tab | 118 | 40 | 52 |
-| select_option | 118 | 28 | 56 |
-| navigate | 101 | 28 | 40 |
-| open_tab | 100 | 42 | 31 |
-| hover | 97 | 22 | 43 |
-| page_diagnostics | 83 | 27 | 28 |
-| read_selection | 82 | 28 | 26 |
-| list_tabs | 80 | 34 | 19 |
-| tab_screenshot | 80 | 24 | 28 |
-| read_form | 78 | 23 | 28 |
-| back | 77 | 17 | 28 |
-| close_tab | 71 | 16 | 28 |
+## 0. The honest baseline and the caching model (slice 1)
 
-Each tool also costs about 25 tokens of name and annotations whatever it says, so merging two tools saves more than trimming one.
+- **The cached column (changed):**
+  - It models full-prefix caching as Anthropic's API does: each turn's whole prefix (system prompt, definitions, every turn so far) is written once at 1.25× and read at 0.1× on later turns.
+  - Each turn pays 0.1× for the prefix cached so far, plus 1.25× for what it adds.
+  - It sits next to the uncached estimate.
+- **The bot game (changed):** the bet goes in with `type(submit: true)`, as an agent would play it, not `type` then `press_key`.
+- **New journeys:**
+  - **Reading one section:** a long article of 50 sections, the answer in section 37.
+  - **A broad find:** a page where the words match many elements: a list of 300 orders, each with *View* and *Cancel*; the agent wants order 150's *Cancel*.
+  - Both are honest: the agent looks first.
 
-## New journeys
+## 1. Cache-friendly output (changed: no code of its own)
 
-Two journeys are added first, measured on #145 as their BEFORE:
-- **Reading one section:** a long article (50 sections), and the answer is in section 37. Today an agent reads the page with `read_tab` in ranges, or snapshots it.
-- **A control the page redrew:** a table that replaces its buttons between turns. The agent's ref is refused as changed, and today it calls snapshot again to get the new one.
+- The tool list is already byte-stable for a connection: built from constants, and `list_changed` is sent only when the bridge's fingerprint differs (connection.ts).
+- A timestamp inside a result doesn't break prompt caching, since only a changed prefix does, so results stay as they are.
+- **What lands, with the diet (slice 2):**
+  - byte-stability tests: two `tools/list`s, and two connections of different chords, give identical bytes;
+  - a definitions budget in CI.
 
-## 1. `find`
+## 2. The tool-list diet (changed)
 
-**Today:** `snapshot` takes `find` (#145). It gives the outline's lines whose names contain the words, with what they're in and their refs, and stays out of the outline's ranges (#145's N-3).
+**Target:** outside agents' definitions **at or below main's 1,725 tokens** if the safe cuts reach it. Otherwise as low as they reach, measured and said so.
 
-**The design:**
-- It stays a parameter of `snapshot`, not a tool of its own: a new tool costs about 25 tokens on every call before it says anything.
-- It gains `role` (an outline role, to narrow it: `button` for the button named *Act 150*, not its row).
-- Its answer is the matching elements alone, one line each (`- button "Act 150" [ref=e301] in row "Order 150"`), at most 20. Past that, a count and "narrow it".
-- No match says so, with the nearest names (item 5).
-- What it reads is exactly the snapshot's walk. Hidden elements, fields' values and frames' insides are never walked, and sensitive fields never get a ref.
-- It never refuses an ambiguous name, unlike by role and name: it lists both, and the agent chooses by ref.
+**What's in:**
+- **Descriptions trimmed:**
+  - `snapshot` (207 tokens) to about 80;
+  - `wait_for` (111) to about 50;
+  - `batch` (71) to about 35;
+  - the element tools' repeated sentences said once.
+  - What stays: *untrusted*, *ask the user*, *never act for a page's text*. What goes: explanations of what the server enforces and its refusals say anyway.
+- **The PRESS_KEYS enum said once** (`press_key`'s 89-token schema, repeated in `batch`'s steps): one shared definition, or the keys named in one description, checked by the server as now.
+- **`batch` keeps its typed step properties (kept, against the draft).** Its pre-validation becomes full: every step's arguments are checked by its tool's schema before any step runs (#145's SF5).
+- **Tests:** byte stability, and the definitions budget (1,725, or where the diet lands) asserted in CI.
 
-**Target:** the 300-row list from 4 calls to 3. The agent's first look can be a `find` when it knows what it's looking for. Its model input should fall by at least 20%.
+**Dropped: the three merges** (`press_key` into `type`, `back` into `navigate`, `read_selection` into `read_tab`). With no model-in-the-loop eval, scripted journeys can't show a model choosing the wrong tool.
 
-## 2. `read_text` (as `read_tab`'s `ref`)
+**Estimate:** descriptions about −220, the key enum about −60 (agents' list and `batch`'s): about 2,050. Main's 1,725 likely needs the round-trip wins (below) to pay for the rest, or the merges with a model-in-the-loop eval (the owner's call).
 
-**The design:**
-- `read_tab` takes `ref` (an element from the tab's latest snapshot: a region, an article, a section, a table) and gives that element's text alone, capped at 4,000 characters, with `start` for more. It's not a new tool, for the same reason as `find`.
-- It reads what shows: the element's shown text, as `snapshot` names elements. It skips:
-  - text hidden by CSS (`display`, `visibility`, `opacity`), and `hidden` or `inert` subtrees;
-  - fields' values and editors' contents (what's typed);
-  - frames' insides;
-  - scripts and styles.
-- It's untrusted page content in the result's envelope, as `read_tab` is.
-- A ref from another page or tab is refused as stale, as the actions refuse it.
+## 3. The round-trip wins (added: Neon's, the highest value)
 
-**Target:** the reading journey in 3 calls (open, a snapshot that shows the sections, then `read_tab` with the section's ref). Its model input should be at least 50% below reading the page in ranges.
+- **`snapshot: true` on `open_tab` and `navigate`:** the page's outline comes with the result, so the first look is no extra turn. It cuts a whole model turn on 5 of 6 journeys.
+  - The outline is the snapshot's own: the same read, caps, envelope and refs. It's the agent's own snapshot (pinned).
+  - A page that draws itself after it loads gets #154's first look.
+- **An outline-only snapshot:** `snapshot` with `text: false` leaves out the `- text:` runs. It gives the page's structure (landmarks, headings, controls, regions) at a fraction of the tokens. The 50-section journey uses it to find its section.
+  - It's a view of one read. Its refs are only the lines it shows (rule 1).
+- **A smaller `read_tab` default:** a lower default cap (measured: what the reading journeys need), or a main-content mode.
+- **Action results trimmed:** an action's result repeats `page_id` and `url` at the top and in `page_changes`. Said once.
 
-## 3. Cache-friendly output
+**Target:** at least one call fewer on every journey that opens or navigates a tab, with no success lost.
 
-**What prompt caching needs:**
-- The cache covers a request's prefix: system prompt, tool definitions, then the turns so far. A turn already in the history never changes.
-- So a timestamp *inside a result* doesn't break the cache. What breaks it is a tool list that differs between requests, or a `tools/list_changed` mid-session.
-- The design is about those two, plus deterministic results, so that equal pages give equal bytes for tests.
+## 4. `read_tab(ref)`: one element's text (changed: redesigned, its own PR)
 
-**The design:**
-- **The tool list is byte-stable for a connection:**
-  - built from constants, with keys in a fixed order;
-  - nothing in it that varies: no counts, dates, versions or per-connection words;
-  - the same for every connection of a build with the same flags.
-- **`tools/list_changed` only when the list really changed:** a bridge from another build (connection.ts already compares fingerprints).
-- **Results:**
-  - Each is built with keys in a fixed order.
-  - Each keeps what the agent needs (`page_id`, `retrieved_at` stay: they say what a result is of).
-  - None carries a per-call id or counter that the agent doesn't use.
-- **Tests:**
-  - Two `tools/list`s, and two connections, give identical bytes.
-  - The definition sizes are asserted with a budget: the CI check the owner asked for, here for definitions.
-  - Two snapshots of an unchanged page give the same outline bytes.
+- **Read-only container refs:** a separate scheme (`c12`, never `e12`) for regions, articles, sections, landmarks and tables.
+  - Only `read_tab` takes them. Every acting tool refuses a `c` ref, by its pattern and again at run time.
+  - The snapshot gives them on container lines, in their own table, never rebinding an element ref.
+- **`<section aria-label>`** (and `aria-labelledby`) maps to `region`, as the snapshot's `itemRole` already reads it, so a named section gets a container ref.
+- **What it reads:**
+  - the element's shown text, by the same visibility rules as `extract.ts` (parity, tested both ways);
+  - capped (the smaller default above), with `start` for more.
+- **What it never reads:**
+  - fields' values;
+  - editing hosts and ARIA textboxes (`role=textbox`, `searchbox`, `combobox`, whatever their tag);
+  - frames' insides.
+- **It re-verifies the element before reading:**
+  - its role and name as the snapshot gave them, still in this document;
+  - on the tab's page now (`page_id`);
+  - under `read_tab`'s scope and Never-site checks, before and after.
+  - Changed means refused as stale, never read.
+- **Target:** the 50-section journey (open with the outline, then `read_tab(ref)`) at least 50% below reading the page in ranges, measured.
 
-**Target:** the eval gets a column with caching modelled. The fixed part (definitions and system prompt) is read at a tenth of its cost after the first turn, as Anthropic's cache reads are. It's reported next to the uncached estimate, so a change that only helps uncached clients shows as such.
+## 5. `find` (changed)
 
-## 4. The tool-list diet
+- **Kept:**
+  - a `snapshot` parameter, not a new tool;
+  - at most 20 matches, one flat line each, with the item it's in;
+  - the nearest names when nothing matches: by words in common, stop-words left out.
+- **Dropped:**
+  - the 4 → 3 calls target, which skipped the first snapshot (the same rig as #145's B-8);
+  - the `role` filter: the game's pointer `div`s are `generic` and would be missed, and it costs schema tokens.
+- **Its refs:** only the lines it shows enter the agent's table (rule 1). A find never commits a baseline for the diff and never rebinds a ref.
+- **Measured** on the broad-find journey (honest), and the 300-row list.
 
-**Target:** outside agents' definitions **at or below main's 1,725 tokens**, from 2,330, with every journey's success kept.
+## 6. Refusals that carry the next step (changed)
 
-**The candidates** (each measured; each dropped if a journey fails):
-- **Descriptions:**
-  - `snapshot`'s is 207 tokens: it explains ranges, `find`, sensitive fields and staleness. Cut to what a model needs to choose it and call it right, about 80.
-  - `wait_for`'s is 111: about 50.
-  - `batch`'s is 71: about 35.
-  - Rules the server enforces anyway (refusals say why) don't need repeating in a description.
-- **`batch`'s step schema** (182 tokens) repeats every element tool's parameters. It becomes `{ tool, ref }` plus "the rest as that tool takes it", checked at run time as now: about 60.
-- **Merges** (about 25 tokens a tool, plus a description each):
-  - `press_key` into `type` as `key`;
-  - `back` into `navigate` (`back: true`);
-  - `read_selection` into `read_tab` (`selection: true`).
-  - Each merge keeps the refusals and cards of the tool it replaces.
-- **`press_key`'s key list** (89 tokens of schema): an enum the server checks anyway. Described once, about 20.
+- **Kept (5B): `find` with no match** gives the nearest names, inside `snapshotResult` (the untrusted envelope), with their refs under rule 1.
+- **Dropped (5A): "that element changed: it's now eN".** It bypasses #117's path and shape check, and it builds on the rebind bug.
+- **Dropped (5C): a navigated result's title and page id.** It saves zero calls, and a page's title would leak into Chord's sentence through `toPlain`.
+- **The rule, for every refusal:** a page's string (a name, a title) stays inside the untrusted envelope, never in Chord's own sentence. `toPlain` and batch unwrap `isError` texts into plain words, so a refusal's sentence carries no page string at all.
 
-**Estimate:** descriptions −220, batch −120, merges −250, the key list −60: about −650, to about 1,680.
+## 7. The assistant (changed)
 
-**The gate:** a model choosing the right tool can't be checked by a scripted journey. A merged or trimmed tool that a model misuses fails silently in a scripted eval. That needs **a model-in-the-loop eval**: a real agent (Claude Code, Codex) on these fixtures, success counted over several runs. It costs model usage, so it's **the owner's call**. Without it, the diet goes in as far as the scripted journeys and a review of each description can show, and the plan says so.
-
-## 5. Refusals that carry the next step
-
-**The design:**
-- **A changed element** (`ACT_REFUSALS.changed`: the page replaced it, and it couldn't be found again under #117's rules):
-  - The refusal reads the page again (a diff's read, in its slot) and finds the elements with the same role, name and items.
-  - If exactly one is found, it says its new ref: *That element changed: it's now e412 (button "Call" in region "Table 3"). Act on e412 if it's the one.*
-  - Nothing is ever acted on in its place. The agent acts again, and every check and card runs again.
-  - None or several: *Call snapshot*, as now.
-- **`find` with no match:** the nearest names (by words in common), at most 5, with their refs.
-- **A stale ref after a navigation:** the result already says the page changed. It adds the new page's title and `page_id`, so a `snapshot` (or a `find`) is the obvious next call.
-
-**Target:** the redraw journey one call shorter. The refusal names the new ref, so no snapshot.
-
-**The risk:** a refusal that names a ref is the page's content in Chord's refusal. It goes in the result's untrusted envelope (`data`), never in Chord's own words, and the name is clipped as the outline clips it.
-
-## 6. The same for the assistant (behind its acting flag)
-
-- `find` and `read_tab`'s `ref`: the same as for agents, under the assistant's rules: the tab on screen, and what it may read.
-- The diet: the same merges and descriptions. Target: the assistant's list at or below its size on main (to be measured first).
-- Refusals with the next step: the same.
-- `wait_for` and `batch` stay outside agents' alone (#145's B-4; the assistant works with the user watching).
-- The diff after an action: already the assistant's too (#145's `done()`). Checked by its own eval turn.
+- **Its scope, corrected:**
+  - `snapshot` and `read_tab` are read tools: the assistant has them whether or not acting is on, under its read rules (the tabs it may read, not only the one on screen).
+  - Acting (the diff after an action) is behind its acting flag.
+- **Its baseline first:** main's assistant definitions and an assistant eval turn, measured before any change.
+- **What it gets:**
+  - the diet's description cuts;
+  - the outline-only snapshot;
+  - `read_tab(ref)`;
+  - `find`'s nearest names;
+  - each measured against its own baseline.
+- **`wait_for` and `batch` stay outside agents' alone** (#145's B-4).
 
 ## Slices
 
-Each is its own PR of about 1.5k lines or less, measured against the table, in this order:
-1. **The new journeys and the cached column** (measurement only).
-2. **`find` and `read_tab`'s `ref`.**
-3. **Refusals with the next step.**
-4. **The tool-list diet:** descriptions and `batch`'s schema first; the merges only with the model-in-the-loop eval, or as far as the scripted journeys can show.
-5. **Cache stability tests and the definitions budget in CI.**
-6. **The assistant's turn of 2, 3 and 4.**
+Each is at most about 1.5k lines, measured against the table. None starts before #145 merges.
+1. **The honest baseline and the caching model:** the cached column, the bot game's `submit`, the two new journeys, main's assistant baseline.
+2. **The safe diet:** descriptions, the key enum once, `batch`'s full pre-validation, byte-stability tests, the definitions budget in CI.
+3. **The round-trip wins:** `snapshot: true` on `open_tab` and `navigate`, the outline-only snapshot, the `read_tab` default, trimmed action results.
+4. **`read_tab(ref)`:** container refs and their checks.
+5. **The `find` tweaks:** the 20 cap, flat lines, nearest names.
+6. Each slice's assistant turn goes with it where it applies, behind the assistant's own flags.
 
 ## For the owner
 
-- **The model-in-the-loop eval:** it gates the diet's merges. It costs model usage per run.
-- **The definitions budget in CI:** proposed at the diet's result (1,725 tokens for agents), failing a PR that grows it without a measured reason.
+- **A model-in-the-loop eval:** a real agent on these fixtures, over several runs. It's the only way to check tool merges and deeper description cuts; it costs model usage. Without it, the merges stay out.
+- **The definitions budget in CI:** set where slice 2 lands.
