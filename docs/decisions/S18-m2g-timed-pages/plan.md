@@ -209,31 +209,30 @@ Result tokens alone mislead. Every call is a model turn that re-sends the whole 
 - The form's metered journey also carried a batch that was meant to fail.
 - One timed-table cell was Wayland's time in the X11 row.
 
-Now every journey starts with a snapshot, as an agent knowing nothing of the page would. Linux container, X11, at `485a0b0`, after by role and name was dropped and main (#150) merged:
+Now every journey starts with a snapshot, on both builds, as an agent knowing nothing of the page would. Main plays the bot hand with one snapshot and its refs throughout, as its own re-finding (#117) allows (round 1 of #145, SF5). Linux container, X11, at round 1's fixes:
 
 | Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |
 |---|---|---|---|---|---|---|
-| Bot game, one hand | yes → yes | 8 → **6** | 790 → 859 | 1,725 → 2,330 | 81,334 → **64,632** (−21%) | 4.8 → 4.3 |
-| Timed table, two turns | yes → yes | 8 → **5** | 781 → **563** | 1,725 → 2,330 | 81,220 → **53,223** (−34%) | 4.3 → 3.6 |
+| Bot game, one hand | yes → yes | 6 → 6 | 498 → 859 | 1,725 → 2,330 | 60,106 → 64,632 (**+8%**) | 5.6 → 4.4 |
+| Timed table, two turns | yes → yes | 8 → **6** | 781 → **612** | 1,725 → 2,330 | 81,220 → **63,907** (−21%) | 4.2 → 3.6 |
 | A 20-field form | yes → yes | 22 → **3** | 1,606 → 974 | 1,725 → 2,330 | 236,381 → **32,538** (−86%) | 6.1 → 4.1 |
 | A page that draws itself | yes → yes | 3 → 3 | 202 → 232 | 1,725 → 2,330 | 29,570 → 31,415 (**+6%**) | 1.0 → 0.9 |
-| A 300-row list | yes → yes | 3 → 4 | 10,290 → **508** | 1,725 → 2,330 | 49,746 → **42,628** (−14%) | 0.4 → 0.3 |
+| A 300-row list | yes → yes | 3 → 4 | 10,290 → **510** | 1,725 → 2,330 | 49,746 → **42,635** (−14%) | 0.4 → 0.3 |
 | A picture of the view | yes → yes | 2 → 2 | 1,108 → 1,109 | 1,725 → 2,330 | 20,602 → 21,814 (**+6%**) | 0.1 → 0.1 |
 
-Wayland gives the same counts. With by role and name still in (`917002a`), the tool definitions were 2,495: dropping it brought them down by 165 tokens a call, and the two rows #145 doesn't change went from +8% and +7% to +6%.
+Wayland gives the same counts.
 
 **The answer:**
 - Every journey still succeeds.
-- *The form* (−86%) and *the timed table* (−34%): `batch` and `wait_for` save calls.
-- *The bot hand* (−21%): after one snapshot, each action's diff replaces a second look (8 → 6 calls). The diffs cost more result tokens than they save (859 against 790), but every call saved is a whole context.
-- *The 300-row list* (−14%): collapsed rows and `find` cut its results from 10,290 to 508 tokens, but it takes one more call (a `find` after the first look). Most of its saving is gone at 8,000 tokens a call.
-- *The two journeys #145 doesn't change* read 6% more: the larger tool list alone, +605 tokens on every call. That's M2g-2's tool-list diet.
-- Wall time is Chord's own. A real agent's turn takes seconds of model time, so the calls saved (2, 3 and 19) are most of the time saved.
+- *The form* (−86%) and *the timed table* (−21%) save calls, with `batch` and `wait_for`.
+- *The 300-row list* (−14%): collapsed rows and `find` cut its results from 10,290 to 510 tokens, at one more call.
+- *The bot hand* is **8% worse**. Played honestly, main needs one snapshot too, so #145 saves no call there. The diffs after its four actions cost 361 result tokens more, and the larger tool list costs the rest.
+- *The two journeys #145 doesn't change* read 6% more: the larger tool list alone (+605 tokens a call), M2g-2's diet.
 
 **By change** (each kept only where a journey shows it pays):
+- *The diff after each action* pays on no journey now. It saves calls only where an agent would otherwise look again, and with main's refs surviving, no journey has it look again. `wait_for`'s diff (the timed table) is the one place it saves tokens. The planner's call: keep the diff after an action, or make it ask-for (`changes: true`).
 - *`wait_for`:* the timed table.
 - *`batch`:* the form.
-- *The diff after each action:* the bot hand.
 - *Rows collapsed and `find`:* the 300-row list.
 - *By role and name:* **dropped** (the planner, 2026-11-25). No journey needs it: the refs and re-finding cover it.
   - Each honest journey looks first, and the refs it gets work. Stable refs, and #117's re-finding of a redrawn control, cover what it was for.
@@ -241,6 +240,35 @@ Wayland gives the same counts. With by role and name still in (`917002a`), the t
   - It was also the biggest surface for a page to spoof (Neon's B-1 and B-2).
   - Gone with it: the tools' `role` and `name`, `refByName`, the shown-name check, and the read-by-name slot. Kept, since stable refs need them on their own: B-2's step key (name, items, place) and the page check before the step.
 - *Screenshots by exception:* paid off on no journey, so dropped (above).
+
+## Round 1 of #145 (Claude and Neon, 2026-11-25)
+
+**Refs never rebind to an element the agent didn't see (B1):**
+- A diff too big to show (over DIFF_MAX_LINES) is never taken as seen. Its refs are worked out without being issued (`ElementRefs.preview`), and nothing is issued or kept unless its lines are returned. So the agent's refs and the next diff's baseline stay its last seen snapshot's.
+- A shown diff moves only the diff's baseline (`rebase`). Later ranges (`start`) stay the outline the agent read.
+- The page's id for an element (its sid) holds only while its role, its name and the items it's in stay the same. A node renamed in place, or moved to another row, gets a new id and so a new ref, and its old ref resolves to the snapshot it came from, where act.ts refuses it as changed. A change of state alone (checked, filled) keeps it.
+- The same holds behind `find` and collapsed rows. A ref the agent never saw names an element exactly as the page has it, and a changed element always gets a new ref.
+
+**Performance (SF4)** (main process, core's perf test, Windows x64):
+
+| | Before | After |
+|---|---|---|
+| The diff after an action, 16,003 nodes | 20.5 ms median | 16.3 ms (no outline text built, refs previewed) |
+| A snapshot of the 20,000-element page | 4.5 ms | 2.0 ms (a row's shape made only when it has a sibling of the same size) |
+| A typical page's snapshot | 0.45 ms | 0.3 ms |
+
+The page's own side (the snapshot script in the renderer, its shapes for re-finding) is unchanged. Its cost on 20k nodes, which Neon and Claude measured at 50–120 ms, is a limit for M2g-2 (below).
+
+**The eval's assumptions (SF5):**
+- Main's bot hand is played with one snapshot and its refs throughout (main finds a redrawn control again too, #117).
+- The timed table played with #145's tools starts with a snapshot.
+- Every journey now starts with a look, on both builds.
+
+**Limits (stated, not fixed here):**
+- *Two step cards for the same step asked at the same moment:* each gets its own card (#145's B1 joins a retry to its card, not two asks at once). One Allow still runs one action.
+- *A `file://` page's origin is `null`:* the diff's origin check compares `null` with `null`, so two `file://` pages count as one origin. Agents can't open `file://` pages (open_tab and navigate take http and https only).
+- *`find` doesn't show a container's children:* it shows the matching elements and what they're in, not what else is inside. The agent snapshots for that.
+- *The page side's cost on very large pages* (the snapshot script and its shapes): M2g-2's measurement slice.
 
 ## Slice (b): wait_for (built, 2026-11-24)
 
