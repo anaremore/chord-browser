@@ -45,6 +45,7 @@ import { AssistantIcon } from '../shared/icons';
 import { announce } from './announce';
 import { api } from './api';
 import styles from './Assistant.module.css';
+import { cardWait, forgetCard } from './card-guard';
 
 const act = (action: AssistantAction) => void api.assistant.act(action);
 const ICON = { size: 15, strokeWidth: 1.75 } as const;
@@ -324,12 +325,20 @@ function ToolRow({ messages }: { messages: AssistantMessage[] }) {
  * focus, so typing in the composer can't answer it (F6).
  */
 function ActApproval({ message, act: card }: { message: AssistantMessage; act: AssistantActCard }) {
-  const [shownAt] = useState(() => performance.now());
+  const pending = message.body.role === 'approval' && message.body.decision === 'pending';
+  // Its first moment counts from when it was first shown, never from a redraw (card-guard.ts); its buttons say they
+  // can't be pressed yet, so a click in it is never dropped unseen (the release check, 2026-11-25).
+  const [ready, setReady] = useState(() => !pending || cardWait(message.id, performance.now(), durations.promptInputDelay) === 0);
+  useEffect(() => {
+    if (!pending) return void forgetCard(message.id);
+    if (ready) return;
+    const timer = setTimeout(() => setReady(true), cardWait(message.id, performance.now(), durations.promptInputDelay));
+    return () => clearTimeout(timer);
+  }, [pending, ready, message.id]);
   if (message.body.role !== 'approval') return null;
   const body = message.body;
-  const pending = body.decision === 'pending';
   const answer = (decision: 'once' | 'thread' | 'always' | 'denied') => {
-    if (!pending || performance.now() - shownAt < durations.promptInputDelay) return;
+    if (!pending || cardWait(message.id, performance.now(), durations.promptInputDelay) > 0) return;
     act({ do: 'approve', messageId: message.id, decision });
   };
   const allow = card.kind === 'site' ? 'thread' : 'once';
@@ -389,6 +398,8 @@ function ActApproval({ message, act: card }: { message: AssistantMessage; act: A
               key={b.label}
               type="button"
               className={looks[b.look]}
+              aria-disabled={(!ready && !b.show) || undefined}
+              data-waiting={(!ready && !b.show) || undefined}
               onClick={() => (b.show ? act({ do: 'showStep', messageId: message.id }) : b.decision && answer(b.decision))}
             >
               {b.label}
