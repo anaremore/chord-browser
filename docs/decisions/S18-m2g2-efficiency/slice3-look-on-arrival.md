@@ -41,7 +41,7 @@ The plan's line (threat-checklist.md, *The outline-only snapshot and `snapshot: 
   - An outline from a Never site is never returned, and nothing of it is kept.
   - *Tests* (control.test, agent-chords.test):
     - `navigate` with `snapshot: true` whose read comes back from a Never address gives no outline, no ref and no outline kept, and says why.
-    - `open_tab` whose read does the same: the tab's answer stands, with `no_outline`, and nothing of the site.
+    - `open_tab` whose read does the same, or whose page goes to a Never site as it's read: as `open_tab` landing there (round 1 of #232, B1): its held notes dropped, the tab closed, the Never refusal (`isError`), and nothing of the site, then or later.
     - `open_tab` with `snapshot: true` that lands on a Never site closes the tab, as without it.
 - **Private windows, and a tab the scope can't read:**
   - The scope's `readable` and `blockedNow`, at the read: `snapshot`'s own call, so its tests are these.

@@ -3010,6 +3010,21 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(out.data).toMatchObject({ no_outline: STILL_LOADING });
     });
 
+    it('a page loading when the outline would be taken: no outline, and nothing read, never a wait for it (round 2 of #232, SF-R2-1)', async () => {
+      // The page starts loading after navigate has answered, before the outline (its bar let go of: the action's end).
+      let armed = false;
+      const twist: Twist = {};
+      const t = await acting({ twist, act: { doing: (_n, d) => void (armed && d === null && (t.at.loading = true)) } });
+      (t.scope as { outlineOnGo?: boolean }).outlineOnGo = true;
+      armed = true;
+      twist.codes = [];
+      // A wait for the load (15 s) would outlast the test's own time limit.
+      const out = JSON.parse((await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b', snapshot: true })).text!) as Body;
+      expect(out.source).toBeUndefined();
+      expect(out.data).toMatchObject({ navigated: true, no_outline: STILL_LOADING });
+      expect(twist.codes.filter((c) => c.includes('__chordSnapshots'))).toEqual([]);
+    });
+
     it('Settings’ Nothing, turned on as the outline is read: no outline, in its words (round 1 of #232, SF2)', async () => {
       const { body } = await go({ off: true });
       expect(body.source).toBeUndefined();

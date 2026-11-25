@@ -468,7 +468,10 @@ async function snapshotTool(call: Call, args: Record<string, unknown>, settled =
   let read = await page.snapshot(scope.agent.id, token);
   // Nothing in it: a page that draws itself after it loads (the owner, 2026-11-24: a new tab's first look came back
   // empty). Taken once more when the page shows something, at most FIRST_LOOK_MS later; still nothing, the result says so.
-  if (read && read.nodes.length === 0 && !call.stopped() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped()) {
+  // Not for a page that went somewhere it may not be read, or (for an action's answer) began loading or went elsewhere:
+  // no wait, and no read, once the page has moved on (round 2 of #232).
+  const movedOn = () => (read ? blockedNow(call, node.id, page, 'That page could not be read.', read.url) !== null : false) || (settled && (loadingNow() || !sameId(page, pageId)));
+  if (read && read.nodes.length === 0 && !call.stopped() && !movedOn() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped() && !movedOn()) {
     token = randomBytes(12).toString('hex');
     read = await page.snapshot(scope.agent.id, token);
   }

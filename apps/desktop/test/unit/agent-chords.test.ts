@@ -21,7 +21,7 @@ import { PasswordService } from '../../src/main/passwords/service';
 import { Store } from '../../src/main/store';
 import { holdForAgent } from '../../src/preload/agent-hold';
 import { holdSends } from '../../src/main/control/sends';
-import { pageLoaded } from '../../src/main/control/tools';
+import { pageLoaded, STILL_LOADING } from '../../src/main/control/tools';
 
 afterEach(() => vi.useRealTimers());
 
@@ -780,7 +780,8 @@ function connected(t: ReturnType<typeof setup>, loadMs?: number, actions = true)
   const events = new EventEmitter();
   // `nodes`: what the snapshot script answers (S18 M2g-2 slice 3a), from `read` (else where the page is); `during`, what
   // happens as it reads (the page goes elsewhere: round 1 of #232, B1).
-  const page = { at: '', loading: true, nodes: [] as unknown[], read: '', during: undefined as (() => void) | undefined };
+  // `onGet`: what happens when Chord looks the tab up (after open_tab's own load: round 2 of #232).
+  const page = { at: '', loading: true, nodes: [] as unknown[], read: '', during: undefined as (() => void) | undefined, onGet: undefined as (() => void) | undefined };
   const contents = Object.assign(events, {
     isDestroyed: () => false,
     isLoading: () => page.loading,
@@ -794,7 +795,7 @@ function connected(t: ReturnType<typeof setup>, loadMs?: number, actions = true)
   const sent: Reply[] = [];
   const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(actions)) }, (m) => void sent.push(m as never), {
     present: async () => 'once',
-    browser: { store: t.store, tabs: { get: () => ({ webContents: contents }) as never, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
+    browser: { store: t.store, tabs: { get: () => (page.onGet?.(), { webContents: contents }) as never, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
     chords: t.chords,
     dispatch: (c) => t.store.dispatch(c),
     neverSites: () => ['bank.test'],
@@ -906,6 +907,26 @@ describe('open_tab and a Never site (security review)', () => {
       expect(never.a.tabs(), way).toHaveLength(0);
       expect(JSON.stringify(await never.a.reply(2, 'list_tabs')), way).not.toMatch(PRIVATE);
     }
+  });
+
+  it('with snapshot: true, a page that starts loading again once open_tab has answered: no outline, and no wait for it (round 2 of #232, SF-R2-1)', async () => {
+    const t = setup(['bank.test']);
+    const a = connected(t);
+    a.page.nodes = [{ depth: 0, role: 'button', name: 'Join table', key: 0, sid: 1 }];
+    const replied = a.reply(1, 'open_tab', { url: 'https://agent.test/lobby', snapshot: true });
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBeGreaterThan(0));
+    a.page.at = 'https://agent.test/lobby';
+    a.page.loading = false;
+    // Loaded when open_tab answers; loading again by the time its outline is taken (a wait for it would be 15 s,
+    // past the test's own time limit).
+    a.page.onGet = () => void (a.page.loading = true);
+    a.events.emit('did-stop-loading');
+    const result = await replied;
+    expect(result.isError).toBe(false);
+    const body = JSON.parse(result.content[0]!.text) as Record<string, unknown> & { data: Record<string, unknown> };
+    expect(body.source).toBeUndefined();
+    expect(body.data).toMatchObject({ tab_id: 'a1', no_outline: STILL_LOADING });
+    expect(a.tabs()).toHaveLength(1);
   });
 
   it('with snapshot: true in a build without M2’s tools (no snapshot), open_tab answers as it always did (round 1 of #232, SF3)', async () => {
