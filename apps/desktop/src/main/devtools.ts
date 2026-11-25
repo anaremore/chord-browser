@@ -68,7 +68,7 @@ const WINDOW_OFFSET = 48;
 const WAYLAND = platform === 'linux' && (process.env['XDG_SESSION_TYPE'] === 'wayland' || Boolean(process.env['WAYLAND_DISPLAY']));
 
 /** ⌘⇧D / Ctrl+Shift+D inside DevTools: pop them out, or dock them (Chrome's key for it). */
-export function isToggleKey(input: Pick<Electron.Input, 'type' | 'key' | 'code' | 'control' | 'meta' | 'alt' | 'shift'>, os = platform): boolean {
+function isToggleKey(input: Pick<Electron.Input, 'type' | 'key' | 'code' | 'control' | 'meta' | 'alt' | 'shift'>, os = platform): boolean {
   const mod = os === 'darwin' ? input.meta && !input.control : input.control && !input.meta;
   // By position, as Chord's shortcuts go with a modifier down: D on any layout.
   return input.type === 'keyDown' && mod && input.shift && !input.alt && (input.code === 'KeyD' || input.key.toLowerCase() === 'd');

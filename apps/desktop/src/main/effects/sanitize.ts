@@ -134,7 +134,7 @@ function serializeName(value: string): string {
 }
 
 /** CSSOM's "serialize a string". */
-export function serializeString(value: string): string {
+function serializeString(value: string): string {
   let out = '"';
   for (const c of value) {
     const code = c.codePointAt(0)!;

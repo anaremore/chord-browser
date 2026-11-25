@@ -30,7 +30,7 @@ export function registerCaller(contents: WebContents, role: Role, origins: reado
   contents.once('destroyed', () => callers.delete(contents.id));
 }
 
-export class IpcDenied extends Error {}
+class IpcDenied extends Error {}
 
 function authorize(channel: InvokeChannel, event: IpcMainInvokeEvent): void {
   const caller = callers.get(event.sender.id);

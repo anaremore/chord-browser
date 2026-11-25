@@ -6,7 +6,7 @@
  */
 
 /** Chrome's update endpoint. */
-export const WEB_STORE_UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
+const WEB_STORE_UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
 
 export interface UpdateInfo {
   id: string;

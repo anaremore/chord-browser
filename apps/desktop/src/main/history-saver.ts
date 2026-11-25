@@ -19,8 +19,8 @@ export interface HistorySaverDeps {
   savable(nodeId: NodeId): boolean;
 }
 
-export const SAVE_SOON_MS = 2000;
-export const SAVE_EVERY_MS = 30_000;
+const SAVE_SOON_MS = 2000;
+const SAVE_EVERY_MS = 30_000;
 
 /** A short fingerprint of a history, so an unchanged one isn't written again (page state can run to hundreds of KB). */
 const fingerprint = (nav: NavState | null) => createHash('sha1').update(JSON.stringify(nav)).digest('base64');

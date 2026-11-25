@@ -42,7 +42,7 @@ export interface ExporterOptions {
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** "Chord data 2026-11-30.jsonl", or `.chorddata` encrypted (S15 §2, *Extension and MIME type*). The date is this computer's. */
-export function exportName(now: Date, encrypted: boolean, passwordsOnly = false): string {
+function exportName(now: Date, encrypted: boolean, passwordsOnly = false): string {
   return `Chord ${passwordsOnly ? 'passwords' : 'data'} ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.${encrypted ? 'chorddata' : 'jsonl'}`;
 }
 

@@ -16,11 +16,11 @@ import { size } from '@chord/tokens';
 import { BaseWindow, ipcMain, nativeTheme, screen, WebContentsView, type Session } from 'electron';
 import { join } from 'node:path';
 
-export const BAR_HEIGHT = size.playerBar;
+const BAR_HEIGHT = size.playerBar;
 /** Room the window controls take in the bar (Chord's own numbers, apps/desktop/src/main/platform.ts). */
 const CONTROLS = { win32: { side: 'right', width: 3 * 46 }, linux: { side: 'right', width: 120 }, darwin: { side: 'left', width: 76 } } as const;
 
-export type BarStatus = 'starting' | 'cdm' | 'ready' | 'failed';
+type BarStatus = 'starting' | 'cdm' | 'ready' | 'failed';
 
 /** What the bar shows. */
 export interface BarState {

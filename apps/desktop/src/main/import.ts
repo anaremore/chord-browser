@@ -60,7 +60,7 @@ export interface ImporterOptions {
 const keyOf = (profile: FoundProfile) => createHash('sha256').update(profile.dir).digest('hex').slice(0, 16);
 
 const numbers = new Intl.NumberFormat('en-US');
-export const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
+const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 const NONE: ImportCounts = { bookmarks: 0, folders: 0, chords: 0, favorites: 0, tabs: 0, pages: 0 };
 
 /** "Chrome", "Chrome · Work" when it has several profiles, "Firefox (Flatpak)". */
@@ -80,7 +80,7 @@ function themesFor(state: State): ChordThemeSpec[] {
 }
 
 /** "Imported 6 tabs, 1,204 bookmarks and 34,551 pages of history from Chrome". */
-export function doneMessage(counts: ImportCounts, browser: string): string {
+function doneMessage(counts: ImportCounts, browser: string): string {
   const parts = [
     counts.tabs > 0 ? plural(counts.tabs, 'tab') : '',
     counts.bookmarks + counts.favorites > 0 ? plural(counts.bookmarks + counts.favorites, 'bookmark') : '',

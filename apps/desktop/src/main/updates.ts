@@ -17,7 +17,7 @@ import { proxies } from './proxy';
 import { newerRelease, type Release } from './releases';
 
 /** What updates.ts needs from update-installer.ts (an interface, so tests can stand in for it). */
-export interface Installer {
+interface Installer {
   readonly supported: boolean;
   prepare(release: Release, onProgress: (percent: number) => void): Promise<void>;
   restart(): void;

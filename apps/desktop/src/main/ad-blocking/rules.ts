@@ -17,7 +17,7 @@
  * worker runs it after each refresh.
  */
 
-export type ResourceType =
+type ResourceType =
   | 'main_frame'
   | 'sub_frame'
   | 'stylesheet'
@@ -34,7 +34,7 @@ export type ResourceType =
   | 'webbundle'
   | 'other';
 
-export interface RuleCondition {
+interface RuleCondition {
   urlFilter?: string;
   regexFilter?: string;
   isUrlFilterCaseSensitive?: boolean;
@@ -66,7 +66,7 @@ export interface Rule {
 export const PRIORITY = { block: 1, exception: 2, important: 3, siteOff: 4 } as const;
 
 /** Chromium's limit on regexFilter rules per extension. */
-export const MAX_REGEX_RULES = 1000;
+const MAX_REGEX_RULES = 1000;
 
 export interface CompileStats {
   /** Lines that are network filters (not comments, not element hiding). */

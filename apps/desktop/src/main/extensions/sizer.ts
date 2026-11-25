@@ -14,7 +14,7 @@
 
 /** Chord's own isolated world for the sizer: below the range Chromium gives extensions (1 << 20 and up), and not Electron's 999. */
 export const SIZER_WORLD = 4321;
-export const SIZE_TAG = 'chord-popup-size:';
+const SIZE_TAG = 'chord-popup-size:';
 
 /**
  * Runs in the popup's page, in SIZER_WORLD. Reports the content's natural

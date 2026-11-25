@@ -9,7 +9,7 @@ import { ElectronChromeExtensions } from '@chord/chrome-extensions';
 import type { BaseWindow, ContextMenuParams, MenuItem, Session, WebContents } from 'electron';
 
 /** What a tab looks like to `chrome.tabs`, beyond what the library reads from the page itself. */
-export interface TabFacts {
+interface TabFacts {
   pinned: boolean;
   /** Position among the chord's tabs. */
   index: number;

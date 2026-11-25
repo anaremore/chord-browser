@@ -104,7 +104,7 @@ export function systemPickerFor(platform: NodeJS.Platform, osVersion: string, en
  * id of its own.
  */
 let pickerWindow = -1;
-export function macPickerSource(): { id: string; name: string } {
+function macPickerSource(): { id: string; name: string } {
   return { id: `window:-4:${pickerWindow--}`, name: '' };
 }
 
