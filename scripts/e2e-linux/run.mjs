@@ -11,7 +11,14 @@
 // Every argument but these goes to Playwright:
 //   --wayland / --x11   which display server (x11 by default)
 //   --rebuild           rebuild the image from scratch (fresh Ubuntu packages)
-//   --cpus <n>          only n CPUs, as CI's runners have 4 (perf.spec.ts's baselines are taken so)
+//   --cpus <n>          n CPUs of the run's own (4 when not given, as CI's runners have; perf.spec.ts's baselines are
+//                       taken so). Each run gets a slot of its own from this machine's CPUs, never CPUs 0-3 (left for
+//                       you), so runs from several worktrees don't share cores. A fraction (0.35) is one CPU of its own
+//                       held to that share of it (a CFS quota). --cpus all: every CPU, shared, as before slots.
+//   --slow              a slow machine, to bring races out: --cpus 0.35 unless --cpus is given, and Playwright's
+//                       --retries 0 --repeat-each 5 unless those are given
+//   --throttle <rate>   pages' renderers slowed that many times over CDP (Emulation.setCPUThrottlingRate), in every
+//                       spec that launches Chord through main-errors.ts' watchForMainErrors (CHORD_E2E_CPU_THROTTLE)
 //   --share <dir>       a folder of this machine's, read and written by the run at /share (CHORD_E2E_SHARE):
 //                       input and results that stay out of the tree (scripts/dev/signin-sweep)
 // CHORD_E2E_WSL_DISTRO picks the WSL distro that has Docker (WSL's default otherwise).
@@ -44,7 +51,7 @@ const WINDOWS_SPEC_PATH = /^[^-][^\\]*\\.*\.[cm]?[jt]sx?(:\d+)*$/;
 
 /** The runner's own options, and the arguments that go to Playwright. */
 export function parseArgs(argv) {
-  const options = { display: 'x11', rebuild: false, help: false, cpus: null, share: null, playwright: [] };
+  const options = { display: 'x11', rebuild: false, help: false, cpus: null, share: null, slow: false, throttle: null, playwright: [] };
   // `pnpm test:e2e:linux -- -g x` hands the script the `--` too.
   const args = argv[0] === '--' ? argv.slice(1) : argv;
   for (let i = 0; i < args.length; i++) {
@@ -52,13 +59,65 @@ export function parseArgs(argv) {
     if (arg === '--wayland' || arg === '--x11') options.display = arg.slice(2);
     else if (arg === '--rebuild') options.rebuild = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
-    else if (arg === '--cpus') options.cpus = Number(args[++i]);
-    else if (arg.startsWith('--cpus=')) options.cpus = Number(arg.slice('--cpus='.length));
+    else if (arg === '--cpus') options.cpus = cpusArg(args[++i]);
+    else if (arg.startsWith('--cpus=')) options.cpus = cpusArg(arg.slice('--cpus='.length));
+    else if (arg === '--slow') options.slow = true;
+    else if (arg === '--throttle') options.throttle = Number(args[++i]);
+    else if (arg.startsWith('--throttle=')) options.throttle = Number(arg.slice('--throttle='.length));
     else if (arg === '--share') options.share = args[++i] ?? '';
     else if (arg.startsWith('--share=')) options.share = arg.slice('--share='.length);
     else options.playwright.push(WINDOWS_SPEC_PATH.test(arg) ? arg.replaceAll('\\', '/') : arg);
   }
   return options;
+}
+
+/** --cpus' value: `all`, or a number of CPUs (a fraction is a share of one). */
+const cpusArg = (value) => (value === 'all' ? 'all' : Number(value));
+
+/** --slow's defaults: a fraction of a CPU, and every try counted, five times over, unless asked otherwise. */
+export const SLOW_CPUS = 0.35;
+export function slowDefaults(options) {
+  if (!options.slow) return options;
+  const has = (flag) => options.playwright.some((a) => a === flag || a.startsWith(`${flag}=`));
+  return {
+    ...options,
+    cpus: options.cpus ?? SLOW_CPUS,
+    playwright: [...options.playwright, ...(has('--retries') ? [] : ['--retries', '0']), ...(has('--repeat-each') ? [] : ['--repeat-each', '5'])],
+  };
+}
+
+/* ---------- CPU slots ---------- */
+
+/** CPUs 0..RESERVED_CPUS-1 are never given to a run: they're left for you. */
+export const RESERVED_CPUS = 4;
+/** A run's CPUs when --cpus isn't given: CI's runners have 4. */
+export const DEFAULT_CPUS = 4;
+
+/** A cpuset ("4-7,10") as the CPUs it names. */
+export function cpusetCpus(cpuset) {
+  const cpus = new Set();
+  for (const part of String(cpuset ?? '').split(',').map((p) => p.trim()).filter(Boolean)) {
+    const [from, to = from] = part.split('-').map(Number);
+    for (let cpu = from; cpu <= to; cpu++) cpus.add(cpu);
+  }
+  return cpus;
+}
+
+/**
+ * A run's CPUs: a slot of `size` (whole CPUs) from those after the reserved ones, in steps of its size, that no running
+ * run has (`taken`: their cpusets). A free one is picked at random, so two runs starting at once rarely pick the same.
+ * With none free, the one shared with the fewest: `shared` says so. A size bigger than what's left gets all of it.
+ */
+export function pickCpuset({ total, size, taken = [], reserved = RESERVED_CPUS, random = Math.random }) {
+  const first = Math.min(reserved, Math.max(0, total - 1));
+  const width = Math.max(1, Math.min(size, total - first));
+  const slots = [];
+  for (let start = first; start + width <= total; start += width) slots.push(start);
+  const busy = taken.map(cpusetCpus);
+  const overlap = (start) => busy.reduce((n, cpus) => n + [...cpus].filter((c) => c >= start && c < start + width).length, 0);
+  const free = slots.filter((start) => overlap(start) === 0);
+  const start = free.length > 0 ? free[Math.floor(random() * free.length)] : slots.reduce((best, slot) => (overlap(slot) < overlap(best) ? slot : best), slots[0]);
+  return { cpuset: width === 1 ? String(start) : `${start}-${start + width - 1}`, shared: free.length === 0 };
 }
 
 /** The image's tag: a hash of the Dockerfile and the pnpm version it bakes in, so a change to either builds a new one. */
@@ -98,10 +157,10 @@ export function staleRuns(inspected, now = Date.now()) {
  * unminified build to profile (CHORD_NO_MINIFY), the performance spec's enforcement and CPU profiles,
  * and a bigger Xvfb screen (CHORD_E2E_SCREEN, for scripts/dev/shots.mjs).
  */
-export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE', 'CHORD_E2E_SCREEN'];
+export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE', 'CHORD_E2E_SCREEN', 'CHORD_E2E_CPU_THROTTLE'];
 
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
-export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpus = null, share = null, env = {} }) {
+export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpuset = null, quota = null, share = null, env = {} }) {
   return [
     'run',
     '--interactive',
@@ -112,10 +171,11 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     '--init',
     // Chromium keeps its shared memory in /dev/shm; Docker's default 64 MB isn't enough for a browser.
     '--shm-size', '2g',
-    // --cpus: only the first n CPUs, as CI's runners have 4. How much of a launch runs side by side depends on
-    // how many CPUs Chromium may use (warm launches took 4.0 times bare Electron's on 24, 4.5 on 4); a CPU
-    // quota would slow it down without changing that.
-    ...(cpus ? ['--cpuset-cpus', `0-${cpus - 1}`] : []),
+    // The run's own CPUs (pickCpuset). How much of a launch runs side by side depends on how many CPUs Chromium
+    // may use (warm launches took 4.0 times bare Electron's on 24, 4.5 on 4), so a run is given whole CPUs; a
+    // quota on top (--cpus 0.35, --slow) slows everything in it, to bring races out.
+    ...(cpuset ? ['--label', `chord-e2e.cpus=${cpuset}`, '--cpuset-cpus', cpuset] : []),
+    ...(quota ? ['--cpus', String(quota)] : []),
     // No core dumps. WSL 2 pipes every Linux crash, a container's included, to Windows' %TEMP%\wsl-crashes,
     // and a renderer's core can be gigabytes (two forced crashes filled a disk). The kernel ignores a
     // limit of 0 for a piped core_pattern; 1 is the value that makes it give up on the dump.
@@ -219,12 +279,13 @@ async function main() {
   const distro = process.env['CHORD_E2E_WSL_DISTRO'];
   const wsl = (args) => ['wsl.exe', [...(distro ? ['-d', distro] : []), '-e', ...args]];
 
-  const options = parseArgs(process.argv.slice(2));
+  const options = slowDefaults(parseArgs(process.argv.slice(2)));
   if (options.help) {
     console.log(readFileSync(import.meta.filename, 'utf8').split('\nimport ')[0].replace(/^#!.*\n/, '').replaceAll(/^\/\/ ?/gm, ''));
     return 0;
   }
-  if (options.cpus !== null && !(Number.isInteger(options.cpus) && options.cpus > 0)) fail('--cpus takes a whole number of CPUs, such as 4');
+  if (options.cpus !== null && options.cpus !== 'all' && !(options.cpus > 0)) fail('--cpus takes a number of CPUs (4, or a share of one: 0.35), or all');
+  if (options.throttle !== null && !(options.throttle >= 1)) fail('--throttle takes how many times slower, such as 4');
   if (options.share !== null && !(options.share && statSync(options.share, { throwIfNoEntry: false })?.isDirectory())) fail('--share takes a folder that exists');
 
   // Every spawn has windowsHide: started without a console (an editor's task, a background shell),
@@ -338,10 +399,27 @@ async function main() {
     });
   }
 
-  const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${options.cpus ? `, ${options.cpus} CPUs` : ''}`;
+  // The run's CPUs: a slot no other run has (pickCpuset), from the CPUs Docker sees.
+  let cpuset = null;
+  let quota = null;
+  if (options.cpus !== 'all') {
+    const want = options.cpus ?? DEFAULT_CPUS;
+    const total = Number(docker(['info', '--format', '{{.NCPU}}'], { quiet: true })) || 0;
+    if (total > 1) {
+      const live = docker(['ps', '--quiet', '--filter', 'label=chord-e2e=run'], { quiet: true })?.split(/\s+/).filter(Boolean) ?? [];
+      const taken = live.length ? (docker(['inspect', '--format', '{{.HostConfig.CpusetCpus}}', ...live], { quiet: true }) ?? '').split('\n') : [];
+      const picked = pickCpuset({ total, size: Math.ceil(want), taken });
+      cpuset = picked.cpuset;
+      if (picked.shared) log(`Every CPU slot is in use by another run: sharing CPUs ${cpuset} with the fewest`);
+    }
+    if (!Number.isInteger(want)) quota = want;
+  }
+  const env = { ...process.env, ...(options.throttle ? { CHORD_E2E_CPU_THROTTLE: String(options.throttle) } : {}) };
+  const cpusSaid = cpuset ? `, CPUs ${cpuset}${quota ? ` at ${quota} of one` : ''}` : options.cpus === 'all' ? ', every CPU' : '';
+  const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${cpusSaid}${options.throttle ? `, pages ${options.throttle}x slower` : ''}`;
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
   const share = options.share === null ? null : dockerPath(resolve(options.share));
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpus: options.cpus, share, env: process.env }), tar);
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota, share, env }), tar);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);

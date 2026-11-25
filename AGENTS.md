@@ -51,12 +51,11 @@ pnpm deadcode                  # Knip, on demand only
 - **Build on Z:.** The repo, its worktrees, `node_modules` and builds live on Z:. C: is small, and tests once
   filled it.
 - **Worktrees** go under `Z:\Projects\chord-browser-wt\<name>`, made with `git worktree add` from the main checkout.
-  Remove one only after its PR shows MERGED.
+  Remove one only after `node scripts/dev/verify-merged.mjs <pr>` exits 0 (MERGED, and in origin/main).
 - **Docker for the container runner** is Docker Engine in WSL 2. Don't `wsl --shutdown` casually: other threads'
   containers run there.
-- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges, through main's merge queue:
-  `gh pr merge <n> --merge --auto` queues a pull request whose `E2E` passed, and it merges once its merge group
-  passes. A plain `gh pr merge <n> --merge` is refused while the queue is on.
+- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges, with `gh pr merge <n> --merge` once the
+  `E2E` status is success (main's ruleset requires it).
 
 ## Invariants (never broken; reviewers check every one)
 
@@ -135,18 +134,31 @@ New decision records (S20 and on) are a small folder each, not one growing file:
 - **Reviews start when a push lands,** not when CI is green. Every PR with product code gets two independent
   reviews (Claude and Gemini Neon).
 - **A finding is reproduced before it's fixed:** a failing test first (unit, or E2E in the container), then the fix
-  that turns it green. A finding that can't be reproduced is said so, not fixed blind.
+  that turns it green. A finding that can't be reproduced is said so, not fixed blind. A race shows under
+  `pnpm test:e2e:linux --slow` (one CPU at 0.35: the chord-e2e-linux skill).
 - **The stop rule.** A finding that needs an exotic API, a crash, or a hostile build to show becomes a stated limit
   in the decision record or an issue, not another review round.
+- **One push per review round.** Fix every finding of the round, run the tests locally (E2E in the container), then
+  push once: each push restarts CI and the reviews.
+- **Drafts while reviews go on.** A PR stays a draft through its review rounds, and is marked ready for review when
+  a round comes back clean; then it gets the E2E run that gates merging (the full tier with `ready`).
+- **At most one open PR to main per thread.** The next slice waits on a stacked branch, not a second PR.
+  Before starting a slice and before pushing, `node scripts/dev/pr-collisions.mjs` lists files several open PRs
+  touch and PRs that conflict: wait for, or rebase onto, the one that lands first.
+- **Risky state lands alone, simulated.** A stateful module where async steps, timers and outside events meet (a
+  lease, a hold, a queue) goes first as its own PR, with a seeded `*.sim.test.ts` (template:
+  `apps/desktop/test/unit/sim-kit.ts`) that checks its invariants after every step.
+- **Five blockers in one module in round 1 means redesign.** Rework the design (with a threat checklist), not the
+  five findings one by one.
 - **Threat checklist first.** A slice that touches agents, passwords, IPC, sessions or anything web content can
   reach starts with a threat checklist and a design review, before code (S18's *M2e: threat checklist* is the
   model).
-- **CI is tiered.** Every push gets the fast tier (Linux X11). The merge queue adds Windows x64 and macOS arm64
-  for platform-sensitive code, every platform for an Electron change; the rest run nightly. Adding the `ready`
-  label runs every platform now, once. A draft or a PR stacked on another's branch runs the checks only; a
-  draft labeled `ready` fails *What changed* (mark it ready first). One platform's E2E alone, with no throwaway
+- **CI is tiered.** Work as a draft (the checks only), then mark it ready for review: every push gets the fast
+  tier (Linux X11). When review settles, label it `ready`: the merge tier adds Windows x64 and macOS arm64, which a
+  platform-sensitive PR's `E2E` needs. An Electron change gets every platform; the rest run nightly. A PR stacked on
+  another's branch runs the checks only; a draft labeled `ready` fails *What changed* (mark it ready first). One platform's E2E alone, with no throwaway
   branch: `gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=<file> -f grep=<title> -f repeat=5`. The merge gate is the `E2E`
-  commit status, on pull requests and merge groups (`.github/workflows/ci.yml`).
+  commit status (`.github/workflows/ci.yml`).
 - **Small PRs.** Aim under about 1,500 changed lines (lockfiles, fixtures, docs and vendored lists not counted):
   review rounds grow with size. CI warns past it (`scripts/ci/pr-size.mjs`), never fails; split a slice into
   stacked PRs, or say in the description why it's one piece.
