@@ -369,7 +369,16 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
 
     // Chord not in front while the agent acts: nothing is focused for you then (that would bring Chord forward), and
     // coming back to Chord, your page has the focus, never the agent's (window.ts' keepFocusOffParked).
-    const inFront = (front: boolean) => app.evaluate(({ BaseWindow }, f) => { const w = BaseWindow.getAllWindows()[0]!; if (f) w.focus(); else w.blur(); }, front);
+    // On macOS a window's focus() asks the OS to activate Chord, and macOS 14's cooperative activation may say no to an
+    // app sent behind (CI's macOS x64 runner did, three times: nothing focused for 3 s). Coming back is what a click on
+    // Chord does, which activates it: app.focus with steal (activateIgnoringOtherApps), then the window.
+    const inFront = (front: boolean) =>
+      app.evaluate(({ app: electronApp, BaseWindow }, f) => {
+        const w = BaseWindow.getAllWindows()[0]!;
+        if (!f) return w.blur();
+        if (process.platform === 'darwin') electronApp.focus({ steal: true });
+        w.focus();
+      }, front);
     await inFront(false);
     await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Step up"') });
     await inFront(true);
