@@ -202,29 +202,43 @@ Result tokens alone mislead. Every call is a model turn that re-sends the whole 
 - No prompt caching is assumed. With caching, the fixed part costs less, which narrows the gap but doesn't reverse it.
 - The model's own output and thinking aren't counted.
 
-**Before:** main at `6177df9`, without #145, played with main's tools: snapshots and refs, and polling for the timed table (a snapshot each second). **After:** #145, played with its tools. The same spec runs both; it plays with whatever tools the build lists. Linux container, X11:
+**Before:** main at `6177df9`, without #145, played with main's tools: snapshots and refs, and polling for the timed table (a snapshot each second). **After:** #145, played with its tools. The same spec runs both; it plays with whatever tools the build lists.
+
+**Corrected after Neon's round 1 (B-8).** The first table (`6327f31`) overstated two journeys:
+- The bot hand and the 300-row list played blind: no first snapshot, and names known in advance.
+- The form's metered journey also carried a batch that was meant to fail.
+- One timed-table cell was Wayland's time in the X11 row.
+
+Now every journey starts with a snapshot, as an agent knowing nothing of the page would. Linux container, X11, at `917002a`:
 
 | Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |
 |---|---|---|---|---|---|---|
-| Bot game, one hand | yes → yes | 8 → **5** | 790 → **320** | 1,725 → 2,468 | 81,334 → **53,270** (−35%) | 6.7 → 4.2 |
-| Timed table, two turns | yes → yes | 8 → **5** | 808 → **499** | 1,725 → 2,468 | 81,247 → **53,784** (−34%) | 4.2 → 5.4 (3.6 on Wayland) |
-| A 20-field form | yes → yes | 22 → **4** | 1,606 → 997 | 1,725 → 2,468 | 236,381 → **44,398** (−81%) | 6.1 → 4.3 |
-| A page that draws itself | yes → yes | 3 → 3 | 202 → 214 | 1,725 → 2,468 | 29,570 → 31,811 (**+8%**) | 1.0 → 0.9 |
-| A 300-row list | yes → yes | 3 → **2** | 10,290 → **99** | 1,725 → 2,468 | 49,746 → **21,080** (−58%) | 0.4 → 0.3 |
-| A picture of the view | yes → yes | 2 → 2 | 1,108 → 1,108 | 1,725 → 2,468 | 20,602 → 22,088 (**+7%**) | 0.1 → 0.1 |
+| Bot game, one hand | yes → yes | 8 → **6** | 790 → 859 | 1,725 → 2,495 | 81,334 → **65,622** (−19%) | 4.8 → 4.2 |
+| Timed table, two turns | yes → yes | 8 → **5** | 781 → **563** | 1,725 → 2,495 | 81,220 → **54,048** (−33%) | 4.3 → 3.6 |
+| A 20-field form | yes → yes | 22 → **3** | 1,606 → 974 | 1,725 → 2,495 | 236,381 → **33,033** (−86%) | 6.1 → 4.1 |
+| A page that draws itself | yes → yes | 3 → 3 | 202 → 232 | 1,725 → 2,495 | 29,570 → 31,910 (**+8%**) | 1.0 → 0.9 |
+| A 300-row list | yes → yes | 3 → 4 | 10,290 → **510** | 1,725 → 2,495 | 49,746 → **43,295** (−13%) | 0.4 → 0.3 |
+| A picture of the view | yes → yes | 2 → 2 | 1,108 → 1,109 | 1,725 → 2,495 | 20,602 → 22,144 (**+7%**) | 0.1 → 0.1 |
+
+The same on Wayland. With one CPU, also the same, except the timed table's results came to 618 tokens.
 
 **The answer:**
 - Every journey still succeeds.
-- Four of the six read 34% to 81% less. Those are the journeys #145 is for.
-- The other two read 7–8% more. #145 doesn't change how they're played, so they pay only for the larger tool list: +743 tokens on every call (wait_for, batch, `find`, role and name). That is M2g-2's tool-list diet.
-- Wall time is Chord's own. A real agent's turn takes seconds of model time, so the calls saved (3, 3 and 18) are most of the time saved.
-- The timed table's wall time is paced by the page (the others play for 1.5 s).
+- *The form* (−86%) and *the timed table* (−33%): `batch` and `wait_for` save calls.
+- *The bot hand* (−19%): after one snapshot, each action's diff replaces a second look (8 → 6 calls). The diffs cost more result tokens than they save (859 against 790), but every call saved is a whole context.
+- *The 300-row list* (−13%): collapsed rows and `find` cut its results from 10,290 to 510 tokens, but it takes one more call (a `find` after the first look). Most of its saving is gone at 8,000 tokens a call.
+- *The two journeys #145 doesn't change* read 7–8% more: the larger tool list alone, +770 tokens on every call. That's M2g-2's tool-list diet.
+- Wall time is Chord's own. A real agent's turn takes seconds of model time, so the calls saved (2, 3 and 19) are most of the time saved.
 
 **By change** (each kept only where a journey shows it pays):
-- *`wait_for`:* the timed table, 8 → 5 calls.
-- *`batch`:* the form, 22 → 4 calls.
-- *By role and name, with the diff after each action:* the bot game (8 → 5 calls, no snapshot) and the 300-row list.
-- *Rows collapsed and `find`:* the 300-row list played with a snapshot, 10,291 → 484 result tokens (*after the first cuts*, above). The list played by name needs no snapshot at all.
+- *`wait_for`:* the timed table.
+- *`batch`:* the form.
+- *The diff after each action:* the bot hand.
+- *Rows collapsed and `find`:* the 300-row list.
+- *By role and name:* **no honest journey uses it now**. Each journey looks first, and the refs it gets work.
+  - It costs about 170 tokens of tool definitions on every call: 2,495 with it, 2,325 without its schema.
+  - It would pay where an agent knows a control's name and its refs went stale (a page that redraws or reloads between turns). No journey measures that yet.
+  - The planner's call: drop it, or keep it with a journey that measures that case.
 - *Screenshots by exception:* paid off on no journey, so dropped (above).
 
 ## Slice (b): wait_for (built, 2026-11-24)
