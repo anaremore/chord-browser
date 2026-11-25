@@ -137,6 +137,22 @@ export function narrowArgs(name, cpuset, quota) {
   return ['update', '--cpuset-cpus', String(first), '--cpus', String(quota), name];
 }
 
+/** The exit code for a run held to a share of a CPU whose tests couldn't be held to it. */
+export const NOT_NARROWED_EXIT = 3;
+
+/**
+ * What a run held to a share of a CPU ends with. Its tests must have run at that share: a `--slow` pass that wasn't
+ * slow would be a race hunt's false all-clear. So a narrowing that failed fails the run (its container was stopped
+ * then), and so does a pass whose tests never said they started (in-container.sh's TESTS_START line missing: they may
+ * have run at full speed). A run that failed anyway keeps its code, and says it wasn't narrowed.
+ */
+export function slowOutcome({ wanted, narrowed, failed, code }) {
+  if (!wanted || (narrowed && !failed)) return { code, message: null };
+  if (failed) return { code: NOT_NARROWED_EXIT, message: 'Failed: Docker couldn\'t hold the tests to their share of a CPU, so the run was stopped. A --slow run at full speed proves nothing.' };
+  if (code === 0) return { code: NOT_NARROWED_EXIT, message: `Failed: not narrowed. The tests never said they started (no "${TESTS_START.trim()}" line), so they may have run at full speed.` };
+  return { code, message: 'Not narrowed: the run ended before its tests started.' };
+}
+
 /** The image's tag: a hash of the Dockerfile and the pnpm version it bakes in, so a change to either builds a new one. */
 export function imageTag(dockerfile, pnpmVersion) {
   return `chord-e2e-runner:${createHash('sha256').update(dockerfile).update(`\0${pnpmVersion}`).digest('hex').slice(0, 12)}`;
@@ -466,15 +482,23 @@ async function main() {
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
   const share = options.share === null ? null : dockerPath(resolve(options.share));
   // A share of a CPU: installed and built on the whole slot, then narrowed to it as the tests start (TESTS_START).
-  let narrowed = !(quota && cpuset);
+  const wanted = Boolean(quota && cpuset);
+  let narrowed = false;
+  let narrowFailed = false;
   let tail = '';
   const narrowWhenTestsStart = (text) => {
-    if (narrowed) return;
+    if (!wanted || narrowed || narrowFailed) return;
     tail = (tail + text).slice(-4000);
     if (!tail.includes(TESTS_START)) return;
+    if (docker(narrowArgs(name, cpuset, quota), { quiet: true }) === null) {
+      // Never tested at full speed instead: stopped now, and the run fails (slowOutcome).
+      narrowFailed = true;
+      console.error(`[e2e-linux] Couldn't hold ${name}'s tests to ${quota} of a CPU (docker update failed): stopping it`);
+      docker(['kill', name], { quiet: true });
+      return;
+    }
     narrowed = true;
-    if (docker(narrowArgs(name, cpuset, quota), { quiet: true }) === null) log(`Couldn't narrow ${name} to ${quota} of a CPU: its tests run on CPUs ${cpuset}`);
-    else log(`Tests at ${quota} of CPU ${Math.min(...cpusetCpus(cpuset))}; install and build ran on CPUs ${cpuset}`);
+    log(`Tests at ${quota} of CPU ${Math.min(...cpusetCpus(cpuset))}; install and build ran on CPUs ${cpuset}`);
   };
   const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota: cpuset ? null : quota, share, build: buildKey(entries, image, env), env }), tar, narrowWhenTestsStart);
 
@@ -493,8 +517,10 @@ async function main() {
   else if (existsSync(join(appDir, 'test-results'))) log('The run wrote no results; apps/desktop/test-results is an earlier run’s');
 
   removeContainer();
-  log(code === 0 ? 'Passed' : `Failed (exit ${code})`);
-  return code;
+  const outcome = slowOutcome({ wanted, narrowed, failed: narrowFailed, code });
+  if (outcome.message) log(outcome.message);
+  log(outcome.code === 0 ? 'Passed' : `Failed (exit ${outcome.code})`);
+  return outcome.code;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
