@@ -63,6 +63,8 @@ export interface SnapshotNode {
    * agent; a replaced one gets another. Refs are made from it, so an element still there keeps its ref.
    */
   sid?: number;
+  /** Its name comes from aria-label or aria-labelledby, not what it shows: never found by its name (M2g-1, B3). */
+  aria?: boolean;
 }
 
 /** What the page script returns. */
@@ -437,6 +439,7 @@ export function cleanSnapshotRead(raw: unknown): SnapshotRead | null {
     if (Array.isArray(n['states'])) node.states = (n['states'] as unknown[]).filter((s): s is string => typeof s === 'string').slice(0, 8);
     if (typeof n['choice'] === 'string') node.choice = n['choice'].slice(0, 2000);
     if (typeof n['sid'] === 'number' && Number.isInteger(n['sid']) && n['sid'] > 0 && n['sid'] < 1e8) node.sid = n['sid'];
+    if (n['aria'] === true) node.aria = true;
     const f = n['field'] as Record<string, unknown> | undefined;
     if (f && typeof f === 'object') {
       const s = (k: string) => (typeof f[k] === 'string' ? (f[k] as string).slice(0, 200) : '');

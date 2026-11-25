@@ -86,6 +86,27 @@ Where the tokens go:
   - control.test: the diff in an action's result; a navigation makes refs stale.
   - agents.spec: the eval and every journey.
 
+**After click by role and name (slice c)** (every journey succeeding; baseline → now):
+
+| Journey | Tool calls | Result tokens |
+|---|---|---|
+| Bot game, one hand | 8 → **5** (by name, no snapshot) | 790 → **320** |
+| Timed table, two turns | 5 | 476 → 500 |
+| A 20-field form | 22 → **4** (batch) | 1,610 → **998** |
+| A page that draws itself | 5 → **3** (#154's first look) | 371 → **214** |
+| A 300-row list | 3 → **2** (by name) | 10,291 → **100** |
+| The tool list | | 1,962 → 2,468 (wait_for, batch, find, role and name) |
+
+- **By role and name** (click, type, press_key, select_option, hover take `role` and `name` in place of `ref`):
+  - Read as a snapshot is: a diff's kind, so the agent's own snapshot stays.
+  - Found only if it's the only element with that role and that exact name, among those that can be acted on (so never a password, code or card field, nor a file picker), and only from a read that wasn't cut short.
+  - The roles are an allowlist: button, link, checkbox, radio, switch, tab, menuitem, option, combobox, listbox, textbox, searchbox, spinbutton, slider, and generic (the game's pointer `div`s).
+  - Never an element whose name comes from `aria-label` or `aria-labelledby` rather than what it shows (Neon's B3).
+  - Then it's an element like a ref's: every check and card the same.
+  - The step key a late Allow is kept by is a JSON tuple now (B4: no value runs into the next).
+  - *Tests:* control.test (found; each refusal; two alike); agents.spec's eval (the bot game and the 300-row list by name; an aria-label's name refused, nothing clicked).
+- **The tool list is now the largest fixed cost** (2,468 tokens with every request). Trimming it waits on a model-in-the-loop eval (the owner's call: model usage).
+
 The connection also logs each result's size (`result <tool> <chars> ~<tokens>`), and `agentResultSizes` reads them per tool.
 
 ## After Neon's design review (2026-11-24, through 7c4e271)

@@ -1142,6 +1142,27 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(known.cards).toEqual([]);
   });
 
+  it('by role and exact name, with no ref (M2g-1): the only one, its name what it shows; else a no that says how (Neon’s B3, B4)', async () => {
+    const t = await acting();
+    expect(result(await t.call('click', { tab_id: t.tab, role: 'link', name: 'Home' })).data['done']).toBe('Clicked “Home”');
+    // [args, what it says]
+    const table: [Record<string, unknown>, string][] = [
+      [{ role: 'link' }, 'Name the element by its ref, or by role and name (both).'],
+      [{ role: 'heading', name: 'Orders' }, `An element is found by its name only for these roles: button, link, checkbox, radio, switch, tab, menuitem, option, combobox, listbox, textbox, searchbox, spinbutton, slider, generic. Call snapshot and use its ref.`],
+      [{ role: 'button', name: 'Nope' }, 'There’s no button named that on the page that can be acted on. Call snapshot to see its elements.'],
+      // The name exactly as the outline gives it: not a part of it, nor in another case.
+      [{ role: 'link', name: 'home' }, 'There’s no link named that on the page that can be acted on. Call snapshot to see its elements.'],
+    ];
+    for (const [args, says] of table) expect(refusal(await t.call('click', { tab_id: t.tab, ...args })).refused, JSON.stringify(args)).toBe(says);
+    // Two alike: never a guess.
+    ELEMENTS.push({ role: 'link', name: 'Home' });
+    try {
+      expect(refusal(await t.call('click', { tab_id: t.tab, role: 'link', name: 'Home' })).refused).toBe('There are 2 of them with that role and name. Call snapshot and use the one’s ref.');
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
   it('after an action, what changed since the agent’s last snapshot (M2g-1: the default, never with no snapshot to compare)', async () => {
     const t = await acting();
     // acting() took a snapshot: nothing changed after a hover.

@@ -360,6 +360,8 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const node = { depth, role, name: nameOf(el, role), sid: sidOf(el) };
+      // A name from aria-label or aria-labelledby, not what it shows (Neon's review of M2g-1, B3): never found by name.
+      if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) node.aria = true;
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).

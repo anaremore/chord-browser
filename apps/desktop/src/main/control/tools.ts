@@ -480,6 +480,36 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   return { page_changes: changes };
 }
 
+/** The roles an element is found by, by its name (M2g-1, Neon's B3): what's clicked, typed in or chosen. */
+const NAME_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'option', 'combobox', 'listbox', 'textbox', 'searchbox', 'spinbutton', 'slider', 'generic']);
+
+/**
+ * An element by its role and exact name, in the page as it is now (M2g-1): read as a snapshot is (a diff's kind: the
+ * agent's own snapshot stays), and only if it's the only one with that role and name, its name what it shows (never an
+ * aria-label's: B3), the read whole (never cut short: what it didn't see could be its twin) and it has a ref (never a
+ * password, code or card field, nor a file picker). Its ref, or the refusal.
+ */
+async function refByName(call: Call, nodeId: NodeId, page: NonNullable<Awaited<ReturnType<typeof loadedPage>>>, args: Record<string, unknown>): Promise<string | ToolOutput> {
+  const role = typeof args['role'] === 'string' ? args['role'].trim().toLowerCase() : '';
+  const name = typeof args['name'] === 'string' ? args['name'] : '';
+  if (!role || !name) return refuse('Name the element by its ref, or by role and name (both).');
+  if (!NAME_ROLES.has(role)) return refuse(`An element is found by its name only for these roles: ${[...NAME_ROLES].join(', ')}. Call snapshot and use its ref.`);
+  const refs = (call.scope.memory.elements ??= new Map()).get(nodeId) ?? new ElementRefs();
+  call.scope.memory.elements.set(nodeId, refs);
+  const token = randomBytes(12).toString('hex');
+  const read = await page.snapshot(call.scope.agent.id, token, false);
+  if (!read) return refuse('That page could not be read.');
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  if (read.cut.elements || read.cut.time || read.cut.refs) return refuse('That page is too big to find an element by its name. Call snapshot and use its ref.');
+  const found = read.nodes.filter((n) => n.key !== undefined && n.role === role && n.name === name);
+  if (found.length === 0) return refuse(`There’s no ${role} named that on the page that can be acted on. Call snapshot to see its elements.`);
+  if (found.length > 1) return refuse(`There are ${found.length} of them with that role and name. Call snapshot and use the one’s ref.`);
+  if (found[0]!.aria) return refuse('That element’s name isn’t what it shows (it comes from its aria-label), so it isn’t found by its name. Call snapshot and use its ref.');
+  const issued = refs.issue(page.id, token, snapshotKeys(read), sidsOf(read), false);
+  const ref = issued.get(found[0]!.key!);
+  return ref ?? refuse('That field is one the user fills (a password, code or card field). Ask them to.');
+}
+
 /* ---------- wait_for (S18 M2g-1) ---------- */
 
 /** Agents waiting now (one wait each: Neon's review of M2g-1, B5). */
@@ -733,9 +763,16 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     }
   }
 
+  // An element by its role and exact name (M2g-1): found in the page as it is now, the only one, as a ref; then as any.
+  let refArg = args['ref'];
+  if (refArg === undefined && (typeof args['role'] === 'string' || typeof args['name'] === 'string')) {
+    const named = await refByName(call, node.id, page, args);
+    if (typeof named !== 'string') return named;
+    refArg = named;
+  }
   // An element, by its ref from the tab's latest snapshot, on the page it's on now.
-  const lookup = scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id) ?? { ok: false as const, why: 'unknown' as const };
-  if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(args['ref'] ?? '')) : ELEMENT_REFUSALS.stale);
+  const lookup = scope.memory.elements?.get(node.id)?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
+  if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
   /**
    * One step in the page on the ref's element (act.ts). A ref whose node the page replaced may be found again there
    * (the owner's bug #2): the result says so.
@@ -825,7 +862,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (halted) return refuse(halted);
     const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
     if (after) return refuse(after);
-    if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    if (!scope.memory.elements?.get(node.id)?.resolve(refArg, page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
     // And on another site now, it'd need its own yes.
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
     // It runs, on the page and site the card named: the yes is kept now (the agent's life; a fresh Always for good).
@@ -842,7 +879,8 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
   // And what the card showed (Neon's review of #112): why it asks, and the element's shape (its link, its form's
   // address, method and fields). Any of it changed, it's another step: a late Allow never covers it.
   const shown = createHash('sha256').update(`${step.class === 'risky' ? step.why : 'act'}|${stepShape(element)}`).digest('hex').slice(0, 16);
-  const stepKey = `${node.id}|${page.id}|${String(args['ref'])}|${tool}|${isPressKey(key) ? key : ''}|${args['submit'] === true}|${typed}|${shown}`;
+  // As JSON (Neon's review of M2g-1, B4): no value can run into the next.
+  const stepKey = JSON.stringify([node.id, page.id, String(refArg), tool, isPressKey(key) ? key : '', args['submit'] === true, typed, shown]);
   if (step.class === 'risky') {
     const { fields, more } = stepFields(element.risk?.form?.fields.map((f) => f.label) ?? []);
     const released = scope.agent.releases(node.id);
@@ -868,7 +906,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (halted) return refuse(halted);
     const after = blockedNow(call, node.id, page, 'That tab could not be loaded.');
     if (after) return refuse(after);
-    if (!scope.memory.elements?.get(node.id)?.resolve(args['ref'], page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
+    if (!scope.memory.elements?.get(node.id)?.resolve(refArg, page.id).ok) return refuse(ELEMENT_REFUSALS.stale);
     if (host.siteOf(page.url()) !== site) return refuse(ELEMENT_REFUSALS.stale);
     // What the card showed is what goes (#112 review 1): described again, the same step, the same name, the same form
     // (where it goes, how, and its fields). A page that changed any of it while the card was up gets nothing.

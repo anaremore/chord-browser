@@ -1421,18 +1421,22 @@ test('the token eval: five journeys, each as an agent would play it with these t
 
     await journey('bot game, one hand', async () => {
       const tab = await open('/game');
-      // One snapshot: after each action its result says what changed (page_changes), and refs of what stayed stay good.
-      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      const called = JSON.parse((await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') })).text) as { data: { page_changes?: string[] } };
-      if (!Array.isArray(called.data.page_changes)) throw new Error('no page_changes after a click');
-      await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
-      await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
-      // Raise by its ref from the last diff that named it, else the snapshot's (the controls redraw: found again).
-      const raise = called.data.page_changes.filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).find((l) => l.includes('generic "Raise"')) ?? o;
-      await act('click', { tab_id: tab, ref: refOf(raise, 'generic "Raise"') });
+      // No snapshot at all: each control by its role and name (M2g-1), each result saying what changed.
+      const called = JSON.parse((await act('click', { tab_id: tab, role: 'generic', name: 'Call' })).text) as { data: { page_changes?: unknown } };
+      if (called.data.page_changes !== undefined) throw new Error('a diff with no snapshot to compare with');
+      await act('type', { tab_id: tab, role: 'textbox', name: 'Bet', text: '20' });
+      await act('press_key', { tab_id: tab, role: 'textbox', name: 'Bet', key: 'Enter' });
+      await act('click', { tab_id: tab, role: 'generic', name: 'Raise' });
       const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
       return /Call.*bet 20.*Raise/.test(log);
     });
+    // Never by a name that isn't what it shows (B3): its aria-label says Pay, it shows Join.
+    {
+      const tab = await open('/aria');
+      const byLabel = await ask('click', { tab_id: tab, role: 'button', name: 'Pay' });
+      expect(byLabel.text).toBe('That element’s name isn’t what it shows (it comes from its aria-label), so it isn’t found by its name. Call snapshot and use its ref.');
+      expect(String(await inPage('/aria', 'document.getElementById("log").textContent'))).toBe('');
+    }
     await journey('timed table, two turns', async () => {
       const tab = await open('/timed?others=1500');
       for (let turn = 0; turn < 2; turn++) {
@@ -1467,10 +1471,8 @@ test('the token eval: five journeys, each as an agent would play it with these t
     });
     await journey('a 300-row list', async () => {
       const tab = await open('/rows-300');
-      // The outline collapses the rows; the agent asks for the one it wants by its name.
-      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      if (!o.includes('"Act 150"')) o = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Act 150' })).text);
-      const clicked = await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') });
+      // The row the agent wants, by its button's name: no outline needed (find, or a ref from one, would do too).
+      const clicked = await act('click', { tab_id: tab, role: 'button', name: 'Act 150' });
       return clicked.text.startsWith('{');
     });
 
@@ -2365,6 +2367,8 @@ test.beforeAll(async () => {
     // A timed table (M2g-1's acceptance journey): your turn comes after the others', a shot clock of 15 s then, and
     // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
     // The token eval (the owner, 2026-11-24): a 20-field form, and a lobby that draws itself 600 ms after it loads.
+    // A name that isn't what it shows (Neon's B3 for M2g-1): never found by it.
+    '/aria': '<title>Aria</title><main><button aria-label="Pay">Join</button><p id=log></p></main><script>document.querySelector("button").onclick = () => { document.getElementById("log").textContent += " clicked"; };</script>',
     '/form20': `<title>Sign up</title><main><form onsubmit="return false"><h1>Sign up</h1>${Array.from({ length: 20 }, (_, i) => `<label>Field ${i + 1} <input name=f${i + 1}></label>`).join('')}</form></main>`,
     '/drawn': '<title>Lobby</title><div id=app></div><p id=log></p><script>setTimeout(() => { document.getElementById("app").innerHTML = "<h1>Lobby</h1><button>Join table</button>"; document.querySelector("#app button").onclick = () => { document.getElementById("log").textContent += " joined"; }; }, 600)</script>',
     '/timed': '<title>Timed table</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div role=region aria-label="Table 9"><p id=status>Waiting for the others</p><div id=controls></div></div><p id=log></p></main><script src="/timed.js"></script>',
