@@ -4,7 +4,7 @@
  * is the source of truth; `provider_session_id` only caches the provider's
  * side, so losing it costs a summary, never the conversation.
  */
-import { assistantMessageText, isAssistantScope, type AssistantHit, type AssistantImage, type AssistantMessage, type AssistantMessageBody, type AssistantProvider, type AssistantThread } from '@chord/core';
+import { assistantMessageText, isAssistantScope, replyBlocks, type AssistantHit, type AssistantImage, type AssistantMessage, type AssistantMessageBody, type AssistantProvider, type AssistantThread } from '@chord/core';
 import type { StatementSync } from 'node:sqlite';
 
 export type AssistantOp =
@@ -68,6 +68,12 @@ function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): Assi
 function messageOf(r: Row): AssistantMessage | null {
   try {
     const body = JSON.parse(str(r['body'])) as AssistantMessageBody;
+    // A reply's updates, kept only when well formed: a corrupt row shows as one message, never breaks the chat.
+    if (body.role === 'assistant' && 'blocks' in body) {
+      const blocks = replyBlocks(body.blocks, body.text.length);
+      if (blocks) body.blocks = blocks;
+      else delete body.blocks;
+    }
     return { id: str(r['id']), threadId: str(r['thread_id']), createdAt: num(r['created_at']), body };
   } catch {
     return null;

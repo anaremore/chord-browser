@@ -628,6 +628,35 @@ test('read another tab, then type: each card answered with a click in the panel,
   }
 });
 
+test('a long task: earlier updates fold into one row that opens in place; the final answer stays whole (the owner’s approved mock, 2026-11-25)', async () => {
+  test.setTimeout(90_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    const steps = ['Hand 1: seven-two, I folded.', 'Hand 2: I called.', 'Hand 3: I won the pot.', 'Hand 4: dealing now.'].flatMap((say) => [{ say }, { tool: 'snapshot' }]);
+    await send(panel, act([...steps, { say: 'Done: I’m at 512. ' }]));
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    const earlier = panel.getByRole('button', { name: 'Earlier in this task (4)' });
+    await expect(earlier).toBeVisible();
+    await expect(earlier).toHaveAttribute('aria-expanded', 'false');
+    await expect(panel.getByText('Done: I’m at 512. Done.', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Hand 1: seven-two, I folded.', { exact: true })).toHaveCount(0);
+    // The folded steps' quiet row, counted (the fourth look led to the final answer: it stays beside it).
+    await expect(panel.getByText(/Looked over “.*” \(3 times\)/)).toBeVisible();
+    await earlier.click();
+    await expect(earlier).toHaveAttribute('aria-expanded', 'true');
+    await expect(panel.getByText('Hand 1: seven-two, I folded.', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Hand 4: dealing now.', { exact: true })).toBeVisible();
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
 test('what the assistant writes between its steps is a paragraph each, never glued together (the owner’s card-game run on 982ce10)', async () => {
   test.setTimeout(90_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));

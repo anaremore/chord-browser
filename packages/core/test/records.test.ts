@@ -339,6 +339,12 @@ describe('records that aren’t what they say', () => {
     expect(decode()).toBeNull();
   });
 
+  it('a reply’s updates (a long task’s) come in when well formed, and are dropped when not (Claude’s review of #190)', () => {
+    const r = (blocks: unknown): DataRecord => ({ type: 'message', id: 'm1', set: { thread: 'th1', created: 1, body: { role: 'assistant', text: 'One.\n\nTwo.', status: 'done', citations: [], blocks } } });
+    expect(messageFromRecord(r([{ at: 0, after: null }, { at: 6, after: 'm0' }]))?.body).toMatchObject({ blocks: [{ at: 0, after: null }, { at: 6, after: 'm0' }] });
+    for (const bad of [[{ at: 99, after: null }], [{ at: 0, after: 7 }], 'x']) expect(messageFromRecord(r(bad))?.body, JSON.stringify(bad)).not.toHaveProperty('blocks');
+  });
+
   it('a reply’s links that aren’t web pages are dropped', () => {
     const r: DataRecord = {
       type: 'message',

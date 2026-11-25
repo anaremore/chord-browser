@@ -26,6 +26,7 @@ import {
   nameTabs,
   splitCitations,
   stripCitations,
+  timelineRows,
   toolRowLabel,
   type AssistantActCard,
   type AssistantContextUsage,
@@ -34,11 +35,12 @@ import {
   type AssistantImage,
   type AssistantMessage,
   type AssistantProvider,
+  type TimelineRow,
 } from '@chord/core';
 import type { AssistantAction, AssistantView, SystemInfo } from '@chord/ipc';
-import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Check, ChevronDown, ChevronRight, Copy, Download, Ellipsis, Pencil, RotateCcw, Square, X } from 'lucide-react';
 import { motion, useIsPresent, type Transition } from 'motion/react';
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { durations } from '@chord/tokens';
 import { useMenu } from '../shared/a11y';
 import { AssistantIcon } from '../shared/icons';
@@ -167,10 +169,17 @@ function Markdown({ text, onLink, marks }: { text: string; onLink(url: string): 
 }
 
 /** A reply: Markdown with numbered citation pills, in the sentence where the assistant quoted a tab. */
-function Reply({ message, onLink, names, offerCodex }: { message: AssistantMessage; onLink(url: string): void; names: AssistantView['tabNames']; offerCodex: boolean }) {
+function Reply({ message, onLink, names, offerCodex, text: part, images: withImages = true }: { message: AssistantMessage; onLink(url: string): void; names: AssistantView['tabNames']; offerCodex: boolean; text?: string; images?: boolean }) {
+  const whole = message.body.role === 'assistant' ? message.body.text : '';
+  // Citations are numbered from the whole reply, once, whichever update of it this shows (Claude's review of #190).
+  const numbers = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const seg of splitCitations(whole)) if (seg.kind === 'citation') map.set(`${seg.ref}:${seg.quote}`, seg.n);
+    return map;
+  }, [whole]);
   if (message.body.role !== 'assistant') return null;
-  const numbers = new Map<string, number>();
-  for (const seg of splitCitations(message.body.text)) if (seg.kind === 'citation') numbers.set(`${seg.ref}:${seg.quote}`, seg.n);
+  // One update of a long turn (`part`), or the whole reply.
+  const shown = part ?? message.body.text;
   const citations = message.body.citations;
   const cite: Marks['cite'] = (ref, quote, quoted) => {
     const n = numbers.get(`${ref}:${quote}`);
@@ -214,12 +223,12 @@ function Reply({ message, onLink, names, offerCodex }: { message: AssistantMessa
         Make it with Codex
       </button>
     ) : null;
-  const images = message.body.images ?? [];
-  const making = message.body.making ?? 0;
+  const images = withImages ? (message.body.images ?? []) : [];
+  const making = withImages ? (message.body.making ?? 0) : 0;
   return (
     <div className={styles.reply}>
       {/* Once there's no offer, its mark goes with the line it took. */}
-      <Markdown text={offerCodex ? message.body.text : message.body.text.replace(/\s*\[\[make-image\]\]/g, '')} onLink={onLink} marks={{ cite, tab, makeImage }} />
+      <Markdown text={offerCodex ? shown : shown.replace(/\s*\[\[make-image\]\]/g, '')} onLink={onLink} marks={{ cite, tab, makeImage }} />
       {(images.length > 0 || making > 0) && (
         <div className={styles.madeImages}>
           {images.map((image) => (
@@ -278,19 +287,30 @@ function MadeImage({ image }: { image: AssistantImage }) {
 
 /* ---------- Timeline ---------- */
 
-type Row = { kind: 'message'; message: AssistantMessage } | { kind: 'tools'; messages: AssistantMessage[] };
-
-/** Consecutive tool activity in a turn folds into one quiet row; a fill card is a row of its own. */
-function rows(messages: readonly AssistantMessage[]): Row[] {
-  const out: Row[] = [];
-  for (const message of messages) {
-    const last = out.at(-1);
-    if (message.body.role === 'tool' && !message.body.fill) {
-      if (last?.kind === 'tools') last.messages.push(message);
-      else out.push({ kind: 'tools', messages: [message] });
-    } else out.push({ kind: 'message', message });
-  }
-  return out;
+/**
+ * *Earlier in this task (N)* (mocks/assistant-long-turns.html, approved 2026-11-25): closed, the folded steps' quiet row;
+ * open, the earlier updates in place, muted, with their steps between them. Its own state, so it stays as you left it.
+ */
+function EarlierRow({ count, tools, notes, children }: { count: number; tools: AssistantMessage[]; notes: AssistantMessage[]; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.earlier}>
+      {/* Its words are its name (Claude's review of #190). */}
+      <button type="button" className={styles.earlierButton} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <ChevronRight size={13} strokeWidth={2} className={styles.earlierChevron} data-open={open || undefined} aria-hidden />
+        Earlier in this task ({count})
+      </button>
+      {open ? (
+        <div className={styles.folded}>{children}</div>
+      ) : (
+        <>
+          {tools.length > 0 && <ToolRow messages={tools} />}
+          {/* What the page set off, and your stopping it, stay in view, never in the line above (Claude's review of #190). */}
+          {notes.length > 0 && <ToolRow messages={notes} />}
+        </>
+      )}
+    </div>
+  );
 }
 
 function ToolRow({ messages }: { messages: AssistantMessage[] }) {
@@ -591,7 +611,7 @@ function FillCard({ message }: { message: AssistantMessage }) {
   );
 }
 
-function MessageView({ message, last, onLink, onEdit, view }: { message: AssistantMessage; last: boolean; onLink(url: string): void; onEdit(message: AssistantMessage): void; view: AssistantView }) {
+function MessageView({ message, last, onLink, onEdit, view, update }: { message: AssistantMessage; last: boolean; onLink(url: string): void; onEdit(message: AssistantMessage): void; view: AssistantView; update?: { text: string; last: boolean } }) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
     void navigator.clipboard.writeText(text);
@@ -628,10 +648,18 @@ function MessageView({ message, last, onLink, onEdit, view }: { message: Assista
     );
   }
   if (body.role !== 'assistant') return null;
+  // An update of a long turn that isn't its last: the paragraph alone (the reply's status, copy and images go with its last).
+  if (update && !update.last) {
+    return (
+      <div className={styles.assistant}>
+        <Reply message={message} text={update.text} images={false} onLink={onLink} names={view.tabNames} offerCodex={false} />
+      </div>
+    );
+  }
   const working = body.status === 'streaming' && !body.text && !body.making && !body.images?.length;
   return (
     <div className={styles.assistant}>
-      {working ? <Working startedAt={view.startedAt} /> : <Reply message={message} onLink={onLink} names={view.tabNames} offerCodex={last && view.codexImages && !view.busy} />}
+      {working ? <Working startedAt={view.startedAt} /> : <Reply message={message} {...(update ? { text: update.text } : {})} onLink={onLink} names={view.tabNames} offerCodex={last && view.codexImages && !view.busy} />}
       {body.status === 'interrupted' && (
         <p className={styles.statusLine}>
           Interrupted.
@@ -706,13 +734,24 @@ function Timeline({ view, onLink, onEdit }: { view: AssistantView; onLink(url: s
         aria-label="Conversation"
         tabIndex={0}
       >
-        {rows(view.messages).map((row) =>
-          row.kind === 'tools' ? (
-            <ToolRow key={row.messages[0]!.id} messages={row.messages} />
-          ) : (
-            <MessageView key={row.message.id} message={row.message} view={view} last={row.message === lastUser || row.message === lastAssistant} onLink={onLink} onEdit={onEdit} />
-          ),
-        )}
+        {timelineRows(view.messages).map(function row(r: TimelineRow): ReactNode {
+          if (r.kind === 'tools') return <ToolRow key={r.messages[0]!.id} messages={r.messages} />;
+          if (r.kind === 'earlier') {
+            return (
+              <EarlierRow key={`${r.message.id}:earlier`} count={r.count} tools={r.tools} notes={r.notes}>
+                {r.rows.map(row)}
+              </EarlierRow>
+            );
+          }
+          if (r.kind === 'update') {
+            return (
+              <MessageView key={`${r.message.id}:${r.index}`} message={r.message} update={{ text: r.text, last: r.last }} view={view} last={r.last && r.message === lastAssistant} onLink={onLink} onEdit={onEdit} />
+            );
+          }
+          return <MessageView key={r.message.id} message={r.message} view={view} last={r.message === lastUser || r.message === lastAssistant} onLink={onLink} onEdit={onEdit} />;
+        })}
+        {/* A long turn under way: Working… under everything, the step under way included (the mock; Claude's review of #190). */}
+        {lastAssistant?.body.role === 'assistant' && lastAssistant.body.status === 'streaming' && Boolean(lastAssistant.body.blocks?.length) && <Working startedAt={view.startedAt} />}
       </div>
       {!following && (
         <button

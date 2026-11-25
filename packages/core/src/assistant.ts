@@ -152,6 +152,12 @@ export type AssistantMessageBody =
       images?: AssistantImage[];
       /** Images it's still making (while the reply streams). */
       making?: number;
+      /**
+       * Where each update of a long turn starts (the text it wrote after a step: a paragraph of its own), and the chat
+       * item just before it (a step's activity, a card), so the chat shows each in its place (the owner's card-game run).
+       * Absent on replies from before.
+       */
+      blocks?: AssistantReplyBlock[];
     }
   /**
    * A tool's activity line. propose_fill's carries its card (`fill`) while the
@@ -527,4 +533,144 @@ export function toolRowLabel(steps: readonly { tool: string; summary: string }[]
   }
   // Every different step stays in the row (what the page set off is said there: a picker refused, a window not opened).
   return [...counts].map(([summary, n]) => (n > 1 ? `${summary} (${n} times)` : summary)).join(' · ');
+}
+
+/** An update of a reply: where its text starts, and the id of the chat item just before it (null: none in the turn). */
+export interface AssistantReplyBlock {
+  at: number;
+  after: string | null;
+}
+
+/**
+ * Where an update starts in the reply's text, as a piece streams in (`was` the text before, `next` after, as
+ * nextReplyText made it): at 0 for its first words, after the break for the first words after a step; null otherwise
+ * (within an update, or only space so far).
+ */
+export function replyBlockStart(was: string, next: string, afterTool: boolean, newBlock: boolean): number | null {
+  if (!was.trim()) return next.trim() ? 0 : null;
+  return afterTool && !newBlock ? was.trimEnd().length + 2 : null;
+}
+
+/**
+ * A reply's updates as saved or imported, kept only when well formed: each an integer start, in order, and what came
+ * before it (an id, or null). Anything else: none (the reply shows as one message, as before).
+ */
+export function replyBlocks(value: unknown, textLength = Infinity): AssistantReplyBlock[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: AssistantReplyBlock[] = [];
+  for (const b of value as unknown[]) {
+    const at = (b as { at?: unknown } | null)?.at;
+    const after = (b as { after?: unknown } | null)?.after;
+    if (typeof at !== 'number' || !Number.isInteger(at) || at < 0 || at > textLength || (out.length > 0 && at < out.at(-1)!.at)) return undefined;
+    if (after !== null && typeof after !== 'string') return undefined;
+    out.push({ at, after });
+  }
+  return out;
+}
+
+/** A row of the chat's timeline. */
+export type TimelineRow =
+  | { kind: 'message'; message: AssistantMessage }
+  /** A run of steps' activity, one quiet row. */
+  | { kind: 'tools'; messages: AssistantMessage[] }
+  /** An update of a long turn's reply, a paragraph (or more) of its own; `index` its place, `last` the reply's final one. */
+  | { kind: 'update'; message: AssistantMessage; text: string; index: number; last: boolean }
+  /**
+   * *Earlier in this task (N)* of `message` (the reply): the updates folded, with their steps in order; the folded steps
+   * for the closed row's line; and what the page set off or your stopping it (`notes`), which stay in view when closed.
+   */
+  | { kind: 'earlier'; message: AssistantMessage; count: number; rows: TimelineRow[]; tools: AssistantMessage[]; notes: AssistantMessage[] };
+
+/** A turn's updates past this many fold the earlier ones (mocks/assistant-long-turns.html, the owner's OK 2026-11-25). */
+const UNFOLDED_UPDATES = 3;
+
+const isStep = (m: AssistantMessage): boolean => m.body.role === 'tool' && !m.body.fill;
+/** What the page set off and was caught, or *Stopped: you used the tab*: never hidden in a closed fold's line. */
+const isNote = (m: AssistantMessage): boolean => m.body.role === 'tool' && m.body.tool === 'act' && !m.body.ok;
+/** A card waiting for you (a read, an act, a fill's values): never folded away. */
+const isWaiting = (m: AssistantMessage): boolean => (m.body.role === 'approval' && m.body.decision === 'pending') || (m.body.role === 'tool' && m.body.fill?.status === 'pending');
+
+/** Messages as rows: a run of steps' activity in one row; anything else (a card, a fill card, a divider) its own. */
+function messageRows(messages: readonly AssistantMessage[]): TimelineRow[] {
+  const out: TimelineRow[] = [];
+  for (const message of messages) {
+    const last = out.at(-1);
+    if (isStep(message)) {
+      if (last?.kind === 'tools') last.messages.push(message);
+      else out.push({ kind: 'tools', messages: [message] });
+    } else out.push({ kind: 'message', message });
+  }
+  return out;
+}
+
+/** One turn (what follows a message of yours) whose reply wrote updates: each in its place, the earlier ones folded. */
+function turnRows(items: readonly AssistantMessage[], message: AssistantMessage, blocks: readonly AssistantReplyBlock[]): TimelineRow[] {
+  const body = message.body;
+  if (body.role !== 'assistant') return [];
+  // The turn in order: the items up to each update's `after`, then the update; what's after the last one, last. Found by
+  // id in the whole turn, whatever order the store gave them in (the reply is saved with its turn's start).
+  const seq: (AssistantMessage | { update: number })[] = [];
+  let next = 0;
+  blocks.forEach((block, i) => {
+    const upTo = block.after === null ? -1 : items.findIndex((m) => m.id === block.after);
+    for (; next <= upTo; next++) seq.push(items[next]!);
+    seq.push({ update: i });
+  });
+  for (; next < items.length; next++) seq.push(items[next]!);
+  const rowsOf = (part: (AssistantMessage | { update: number })[]): TimelineRow[] => {
+    const rows: TimelineRow[] = [];
+    let run: AssistantMessage[] = [];
+    for (const item of part) {
+      if (!('update' in item)) {
+        run.push(item);
+        continue;
+      }
+      const i = item.update;
+      rows.push(...messageRows(run), { kind: 'update', message, text: body.text.slice(blocks[i]!.at, blocks[i + 1]?.at ?? body.text.length).trim(), index: i, last: i === blocks.length - 1 });
+      run = [];
+    }
+    return [...rows, ...messageRows(run)];
+  };
+  const kept = body.status === 'streaming' ? 2 : 1;
+  const folded = blocks.length - kept;
+  // The fold ends with its last update: the steps after it lead to the first one in view, and stay with it.
+  const cut = seq.findIndex((item) => 'update' in item && item.update === folded - 1) + 1;
+  const earlier = seq.slice(0, cut).filter((item): item is AssistantMessage => !('update' in item));
+  if (blocks.length <= UNFOLDED_UPDATES || earlier.some(isWaiting)) return rowsOf(seq);
+  return [
+    { kind: 'earlier', message, count: folded, rows: rowsOf(seq.slice(0, cut)), tools: earlier.filter((m) => isStep(m) && !isNote(m)), notes: earlier.filter(isNote) },
+    ...rowsOf(seq.slice(cut)),
+  ];
+}
+
+/**
+ * The chat as rows (the owner's card-game run; mocks/assistant-long-turns.html, approved 2026-11-25). A reply that
+ * wrote updates between its steps shows each in its place, between the steps before and after it. Past three, the
+ * earlier ones fold into *Earlier in this task (N)*: while it works the latest two stay in view, and once it's done only
+ * its final answer, in full. A card still waiting for you is never folded away, and what the page set off stays in view.
+ * Replies from before (no updates recorded) are as they were.
+ */
+export function timelineRows(messages: readonly AssistantMessage[]): TimelineRow[] {
+  const out: TimelineRow[] = [];
+  // Each turn: a message of yours and what follows it, up to the next.
+  const turns: AssistantMessage[][] = [];
+  for (const message of messages) {
+    if (message.body.role === 'user' || turns.length === 0) turns.push([message]);
+    else turns.at(-1)!.push(message);
+  }
+  for (const turn of turns) {
+    const [first, ...rest] = turn;
+    const own = first!.body.role === 'user' ? [first!] : [];
+    const items = first!.body.role === 'user' ? rest : turn;
+    const replies = items.filter((m) => m.body.role === 'assistant');
+    const reply = replies.length === 1 ? replies[0]! : null;
+    const blocks = reply?.body.role === 'assistant' ? (reply.body.blocks ?? []) : [];
+    out.push(...own.map((message): TimelineRow => ({ kind: 'message', message })));
+    if (!reply || blocks.length === 0) {
+      out.push(...messageRows(items));
+      continue;
+    }
+    out.push(...turnRows(items.filter((m) => m !== reply), reply, blocks));
+  }
+  return out;
 }
