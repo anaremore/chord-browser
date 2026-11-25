@@ -7,7 +7,7 @@ The owner, on a real-time online table (main plus #117): the agent played a full
 **Measure first.** For snapshot, click and type on the redraw fixtures (`/table`, `/game`, `/moves`): p50 and p95 of each step inside Chord (from the tool call arriving to its answer), split by phase (lookup, describe, card, point, hit, deep checks, press, settle), plus the round trip through the relay as an agent sees it. Measured before any change and after each, in the Linux container (X11 and Wayland). Where the seconds go decides the order of the work below.
 
 **What changes (to be settled with Neon's review):**
-1. *Target by role and name.* `click`, `type`, `press_key`, `select_option` and `hover` take `{ role, name }` instead of a `ref`, resolved when the action runs. The page is walked as the snapshot walks it (the same rules for what's shown and what counts as acted on), and the element must be the only one with that role and that name. Optionally `within` names an item (a row, region or dialog by its role and name). Then it's an element like a ref's, and every check after is the same: the site card, the step classified from what's found, the step card for a risky step, the step checked again before input, the hit test and the guard.
+1. *Target by role and name* (**dropped**, 2026-11-25: below, *Is it worth it?*). `click`, `type`, `press_key`, `select_option` and `hover` take `{ role, name }` instead of a `ref`, resolved when the action runs. The page is walked as the snapshot walks it (the same rules for what's shown and what counts as acted on), and the element must be the only one with that role and that name. Optionally `within` names an item (a row, region or dialog by its role and name). Then it's an element like a ref's, and every check after is the same: the site card, the step classified from what's found, the step card for a risky step, the step checked again before input, the hit test and the guard.
 2. *`wait_for`.* It returns when a text, or an element with a role and name (and `within`), appears or disappears in the tab's page, or when its timeout runs out (at most 30 s; default 10 s). It answers only yes or no and how long it took, never page content.
 3. *A compact snapshot with each action's result.* Optional (`snapshot: true` on an action), it's the page's outline after the action has settled, bounded (refs and characters) and cut the same way `snapshot` is, so the next step needs no extra call.
 4. *#143, card waits.* A tool call waiting on a card answers before the client's timeout: *Waiting for the user to approve on Chord's card. Try the same step again in a moment.* The card stays up, and the user's Allow is kept for that exact step (the late Allow `stepKey`), so the retry goes straight through, once. Where a client sends a `progressToken`, Chord sends MCP progress notifications to keep the call alive instead.
@@ -235,10 +235,11 @@ The same on Wayland. With one CPU, also the same, except the timed table's resul
 - *`batch`:* the form.
 - *The diff after each action:* the bot hand.
 - *Rows collapsed and `find`:* the 300-row list.
-- *By role and name:* **no honest journey uses it now**. Each journey looks first, and the refs it gets work.
-  - It costs about 170 tokens of tool definitions on every call: 2,495 with it, 2,325 without its schema.
-  - It would pay where an agent knows a control's name and its refs went stale (a page that redraws or reloads between turns). No journey measures that yet.
-  - The planner's call: drop it, or keep it with a journey that measures that case.
+- *By role and name:* **dropped** (the planner, 2026-11-25). No journey needs it: the refs and re-finding cover it.
+  - Each honest journey looks first, and the refs it gets work. Stable refs, and #117's re-finding of a redrawn control, cover what it was for.
+  - It cost about 170 tokens of tool definitions on every call (2,495 with it, 2,325 without its schema).
+  - It was also the biggest surface for a page to spoof (Neon's B-1 and B-2).
+  - Gone with it: the tools' `role` and `name`, `refByName`, the shown-name check, and the read-by-name slot. Kept, since stable refs need them on their own: B-2's step key (name, items, place) and the page check before the step.
 - *Screenshots by exception:* paid off on no journey, so dropped (above).
 
 ## Slice (b): wait_for (built, 2026-11-24)
@@ -292,11 +293,11 @@ The same on Wayland. With one CPU, also the same, except the timed table's resul
 
 | Checklist item | Test |
 |---|---|
-| Duplicates refuse | control.test, by role and name: two alike refused |
+| Duplicates refuse | (by role and name dropped) |
 | `within` and items | |
 | Swap between resolving and the press | |
 | Step classified from the element | |
-| Sensitive fields never matched | control.test, by role and name: a field with no ref (password, code, card) refused |
+| Sensitive fields never matched | (by role and name dropped; a ref is never given for one: core control-snapshot.test) |
 | Resolving walk budget | |
 | `wait_for`: same readability as `read_tab` | control.test, *met: says so…* (a never-read page refused); the readability check between chunks, *the same document going to another address…* |
 | `wait_for`: one at a time, 30 s, Stop and navigation | control.test, *one wait at a time…*, *the page going somewhere else…* (another document), *the same document going to another address…* (pushState: waits on, refs said stale, the bar) |

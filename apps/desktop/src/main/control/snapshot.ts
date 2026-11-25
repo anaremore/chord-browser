@@ -132,35 +132,6 @@ export const SNAPSHOT_LIB = String.raw`
     }
     return clip(el.getAttribute('title'), NAME_MAX);
   };
-  // What an element visibly shows as its name (Neon's round 1 of M2g-1, B-1): its own words that show, a label of
-  // its that shows, or a button's value. Never aria, a title, alt text, a placeholder, or words hidden by CSS. An
-  // element found by its name must have exactly this name, so a page can't name a button for what it doesn't show.
-  const shownWords = (node) => {
-    if (node.isContentEditable || VALUE_TAGS.has(node.tagName)) return '';
-    let out = '';
-    let steps = 0;
-    const walk = (n) => {
-      for (const c of n.childNodes) {
-        if (out.length > 240 || ++steps > 2000) return;
-        if (c.nodeType === 3) out += c.nodeValue;
-        else if (c.nodeType === 1 && !NO_WORDS.has(c.tagName) && !c.isContentEditable && !c.hidden && (typeof c.checkVisibility !== 'function' || c.checkVisibility({ opacityProperty: true, visibilityProperty: true }))) walk(c);
-      }
-    };
-    walk(node);
-    return clip(out, 120);
-  };
-  const shownNameOf = (el, role) => {
-    if (!shown(el) || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return '';
-    if (TYPED.has(role) && !isField(el)) return '';
-    if (isField(el)) {
-      const type = typeOf(el);
-      if (type === 'submit' || type === 'button' || type === 'reset') return clip(el.value || (type === 'submit' ? 'Submit' : ''), NAME_MAX);
-      if (type === 'image') return '';
-      return clip(labelsOf(el).filter(shown).map(shownWords).filter(Boolean).join(' '), NAME_MAX);
-    }
-    if (ACTED.has(role) || role === 'generic') return clip(shownWords(el), NAME_MAX);
-    return '';
-  };
   const statesOf = (el, role) => {
     const s = [];
     const aria = (name) => el.getAttribute('aria-' + name);
@@ -302,11 +273,11 @@ export const SNAPSHOT_HISTORY = 4;
  * An owner's snapshot by its token, in the page: the latest, or one kept behind it (SNAPSHOT_HISTORY). For act.ts' and
  * deep.ts' scripts: `snapshotFind(owner, token)` there.
  */
-export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; if (r) return r; const n = globalThis.__chordNamed && globalThis.__chordNamed.get(owner); return n && n.token === token ? n : null; };`;
+export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; return r || null; };`;
 
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
-export function snapshotScript(owner: string, token: string, pinned: boolean | 'named' = true): string {
-  const args = { owner, token, pinned: pinned === true, slot: pinned === 'named' ? 'named' : 'history', scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
+export function snapshotScript(owner: string, token: string, pinned = true): string {
+  const args = { owner, token, pinned, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   const started = performance.now();
@@ -389,8 +360,6 @@ export function snapshotScript(owner: string, token: string, pinned: boolean | '
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const node = { depth, role, name: nameOf(el, role), sid: sidOf(el) };
-      // Its name is what it visibly shows (B3; Neon's round 1, B-1): only such an element is found by its name.
-      if (node.name && (ACTED.has(role) || role === 'generic') && shownNameOf(el, role) === node.name) node.seen = true;
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -477,14 +446,6 @@ export function snapshotScript(owner: string, token: string, pinned: boolean | '
   // stay behind it, at most SNAPSHOT_HISTORY in all (M2g-1): a ref the agent got from one of them (a diff after an action
   // takes a snapshot too) still names its element there, and one the page replaced is found again from there (#117).
   // The agent's own snapshot (it read it: pinned) stays until its next one; the ones a diff took, the last few.
-  // A read to find an element by its name (S-1): its own slot, the latest only; the snapshots' history untouched.
-  if (args.slot === 'named') {
-    const named = (globalThis.__chordNamed = globalThis.__chordNamed || new Map());
-    named.delete(args.owner);
-    named.set(args.owner, read);
-    while (named.size > args.owners) named.delete(named.keys().next().value);
-    return { url: location.href, title: document.title, nodes, cut };
-  }
   read.pinned = args.pinned;
   const before = reads.get(args.owner);
   const kept = [read];
@@ -636,7 +597,7 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned: boolean | 'named' = true): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
   return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned) }]), null, SNAPSHOT_MS));
 }

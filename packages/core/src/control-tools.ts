@@ -170,11 +170,7 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
       level: 'act',
       readOnly: false,
       description,
-      // By its ref, or by its role and exact name (M2g-1): one of the two.
-      inputSchema: object(
-        { tab_id: { type: 'string' }, ref: { type: 'string', pattern: '^e[1-9][0-9]{0,8}$' }, role: { type: 'string', maxLength: 40 }, name: { type: 'string', minLength: 1, maxLength: 200 }, ...more },
-        ['tab_id', ...required],
-      ),
+      inputSchema: object({ tab_id: { type: 'string' }, ref: { type: 'string', pattern: '^e[1-9][0-9]{0,8}$' }, ...more }, ['tab_id', 'ref', ...required]),
     }),
   ),
   {

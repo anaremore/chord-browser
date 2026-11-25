@@ -1099,7 +1099,7 @@ describe('acting through the gate (S18 M2c)', () => {
   /** The page's elements, by key: what the snapshot says, and how each act step answers. */
   type Field = { type: string; autocomplete?: string; name?: string; id?: string; label?: string; placeholder?: string };
   type Risk = { tag: string; type: string; href: string; text?: string; multiline: boolean; submits: boolean; form: { method: string; search: boolean; action: string; url?: string; fields: (Field & { text: boolean })[] } | null };
-  type El = { role: string; name: string; seen?: false; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field; risk?: Partial<Risk> };
+  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field; risk?: Partial<Risk> };
   /** What the page says the step is (S18 M2d): a link's address, a field's form; nothing risky unless a row says so. */
   const riskOf = (el: El): Risk => ({ tag: el.role === 'link' ? 'a' : el.editable ? 'input' : 'div', type: '', href: el.role === 'link' ? '/home' : '', text: '', multiline: false, submits: false, form: null, ...el.risk });
   const field = (f: Field) => ({ autocomplete: '', name: '', id: '', label: '', placeholder: '', ...f });
@@ -1188,7 +1188,7 @@ describe('acting through the gate (S18 M2c)', () => {
       return { ok: true, ...said };
     }
     if (code.includes('__chordSnapshots')) twist.read?.meanwhile?.(events);
-    if (code.includes('__chordSnapshots')) return { url: twist.read?.url ?? 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1, ...(e.seen === false ? {} : { seen: true }) })), cut: twist.read?.cut ?? {} };
+    if (code.includes('__chordSnapshots')) return { url: twist.read?.url ?? 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1 })), cut: twist.read?.cut ?? {} };
     return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
@@ -1289,49 +1289,10 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(known.cards).toEqual([]);
   });
 
-  it('by role and exact name, with no ref (M2g-1): the only one, its name what it shows; else a no that says how (Neon’s B3, B4)', async () => {
+  it('an element is named by its ref alone (by role and name was dropped from M2g-1): none, nothing pressed', async () => {
     const t = await acting();
-    expect(result(await t.call('click', { tab_id: t.tab, role: 'link', name: 'Home' })).data['done']).toBe('Clicked “Home”');
-    // [args, what it says]
-    const table: [Record<string, unknown>, string][] = [
-      [{ role: 'link' }, 'Name the element by its ref, or by role and name (both).'],
-      [{ role: 'heading', name: 'Orders' }, `An element is found by its name only for these roles: button, link, checkbox, radio, switch, tab, menuitem, option, combobox, listbox, textbox, searchbox, spinbutton, slider, generic. Call snapshot and use its ref.`],
-      [{ role: 'button', name: 'Nope' }, 'There’s no button named that on the page that can be acted on. Call snapshot to see its elements.'],
-      // The name exactly as the outline gives it: not a part of it, nor in another case.
-      [{ role: 'link', name: 'home' }, 'There’s no link named that on the page that can be acted on. Call snapshot to see its elements.'],
-    ];
-    for (const [args, says] of table) expect(refusal(await t.call('click', { tab_id: t.tab, ...args })).refused, JSON.stringify(args)).toBe(says);
-    // Two alike: never a guess.
-    ELEMENTS.push({ role: 'link', name: 'Home' });
-    try {
-      expect(refusal(await t.call('click', { tab_id: t.tab, role: 'link', name: 'Home' })).refused).toBe('There are 2 of them with that role and name. Call snapshot and use the one’s ref.');
-    } finally {
-      ELEMENTS.pop();
-    }
-    // The page read for the name went to a never-read site, or elsewhere, meanwhile (Neon's round 1, B-2): nothing pressed.
-    const input = t.at.input.length;
-    // (Each twist set after acting()'s own snapshot.)
-    const neverTwist: Twist = {};
-    const never = await acting({ twist: neverTwist });
-    neverTwist.read = { url: 'https://private.test/inbox' };
-    expect(refusal(await never.call('click', { tab_id: never.tab, role: 'link', name: 'Home' })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
-    expect(never.at.input).toEqual([]);
-    const awayTwist: Twist = {};
-    const away = await acting({ twist: awayTwist });
-    awayTwist.read = { meanwhile: (events) => { awayTwist.read = {}; events.emit('did-navigate-in-page', {}, 'https://news.test/b', true); } };
-    expect(refusal(await away.call('click', { tab_id: away.tab, role: 'link', name: 'Home' })).refused).toBe(ELEMENT_REFUSALS.stale);
-    expect(away.at.input).toEqual([]);
-    expect(t.at.input.length).toBe(input);
-    // A name the page doesn't show (an aria-label, a title, alt text, a hidden label or hidden words: the page says so,
-    // Neon's round 1, B-1): never found by it, nothing pressed.
-    ELEMENTS.push({ role: 'button', name: 'Pay', seen: false });
-    try {
-      const input = t.at.input.length;
-      expect(refusal(await t.call('click', { tab_id: t.tab, role: 'button', name: 'Pay' })).refused).toBe('That element’s name isn’t what it shows on the page (it comes from a label, title or text that’s hidden), so it isn’t found by its name. Call snapshot and use its ref.');
-      expect(t.at.input.length).toBe(input);
-    } finally {
-      ELEMENTS.pop();
-    }
+    expect(refusal(await t.call('click', { tab_id: t.tab, role: 'link', name: 'Home' })).refused).toBe(ELEMENT_REFUSALS.unknown(''));
+    expect(t.at.input).toEqual([]);
   });
 
   it('the diff after an action is read under a read’s rules: never a page that may not be read, another origin, or a read cut short (Neon’s round 1 of M2g-1, B-6)', async () => {

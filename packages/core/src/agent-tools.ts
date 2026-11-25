@@ -150,7 +150,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   ),
   ...(
     [
-      ['click', 'Click an element in one of your own tabs by its ref from a snapshot, or by role and name (its exact name as the outline shows it, when it’s the only one: no snapshot needed). The first action on a site asks the user. Returns what happened: whether the page went somewhere else (then its refs are stale: call snapshot), and what changed.', true],
+      ['click', 'Click an element in one of your own tabs by its ref from a snapshot. The first action on a site asks the user. Returns what happened: whether the page went somewhere else (then its refs are stale: call snapshot), and what changed.', true],
       ['type', 'Type text into a text field in one of your own tabs by its ref: what’s there is replaced unless replace is false; submit presses Enter after. Never a password, code or card number (those fields have no ref: the user fills them).', true],
       ['press_key', 'Press one key in an element of one of your own tabs, by its ref. Only the keys listed; text goes in with type.', true],
       ['select_option', 'Choose an option of a list in one of your own tabs, by the list’s ref and the option’s label from the snapshot.', false],
@@ -162,7 +162,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   {
     name: 'batch',
     level: 'act',
-    description: `Several steps on one of your tabs in one call, in order (fill a form's fields, then submit): each a click, type, press_key, select_option or hover by its ref (or role and name), as that tool takes it, asking the user as that tool would. Stops at the first step refused, and says which; at most ${BATCH_STEPS_MAX} steps.`,
+    description: `Several steps on one of your tabs in one call, in order (fill a form's fields, then submit): each a click, type, press_key, select_option or hover by its ref, as that tool takes it, asking the user as that tool would. Stops at the first step refused, and says which; at most ${BATCH_STEPS_MAX} steps.`,
     inputSchema: object(
       {
         tab_id: { type: 'string' },
@@ -174,16 +174,13 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
             {
               tool: { type: 'string', enum: [...BATCH_TOOLS] },
               ref: { type: 'string', pattern: '^e[1-9][0-9]{0,8}$' },
-              // Or by role and exact name, as the step's own tool takes them (N-2: the schema as the runtime is).
-              role: { type: 'string', maxLength: 40 },
-              name: { type: 'string', minLength: 1, maxLength: 200 },
               text: { type: 'string', maxLength: TYPE_TEXT_MAX },
               replace: { type: 'boolean' },
               submit: { type: 'boolean' },
               key: { type: 'string', enum: [...PRESS_KEYS] },
               option: { type: 'string', maxLength: 500 },
             },
-            ['tool'],
+            ['tool', 'ref'],
           ),
         },
       },

@@ -63,8 +63,6 @@ export interface SnapshotNode {
    * agent; a replaced one gets another. Refs are made from it, so an element still there keeps its ref.
    */
   sid?: number;
-  /** Its name is what it visibly shows (its own words, a shown label, a button's value): only then found by its name (M2g-1, B3, B-1). */
-  seen?: boolean;
 }
 
 /** What the page script returns. */
@@ -107,8 +105,6 @@ export class ElementRefs {
   private earlier: { pageId: string; token: string; keys: Map<string, number>; pinned: boolean }[] = [];
   /** The latest snapshot's outline, for its later ranges: served as it was while the page is the same one. */
   private kept: SnapshotOutline | null = null;
-  /** The last read made to find an element by its name: its own slot, never in place of a snapshot (S-1). */
-  private named: { pageId: string; token: string; keys: Map<string, number> } | null = null;
 
   /** Keep the latest snapshot's outline (its refs are this table's latest). */
   remember(outline: SnapshotOutline): void {
@@ -126,7 +122,6 @@ export class ElementRefs {
    */
   issue(pageId: string, token: string, keys: readonly number[], sids?: ReadonlyMap<number, number>, pinned = true): Map<number, string> {
     const { byKey, keyByRef } = this.refsFor(pageId, keys, sids);
-    if (this.named && this.named.pageId !== pageId) this.named = null;
     // The one before stays behind it, on the same page: a ref from it still names its element there (M2g-1).
     if (this.current && this.current.pageId === pageId) {
       const kept: typeof this.earlier = [];
@@ -145,16 +140,6 @@ export class ElementRefs {
     return byKey;
   }
 
-  /**
-   * The refs of a read made to find an element by its name (M2g-1), numbered as a snapshot's are: in a slot of its
-   * own, so it never pushes out the agent's snapshot or a diff's (Neon's round 1 of M2g-1, S-1). The latest only.
-   */
-  issueNamed(pageId: string, token: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
-    const { byKey, keyByRef } = this.refsFor(pageId, keys, sids);
-    this.named = { pageId, token, keys: keyByRef };
-    return byKey;
-  }
-
   /** Refs for a read's keys, by the page's ids where it has them (the same element, the same ref). */
   private refsFor(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): { byKey: Map<number, string>; keyByRef: Map<string, number> } {
     const byKey = new Map<number, string>();
@@ -165,7 +150,6 @@ export class ElementRefs {
       this.next = 1;
       this.current = null;
       this.earlier = [];
-      this.named = null;
       this.kept = null;
     }
     if (sids && pageId && (!this.base || this.base.pageId !== pageId)) this.base = { pageId, from: this.next - 1 };
@@ -191,9 +175,8 @@ export class ElementRefs {
   resolve(ref: unknown, pageId: string): ElementLookup {
     if (typeof ref !== 'string' || !/^e[1-9][0-9]{0,8}$/.test(ref) || Number(ref.slice(1)) >= this.next) return { ok: false, why: 'unknown' };
     if (!pageId) return { ok: false, why: 'stale' };
-    // The latest snapshot first; then the ones kept behind it (an element the page replaced since is found again there);
-    // then the last read by name.
-    for (const snap of [...(this.current?.pageId === pageId ? [this.current, ...this.earlier] : []), ...(this.named ? [this.named] : [])]) {
+    // The latest snapshot first; then the ones kept behind it (an element the page replaced since is found again there).
+    for (const snap of this.current?.pageId === pageId ? [this.current, ...this.earlier] : []) {
       const key = snap.keys.get(ref);
       if (key !== undefined && snap.pageId === pageId) return { ok: true, token: snap.token, key };
     }
@@ -205,7 +188,6 @@ export class ElementRefs {
     this.current = null;
     this.earlier = [];
     this.kept = null;
-    this.named = null;
   }
 }
 
@@ -474,7 +456,6 @@ export function cleanSnapshotRead(raw: unknown): SnapshotRead | null {
     if (Array.isArray(n['states'])) node.states = (n['states'] as unknown[]).filter((s): s is string => typeof s === 'string').slice(0, 8);
     if (typeof n['choice'] === 'string') node.choice = n['choice'].slice(0, 2000);
     if (typeof n['sid'] === 'number' && Number.isInteger(n['sid']) && n['sid'] > 0 && n['sid'] < 1e8) node.sid = n['sid'];
-    if (n['seen'] === true) node.seen = true;
     const f = n['field'] as Record<string, unknown> | undefined;
     if (f && typeof f === 'object') {
       const s = (k: string) => (typeof f[k] === 'string' ? (f[k] as string).slice(0, 200) : '');

@@ -1474,37 +1474,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
       return /Call.*bet 20.*Raise/.test(log);
     });
-    // Never by a name that isn't what it shows (B3): its aria-label says Pay, it shows Join.
-    // Never by a name the element doesn't visibly show (B3; Neon's round 1, B-1): each way a page can name an element
-    // for what it doesn't show is refused, and nothing is pressed or typed. A shown label is found.
     if (lean) {
-      const NOT_SHOWN = 'That element’s name isn’t what it shows on the page (it comes from a label, title or text that’s hidden), so it isn’t found by its name. Call snapshot and use its ref.';
-      const tab = await open('/aria');
-      // [tool, role, name: how the page names it]
-      const spoofs: [string, string, string][] = [
-        ['click', 'button', 'Pay'], // aria-label
-        ['click', 'button', 'Pay labelled'], // aria-labelledby
-        ['click', 'button', 'Pay title'], // title
-        ['type', 'textbox', 'Pay placeholder'], // an editor's aria-placeholder
-        ['click', 'button', 'Pay alt'], // a picture's alt in a button
-        ['click', 'button', 'Pay image'], // input type=image's alt
-        ['type', 'textbox', 'Pay hidden label'], // a hidden <label>
-        ['click', 'button', 'Pay invisible'], // visibility:hidden words
-        ['click', 'button', 'Pay clear'], // opacity:0 words
-      ];
-      for (const [tool, role, name] of spoofs) {
-        const said = await ask(tool, { tab_id: tab, role, name, ...(tool === 'type' ? { text: 'x' } : {}) });
-        expect(said.text, `${role} "${name}"`).toBe(NOT_SHOWN);
-      }
-      const typed = 'document.getElementById("log").textContent + "|" + document.getElementById("f1").value + "|" + document.querySelector("[contenteditable]").textContent + "|" + document.getElementById("f2").value';
-      expect(String(await inPage('/aria', typed))).toBe('|||');
-      // A label that shows: found by it.
-      expect((await act('type', { tab_id: tab, role: 'textbox', name: 'Shown label', text: 'ok' })).error).toBe(false);
-      expect(String(await inPage('/aria', typed))).toBe('|||ok');
-      // A whole page that's an editor, named by its aria-label.
       const body = await open('/aria-body');
-      expect((await ask('type', { tab_id: body, role: 'textbox', name: 'Pay body', text: 'x' })).text).toBe(NOT_SHOWN);
-      expect(String(await inPage('/aria-body', 'document.body.textContent'))).toBe('Draft');
       // Nor does wait_for look at a page's text when the page is an editor (B-3): what shows is what's typed there.
       const EDITOR = 'That page is an editor: what shows in it is what’s typed there, so wait_for looks only for an element by its role and name there.';
       expect((await ask('wait_for', { tab_id: body, text: 'Draft', timeout_ms: 1000 })).text).toBe(EDITOR);
@@ -2521,21 +2492,6 @@ test.beforeAll(async () => {
     // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
     // The token eval (the owner, 2026-11-24): a 20-field form, and a lobby that draws itself 600 ms after it loads.
     // A name that isn't what it shows (Neon's B3 for M2g-1): never found by it.
-    // Elements named for what they don't show (B-1), one of each kind, and a label that shows.
-    '/aria':
-      '<title>Aria</title><main>' +
-      '<button aria-label="Pay">Join</button>' +
-      '<span id=lb hidden>Pay labelled</span><button aria-labelledby=lb>Join 2</button>' +
-      '<button title="Pay title" style="width:40px;height:20px"></button>' +
-      '<div contenteditable role=textbox aria-placeholder="Pay placeholder" style="width:80px;height:20px;border:1px solid"></div>' +
-      '<button><img alt="Pay alt" width=16 height=16 src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></button>' +
-      '<input type=image alt="Pay image" width=20 height=20 src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">' +
-      '<label for=f1 hidden>Pay hidden label</label><input id=f1>' +
-      '<button><span style="visibility:hidden">Pay invisible</span></button>' +
-      '<button><span style="opacity:0">Pay clear</span></button>' +
-      '<label>Shown label <input id=f2></label>' +
-      '<p id=log></p></main>' +
-      '<script>const log = (s) => { document.getElementById("log").textContent += " " + s; }; document.querySelectorAll("button, input[type=image]").forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); log("clicked"); })); document.querySelector("main").addEventListener("submit", (e) => e.preventDefault());</script>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
     '/ghosts': '<title>Ghosts</title><main><p>Shown text</p><iframe srcdoc="<p>in the frame</p>">Ghost text</iframe><button style="width:0;height:0;padding:0;border:0;overflow:hidden">Ghost</button><div id=host></div></main><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<p>Shadow wait</p>";</script>',

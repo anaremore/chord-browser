@@ -41,9 +41,9 @@ For the plan in `plan.md`. Written before the design review; each item gets a te
 - *The bar while it waits:* Chord's words only (*is waiting on this page*), never the agent's text.
 
 **Added after Neon's round 1 on the code (2026-11-25):**
-- *A name a page gives an element for what it doesn't show* (B-1): found by name only when the name is its own shown words, a shown label, or a button's value. Never `aria-label`, `aria-labelledby`, `title`, `aria-placeholder`, alt text, a hidden label, or words hidden by `visibility` or `opacity`. *Tests:* control.test, by role and name; core control-snapshot.test (`seen`); agents.spec, each kind on `/aria` and an editable body.
+- *A name a page gives an element for what it doesn't show* (B-1): gone with by role and name (dropped, 2026-11-25).
 - *A late Allow on a moved or renamed element* (B-2): the step key and the step's checks carry its name, its items and its place. *Test:* control.test, *a step's key and its checks name the element*.
-- *A read by name from a page that went elsewhere or may not be read* (B-2): refused. *Test:* control.test, by role and name.
+- *A read by name from a page that went elsewhere or may not be read* (B-2): gone with by role and name.
 - *`wait_for` as an oracle on typed text* (B-3): a page that is an editor (an editable body, or `designMode`) is never looked at for text. *Tests:* control.test; agents.spec on `/aria-body` and `/design`.
 - *`wait_for` for the assistant, and the agent's words on a card* (B-4): outside agents only; the card and the activity in Chord's words. *Tests:* core control-snapshot.test; control.test.
 - *A diff across a never-read site, another origin, or a cut read* (B-6): none, or a note to call snapshot. *Test:* control.test.

@@ -193,8 +193,8 @@ describe('The result', () => {
 describe('The page script’s answer, cleaned', () => {
   it('keeps nodes as they can be, and keys once each, at most SNAPSHOT_MAX_REFS', () => {
     const nodes = [
-      { depth: 0, role: 'link', name: 'A', key: 0, seen: true },
-      { depth: 0, role: 'link', name: 'B', key: 0, seen: 'yes' },
+      { depth: 0, role: 'link', name: 'A', key: 0 },
+      { depth: 0, role: 'link', name: 'B', key: 0 },
       { depth: 0, role: 'link', name: 'C', key: -1 },
       { depth: 0, role: 'link', name: 'D', key: 1.5 },
       { depth: 'x', role: 'link' },
@@ -206,9 +206,8 @@ describe('The page script’s answer, cleaned', () => {
     const read = cleanSnapshotRead({ url: 'https://x.example/', title: 9, nodes, cut: { time: true, refs: 'yes' } })!;
     expect(read.title).toBe('');
     expect(read.cut).toEqual({ time: true });
-    // seen only when it's true (B-1: what the page shows as its name; anything else, never found by name).
     expect(read.nodes.slice(0, 5)).toEqual([
-      { depth: 0, role: 'link', name: 'A', key: 0, seen: true },
+      { depth: 0, role: 'link', name: 'A', key: 0 },
       { depth: 0, role: 'link', name: 'B' },
       { depth: 0, role: 'link', name: 'C' },
       { depth: 0, role: 'link', name: 'D' },
@@ -291,21 +290,6 @@ describe('refs that stay, and the diff after an action (M2g-1)', () => {
         expect(refs.resolve(ref, `p${p}`)).toMatchObject({ ok: true });
       }
     }
-  });
-
-  it('a read to find an element by its name has its own slot: it never pushes out the agent’s snapshot or a diff’s (Neon’s round 1 of M2g-1, S-1)', () => {
-    const refs = new ElementRefs();
-    refs.issue('p1', 'mine', [0], new Map([[0, 1]]));
-    for (let i = 1; i <= SNAPSHOT_KEPT; i++) refs.issue('p1', `d${i}`, [0], new Map([[0, 1 + i]]), false);
-    const named = refs.issueNamed('p1', 'byname', [0], new Map([[0, 99]]));
-    // Every diff's ref, and the agent's own, still good; the named one too.
-    expect(refs.resolve('e1', 'p1')).toMatchObject({ ok: true, token: 'mine' });
-    for (let i = 1; i <= SNAPSHOT_KEPT; i++) expect(refs.resolve(`e${1 + i}`, 'p1'), `d${i}`).toMatchObject({ ok: true, token: `d${i}` });
-    expect(refs.resolve(named.get(0), 'p1')).toMatchObject({ ok: true, token: 'byname', key: 0 });
-    // Another page: none of it.
-    expect(refs.resolve(named.get(0), 'p2')).toEqual({ ok: false, why: 'stale' });
-    refs.forget();
-    expect(refs.resolve(named.get(0), 'p1')).toEqual({ ok: false, why: 'stale' });
   });
 
   it('the agent’s own snapshot stays behind the ones a diff takes, until its next; a diff’s, for SNAPSHOT_KEPT diffs', () => {

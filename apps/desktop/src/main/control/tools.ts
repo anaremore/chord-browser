@@ -492,43 +492,6 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   return { page_changes: { ...of, lines: changes } };
 }
 
-/** The roles an element is found by, by its name (M2g-1, Neon's B3): what's clicked, typed in or chosen. */
-const NAME_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'option', 'combobox', 'listbox', 'textbox', 'searchbox', 'spinbutton', 'slider', 'generic']);
-
-/**
- * An element by its role and exact name, in the page as it is now (M2g-1): read as a snapshot is (a diff's kind: the
- * agent's own snapshot stays), and only if it's the only one with that role and name, its name what it shows (never an
- * aria-label's: B3), the read whole (never cut short: what it didn't see could be its twin) and it has a ref (never a
- * password, code or card field, nor a file picker). Its ref, or the refusal.
- */
-async function refByName(call: Call, nodeId: NodeId, page: NonNullable<Awaited<ReturnType<typeof loadedPage>>>, args: Record<string, unknown>): Promise<string | ToolOutput> {
-  const role = typeof args['role'] === 'string' ? args['role'].trim().toLowerCase() : '';
-  const name = typeof args['name'] === 'string' ? args['name'] : '';
-  if (!role || !name) return refuse('Name the element by its ref, or by role and name (both).');
-  if (!NAME_ROLES.has(role)) return refuse(`An element is found by its name only for these roles: ${[...NAME_ROLES].join(', ')}. Call snapshot and use its ref.`);
-  const refs = (call.scope.memory.elements ??= new Map()).get(nodeId) ?? new ElementRefs();
-  call.scope.memory.elements.set(nodeId, refs);
-  const token = randomBytes(12).toString('hex');
-  // The page it's read on, taken first (Neon's round 1 of M2g-1, B-2): one that went elsewhere meanwhile, or whose
-  // read came from a page that may not be read, gives no element.
-  const pageId = page.id;
-  // Its own slot (S-1): never in place of the agent's snapshot or a diff's.
-  const read = await page.snapshot(call.scope.agent.id, token, 'named');
-  if (!read) return refuse('That page could not be read.');
-  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-  const blocked = blockedNow(call, nodeId, page, 'That page could not be read.', read.url);
-  if (blocked) return refuse(blocked);
-  if (page.id !== pageId) return refuse(ELEMENT_REFUSALS.stale);
-  if (read.cut.elements || read.cut.time || read.cut.refs) return refuse('That page is too big to find an element by its name. Call snapshot and use its ref.');
-  const found = read.nodes.filter((n) => n.key !== undefined && n.role === role && n.name === name);
-  if (found.length === 0) return refuse(`There’s no ${role} named that on the page that can be acted on. Call snapshot to see its elements.`);
-  if (found.length > 1) return refuse(`There are ${found.length} of them with that role and name. Call snapshot and use the one’s ref.`);
-  if (!found[0]!.seen) return refuse('That element’s name isn’t what it shows on the page (it comes from a label, title or text that’s hidden), so it isn’t found by its name. Call snapshot and use its ref.');
-  const issued = refs.issueNamed(page.id, token, snapshotKeys(read), sidsOf(read));
-  const ref = issued.get(found[0]!.key!);
-  return ref ?? refuse('That field is one the user fills (a password, code or card field). Ask them to.');
-}
-
 /* ---------- wait_for (S18 M2g-1) ---------- */
 
 /** Agents waiting now (one wait each: Neon's review of M2g-1, B5). */
@@ -840,13 +803,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     }
   }
 
-  // An element by its role and exact name (M2g-1): found in the page as it is now, the only one, as a ref; then as any.
-  let refArg = args['ref'];
-  if (refArg === undefined && (typeof args['role'] === 'string' || typeof args['name'] === 'string')) {
-    const named = await refByName(call, node.id, page, args);
-    if (typeof named !== 'string') return named;
-    refArg = named;
-  }
+  const refArg = args['ref'];
   // An element, by its ref from the tab's latest snapshot, on the page it's on now.
   const lookup = scope.memory.elements?.get(node.id)?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
   if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
