@@ -27,6 +27,8 @@ test.beforeAll(async () => {
       '<title>Table 7</title><h1>Hand 12</h1><p id=log></p>' +
       ['Fold', 'Call', 'Raise'].map((m) => `<button onclick="fetch('/move?${m}', { method: 'POST', body: '${m}' }).then(() => (log.textContent += '${m} '))">${m}</button>`).join(' '),
     // A sign-up form: filled from its card, then reset by the assistant (the owner's preview, 2026-11-24).
+    // No <title>, and a label with its colon (the owner's test of the 0.15 preview).
+    '/plain': '<form><label>Customer name: <input name=customer></label></form>',
     '/form': '<title>Sign up</title><form><label>Full name <input name=name></label> <label>Email <input name=email></label> <button type=button onclick="this.form.reset()">Reset</button></form>',
     // M2e-2b: what a click can set off. Each button's outcome goes in the page's log (and the passkey's time, for the
     // pending-request check: one asked with a 20 s timeout while Chord holds WebAuthn).
@@ -407,6 +409,49 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await again.getByRole('button', { name: 'Allow', exact: true }).click();
     // The folder's listing, so a failure shows what's there (a name left pending: main's Windows run 45585360658).
     await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('a page with no title: the tab and the assistant name its host, never the last page’s title; a field’s label without its colon (the owner’s test of the 0.15 preview)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/form` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/form`))).toBe(true);
+    /** The tab on screen's title, as the store has it. */
+    const title = () =>
+      shell.evaluate(async () => {
+        const { windowId, state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ windowId: string; state: { windows: Record<string, { activeChordId: string; activeTab: Record<string, string | null> }>; nodes: Record<string, Record<string, { title?: string }>> } }> } } }).chord.state.snapshot();
+        const w = state.windows[windowId]!;
+        const id = w.activeTab[w.activeChordId]!;
+        for (const bucket of Object.values(state.nodes)) if (bucket[id]) return bucket[id]!.title ?? null;
+        return null;
+      });
+    await expect.poll(title).toBe('Sign up');
+    // The same tab goes to a page with no <title>: no title of its own, so its host shows, never "Sign up".
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/form`))!;
+    await page.goto(`${site.origin}/plain`);
+    await expect.poll(title).toBe('');
+    const host = new URL(site.origin).host;
+    // The assistant names it by its host, and quotes the field without its colon.
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'type', name: 'Customer name:', args: { text: 'Ada' } }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await expect(siteCard).toContainText('It wants to type in “Customer name”.');
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    await expect(panel.getByText(`Looked over “${host}”`)).toBeVisible();
+    await expect(panel.getByText('Sign up')).toHaveCount(0);
+    await expect(page.locator('input[name=customer]')).toHaveValue('Ada');
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });
