@@ -51,7 +51,7 @@ pnpm deadcode                  # Knip, on demand only
 - **Build on Z:.** The repo, its worktrees, `node_modules` and builds live on Z:. C: is small, and tests once
   filled it.
 - **Worktrees** go under `Z:\Projects\chord-browser-wt\<name>`, made with `git worktree add` from the main checkout.
-  Remove one only after its PR shows MERGED.
+  Remove one only after `node scripts/dev/verify-merged.mjs <pr>` exits 0 (MERGED, and in origin/main).
 - **Docker for the container runner** is Docker Engine in WSL 2. Don't `wsl --shutdown` casually: other threads'
   containers run there.
 - **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges, with `gh pr merge <n> --merge` once the
@@ -62,7 +62,8 @@ pnpm deadcode                  # Knip, on demand only
 1. **Agent input is not yours.** Chord sends an agent's clicks and keys through `sendInputEvent`, so Chord's own
    `before-input-event`, `before-mouse-event` and `input-event` listeners see them too. A listener that acts on
    *your* hands (pausing an agent, shortcuts, DevTools keys, focusing a pane, the passwords menu's keys) asks
-   `isAgentInput(contents)` first (`apps/desktop/src/main/control/input.ts`).
+   `isAgentInput(contents)` first (`apps/desktop/src/main/control/input.ts`). A new listener, `session.fetch`, window-open
+   handler or debugger attach in main fails `apps/desktop/test/unit/invariants.test.ts` until it's classified there.
 2. **What an agent's tab sends goes through the Fetch hold.** Every request the page makes passes Chromium's `Fetch`
    domain on the tab's debugger (`apps/desktop/src/main/control/sends.ts`). A `session.fetch` from main does not:
    it carries the session's cookies outside the hold and skips `isNeverReadable`. Don't add one for an agent's tab
@@ -88,7 +89,7 @@ pnpm deadcode                  # Knip, on demand only
 10. **Mock before UI.** New UI starts as a static HTML mock the owner picks from, with multiple-choice questions.
     No UI code before the mock is approved.
 11. **The renderer is a web page.** Nothing in `apps/desktop/src/renderer` imports `electron`, `node:*`, or main's
-    or preload's code; it talks to main through `packages/ipc` only.
+    or preload's code; it talks to main through `packages/ipc` only (Oxlint's `no-restricted-imports` holds it).
 12. **Tests come with the change.** Logic gets unit tests (tables where there are many cases), user flows get E2E
     tests. Every feature works on Windows, macOS and Linux (X11 and Wayland).
 
@@ -133,7 +134,8 @@ New decision records (S20 and on) are a small folder each, not one growing file:
 - **Reviews start when a push lands,** not when CI is green. Every PR with product code gets two independent
   reviews (Claude and Gemini Neon).
 - **A finding is reproduced before it's fixed:** a failing test first (unit, or E2E in the container), then the fix
-  that turns it green. A finding that can't be reproduced is said so, not fixed blind.
+  that turns it green. A finding that can't be reproduced is said so, not fixed blind. A race shows under
+  `pnpm test:e2e:linux --slow` (one CPU at 0.35: the chord-e2e-linux skill).
 - **The stop rule.** A finding that needs an exotic API, a crash, or a hostile build to show becomes a stated limit
   in the decision record or an issue, not another review round.
 - **One push per review round.** Fix every finding of the round, run the tests locally (E2E in the container), then
@@ -141,8 +143,8 @@ New decision records (S20 and on) are a small folder each, not one growing file:
 - **Drafts while reviews go on.** A PR stays a draft through its review rounds, and is marked ready for review when
   a round comes back clean; then it gets the E2E run that gates merging (the full tier with `ready`).
 - **At most one open PR to main per thread.** The next slice waits on a stacked branch, not a second PR.
-  `node scripts/dev/pr-collisions.mjs` lists files several open PRs touch; `node scripts/dev/verify-merged.mjs <n>`
-  says whether a PR is really in main before its worktree or branch goes.
+  Before starting a slice and before pushing, `node scripts/dev/pr-collisions.mjs` lists files several open PRs
+  touch and PRs that conflict: wait for, or rebase onto, the one that lands first.
 - **Risky state lands alone, simulated.** A stateful module where async steps, timers and outside events meet (a
   lease, a hold, a queue) goes first as its own PR, with a seeded `*.sim.test.ts` (template:
   `apps/desktop/test/unit/sim-kit.ts`) that checks its invariants after every step.
@@ -157,5 +159,9 @@ New decision records (S20 and on) are a small folder each, not one growing file:
   another's branch runs the checks only; a draft labeled `ready` fails *What changed* (mark it ready first). One platform's E2E alone, with no throwaway
   branch: `gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=<file> -f grep=<title> -f repeat=5`. The merge gate is the `E2E`
   commit status (`.github/workflows/ci.yml`).
-- **PR descriptions** say what changed, what was measured, which invariants it touches and how each is tested.
-  Commits use Conventional Commits prefixes.
+- **Small PRs.** Aim under about 1,500 changed lines (lockfiles, fixtures, docs and vendored lists not counted):
+  review rounds grow with size. CI warns past it (`scripts/ci/pr-size.mjs`), never fails; split a slice into
+  stacked PRs, or say in the description why it's one piece.
+- **Evidence, not claims.** The PR template (`.github/pull_request_template.md`) asks for a table: each checklist
+  item or invariant the change touches, the code that does it (path:line), and the test that proves it. Reviewers
+  check the table first. Also: what was measured, before and after. Commits use Conventional Commits prefixes.
