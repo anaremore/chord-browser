@@ -13,8 +13,21 @@ const AXIS_RATIO = 1.5;
 const COMMIT_PROGRESS = 0.5;
 /** …or moving toward the neighbor faster than this (px/ms). */
 export const COMMIT_SPEED = 0.5;
-/** No wheel events for this long ends a gesture where the OS sends no end phase. */
+/** No wheel events for this long ends a gesture where the OS sends no end phase… */
 export const IDLE_END_MS = 80;
+/**
+ * …and as many frames drawn without one. A frame hands the renderer the input that waited for it before anything
+ * else, so a busy renderer (whose frames come late) never ends a swipe while its next events are still on their way:
+ * 80 ms with no event read is not a lift when no frame came to read one. At 60 frames a second, 80 ms is 5 frames.
+ */
+export const IDLE_END_FRAMES = 3;
+/** A window that draws no frames (hidden) ends a gesture after this long anyway. */
+export const IDLE_END_MAX_MS = 1000;
+
+/** Whether a gesture with no end phase from the OS has ended: `sinceLastMs` since its last event, `frames` drawn since. */
+export function gestureIdle(sinceLastMs: number, frames: number): boolean {
+  return sinceLastMs >= IDLE_END_MAX_MS || (sinceLastMs >= IDLE_END_MS && frames >= IDLE_END_FRAMES);
+}
 /** Momentum keeps arriving after a release: a gesture after a gap this long is a new one. */
 export const MOMENTUM_GAP_MS = 120;
 

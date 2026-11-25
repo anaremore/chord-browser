@@ -6,13 +6,13 @@
  * Chromium hands the shell wheel events (`deltaX`); they don't say when the
  * fingers lift, so main forwards the trackpad's gesture phases
  * (`gesture:phase`), and where the OS sends none the gesture ends after
- * IDLE_END_MS without events. Momentum after a release is ignored until it
+ * IDLE_END_MS and IDLE_END_FRAMES frames without events. Momentum after a release is ignored until it
  * pauses. A mouse's tilt wheel switches one chord per notch.
  */
 import { animate, motionValue, type AnimationPlaybackControls, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api } from './api';
-import { IDLE_END_MS, MOMENTUM_GAP_MS, VelocityTracker, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
+import { IDLE_END_MAX_MS, MOMENTUM_GAP_MS, VelocityTracker, gestureIdle, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
 
 /** How a chord pane comes and goes: the usual slide, a swipe's commit, or a crossfade (reduced motion). */
 export type PaneMotion = { kind: 'slide'; dir: 1 | -1 } | { kind: 'swipe'; exitTo: number; transition: Transition } | { kind: 'fade'; transition: Transition };
@@ -87,6 +87,8 @@ export function useChordSwipe(options: Options): ChordSwipe {
     lastAt: 0,
     ignoreUntil: 0,
     endTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+    endFrame: 0,
+    framesSince: 0,
     commitTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     tracker: new VelocityTracker(),
     context: null as null | { currentId: string; prevId: string | null; nextId: string | null; width: number },
@@ -107,8 +109,14 @@ export function useChordSwipe(options: Options): ChordSwipe {
       s.blendId = id;
       setBlendId(id);
     };
-    const reset = () => {
+    /** The wait for a gesture's end (frames, and the fallback), stopped. */
+    const stopEnd = () => {
       clearTimeout(s.endTimer);
+      cancelAnimationFrame(s.endFrame);
+      s.endFrame = 0;
+    };
+    const reset = () => {
+      stopEnd();
       clearTimeout(s.commitTimer);
       s.phase = 'idle';
       s.context = null;
@@ -191,7 +199,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
     };
 
     const release = (now: number) => {
-      clearTimeout(s.endTimer);
+      stopEnd();
       if (s.phase === 'deciding' || s.phase === 'vertical') {
         s.phase = 'idle';
         return;
@@ -211,9 +219,17 @@ export function useChordSwipe(options: Options): ChordSwipe {
     };
 
     const scheduleEnd = () => {
-      clearTimeout(s.endTimer);
-      // No end phase from the OS: the gesture ends when the events stop (velocity as of the last one).
-      s.endTimer = setTimeout(() => release(s.lastAt), IDLE_END_MS);
+      stopEnd();
+      // No end phase from the OS: the gesture ends when the events stop (velocity as of the last one): IDLE_END_MS
+      // and IDLE_END_FRAMES frames with none, so a busy renderer's late frames never end it early (gestureIdle).
+      s.framesSince = 0;
+      const tick = () => {
+        s.framesSince += 1;
+        if (gestureIdle(performance.now() - s.lastAt, s.framesSince)) release(s.lastAt);
+        else s.endFrame = requestAnimationFrame(tick);
+      };
+      s.endFrame = requestAnimationFrame(tick);
+      s.endTimer = setTimeout(() => release(s.lastAt), IDLE_END_MAX_MS);
     };
 
     /** A mouse notch: one chord over, with the usual slide. */
@@ -319,7 +335,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
       root?.removeEventListener('wheel', onWheel);
       unsubscribe();
       stopAll();
-      clearTimeout(s.endTimer);
+      stopEnd();
       clearTimeout(s.commitTimer);
     };
     // The listeners read `latest`; they're attached once per window.

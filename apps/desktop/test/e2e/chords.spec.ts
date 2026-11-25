@@ -34,17 +34,20 @@ const runAction = (shell: Page, action: string) =>
   shell.evaluate((a) => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run(a), action);
 
 /** Wheel events as a trackpad sends them, `gapMs` apart, over an element of the shell. */
-function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]') {
-  return shell.evaluate(
-    async ({ deltas, gapMs, over }) => {
-      const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
-      for (const d of deltas) {
+async function swipe(shell: Page, deltas: { x: number; y?: number }[], gapMs: number, over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]') {
+  // Each wheel event sent on its own, paced from here, as a trackpad's arrive: an evaluate is handled ahead of the
+  // shell's own work, as input is. Events made with setTimeout in the shell itself stall on a busy machine behind its
+  // renders, which a trackpad's never do: the swipe then read as lifted midway (#198).
+  for (const d of deltas) {
+    await shell.evaluate(
+      ({ d, over }) => {
+        const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
         target!.dispatchEvent(new WheelEvent('wheel', { deltaX: d.x, deltaY: d.y ?? 0, deltaMode: 0, bubbles: true, cancelable: true }));
-        await new Promise((r) => setTimeout(r, gapMs));
-      }
-    },
-    { deltas, gapMs, over },
-  );
+      },
+      { d, over },
+    );
+    await new Promise((resolve) => setTimeout(resolve, gapMs));
+  }
 }
 const steps = (count: number, x: number, y = 0) => Array.from({ length: count }, () => ({ x, y }));
 

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMMIT_SPEED,
+  IDLE_END_FRAMES,
+  IDLE_END_MAX_MS,
+  IDLE_END_MS,
   VelocityTracker,
+  gestureIdle,
   isWheelNotch,
   lockAxis,
   rawOffset,
@@ -113,5 +117,24 @@ describe('isWheelNotch', () => {
     expect(isWheelNotch(0, 6, true)).toBe(false);
     // A trackpad's later, larger deltas are still the trackpad.
     expect(isWheelNotch(0, 120, false)).toBe(false);
+  });
+});
+
+describe('gestureIdle: a gesture with no end phase from the OS ends when its events stop', () => {
+  it('on a machine keeping up: 80 ms with no event (about five frames at 60 a second)', () => {
+    expect(gestureIdle(IDLE_END_MS - 1, 5)).toBe(false);
+    expect(gestureIdle(IDLE_END_MS, 5)).toBe(true);
+  });
+
+  it('on a busy one, never before a few frames have come with no event: late frames are late input, not a lift (#198)', () => {
+    // 80 ms passed but only one frame came to hand over the input waiting for it: the fingers may still be moving.
+    expect(gestureIdle(IDLE_END_MS + 3, 1)).toBe(false);
+    expect(gestureIdle(500, IDLE_END_FRAMES - 1)).toBe(false);
+    expect(gestureIdle(IDLE_END_MS + 3, IDLE_END_FRAMES)).toBe(true);
+  });
+
+  it('in a window drawing no frames (hidden), after a second anyway', () => {
+    expect(gestureIdle(IDLE_END_MAX_MS - 1, 0)).toBe(false);
+    expect(gestureIdle(IDLE_END_MAX_MS, 0)).toBe(true);
   });
 });
