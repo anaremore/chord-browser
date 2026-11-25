@@ -62,6 +62,7 @@ import {
   type NodeId,
   type State,
   type TabNode,
+  SNAPSHOT_FIND_MAX,
   WAIT_FOR_DEFAULT_MS,
   WAIT_FOR_MAX_MS,
   WAIT_FOR_TEXT_MAX,
@@ -390,9 +391,11 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const elements = (scope.memory.elements ??= new Map());
   for (const id of [...elements.keys()]) if (nodeOf(browser.store.state, id)?.kind !== 'tab') elements.delete(id);
   const start = typeof args['start'] === 'number' ? args['start'] : 0;
+  // Only what has this text in its name (the owner, 2026-11-24: as few tokens as can be), with what it's in.
+  const find = typeof args['find'] === 'string' ? args['find'].slice(0, SNAPSHOT_FIND_MAX) : undefined;
   // Reading on: the same page's latest outline, as it was made, while the page is where it may be read.
   const now = currentPage(browser, node.id);
-  const kept = start > 0 && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
+  const kept = start > 0 && !find && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
   if (kept && now) {
     const blocked = blockedNow(call, node.id, now, 'That page could not be read.', kept.url);
     if (blocked) return refuse(blocked);
@@ -421,7 +424,7 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const samePage = sameId(page, pageId);
   // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
   const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
-  const outline = snapshotOutline(read, issued);
+  const outline = snapshotOutline(read, issued, find ? { find } : {});
   const note = snapshotNote(read.cut);
   const retrievedAt = Date.now();
   refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });

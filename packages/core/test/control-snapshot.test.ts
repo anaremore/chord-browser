@@ -10,6 +10,8 @@ import {
   ElementRefs,
   isActionTool,
   isNeverOffered,
+  ROWS_COLLAPSE,
+  ROWS_SHOWN,
   readNeedsApproval,
   SNAPSHOT_MAX_REFS,
   SNAPSHOT_SCAN,
@@ -231,5 +233,41 @@ describe('Which builds and front doors offer snapshot', () => {
   it('asks like read_tab: under This chord, for a tab in another chord', () => {
     expect(readNeedsApproval({ scope: 'chord', attached: false, sameChord: false, tool: 'snapshot', granted: false })).toBe(true);
     expect(readNeedsApproval({ scope: 'chord', attached: false, sameChord: true, tool: 'snapshot', granted: false })).toBe(false);
+  });
+});
+
+describe('the outline, for as few tokens (the owner, 2026-11-24)', () => {
+  /** A list of `rows` rows, each a link, a note and a button; every link and button with a key. */
+  const list = (rows: number) => {
+    const nodes: SnapshotRead['nodes'] = [{ depth: 0, role: 'main', name: '' }, { depth: 1, role: 'heading', name: 'Rows', level: 1 }, { depth: 1, role: 'list', name: '' }];
+    let key = 0;
+    for (let i = 0; i < rows; i++) {
+      nodes.push({ depth: 2, role: 'listitem', name: '' }, { depth: 3, role: 'link', name: `Row ${i}`, key: key++ }, { depth: 3, role: 'text', name: `Note ${i}` }, { depth: 3, role: 'button', name: `Act ${i}`, key: key++ });
+    }
+    nodes.push({ depth: 1, role: 'button', name: 'Load more', key });
+    return { url: 'https://rows.test/', title: 'Rows', nodes, cut: {} } as SnapshotRead;
+  };
+  const refsOf = (read: SnapshotRead) => new ElementRefs().issue('p1', 't', snapshotKeys(read));
+
+  it('a run of more than ROWS_COLLAPSE rows alike shows its first ROWS_SHOWN, says how many more, and goes on after it', () => {
+    const read = list(300);
+    const outline = snapshotOutline(read, refsOf(read));
+    const lines = outline.text.split('\n');
+    expect(lines.filter((l) => l.trim().startsWith('- listitem'))).toHaveLength(ROWS_SHOWN);
+    expect(lines).toContain('    - … 295 more listitem like these (call snapshot with find to see one by its name)');
+    // What follows the run is there, with its ref.
+    expect(outline.text).toMatch(/- button "Load more" \[ref=e\d+\]$/);
+    expect(outline.collapsed).toBe(295);
+    // A short list is whole.
+    const short = list(ROWS_COLLAPSE);
+    expect(snapshotOutline(short, refsOf(short)).text.split('\n').filter((l) => l.trim().startsWith('- listitem'))).toHaveLength(ROWS_COLLAPSE);
+  });
+
+  it('find: only what has the text in its name (any case), with what it’s in, and its ref good', () => {
+    const read = list(300);
+    const issued = refsOf(read);
+    const outline = snapshotOutline(read, issued, { find: 'act 150' });
+    expect(outline.text).toBe(['- main', '  - list', '    - listitem', `      - button "Act 150" [ref=${issued.get(301)}]`].join('\n'));
+    expect(outline.refs).toBe(1);
   });
 });

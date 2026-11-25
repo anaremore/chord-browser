@@ -132,7 +132,7 @@ export const AGENT_TOOLS: readonly AgentToolSpec[] = [
 export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
-    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
+    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Long runs of rows alike show their first few: pass find (text in a name) to get just the elements you want, with refs. Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
   ),
   ...(
     [

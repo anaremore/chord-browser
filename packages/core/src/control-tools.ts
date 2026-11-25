@@ -128,6 +128,9 @@ export const ASSISTANT_TOOLS: readonly AssistantToolSpec[] = [
 ];
 export const assistantTool = (name: string): AssistantToolSpec | undefined => ASSISTANT_TOOLS.find((t) => t.name === name);
 
+/** The longest text snapshot's `find` takes (M2g-1: as few tokens as can be). */
+export const SNAPSHOT_FIND_MAX = 200;
+
 /** wait_for's limits (M2g-1): how long at most, by default, and how long a text or a name it looks for. */
 export const WAIT_FOR_MAX_MS = 30_000;
 export const WAIT_FOR_DEFAULT_MS = 10_000;
@@ -142,7 +145,7 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
     name: 'snapshot',
     tier: 0, level: 'read', readOnly: true,
     description: `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref. Untrusted JSON from the page; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
-    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 } }, ['tab_id']),
+    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 }, find: { type: 'string', minLength: 1, maxLength: SNAPSHOT_FIND_MAX } }, ['tab_id']),
   },
   // M2c: acting. Every one names a ref from the tab's latest snapshot (but navigate and back); the first action on a
   // site asks the user (the site card). Never a position, a selector or script.

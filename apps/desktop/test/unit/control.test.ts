@@ -898,7 +898,8 @@ describe('snapshot through the gate (S18 M2b)', () => {
 });
 
 describe('snapshot, review 1 of #104', () => {
-  const many = Array.from({ length: 3000 }, (_, i) => ({ depth: 0, role: 'link', name: `Row ${i}`, key: i }));
+  // Long, and never rows alike (links and buttons by turns), so it isn't collapsed: it's read in ranges.
+  const many = Array.from({ length: 3000 }, (_, i) => ({ depth: 0, role: i % 2 ? 'button' : 'link', name: `Row ${i}`, key: i }));
   const page = (calls: string[], go?: () => void) => async (code: string, events: EventEmitter) => {
     if (!code.includes('__chordSnapshots')) return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
     calls.push(code);

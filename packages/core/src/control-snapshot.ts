@@ -174,16 +174,27 @@ export function snapshotKeys(read: SnapshotRead): number[] {
  * the refs issued for the read's keys (ElementRefs.issue). A field Chord never lets an agent touch has no ref and
  * says why. Returns the text and how many refs it holds.
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>): { text: string; refs: number } {
-  const lines: string[] = [];
+/**
+ * Runs of rows alike (a list, a table): past ROWS_COLLAPSE of them, the first ROWS_SHOWN are shown and the rest said in
+ * one line (the owner, 2026-11-24: as effective, for as few tokens). `find` shows them.
+ */
+export const ROWS_COLLAPSE = 8;
+export const ROWS_SHOWN = 5;
+
+/**
+ * The outline's text. With `find`, only the elements whose name has that text (any case), each with the elements it's
+ * in; else runs of more than ROWS_COLLAPSE rows alike (each the same roles, the same shape) show their first ROWS_SHOWN.
+ */
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string } = {}): { text: string; refs: number; collapsed?: number } {
+  const nodes = read.nodes;
   let count = 0;
-  for (const node of read.nodes) {
+  const lineOf = (node: SnapshotRead['nodes'][number]): string | null => {
     const depth = Math.max(0, Math.min(40, Math.floor(node.depth)));
     const role = /^[a-z][a-z-]{0,30}$/.test(node.role) ? node.role : 'generic';
     const name = clipName(node.name ?? '');
     const parts = [`${'  '.repeat(depth)}- ${role === 'text' ? 'text:' : role}`];
     if (name) parts.push(quoted(name));
-    else if (role === 'text') continue;
+    else if (role === 'text') return null;
     const sensitive = node.field ? sensitiveField(node.field) : null;
     const ref = !sensitive && node.key !== undefined ? refs.get(node.key) : undefined;
     if (ref) {
@@ -198,9 +209,75 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     }
     if (node.choice && !sensitive) parts.push(`[choice=${quoted(clipName(node.choice))}]`);
     if (sensitive) parts.push(`[${SENSITIVE_NOTE[sensitive]}]`);
-    lines.push(parts.join(' '));
+    return parts.join(' ');
+  };
+  const depthOf = (i: number) => Math.max(0, Math.min(40, Math.floor(nodes[i]!.depth)));
+  const lines: string[] = [];
+  // find: the matches, each with the elements it's in (those not shown yet).
+  const find = opts.find?.trim().toLowerCase();
+  if (find) {
+    const path: number[] = [];
+    const shown = new Set<number>();
+    for (let i = 0; i < nodes.length; i++) {
+      const d = depthOf(i);
+      while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
+      if ((nodes[i]!.name ?? '').toLowerCase().includes(find)) {
+        for (const a of [...path, i]) {
+          if (shown.has(a)) continue;
+          shown.add(a);
+          const line = lineOf(nodes[a]!);
+          if (line) lines.push(line);
+        }
+      }
+      path.push(i);
+    }
+    return { text: lines.join('\n'), refs: count };
   }
-  return { text: lines.join('\n'), refs: count };
+  // Each node's subtree ends where the next node at its depth or above begins.
+  const ends: number[] = new Array(nodes.length);
+  const open: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    while (open.length && depthOf(open[open.length - 1]!) >= depthOf(i)) ends[open.pop()!] = i;
+    open.push(i);
+  }
+  for (const i of open) ends[i] = nodes.length;
+  // A row's shape: its own and its subtree's roles, each at its depth below it (never names: rows alike differ there).
+  const shapeOf = (i: number) => {
+    const base = depthOf(i);
+    const parts: string[] = [];
+    for (let k = i; k < ends[i]!; k++) parts.push(`${depthOf(k) - base}:${nodes[k]!.role}`);
+    return parts.join(',');
+  };
+  let collapsed = 0;
+  const render = (from: number, to: number) => {
+    let i = from;
+    while (i < to) {
+      const d = depthOf(i);
+      const shape = shapeOf(i);
+      // The run of rows alike from here: siblings (the same depth, one after another) of the same shape.
+      const run = [i];
+      let k = ends[i]!;
+      while (k < to && depthOf(k) === d && shapeOf(k) === shape) {
+        run.push(k);
+        k = ends[k]!;
+      }
+      const shownRows = run.length > ROWS_COLLAPSE ? run.slice(0, ROWS_SHOWN) : run;
+      for (const r of shownRows) {
+        const line = lineOf(nodes[r]!);
+        if (line) lines.push(line);
+        render(r + 1, ends[r]!);
+      }
+      if (shownRows.length < run.length) {
+        const more = run.length - shownRows.length;
+        collapsed += more;
+        const role = /^[a-z][a-z-]{0,30}$/.test(nodes[i]!.role) ? nodes[i]!.role : 'generic';
+        lines.push(`${'  '.repeat(d)}- … ${more} more ${role === 'text' ? 'lines' : role} like these (call snapshot with find to see one by its name)`);
+      }
+      i = k;
+    }
+  };
+  render(0, nodes.length);
+  return { text: lines.join('\n'), refs: count, ...(collapsed ? { collapsed } : {}) };
 }
 
 /** Chord's note on what the snapshot left out, if anything. */

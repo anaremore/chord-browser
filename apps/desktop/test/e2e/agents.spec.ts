@@ -1414,7 +1414,9 @@ test('the token eval: five journeys, each as an agent would play it with these t
     });
     await journey('a 300-row list', async () => {
       const tab = await open('/rows-300');
-      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // The outline collapses the rows; the agent asks for the one it wants by its name.
+      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      if (!o.includes('"Act 150"')) o = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Act 150' })).text);
       const clicked = await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') });
       return clicked.text.startsWith('{');
     });
