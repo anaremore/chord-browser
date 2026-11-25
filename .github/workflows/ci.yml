@@ -560,6 +560,38 @@ jobs:
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.player == 'true'
     uses: ./.github/workflows/player.yml
 
+  # Windows setup over a connected agent (issue #142, test/packaged/update-over-relay.spec.ts): the last release
+  # installed for real, an agent's relay running from it and restarting, then this build's setup run over it, as a
+  # person runs it and as the in-app updater does. Unsigned: what it checks doesn't depend on a signature.
+  installer:
+    name: Windows setup · update with an agent connected
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier == 'full'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @chord/desktop package --win --x64
+      # The newest published release (they're pre-releases, which `gh release download` alone skips).
+      - name: The last release's setup
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*-win-x64-setup.exe' --dir "$RUNNER_TEMP/previous"
+          echo "CHORD_PREVIOUS_INSTALLER=$(cygpath -w "$(ls "$RUNNER_TEMP"/previous/*-setup.exe)")" >> "$GITHUB_ENV"
+          echo "CHORD_INSTALLER=$(cygpath -w "$(ls "$PWD"/apps/desktop/release/*-setup.exe)")" >> "$GITHUB_ENV"
+      - run: pnpm --filter @chord/desktop test:packaged update-over-relay
+
   # E2E on every OS, each split into shards that run side by side on their own runners. A shard is a set of spec
   # files balanced by how long each takes (CHORD_E2E_SHARD; scripts/ci/e2e-shards.mjs and its map,
   # e2e-shards.json), each file's tests together and in order. Each shard sets its runner up in full.
@@ -839,7 +871,7 @@ jobs:
   # token, so it can't post one: the maintainer runs the full tier from a branch of this repository instead.
   e2e:
     name: E2E · ${{ needs.changes.outputs.tier || 'unknown' }} tier
-    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e-perf]
+    needs: [changes, checks, forms, forms-ttw, player, e2e-fast, e2e-full, e2e-perf, installer]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -865,12 +897,16 @@ jobs:
           FORMS: ${{ needs.forms.result }}
           FORMS_TTW: ${{ needs.forms-ttw.result }}
           PLAYER: ${{ needs.player.result }}
+          INSTALLER: ${{ needs.installer.result }}
         run: |
-          # The full tier is its shards and perf.spec.ts's jobs: failed or cancelled if either was, else their result.
-          if [ "$FULL_SHARDS" = failure ] || [ "$PERF" = failure ]; then FULL=failure
-          elif [ "$FULL_SHARDS" = cancelled ] || [ "$PERF" = cancelled ]; then FULL=cancelled
-          elif [ "$FULL_SHARDS" = "$PERF" ]; then FULL="$PERF"
-          else FULL="$FULL_SHARDS, perf $PERF"
+          # The full tier is its shards, perf.spec.ts's jobs and Windows setup's check (the `installer` job): failed
+          # or cancelled if any was, else their result.
+          # Windows setup's check runs on the full tier only: on the merge tier (or a repro) it's skipped, and counts for nothing.
+          if [ "$TIER" != full ] && [ "$INSTALLER" = skipped ]; then INSTALLER="$PERF"; fi
+          if [ "$FULL_SHARDS" = failure ] || [ "$PERF" = failure ] || [ "$INSTALLER" = failure ]; then FULL=failure
+          elif [ "$FULL_SHARDS" = cancelled ] || [ "$PERF" = cancelled ] || [ "$INSTALLER" = cancelled ]; then FULL=cancelled
+          elif [ "$FULL_SHARDS" = "$PERF" ] && [ "$PERF" = "$INSTALLER" ]; then FULL="$PERF"
+          else FULL="$FULL_SHARDS, perf $PERF, Windows setup $INSTALLER"
           fi
           echo "What changed: $CHANGES (anything but docs: ${CODE:-unknown}; platform-sensitive: ${PLATFORM:-n/a}). Tier: ${TIER:-unknown}. Fast tier's shards: $FAST. Full tier's: $FULL."
           path=''
