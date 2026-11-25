@@ -339,7 +339,7 @@ test('Favorites: added by action or by dragging, a chord’s own or in every cho
  */
 async function motionOn(app: ElectronApplication, shell: Page): Promise<void> {
   await app.evaluate(({ nativeTheme, systemPreferences }) => {
-    systemPreferences.getAnimationSettings = () => ({ shouldRenderRichAnimation: true, scrollAnimationsEnabledBySystem: true, prefersReducedMotion: false });
+    systemPreferences.getAnimationSettings = () => ({ shouldRenderRichAnimation: true, scrollAnimationsEnabledBySystem: true, prefersReducedMotion: false, prefersAnimatedImagesStartPaused: false });
     nativeTheme.emit('updated');
   });
   await shell.emulateMedia({ reducedMotion: 'no-preference' });

@@ -4,7 +4,7 @@ Thanks for helping. Chord is early, so expect things to move quickly.
 
 ## Before you start
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md). Every UI change is reviewed against DESIGN.md, and every library or API choice against ARCHITECTURE.md.
+Read [AGENTS.md](AGENTS.md) first: the commands, the rules that are never broken, and which sections of [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md) to read for what you're changing. Every UI change is reviewed against DESIGN.md, and every library or API choice against ARCHITECTURE.md.
 
 ## Setup
 
@@ -33,10 +33,10 @@ pnpm test:e2e:linux launch.spec.ts -g "Peek" --repeat-each 5
 It needs Docker. On Windows that's Docker Engine in a WSL 2 distro, with your user in its `docker` group; nothing else goes in WSL, as Node, pnpm and the display servers are in the image. Set `CHORD_E2E_WSL_DISTRO` if Docker isn't in your default distro. On Linux and macOS it uses the `docker` on your PATH. `pnpm --filter @chord/desktop test:e2e:linux` works too.
 
 - **What it tests:** your working tree as it is, from whichever worktree you run it in, uncommitted changes included: tracked files, and untracked ones that aren't ignored. They're copied into a fresh container, which installs and builds there. Your own `node_modules` and `out` are never used.
-- **Arguments** go to Playwright (spec files, `-g`, `--repeat-each`, `--workers`, `--reporter`, …), apart from `--wayland`/`--x11`, `--rebuild`, which rebuilds the image with fresh Ubuntu packages, and `--cpus <n>`, which runs on the first n CPUs only, as CI's runners have 4 (perf.spec.ts's container baselines are taken so: docs/testing/performance.md). Every app in a run shares one display, as on CI, so keep `--workers` at 1 for anything about focus.
+- **Arguments** go to Playwright (spec files, `-g`, `--repeat-each`, `--workers`, `--reporter`, …), apart from `--wayland`/`--x11`, `--rebuild`, which rebuilds the image with fresh Ubuntu packages, `--cpus <n>` (below), `--slow`, which makes the run slow to bring races out (one CPU at 0.35 of its time, and `--retries 0 --repeat-each 5`), and `--throttle <rate>`, which slows web pages' renderers that many times over CDP. Every app in a run shares one display, as on CI, so keep `--workers` at 1 for anything about focus.
 - **Results** land where a local run leaves them: `apps/desktop/test-results` (failure details, `captures/`, `perf.json`), and `apps/desktop/playwright-report` if you asked for the html reporter.
-- **Several runs at once** are fine. Each one gets its own container (`chord-e2e-run-<worktree>-<random>`), and they share the caches.
-- **Cost:** the first run builds the image (`chord-e2e-runner:<hash>`, 1.4 GB, about 2 minutes) and fills the pnpm store and Electron download caches (the volumes `chord-e2e-pnpm-store` and `chord-e2e-electron-cache`, 440 MB, from 10 seconds to a couple of minutes, depending on the registry): about 11 minutes in all for the whole suite. After that, installing and building take about 20 seconds, and the whole suite about 9 minutes (CI's Linux jobs take about 10). The image is rebuilt only when `scripts/e2e-linux/Dockerfile` changes.
+- **Several runs at once** are fine. Each one gets its own container (`chord-e2e-run-<worktree>-<random>`), and they share the caches. Each also gets CPUs of its own: a slot of 4 (as CI's runners have; perf.spec.ts's container baselines are taken so: docs/testing/performance.md) that no other run is using, never CPUs 0-3, which stay free for your own work. `--cpus <n>` asks for a slot of n, a fraction (`--cpus 0.35`) for one CPU held to that share of it, and `--cpus all` for every CPU, shared with other runs, as before slots.
+- **Cost:** the first run builds the image (`chord-e2e-runner:<hash>`, 1.4 GB, about 2 minutes) and fills the pnpm store and Electron download caches (the volumes `chord-e2e-pnpm-store` and `chord-e2e-electron-cache`, 440 MB, from 10 seconds to a couple of minutes, depending on the registry): about 11 minutes in all for the whole suite. After that, installing and building take about 20 seconds (the build is kept too: a run that changed only tests, docs or CI reuses the last build of the same source, and starts its tests in about 10 seconds), and the whole suite about 9 minutes (CI's Linux jobs take about 10). The image is rebuilt only when `scripts/e2e-linux/Dockerfile` changes.
 - **Where things go:** on Docker's own disk (on Windows, WSL's), never in Windows' temp folder. The copy of your tree, its `node_modules`, the build, and the test profiles in the run's temp folder (`test/run-temp.ts`) all live in the run's container. The caches are Docker volumes. Only the results come back to your tree.
 - **Cleaning up:** a run removes its own container, even when stopped with Ctrl+C, and removes any container a killed run left behind that has been stopped for 10 minutes. To free the space: `docker volume rm chord-e2e-pnpm-store chord-e2e-electron-cache`, and `docker image rm` the tags `docker image ls chord-e2e-runner` lists.
 - **The sandbox stays on.** Chromium's sandbox needs unprivileged user namespaces, so the container runs as an ordinary user with no capabilities, with Docker's seccomp profile (which blocks namespaces) turned off. `scripts/e2e-linux/run.mjs` says why that's the choice.
@@ -58,16 +58,24 @@ Checks inside tests that only run on Windows: downloads carry the mark of the we
 
 ## What CI runs on a pull request
 
-Every push gets the fast tier: typecheck, lint, unit tests, the password detector, and E2E on Linux x64 X11 (about 16 minutes). The full tier adds E2E on Windows, macOS, Linux Wayland and Linux arm64, and Chord Player (about 27 minutes). The `E2E` commit status is the merge gate:
+Every push gets the fast tier: typecheck, lint, unit tests, and E2E on Linux x64 X11, every spec but `perf.spec.ts`, in 4 shards balanced by how long each spec takes (`scripts/ci/e2e-shards.json`). The password detector's corpora run too when the pull request touches the detector. The merge tier, on a pull request labeled `ready`, adds E2E on Windows x64 and macOS arm64, `perf.spec.ts` on Linux x64 X11 and Windows x64, and Chord Player when it changed. The full tier adds the rest: Windows arm64, macOS x64, Linux Wayland and Linux arm64, `perf.spec.ts` on each, the password detector's corpora and Chord Player. It runs nightly, by hand, and on a change to Electron's version; the free plan runs about 20 Linux and 5 macOS jobs at once, so not on every pull request. The `E2E` commit status is the merge gate, required by `main`'s ruleset:
 
 | The pull request | Runs | `E2E` |
 |---|---|---|
-| Docs, the site or mocks only | typecheck, lint, unit tests | success |
+| Docs, the site or mocks, unit tests, dev or container-runner scripts, `.claude/` or `renovate.json` only | typecheck, lint, unit tests | success |
+| A draft, or stacked on another PR's branch | typecheck, lint, unit tests | pending until it's ready for review and targets `main`; a draft labeled `ready` fails *What changed*, saying so |
 | Not platform-sensitive | the fast tier | success once it passes |
 | Platform-sensitive | the fast tier | pending once it passes, until it's labeled `ready` |
-| Labeled `ready` (and not a draft), or Renovate's | the full tier | success once every platform passes |
+| Labeled `ready` (and not a draft) | the merge tier, on every push | success once it passes |
+| Changes Electron's version, labeled `ready` or Renovate's | the full tier | success once every platform passes |
 
-Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Every push to `main`, and a run each night, run the full tier; a failure there opens (or comments on) the issue *Nightly full tier failed on main*.
+The way to merge: work as a draft, mark it ready for review and label it `ready` when review settles, and merge with `gh pr merge <n> --merge` once `E2E` is success. (GitHub's merge queue is for organizations' repositories only; ci.yml keeps its `merge_group` lines for one.)
+
+Platform-sensitive means the diff touches code that behaves differently by OS: main's windows, views, focus, fullscreen, keyboard and input, agents' transport, Chord Player, packaging, native code, Electron's version, the workflows, the E2E harness's platform-specific parts, or any changed line that branches on the OS. The list is in the `changes` job of [ci.yml](.github/workflows/ci.yml), and the *What changed* job's summary says which files made a pull request platform-sensitive. Each night the full tier runs on `main`; a failure there opens (or comments on) the issue *Nightly full tier failed on main*, naming each failed platform's job and its failing tests.
+
+One platform's E2E alone (a repro), without a branch that edits CI: `gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=agents.spec.ts -f grep='snapshot' -f repeat=5`. Platforms: `linux-x64-x11`, `linux-x64-wayland`, `linux-arm64-x11`, `windows-x64`, `windows-arm64`, `macos-arm64`, `macos-x64`. It runs that one job and posts no `E2E` status.
+
+The *E2E* job's summary shows how even the shards were, and warns past 1.5×. To rebalance them, refresh the weights from a passing run on `main` and commit the map: `node scripts/ci/e2e-shard-weights.mjs <run-id>` (it needs `gh`). A new spec file runs before it's in the map, dealt to a shard in turn. Renovate opens its updates on weekends (UTC), grouped, at most 3 pull requests at a time, and rebases a pull request only when it conflicts (not on every push to `main`). Electron and security fixes come at once.
 
 ## Ground rules
 

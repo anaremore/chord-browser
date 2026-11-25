@@ -579,7 +579,9 @@ function contents(path: string): { version: unknown; schema: unknown[]; rows: Re
   const db = new DatabaseSync(path);
   try {
     const schema = db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`).all();
-    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as { name: string }[];
+    // sqlite_sequence too (#85): an AUTOINCREMENT table's next id is part of what an upgrade must leave as a new
+    // database has it. SQLite's other internal tables (sqlite_stat*) aren't data.
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND (name NOT LIKE 'sqlite_%' OR name = 'sqlite_sequence') ORDER BY name`).all() as { name: string }[];
     const rows = Object.fromEntries(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY 1`).all()]));
     return { version: db.prepare('PRAGMA user_version').get(), schema, rows };
   } finally {

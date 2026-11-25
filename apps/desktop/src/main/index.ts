@@ -85,6 +85,7 @@ import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { PlayerInstaller } from './player/installer';
 import { playerRoot } from './player/paths';
 import { UPDATE_PUBLIC_KEY } from './update-key';
+import { takeUpdateFailure } from './update-outcome';
 import { RELEASE_DOWNLOADS } from './update-signing';
 
 // A bug in main must never put up Electron's "JavaScript error" box (a native dialog that
@@ -338,7 +339,10 @@ function registerIpc(): void {
     if (command.t === 'agents.unshare') return agents?.service?.shares?.unshare(command.nodeId);
     // An address you typed for an agent's tab: where it goes is yours (a site you keep private makes it a tab of yours),
     // and you take the tab over (S18 M2e-1), as a reload of yours does.
-    if (command.t === 'tab.navigate') agents?.service?.chords?.takeOver(command.nodeId, undefined, { url: command.url });
+    if (command.t === 'tab.navigate') {
+      agents?.service?.chords?.takeOver(command.nodeId, undefined, { url: command.url });
+      assistant?.userUsedTab(command.nodeId);
+    }
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
     if (command.t === 'sync.open') return browser!.openSettings('data');
@@ -365,7 +369,11 @@ function registerIpc(): void {
       browser!.userNavigates?.(contents);
       contents.reload();
     }
-    else if (action === 'stop') contents.stop();
+    else if (action === 'stop') {
+      // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
+      assistant?.userMovedPage(contents);
+      contents.stop();
+    }
   });
   handle('overlay:open', ({ mode, anchor }, sender) => {
     const w = senderWindow(sender);
@@ -1195,7 +1203,12 @@ if (!app.requestSingleInstanceLock()) {
     // Outside agents' tabs (S18): their pages' wiring, and what they held, go to the agents' chords once there are any.
     browser.agentContents = (contents, nodeId) => agents?.service?.chords?.wire(contents, nodeId);
     browser.agentHeld = (nodeId, what, detail, from) => agents?.service?.chords?.note(nodeId, what, detail, from);
-    browser.userNavigates = (contents, going) => agents?.service?.chords?.takeOverPage(contents, going);
+    browser.userNavigates = (contents, going) => {
+      agents?.service?.chords?.takeOverPage(contents, going);
+      assistant?.userMovedPage(contents);
+    };
+    browser.userInput = (nodeId) => assistant?.userUsedTab(nodeId);
+    browser.screenChanged = () => assistant?.screenChanged();
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {
       agents?.service?.stopAll();
@@ -1205,6 +1218,11 @@ if (!app.requestSingleInstanceLock()) {
     // The tabs-with-an-icon index reads every tab, so no navigation waits for it: a slice of buckets a turn, the first
     // on a turn of its own (tens of ms in one pass at 35,000 nodes, a few ms a slice), never right after the task above.
     afterLaunch.run(() => browser!.tabs.warmIcons());
+    // A Windows update setup couldn't install (#142): setup put this version back and reopened it to say why.
+    afterLaunch.run(() => {
+      const failed = takeUpdateFailure(app.getPath('userData'));
+      if (failed) browser?.announce('update:failed', failed);
+    });
     // Auto picture-in-picture is off by default since 2026-10-25 (it popped videos out unasked): a profile
     // from before gets it switched off once, through the store, so it's saved like any other change.
     if (!browser.store.state.settings.autoPipDefaultOff) browser.store.dispatch({ t: 'settings.set', settings: { autoPip: false, autoPipDefaultOff: true } });
@@ -1402,17 +1420,25 @@ if (!app.requestSingleInstanceLock()) {
          * work and the answer's way back), `runs` times; and what the last one found.
          */
         agentSnapshotTimes: async (url: string, runs: number) => {
-          const { snapshotPage } = await import('./control/snapshot');
+          const [{ snapshotPage }, { ASSISTANT_WORLD }] = await Promise.all([import('./control/snapshot'), import('./control/extract')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
           if (!contents) return null;
           const times: number[] = [];
+          const after: number[] = [];
           let last: Awaited<ReturnType<typeof snapshotPage>> = null;
           for (let i = 0; i < runs; i++) {
             const started = performance.now();
             last = await snapshotPage(contents, 'timing', `timing${i}`);
             times.push(performance.now() - started);
+            // A moment between snapshots, as an agent's are (seconds apart): the refs' items, place and shape are taken
+            // in the task right after each (snapshot.ts), timed on its own.
+            await new Promise((done) => setTimeout(done, 30));
+            // Its task run by now, as it always is by an agent's next call (seconds later): on a slow runner its timer
+            // can still be pending after 30 ms, and the next snapshot timed would wait behind it (#154's macOS x64 run).
+            const ms = await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { const r = globalThis.__chordSnapshots.get('timing'); if (r && r.finish) r.finish(); return r ? r.finishMs : -1; })()` }]);
+            after.push(Number(ms));
           }
-          return { times, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
+          return { times, after, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
         },
         /**
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
@@ -1471,7 +1497,21 @@ if (!app.requestSingleInstanceLock()) {
             deep.push(performance.now() - opened);
             if (!hit.ok || !open.ok) return { times, deep, failed: `deep: ${JSON.stringify(hit.ok ? open : hit)}` };
           }
-          return { times, deep };
+          // The owner's bug #2: the same element replaced by a copy of itself each time (a page that redraws), then the
+          // step that finds it again (act.ts). Whether it was found, and how long the step took.
+          const { ASSISTANT_WORLD } = await import('./control/extract');
+          const refind: number[] = [];
+          let refound = 0;
+          for (let i = 0; i < runs; i++) {
+            await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [
+              { code: `(() => { const e = globalThis.__chordSnapshots.get('timing').keep[${key}].ref.deref(); if (e) e.replaceWith(e.cloneNode(true)); })()` },
+            ]);
+            const started = performance.now();
+            const answer = await actOnPage(contents, 'timing', 'timing-act', key, { op: 'point', highlight: false });
+            refind.push(performance.now() - started);
+            if (answer.ok && answer.refound) refound++;
+          }
+          return { times, deep, refind, refound };
         },
         /** What Chord's icon shows: its tabs' counts added up. */
         appBadge: () => appBadgeShown(),

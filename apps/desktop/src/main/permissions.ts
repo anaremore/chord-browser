@@ -10,6 +10,7 @@
  * gets only the harmless ones: no prompt, no answer you saved, no screen.
  */
 import type { Command, NodeId, PermissionDecision, SitePermission, SitePermissions, State } from '@chord/core';
+import { noteUserTab, userTabCatching } from './control/user-watch';
 import type { PermissionPrompt } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
 
@@ -21,6 +22,8 @@ const HARMLESS = new Set(['fullscreen', 'automatic-fullscreen', 'pointerLock', '
  * choose what.
  */
 const ASKED_ELSEWHERE = new Set(['display-capture']);
+/** The clipboard's permissions: refused while the assistant's click sets things off in a tab of yours (S18 M2e-2b). */
+const CLIPBOARD = new Set(['clipboard-sanitized-write', 'clipboard-read']);
 
 /** What a Chromium permission request asks Chord's user for. Null means deny without asking. */
 export function sitePermissionsFor(permission: string, mediaTypes: readonly string[] = []): SitePermission[] | null {
@@ -102,6 +105,17 @@ export class PermissionBroker {
   /** `scope`: a private window's profile, whose answers stay in memory and apart from your saved ones. */
   attach(ses: Session, scope: string | null = null): void {
     ses.setPermissionRequestHandler((contents, permission, callback, details) => {
+      // The clipboard, while the assistant's click is setting things off in a tab of yours (S18 M2e-2b, A6): no.
+      if (CLIPBOARD.has(permission) && contents && userTabCatching(contents)) {
+        noteUserTab(contents, 'clipboard', permission);
+        return callback(false);
+      }
+      // Another program (mailto:, an app's link): never, as in every tab; while the assistant's click is setting things
+      // off, said in the chat too (Neon's S4 on #150).
+      if (permission === 'openExternal' && contents && userTabCatching(contents)) {
+        noteUserTab(contents, 'external', String((details as { externalURL?: string }).externalURL ?? '').slice(0, 120));
+        return callback(false);
+      }
       if (HARMLESS.has(permission)) return callback(true);
       if (this.isAgent(contents)) return callback(false);
       if (ASKED_ELSEWHERE.has(permission)) return callback(true);
@@ -119,6 +133,7 @@ export class PermissionBroker {
       this.deps.onChange();
     });
     ses.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+      if (CLIPBOARD.has(permission) && contents && userTabCatching(contents)) return false;
       if (HARMLESS.has(permission)) return true;
       // No page (a service worker's check) can't be tied to a tab, agent's or not: it gets the site's saved answer, as before.
       if (contents && this.isAgent(contents)) return false;

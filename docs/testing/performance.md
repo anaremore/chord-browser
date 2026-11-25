@@ -55,7 +55,7 @@ Frame work comes from a Chromium trace (`test/e2e/frames.ts`). The Long Animatio
 
 At the end, the run prints one line per measure. Each check reads `label value/budget status`, where status is `ok`, `MISS`, `unlocked run`, `120 Hz display` (needs a faster display), `no data` (nothing was measured; an enforced run counts it as a miss), or `no baseline` (held to a baseline this runner doesn't have, so only reported). The first line names the baseline in use.
 
-The full report is `apps/desktop/test-results/perf.json`. CI uploads it as the `perf-<os>-<shard>` artifact of the E2E shard that ran `perf.spec.ts` (each OS's E2E is split into shards; `perf:baseline --run` reads them all). Besides the checks, each measure has:
+The full report is `apps/desktop/test-results/perf.json`. CI runs `perf.spec.ts` in a job of its own on each platform, on the full tier (*E2E · perf*; `CHORD_E2E_SHARD=perf`), and uploads it as that job's `perf-<os>[-<display>]-perfof1` artifact (`perf:baseline --run` reads every `perf-*`). Besides the checks, each measure has:
 
 - `environment`: the CPU, and the display's refresh rate and its idle frame interval.
 - `locked` and `cpuBusy`: the screen state and the machine's load when it was measured.

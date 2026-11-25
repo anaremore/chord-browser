@@ -55,6 +55,8 @@ import { durations, easing } from '@chord/tokens';
 import type { Input, WebContents, WebFrameMain } from 'electron';
 import type { PasswordDetectorEvents, PasswordsFocusEvent } from './detector';
 import { keyIdOf, routeMenuKey, routeTakenKey, TAKEN_KEY_PATIENCE } from './menu-keys';
+import { isAgentInput } from '../control/input';
+import { onUserLease, userTabCatching } from '../control/user-watch';
 import { generatePasswordFor, type Generated } from './generator';
 import { HOLD_MS, type CandidateValues } from './saving';
 import type { PasswordService } from './service';
@@ -362,7 +364,14 @@ export class PasswordAssist {
   private readonly cards = new Map<string, Card>();
   private readonly guards = new Map<WebContents, KeyGuard>();
 
+  /** Stops hearing the assistant's leases (dispose). */
+  private readonly offLease: () => void;
+
   constructor(private readonly options: PasswordAssistOptions) {
+    // The assistant beginning to act in a tab of yours (S18 M2e-2a): a menu open there closes (Neon's B7 on #147).
+    this.offLease = onUserLease((contents) => {
+      for (const menu of [...this.menus.values()]) if (menu.contents === contents) this.close(menu);
+    });
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimeout ?? ((run, ms) => setTimeout(run, ms));
     this.clearTimer = options.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
@@ -465,6 +474,14 @@ export class PasswordAssist {
     const tab = host.tabOf(e.contents);
     if (!tab) return;
     const open = this.menuOf(e.contents);
+    // The assistant acting in this tab (S18 M2e-2a, A4; Neon's B2): its click or focus never opens your passwords, and
+    // a menu open as it starts closes.
+    // The assistant's whole lease, its after-window too (Neon's S2 on #150): its click's effects may still be landing.
+    if (userTabCatching(e.contents)) {
+      this.pending.delete(e.contents);
+      if (open) this.close(open);
+      return;
+    }
     // A new password's field: the generator's row (never in a private window, which never saves). Otherwise an account's.
     const generating = NEW_ROLES.has(e.role) && e.kind !== 'username-only' && !tab.private;
     if (!generating && (!MENU_KINDS.has(e.kind) || !MENU_ROLES.has(e.role))) {
@@ -535,6 +552,9 @@ export class PasswordAssist {
   }
 
   private openMenu(made: Omit<Menu, 'openedAt'>): void {
+    // Asked again right here, after the vault's answer: the assistant may have begun acting in the tab meanwhile
+    // (Neon's B7 on #147). Its focus never opens your passwords.
+    if (userTabCatching(made.contents)) return;
     const menu: Menu = { ...made, openedAt: this.now() };
     // One menu a window: another pane's, still open, closes first (its keys with it).
     const replaced = this.menus.get(menu.tab.windowId);
@@ -646,6 +666,9 @@ export class PasswordAssist {
   }
 
   private onKey(contents: WebContents, guard: KeyGuard, event: { preventDefault(): void }, input: Input): void {
+    // Keys Chord sends for the assistant or an agent (control/input.ts) are the page's, never the menu's: Enter there
+    // never fills a saved password (Neon's B2 on the M2e plan).
+    if (isAgentInput(contents)) return;
     const menu = this.menuOf(contents);
     if (menu && input.type === 'keyDown') return this.key(menu, guard, event, input);
     const routed = routeTakenKey(guard.taken, input);
@@ -1614,6 +1637,11 @@ export class PasswordAssist {
   }
 
   /** A window closed: its menu and its tabs' cards go. */
+  /** Done with it (a test's, or one made again): it stops hearing the assistant's leases. */
+  dispose(): void {
+    this.offLease();
+  }
+
   windowClosed(windowId: WindowId): void {
     const menu = this.menus.get(windowId);
     if (menu) this.close(menu);

@@ -25,6 +25,7 @@
  */
 import { contextBridge, ipcRenderer } from 'electron';
 import { installAgentGuard, installFrameGuard } from './agent-guard';
+import { installCopyReport } from './copy-report';
 import { holdForAgent } from './agent-hold';
 
 /** The page's globals this touches (the preload's project has no DOM types; this runs in the page's own world). */
@@ -143,6 +144,13 @@ if ((protocol === 'https:' || protocol === 'http:') && isTop) {
   // The page calls this through the bridge: only the value crosses, and main takes only the top frame's.
   const report = (badge: Badge) => ipcRenderer.send('page:badge', badge);
   contextBridge.executeInMainWorld({ func: compatibility, args: [report] });
+}
+// A tab of yours: the same typing guard as an agent's tab's, dormant until the assistant types or presses a key here
+// (S18 M2e-2a, F4), in the top frame only (your tabs' frames get no preload: focus that ends in one is refused).
+if (!agentTab && isTop && (protocol === 'https:' || protocol === 'http:')) {
+  installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
+  // The page copying: reported, so the assistant's lease puts back only what the page copied (copy-report.ts).
+  installCopyReport(globalThis as unknown as Parameters<typeof installCopyReport>[0], () => ipcRenderer.send('page:copied'));
 }
 // An outside agent's tab: every frame of it, whatever its address (an about:blank, srcdoc or blob: frame takes its
 // parent's origin, and its pickers and dialogs would be the page's), but never an extension's or DevTools' page.

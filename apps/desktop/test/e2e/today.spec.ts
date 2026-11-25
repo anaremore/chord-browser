@@ -39,7 +39,7 @@ async function longToday(env: Record<string, string> = {}): Promise<{ app: Elect
  */
 async function setMotion(app: ElectronApplication, shell: Page, on: boolean): Promise<void> {
   await app.evaluate(({ nativeTheme, systemPreferences }, reduced) => {
-    systemPreferences.getAnimationSettings = () => ({ shouldRenderRichAnimation: !reduced, scrollAnimationsEnabledBySystem: !reduced, prefersReducedMotion: reduced });
+    systemPreferences.getAnimationSettings = () => ({ shouldRenderRichAnimation: !reduced, scrollAnimationsEnabledBySystem: !reduced, prefersReducedMotion: reduced, prefersAnimatedImagesStartPaused: reduced });
     nativeTheme.emit('updated');
   }, !on);
   await shell.emulateMedia({ reducedMotion: on ? 'no-preference' : 'reduce' });

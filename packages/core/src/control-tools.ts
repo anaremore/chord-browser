@@ -10,6 +10,7 @@
 
 import { ASSISTANT_FORM_AREA_MAX, ASSISTANT_FORM_MAX_FIELDS } from './assistant-forms';
 import { NAVIGATE_URL_MAX, PRESS_KEYS, TYPE_TEXT_MAX } from './control-act';
+import { AGENT_ACT_SITES_MAX } from './model';
 
 // Core compiles without DOM types; URL is a global in Node and every browser.
 declare const URL: new (url: string) => { protocol: string; host: string; hostname: string; port: string; origin: string; pathname: string; search: string; hash: string; href: string };
@@ -177,7 +178,12 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
 ];
 
 /** The assistant's tools in this build: snapshot too when it has M2 (agentActions); acting comes to it in M2e. */
-export const assistantTools = (actions: boolean): readonly AssistantToolSpec[] => (actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => t.name === 'snapshot')] : ASSISTANT_TOOLS);
+/**
+ * The assistant's tools: with M2 in the build, snapshot; and with *Click and type on pages* on (S18 M2e), the acting
+ * tools too, in the tab on screen.
+ */
+export const assistantTools = (actions: boolean, acting = false): readonly AssistantToolSpec[] =>
+  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => acting || t.name === 'snapshot')] : ASSISTANT_TOOLS;
 export const isActionTool = (name: string): boolean => ACTION_TOOLS.some((t) => t.name === name);
 
 /** The control layer's names for every tool, whoever calls it (M2's included: a scope says whether it offers them). */
@@ -200,6 +206,21 @@ export const isNeverOffered = (toolName: string): boolean => CONTROL_NEVER_OFFER
  * "Never". (Private windows are refused by the caller, which knows windows.)
  */
 /** The *Never* list as kept: each entry trimmed, blanks and repeats gone (a blank entry names no site). */
+/** The assistant's *Always on this site* list: hosts as written, each once (the newest kept), at most AGENT_ACT_SITES_MAX. */
+export function cleanActSites(sites: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const raw of sites) {
+    // As a site is written (core's normalHost, model.ts' actSitesOf): a host, with its port when it has one, an IPv6
+    // address in brackets; lowercase, without a fully qualified name's trailing dot.
+    const site = raw.trim().toLowerCase().replace(/\.+(?=$|:)/, '');
+    if (!site || site.length > 253 || !/^[a-z0-9.:[\]-]+$/.test(site)) continue;
+    const at = out.indexOf(site);
+    if (at >= 0) out.splice(at, 1);
+    out.push(site);
+  }
+  return out.slice(-AGENT_ACT_SITES_MAX);
+}
+
 export function cleanNeverSites(sites: readonly string[]): string[] {
   return [...new Set(sites.map((s) => s.trim()).filter(Boolean))];
 }

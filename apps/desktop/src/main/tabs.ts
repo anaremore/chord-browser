@@ -5,6 +5,8 @@
  * included) comes back when it's shown again.
  */
 import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
+import { isAgentInput } from './control/input';
+import { noteUserTab, userTabCatching, userTabCopied } from './control/user-watch';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
@@ -505,6 +507,10 @@ export class TabManager {
       if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
       this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame));
     });
+    // A tab of yours copied (its page preload): the assistant's lease there puts it back if its click set it off (S18 M2e-2b).
+    contents.ipc.on('page:copied', (event) => {
+      if (!agentPage && !event.senderFrame?.parent) userTabCopied(contents);
+    });
     // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
     contents.ipc.on('page:agentGuardState', (event) => {
       event.returnValue = agentPage && agentGuardUp(contents);
@@ -549,6 +555,8 @@ export class TabManager {
     let gestureAt = 0;
     let gesturePoint: { x: number; y: number } | null = null;
     contents.on('input-event', (_event, input) => {
+      // Only your hands: a click Chord sends for the assistant never opens Peek (S18 M2e-2b; Neon's B5).
+      if (isAgentInput(contents)) return;
       if (input.type === 'mouseDown' || input.type === 'mouseUp') {
         gestureAt = Date.now();
         const mouse = input as Electron.MouseInputEvent;
@@ -584,6 +592,15 @@ export class TabManager {
       this.deps.onAgentRefused?.(openerNodeId, 'popup', url);
       return { action: 'deny' };
     }
+    // What the assistant's click set off in a tab of yours (S18 M2e-2b, A6; Neon's B5 and B1 on #150): nothing opens. A
+    // window would be unwatched; a new tab, in front or behind, would load with no lease of its own (a download saved
+    // unasked, a redirect to an address that deletes or signs out). Said in the chat; the assistant can go there itself,
+    // and leaving the site asks every time.
+    const opener = pageOf(this.views.get(openerNodeId));
+    if (opener !== undefined && userTabCatching(opener)) {
+      noteUserTab(opener, 'popup', url.slice(0, 120));
+      return { action: 'deny' };
+    }
     if (disposition === 'new-window' && features) {
       return {
         action: 'allow',
@@ -604,7 +621,6 @@ export class TabManager {
       return { action: 'deny' };
     }
     // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click).
-    const opener = pageOf(this.views.get(openerNodeId));
     if (disposition !== 'background-tab' && opener && this.leadsToPeek(openerNodeId, opener, url)) {
       this.deps.onPeek(openerNodeId, url, null);
       return { action: 'deny' };
