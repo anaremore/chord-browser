@@ -94,6 +94,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     mayInspect: (node) => (mine(node) ? null : everShared.has(node.id) ? NOT_SHARED : NOT_YOURS),
     cardWaitMs: CONTROL_WAIT_MS,
     sendWaitMs: CONTROL_WAIT_MS,
+    waits: true,
     activity: async () => undefined,
   };
 }

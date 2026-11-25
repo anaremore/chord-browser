@@ -214,7 +214,8 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
  * tools too, in the tab on screen.
  */
 export const assistantTools = (actions: boolean, acting = false): readonly AssistantToolSpec[] =>
-  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => acting || t.name === 'snapshot')] : ASSISTANT_TOOLS;
+  // wait_for is outside agents' alone (Neon's round 1 of M2g-1, B-4).
+  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => t.name !== 'wait_for' && (acting || t.name === 'snapshot'))] : ASSISTANT_TOOLS;
 export const isActionTool = (name: string): boolean => ACTION_TOOLS.some((t) => t.name === name);
 
 /** The control layer's names for every tool, whoever calls it (M2's included: a scope says whether it offers them). */

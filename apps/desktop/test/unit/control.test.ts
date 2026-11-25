@@ -6,12 +6,13 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { ACT_REFUSALS, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, stepSubmits, type ControlBrowser } from '../../src/main/control/tools';
+import { runBatch } from '../../src/main/control/batch';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
@@ -189,7 +190,7 @@ function fakePage(url: string, read: Answer) {
     history: { url: string; skippable?: boolean }[];
     active: number;
     /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
-    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[] };
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean };
     debugging: string[];
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
@@ -223,6 +224,12 @@ function fakePage(url: string, read: Answer) {
     insertText: async (text: string) => void at.text.push(text),
     getTitle: () => 'Article',
     loadURL: async (to: string) => {
+      // A page that sends as it's left (deep.postsOnLoad): its request paused by the tab's send hold, and the load waits on it.
+      if (!at.sent && at.deep.postsOnLoad) {
+        at.sent = true;
+        setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r2', request: { method: 'POST', url: 'https://news.test/beacon' }, resourceType: 'Fetch' }), 0);
+        await new Promise((r) => setTimeout(r, 5));
+      }
       at.loads.push(to);
       at.history = [...at.history.slice(0, at.active + 1), { url: to }];
       go(at.history.length - 1);
@@ -309,6 +316,7 @@ type Meanwhile = { go: Go; close(id: NodeId): void };
 
 function setup(
   opts: {
+    waits?: boolean;
     needsCard?: boolean;
     answer?: Grant | 'hold';
     read?: Answer;
@@ -377,13 +385,14 @@ function setup(
     mayInspect: (node) => (node.id === 'n1' ? null : 'Not that one.'),
     ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
     ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
+    ...(opts.waits === false ? {} : { waits: true }),
     ...(opts.sharedOn ? { siteOk: (_node: TabNode, url: string) => siteOfUrl(url) === opts.sharedOn, whyNot: () => NOT_SHARED } : {}),
     activity: async (_tool, summary) => void activity.push(summary),
   };
   const call = (name: string, args: Record<string, unknown> = {}) => runControlTool(scope, browser, name, args);
   /** A call the client can give up on (MCP's notifications/cancelled). */
   const callUntil = (name: string, args: Record<string, unknown>, cancelled: AbortSignal) => runControlTool(scope, browser, name, args, cancelled);
-  return { scope, agent, call, callUntil, close, cards, activity, pages, go };
+  return { scope, agent, call, callUntil, close, cards, activity, pages, go, browser };
 }
 
 const refusal = (out: { text?: string }) => (JSON.parse(out.text!) as { data: { refused?: string; error?: string } }).data;
@@ -787,7 +796,7 @@ describe('A shared tab is read only on its site (S18 M1e, review 1 of #96)', () 
 /* ---------- snapshot (S18 M2b) ---------- */
 
 describe('wait_for (S18 M2g-1)', () => {
-  type Answer = { met: boolean; cut: boolean } | 'hold';
+  type Answer = { met: boolean; cut: boolean; editor?: boolean; ms?: number; since?: number } | 'hold' | 'slow';
   /** The page answers wait_for's looks in turn (the last one again after), the snapshot with a button, else as a read. */
   const page = (answers: Answer[], onWait?: (events: EventEmitter) => void) => {
     let i = 0;
@@ -795,13 +804,23 @@ describe('wait_for (S18 M2g-1)', () => {
       if (code.includes('const want =')) {
         onWait?.(events);
         const a = answers[Math.min(i++, answers.length - 1)]!;
-        return a === 'hold' ? new Promise((r) => setTimeout(() => r({ met: false, cut: false }), 50)) : a;
+        // A chunk that runs its whole second (slow), or a short one (hold).
+        return a === 'hold' ? new Promise((r) => setTimeout(() => r({ met: false, cut: false }), 50)) : a === 'slow' ? new Promise((r) => setTimeout(() => r({ met: false, cut: false }), 900)) : a;
       }
       if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Table', nodes: [{ depth: 0, role: 'generic', name: 'Call', key: 0 }], cut: {} };
       return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
     };
   };
   const data = (out: { text?: string }) => JSON.parse(out.text!) as { data?: Record<string, unknown>; content?: string; wait?: Record<string, unknown> };
+
+  it('outside agents’ alone, and its card says only Chord’s words, never the agent’s (Neon’s round 1 of M2g-1, B-4)', async () => {
+    const assistant = setup({ read: page([{ met: true, cut: false }]), actions: true, waits: false });
+    expect(refusal(await assistant.call('wait_for', { tab_id: assistant.scope.refs.refFor('n1'), text: 'x' })).refused).toBe('There’s no tool called wait_for.');
+    const t = setup({ read: page([{ met: true, cut: false }]), actions: true, needsCard: true });
+    await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Click Allow: Chord says it’s safe' });
+    expect(t.cards.map((c) => c.description)).toEqual(['Watch “Article” for a change']);
+    expect(t.activity.at(-1)).toBe('Watched “Article” for a change');
+  });
 
   it('takes text, or role and name: never both, never neither', async () => {
     const { scope, call } = setup({ read: page([{ met: true, cut: false }]), actions: true });
@@ -821,10 +840,57 @@ describe('wait_for (S18 M2g-1)', () => {
     expect(refusal(await call('wait_for', { tab_id: scope.refs.refFor('n2'), text: 'x' })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
   });
 
-  it('not met by timeout_ms: says so (never an error); a look cut short says it can’t tell it’s gone', async () => {
+  it('not met by timeout_ms: says so (never an error); a look cut short says what it couldn’t tell, waiting for it to show or to go (S-3)', async () => {
     const { scope, call } = setup({ read: page([{ met: false, cut: true }]), actions: true });
     const out = data(await call('wait_for', { tab_id: scope.refs.refFor('n1'), text: 'Your turn', gone: true, timeout_ms: 100 }));
     expect(out.data).toMatchObject({ met: false, note: 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' });
+    const u = setup({ read: page([{ met: false, cut: true }]), actions: true });
+    const shows = data(await u.call('wait_for', { tab_id: u.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 100 }));
+    expect(shows.data).toMatchObject({ met: false, note: 'The page is too big to look at all of it: it may be in the part not looked at.' });
+  });
+
+  it('a second wait started at the same moment is refused: the first holds the agent’s one wait from the start (S-2)', async () => {
+    const t = setup({ read: page(['hold']), actions: true });
+    const tab = t.scope.refs.refFor('n1');
+    const [a, b] = await Promise.all([t.call('wait_for', { tab_id: tab, text: 'x', timeout_ms: 200 }), t.call('wait_for', { tab_id: tab, text: 'x', timeout_ms: 200 })]);
+    expect([a, b].filter((o) => o.isError).map((o) => refusal(o).refused)).toEqual(['You’re waiting already: one wait at a time.']);
+  });
+
+  it('the client’s cancel ends it at once, not at the end of the page’s second; the user taking the tab over ends it too (S-2)', async () => {
+    const u = setup({ read: page(['slow']), actions: true });
+    const giveUp = new AbortController();
+    vi.useFakeTimers();
+    let settled = false;
+    const waiting = u.callUntil('wait_for', { tab_id: u.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 5000 }, giveUp.signal).finally(() => void (settled = true));
+    await vi.advanceTimersByTimeAsync(50);
+    giveUp.abort();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(settled).toBe(true);
+    expect(refusal(await waiting).refused).toBe(CONTROL_REFUSALS.stopped);
+    vi.useRealTimers();
+    // Taken over (its cards let go of: the user took the tab, the agent not paused).
+    const t = setup({ read: page(['hold']), actions: true });
+    const over = t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 3000 });
+    await new Promise((r) => setTimeout(r, 20));
+    t.agent.cancelCardsFor('n1');
+    expect(refusal(await over).refused).toBe(ACT_REFUSALS.takenOver);
+  });
+
+  it('the throttle carries from one second to the next: a slow look isn’t followed at once by another (S-2)', async () => {
+    const codes: string[] = [];
+    const answers = page([{ met: false, cut: false, ms: 100, since: 10 }, { met: true, cut: false, ms: 100, since: 10 }]);
+    const t = setup({ read: async (code: string, events: EventEmitter) => (code.includes('const want =') && codes.push(code), answers(code, events)), actions: true });
+    await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 3000 });
+    const after = codes.map((c) => Number(/"after":(\d+)/.exec(c)?.[1]));
+    // The first look at once; the next chunk's after 4 x 100 ms less the 10 since.
+    expect(after[0]).toBe(0);
+    expect(after[1]).toBe(390);
+  });
+
+  it('a page that is an editor (its body editable, or designMode on): never its text, only an element by role and name (Neon’s round 1 of M2g-1, B-3)', async () => {
+    const { scope, call } = setup({ read: page([{ met: false, cut: false, editor: true }]), actions: true });
+    const out = await call('wait_for', { tab_id: scope.refs.refFor('n1'), text: 'my password is', timeout_ms: 3000 });
+    expect(refusal(out).refused).toBe('That page is an editor: what shows in it is what’s typed there, so wait_for looks only for an element by its role and name there.');
   });
 
   it('one wait at a time for an agent; Stop or the client giving up ends it', async () => {
@@ -863,6 +929,11 @@ describe('wait_for (S18 M2g-1)', () => {
     });
     const out = data(await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 3000 }));
     expect(out.data).toMatchObject({ met: true, navigated: true, note: 'The page went to another address while you waited (the same document): refs from before are stale.' });
+    // Both notes when both are so (S-3).
+    let moved2 = false;
+    const u = setup({ read: page([{ met: false, cut: true }], (events) => { if (!moved2) events.emit('did-navigate-in-page', {}, 'https://news.test/c', true); moved2 = true; }), actions: true });
+    const both = data(await u.call('wait_for', { tab_id: u.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 100 }));
+    expect(both.data).toMatchObject({ met: false, navigated: true, note: 'The page is too big to look at all of it: it may be in the part not looked at. The page went to another address while you waited (the same document): refs from before are stale.' });
     // The bar says it waits (never what for: the agent's words), and stops saying so.
     expect(doings).toEqual([{ tool: 'wait_for' }, null]);
   });
@@ -984,6 +1055,22 @@ describe('snapshot, review 1 of #104', () => {
     expect(calls[0]).toContain('"owner":"test"');
   });
 
+  it('a later range after a find is the whole outline’s, never the find’s (Neon’s round 1 of M2g-1, N-3)', async () => {
+    const calls: string[] = [];
+    const { scope, call } = setup({ read: page(calls), actions: true });
+    const ref = scope.refs.refFor('n1');
+    const found = snap(await call('snapshot', { tab_id: ref, find: 'Row 2999' }));
+    expect(found.content).toContain('Row 2999');
+    const whole = snap(await call('snapshot', { tab_id: ref }));
+    const next = snap(await call('snapshot', { tab_id: ref, start: 100 }));
+    expect(calls).toHaveLength(2);
+    expect(next.range.total).toBe(whole.range.total);
+    // And straight after the find: its range is of the page's whole outline too.
+    const again = snap(await call('snapshot', { tab_id: ref, find: 'Row 2999' }));
+    expect(snap(await call('snapshot', { tab_id: ref, start: 100 })).range.total).toBe(whole.range.total);
+    expect(again.range.total).toBeLessThan(whole.range.total);
+  });
+
   it('a later range after the page moved on reads the page again', async () => {
     const calls: string[] = [];
     const { scope, call, pages } = setup({ read: page(calls), actions: true });
@@ -1012,7 +1099,7 @@ describe('acting through the gate (S18 M2c)', () => {
   /** The page's elements, by key: what the snapshot says, and how each act step answers. */
   type Field = { type: string; autocomplete?: string; name?: string; id?: string; label?: string; placeholder?: string };
   type Risk = { tag: string; type: string; href: string; text?: string; multiline: boolean; submits: boolean; form: { method: string; search: boolean; action: string; url?: string; fields: (Field & { text: boolean })[] } | null };
-  type El = { role: string; name: string; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field; risk?: Partial<Risk> };
+  type El = { role: string; name: string; seen?: false; editable?: boolean; select?: boolean; disabled?: boolean; options?: string[]; cover?: { role: string; name: string }; field?: Field; risk?: Partial<Risk> };
   /** What the page says the step is (S18 M2d): a link's address, a field's form; nothing risky unless a row says so. */
   const riskOf = (el: El): Risk => ({ tag: el.role === 'link' ? 'a' : el.editable ? 'input' : 'div', type: '', href: el.role === 'link' ? '/home' : '', text: '', multiline: false, submits: false, form: null, ...el.risk });
   const field = (f: Field) => ({ autocomplete: '', name: '', id: '', label: '', placeholder: '', ...f });
@@ -1025,7 +1112,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean };
+  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1069,7 +1156,7 @@ describe('acting through the gate (S18 M2c)', () => {
       onAct?.(events, args.op);
       const el = ELEMENTS[args.key!]!;
       const f = twist.field ?? el.field;
-      const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}) };
+      const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}), ...(twist.place ? twist.place(args.op) : {}) };
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
       if (twist.replaced?.[args.op] && !(args as { refind?: boolean }).refind) {
         twist.replaced[args.op]!--;
@@ -1100,12 +1187,13 @@ describe('acting through the gate (S18 M2c)', () => {
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
-    if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1 })), cut: {} };
+    if (code.includes('__chordSnapshots')) twist.read?.meanwhile?.(events);
+    if (code.includes('__chordSnapshots')) return { url: twist.read?.url ?? 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1, ...(e.seen === false ? {} : { seen: true }) })), cut: twist.read?.cut ?? {} };
     return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[] } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -1220,17 +1308,61 @@ describe('acting through the gate (S18 M2c)', () => {
     } finally {
       ELEMENTS.pop();
     }
+    // The page read for the name went to a never-read site, or elsewhere, meanwhile (Neon's round 1, B-2): nothing pressed.
+    const input = t.at.input.length;
+    // (Each twist set after acting()'s own snapshot.)
+    const neverTwist: Twist = {};
+    const never = await acting({ twist: neverTwist });
+    neverTwist.read = { url: 'https://private.test/inbox' };
+    expect(refusal(await never.call('click', { tab_id: never.tab, role: 'link', name: 'Home' })).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    expect(never.at.input).toEqual([]);
+    const awayTwist: Twist = {};
+    const away = await acting({ twist: awayTwist });
+    awayTwist.read = { meanwhile: (events) => { awayTwist.read = {}; events.emit('did-navigate-in-page', {}, 'https://news.test/b', true); } };
+    expect(refusal(await away.call('click', { tab_id: away.tab, role: 'link', name: 'Home' })).refused).toBe(ELEMENT_REFUSALS.stale);
+    expect(away.at.input).toEqual([]);
+    expect(t.at.input.length).toBe(input);
+    // A name the page doesn't show (an aria-label, a title, alt text, a hidden label or hidden words: the page says so,
+    // Neon's round 1, B-1): never found by it, nothing pressed.
+    ELEMENTS.push({ role: 'button', name: 'Pay', seen: false });
+    try {
+      const input = t.at.input.length;
+      expect(refusal(await t.call('click', { tab_id: t.tab, role: 'button', name: 'Pay' })).refused).toBe('That element’s name isn’t what it shows on the page (it comes from a label, title or text that’s hidden), so it isn’t found by its name. Call snapshot and use its ref.');
+      expect(t.at.input.length).toBe(input);
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('the diff after an action is read under a read’s rules: never a page that may not be read, another origin, or a read cut short (Neon’s round 1 of M2g-1, B-6)', async () => {
+    // [the read the diff takes, what page_changes is]
+    const table: [NonNullable<Twist['read']>, unknown][] = [
+      [{ url: 'https://private.test/inbox' }, undefined],
+      [{ url: 'https://other.test/a' }, undefined],
+      [{ cut: { elements: true } }, { page_id: expect.any(String), url: 'https://news.test/a', note: 'The page is too big to compare all of it: call snapshot to see it.' }],
+    ];
+    for (const [read, says] of table) {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = read;
+      const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+      expect(out.data['page_changes'], JSON.stringify(read)).toEqual(says);
+      // Nothing of it kept: the agent's refs are its own snapshot's still.
+      twist.read = {};
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'], JSON.stringify(read)).toMatchObject({ lines: [] });
+    }
   });
 
   it('after an action, what changed since the agent’s last snapshot (M2g-1: the default, never with no snapshot to compare)', async () => {
     const t = await acting();
     // acting() took a snapshot: nothing changed after a hover.
-    expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toEqual([]);
+    // Its own envelope (S-4): which page and address it's of, and its lines.
+    expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toEqual({ page_id: expect.any(String), url: 'https://news.test/a', lines: [] });
     // The page shows a new button: its line, with its ref.
     ELEMENTS.push({ role: 'button', name: 'Raise' });
     try {
-      const changes = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'] as string[];
-      expect(changes).toEqual([`+ - button "Raise" [ref=e${ELEMENTS.length}]`]);
+      const changes = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'] as { lines: string[] };
+      expect(changes.lines).toEqual([`+ - button "Raise" [ref=e${ELEMENTS.length}]`]);
     } finally {
       ELEMENTS.pop();
     }
@@ -1948,11 +2080,29 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(t.agent.state('n1').cards).toEqual([]);
     });
 
-    it('a Send data card waits its own full wait, never a call’s budget for cards (Neon’s review of M2g-1, B2)', async () => {
+    it('a Send data card waits its own full wait, never a call’s budget for cards, for an action and for navigate (Neon’s review of M2g-1, B2; round 1, B-5)', async () => {
+      // An action's (fake timers: invariant 9, S-6): not answered by the call's 30 ms, answered at its own 400.
       const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 30, sendWaitMs: 400, act: { siteAllowed: () => true } });
-      const began = Date.now();
-      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.');
-      expect(Date.now() - began).toBeGreaterThanOrEqual(350);
+      vi.useFakeTimers();
+      let settled = false;
+      const done = t.call('click', { tab_id: t.tab, ref: 'e1' }).finally(() => void (settled = true));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(refusal(await done).refused).toBe(ACT_REFUSALS.sendsDropped);
+      vi.useRealTimers();
+      // navigate's, the same.
+      const u = await acting({ deep: { postsOnLoad: true }, answer: 'hold', cardWaitMs: 30, sendWaitMs: 400, act: { siteAllowed: () => true } });
+      vi.useFakeTimers();
+      settled = false;
+      const went = u.call('navigate', { tab_id: u.tab, url: 'https://news.test/b' }).finally(() => void (settled = true));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(refusal(await went).refused).toBe(ACT_REFUSALS.sendsDropped);
+      expect(u.cards.filter((c) => c.step?.why === 'send')).toHaveLength(1);
+      // Its subject a JSON tuple (N-5).
+      expect(JSON.parse(u.cards.find((c) => c.step?.why === 'send')!.subject)).toEqual(['n1', 'navigate', 'sends', expect.stringMatching(/^[0-9a-f]{8}$/)]);
     });
 
     it('a send card in an action holds live requests, so it waits CONTROL_WAIT_MS even where site and step cards wait as long as it takes (the assistant: D2, the reviews of #147)', async () => {
@@ -2110,6 +2260,124 @@ describe('acting through the gate (S18 M2c)', () => {
     } finally {
       ELEMENTS.pop();
     }
+  });
+
+  // ---------- batch (M2g-1; Neon's round 1, B-7) ----------
+
+  describe('batch: each step through every gate, stopping at the first that can’t go', () => {
+    type T = Awaited<ReturnType<typeof acting>>;
+    const batch = (t: T, steps: unknown, cancelled = new AbortController().signal, tab: unknown = t.tab) => runBatch(t.scope, t.browser, { tab_id: tab, steps }, cancelled);
+    const ok = (out: { text?: string }) => (JSON.parse(out.text!) as { data: Record<string, unknown> }).data;
+    const clicks = (t: T) => t.at.input.filter((e) => (e as { type: string }).type === 'mouseDown').length;
+
+    it('bounds, the tools it takes and each step’s shape, all checked before any step runs', async () => {
+      const t = await acting({ act: { siteAllowed: () => true } });
+      const table: [unknown, string][] = [
+        [[], 'batch takes 1 to 20 steps.'],
+        [Array.from({ length: 21 }, () => ({ tool: 'hover', ref: 'e1' })), 'batch takes 1 to 20 steps.'],
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'navigate', url: 'https://news.test/b' }], 'Step 2: batch takes click, type, press_key, select_option, hover.'],
+        [[{ tool: 'click', ref: 'e1' }, 'click'], 'Step 2: each step is an object with its tool and arguments.'],
+        ['steps', 'batch takes 1 to 20 steps.'],
+      ];
+      for (const [steps, says] of table) expect((await batch(t, steps)).text, JSON.stringify(steps).slice(0, 60)).toBe(says);
+      // None ran: a bad step 2 never leaves step 1 done.
+      expect(clicks(t)).toBe(0);
+    });
+
+    it('the batch’s tab is every step’s: a step’s own tab_id is ignored', async () => {
+      const t = await acting({ act: { siteAllowed: () => true } });
+      const out = ok(await batch(t, [{ tool: 'click', ref: 'e1', tab_id: 'a9' }, { tool: 'hover', ref: 'e1' }]));
+      expect(out).toMatchObject({ tab_id: t.tab, done: ['Clicked “Home”', 'Pointed at “Home”'] });
+      expect(out['page_changes']).toMatchObject({ lines: [] });
+    });
+
+    it('the site card once for the batch; a risky step asks its own, and a no stops the batch there', async () => {
+      const t = await acting();
+      expect(ok(await batch(t, [{ tool: 'hover', ref: 'e1' }, { tool: 'click', ref: 'e1' }]))['done']).toEqual(['Pointed at “Home”', 'Clicked “Home”']);
+      expect(t.cards.filter((c) => c.kind === 'site')).toHaveLength(1);
+      const u = await acting({ answer: 'deny', act: { siteAllowed: () => true } });
+      const out = await batch(u, [{ tool: 'hover', ref: 'e1' }, { tool: 'type', ref: 'e2', text: 'wool', submit: true }, { tool: 'click', ref: 'e1' }]);
+      expect(out.text).toBe('Step 2 (type) was refused: The user said no to this step. Don’t try it another way; ask the user what to do. Steps 1 to 1 went: Pointed at “Home”.');
+      expect(clicks(u)).toBe(0);
+    });
+
+    it('what a step sends is held and asked about, as for its own call', async () => {
+      const t = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
+      const out = await batch(t, [{ tool: 'click', ref: 'e1' }, { tool: 'hover', ref: 'e1' }]);
+      expect(out.text).toMatch(/^Step 1 \(click\) was refused: .* None before it went\.$/);
+      expect(t.at.debugging).toContain('Fetch.fulfillRequest');
+      expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+    });
+
+    it('Stop, the client’s cancel, the user pausing the agent or taking the tab over: the next step never runs', async () => {
+      // [what happens during step 1, what step 2 says]
+      const cases: [string, (t: T, cancel: AbortController) => void, string][] = [
+        ['stop', (t) => t.agent.stop(), CONTROL_REFUSALS.stopped],
+        ['cancel', (_t, cancel) => cancel.abort(), CONTROL_REFUSALS.stopped],
+        ['pause', (t) => t.agent.pause('n1', true), CONTROL_REFUSALS.paused],
+        // The user took the tab over (a background reload too): its cards let go of, the agent not paused.
+        ['takeover', (t) => t.agent.cancelCardsFor('n1'), ACT_REFUSALS.takenOver],
+      ];
+      for (const [what, during, says] of cases) {
+        const cancel = new AbortController();
+        const t: T = await acting({ act: { siteAllowed: () => true } });
+        // Once step 1 is done (its line in what the agent did, the last thing a step does): between the steps.
+        const line = t.scope.activity;
+        let fired = false;
+        (t.scope as { activity: typeof line }).activity = async (...a) => {
+          await line(...a);
+          if (!fired) {
+            fired = true;
+            during(t, cancel);
+          }
+        };
+        const out = await batch(t, [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'e1' }], cancel.signal);
+        expect(out.isError, what).toBe(true);
+        // Stop and the client's cancel end the whole call, step 1's answer too (stopped); the others stop it before step 2.
+        if (what === 'stop' || what === 'cancel') expect(out.text, what).toContain(says);
+        else expect(out.text, what).toBe(`Step 2 (click) didn’t run: ${says} Steps 1 to 1 went: Clicked “Home”.`);
+        expect(clicks(t), what).toBe(1);
+      }
+    });
+
+    it('a step that took the page elsewhere stops the batch after it: the rest named refs of the page before', async () => {
+      let fired = false;
+      const t = await acting({
+        act: { siteAllowed: () => true },
+        onAct: (events, op) => {
+          if (op === 'hit' && !fired) {
+            fired = true;
+            setTimeout(() => events.emit('did-navigate'), 0);
+          }
+        },
+      });
+      const out = ok(await batch(t, [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'e1' }]));
+      expect(out).toMatchObject({ done: ['Clicked “Home”'], stopped_after: 1, why: 'The page changed: call snapshot before the rest.' });
+      expect(clicks(t)).toBe(1);
+    });
+  });
+
+  it('a step’s key and its checks name the element: its name, its items and its place (Neon’s round 1 of M2g-1, B-2)', async () => {
+    // The same ref (refs stay), its element moved to another row, or renamed: another step, never one a late Allow covers.
+    let row = 'Draft 1';
+    const t = await acting({ answer: 'deny', act: { siteAllowed: () => true }, twist: { place: () => ({ items: JSON.stringify([['row', row]]), path: '[["div",""]]' }) } });
+    await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'go', submit: true });
+    row = 'Production DB';
+    await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'go', submit: true });
+    const name = ELEMENTS[1]!.name;
+    ELEMENTS[1]!.name = 'Search all';
+    try {
+      await t.call('type', { tab_id: t.tab, ref: 'e2', text: 'go', submit: true });
+    } finally {
+      ELEMENTS[1]!.name = name;
+    }
+    const subjects = t.cards.filter((c) => c.kind === 'step').map((c) => c.subject);
+    expect(subjects).toHaveLength(3);
+    expect(new Set(subjects).size).toBe(3);
+    // Moved between the check and the press (its place now another): nothing goes in.
+    const u = await acting({ act: { siteAllowed: () => true }, twist: { place: () => ({ items: u.steps.filter((x) => x === 'describe').length > 1 ? '[["row","Production DB"]]' : '[["row","Draft 1"]]', path: '[]' }) } });
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.stepChanged);
+    expect(u.at.input.filter((e) => (e as { type: string }).type === 'mouseDown')).toEqual([]);
   });
 
   it('type with submit: the card shows the text, and a late Allow is for that text only', async () => {

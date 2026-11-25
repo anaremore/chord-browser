@@ -258,9 +258,9 @@ test('Always on this site: offered to an agent you always allow, kept, listed in
  * changed since (M2g-1), its gone lines left out.
  */
 function waitAnswer(text: string): { met: boolean; lines: string } {
-  const w = JSON.parse(text) as { content?: string; wait?: { met: boolean }; data?: { met: boolean; page_changes?: string[] } };
+  const w = JSON.parse(text) as { content?: string; wait?: { met: boolean }; data?: { met: boolean; page_changes?: { lines?: string[] } } };
   if (w.content !== undefined) return { met: w.wait?.met === true, lines: w.content };
-  return { met: w.data?.met === true, lines: (w.data?.page_changes ?? []).filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).join('\n') };
+  return { met: w.data?.met === true, lines: (w.data?.page_changes?.lines ?? []).filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).join('\n') };
 }
 
 /** A list of rows of links, buttons and text: `rows` of 5 elements each. */
@@ -1464,21 +1464,63 @@ test('the token eval: its journeys, each as an agent would play it with the tool
         await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
         return /Call.*bet 20.*Raise/.test(String(await inPage('/game', 'document.getElementById("log").textContent')));
       }
-      // No snapshot at all: each control by its role and name (M2g-1), each result saying what changed.
-      const called = JSON.parse((await act('click', { tab_id: tab, role: 'generic', name: 'Call' })).text) as { data: { page_changes?: unknown } };
-      if (called.data.page_changes !== undefined) throw new Error('a diff with no snapshot to compare with');
-      await act('type', { tab_id: tab, role: 'textbox', name: 'Bet', text: '20' });
-      await act('press_key', { tab_id: tab, role: 'textbox', name: 'Bet', key: 'Enter' });
-      await act('click', { tab_id: tab, role: 'generic', name: 'Raise' });
+      // As an agent would (Neon's round 1, B-8): it looks first, knowing nothing of the page, then acts by the refs it
+      // saw; each action's result says what changed, so no second look.
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+      await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
+      await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
       const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
       return /Call.*bet 20.*Raise/.test(log);
     });
     // Never by a name that isn't what it shows (B3): its aria-label says Pay, it shows Join.
+    // Never by a name the element doesn't visibly show (B3; Neon's round 1, B-1): each way a page can name an element
+    // for what it doesn't show is refused, and nothing is pressed or typed. A shown label is found.
     if (lean) {
+      const NOT_SHOWN = 'That element’s name isn’t what it shows on the page (it comes from a label, title or text that’s hidden), so it isn’t found by its name. Call snapshot and use its ref.';
       const tab = await open('/aria');
-      const byLabel = await ask('click', { tab_id: tab, role: 'button', name: 'Pay' });
-      expect(byLabel.text).toBe('That element’s name isn’t what it shows (it comes from its aria-label), so it isn’t found by its name. Call snapshot and use its ref.');
-      expect(String(await inPage('/aria', 'document.getElementById("log").textContent'))).toBe('');
+      // [tool, role, name: how the page names it]
+      const spoofs: [string, string, string][] = [
+        ['click', 'button', 'Pay'], // aria-label
+        ['click', 'button', 'Pay labelled'], // aria-labelledby
+        ['click', 'button', 'Pay title'], // title
+        ['type', 'textbox', 'Pay placeholder'], // an editor's aria-placeholder
+        ['click', 'button', 'Pay alt'], // a picture's alt in a button
+        ['click', 'button', 'Pay image'], // input type=image's alt
+        ['type', 'textbox', 'Pay hidden label'], // a hidden <label>
+        ['click', 'button', 'Pay invisible'], // visibility:hidden words
+        ['click', 'button', 'Pay clear'], // opacity:0 words
+      ];
+      for (const [tool, role, name] of spoofs) {
+        const said = await ask(tool, { tab_id: tab, role, name, ...(tool === 'type' ? { text: 'x' } : {}) });
+        expect(said.text, `${role} "${name}"`).toBe(NOT_SHOWN);
+      }
+      const typed = 'document.getElementById("log").textContent + "|" + document.getElementById("f1").value + "|" + document.querySelector("[contenteditable]").textContent + "|" + document.getElementById("f2").value';
+      expect(String(await inPage('/aria', typed))).toBe('|||');
+      // A label that shows: found by it.
+      expect((await act('type', { tab_id: tab, role: 'textbox', name: 'Shown label', text: 'ok' })).error).toBe(false);
+      expect(String(await inPage('/aria', typed))).toBe('|||ok');
+      // A whole page that's an editor, named by its aria-label.
+      const body = await open('/aria-body');
+      expect((await ask('type', { tab_id: body, role: 'textbox', name: 'Pay body', text: 'x' })).text).toBe(NOT_SHOWN);
+      expect(String(await inPage('/aria-body', 'document.body.textContent'))).toBe('Draft');
+      // Nor does wait_for look at a page's text when the page is an editor (B-3): what shows is what's typed there.
+      const EDITOR = 'That page is an editor: what shows in it is what’s typed there, so wait_for looks only for an element by its role and name there.';
+      expect((await ask('wait_for', { tab_id: body, text: 'Draft', timeout_ms: 1000 })).text).toBe(EDITOR);
+      const design = await open('/design');
+      expect((await ask('wait_for', { tab_id: design, text: 'typed secret', timeout_ms: 1000 })).text).toBe(EDITOR);
+      // Never what doesn't show (S-5): a frame's fallback text, a button with no size.
+      const ghosts = await open('/ghosts');
+      for (const want of [{ text: 'Ghost text' }, { role: 'button', name: 'Ghost' }]) {
+        expect(JSON.parse((await ask('wait_for', { tab_id: ghosts, ...want, timeout_ms: 500 })).text), JSON.stringify(want)).toMatchObject({ data: { met: false } });
+      }
+      expect(JSON.parse((await ask('wait_for', { tab_id: ghosts, text: 'Shown text', timeout_ms: 500 })).text)).toMatchObject({ data: { met: true } });
+      // A change inside an open shadow root wakes a look (N-6): met well before the page's one-second chunk ends.
+      await inPage('/ghosts', 'setTimeout(() => { document.getElementById("host").shadowRoot.querySelector("p").textContent = "Shadow ready"; }, 200); 0');
+      const shadow = JSON.parse((await ask('wait_for', { tab_id: ghosts, text: 'Shadow ready', timeout_ms: 3000 })).text) as { data: { met: boolean; waited_ms: number } };
+      expect(shadow.data.met).toBe(true);
+      expect(shadow.data.waited_ms).toBeLessThan(800);
     }
     await journey('timed table, two turns', async () => {
       const tab = await open('/timed?others=1500');
@@ -1513,11 +1555,18 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const filled = await act('batch', { tab_id: tab, steps: Array.from({ length: 20 }, (_, i) => ({ tool: 'type', ref: refOf(o, `textbox "Field ${i + 1}"`), text: `v${i + 1}` })) });
       if (filled.error) throw new Error(filled.text);
       const values = (await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string;
-      // A step refused stops the batch there, and says which went (a ref never given, in the middle).
-      const stopped = await act('batch', { tab_id: tab, steps: [{ tool: 'type', ref: refOf(o, 'textbox "Field 1"'), text: 'w1' }, { tool: 'type', ref: 'e999', text: 'x' }, { tool: 'type', ref: refOf(o, 'textbox "Field 3"'), text: 'w3' }] });
-      const after = (await inPage('/form20', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')) as string;
-      return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',') && stopped.error && /^Step 2 \(type\) was refused: .* Steps 1 to 1 went: Typed in “Field 1”\.$/.test(stopped.text) && after === 'w1,v2,v3';
+      return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
     });
+    // Not metered (Neon's round 1, B-8): a step refused stops the batch there, and says which went (a ref never given,
+    // in the middle).
+    if (lean) {
+      const tab = await open('/form20?again=1');
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const stopped = await act('batch', { tab_id: tab, steps: [{ tool: 'type', ref: refOf(o, 'textbox "Field 1"'), text: 'w1' }, { tool: 'type', ref: 'e999', text: 'x' }, { tool: 'type', ref: refOf(o, 'textbox "Field 3"'), text: 'w3' }] });
+      expect(stopped.error).toBe(true);
+      expect(stopped.text).toMatch(/^Step 2 \(type\) was refused: .* Steps 1 to 1 went: Typed in “Field 1”\.$/);
+      expect(await inPage('/form20?again=1', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')).toBe('w1,,');
+    }
     await journey('a page that draws itself after it loads', async () => {
       const tab = await open('/drawn');
       let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
@@ -1535,8 +1584,12 @@ test('the token eval: its journeys, each as an agent would play it with the tool
         const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
         return (await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') })).text.startsWith('{');
       }
-      // The row the agent wants, by its button's name: no outline needed (find, or a ref from one, would do too).
-      const clicked = await act('click', { tab_id: tab, role: 'button', name: 'Act 150' });
+      // As an agent would (B-8): it looks first; the outline shows 5 rows of 300 and says how many more, so it asks for
+      // the one it wants by its words (find), then clicks it by its ref.
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      if (o.includes('Act 150')) throw new Error('the 300 rows weren’t collapsed');
+      const found = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Act 150' })).text);
+      const clicked = await act('click', { tab_id: tab, ref: refOf(found, 'button "Act 150"') });
       return clicked.text.startsWith('{');
     });
     await journey('a picture of the view', async () => {
@@ -2468,7 +2521,24 @@ test.beforeAll(async () => {
     // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
     // The token eval (the owner, 2026-11-24): a 20-field form, and a lobby that draws itself 600 ms after it loads.
     // A name that isn't what it shows (Neon's B3 for M2g-1): never found by it.
-    '/aria': '<title>Aria</title><main><button aria-label="Pay">Join</button><p id=log></p></main><script>document.querySelector("button").onclick = () => { document.getElementById("log").textContent += " clicked"; };</script>',
+    // Elements named for what they don't show (B-1), one of each kind, and a label that shows.
+    '/aria':
+      '<title>Aria</title><main>' +
+      '<button aria-label="Pay">Join</button>' +
+      '<span id=lb hidden>Pay labelled</span><button aria-labelledby=lb>Join 2</button>' +
+      '<button title="Pay title" style="width:40px;height:20px"></button>' +
+      '<div contenteditable role=textbox aria-placeholder="Pay placeholder" style="width:80px;height:20px;border:1px solid"></div>' +
+      '<button><img alt="Pay alt" width=16 height=16 src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></button>' +
+      '<input type=image alt="Pay image" width=20 height=20 src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">' +
+      '<label for=f1 hidden>Pay hidden label</label><input id=f1>' +
+      '<button><span style="visibility:hidden">Pay invisible</span></button>' +
+      '<button><span style="opacity:0">Pay clear</span></button>' +
+      '<label>Shown label <input id=f2></label>' +
+      '<p id=log></p></main>' +
+      '<script>const log = (s) => { document.getElementById("log").textContent += " " + s; }; document.querySelectorAll("button, input[type=image]").forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); log("clicked"); })); document.querySelector("main").addEventListener("submit", (e) => e.preventDefault());</script>',
+    '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
+    '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
+    '/ghosts': '<title>Ghosts</title><main><p>Shown text</p><iframe srcdoc="<p>in the frame</p>">Ghost text</iframe><button style="width:0;height:0;padding:0;border:0;overflow:hidden">Ghost</button><div id=host></div></main><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<p>Shadow wait</p>";</script>',
     '/form20': `<title>Sign up</title><main><form onsubmit="return false"><h1>Sign up</h1>${Array.from({ length: 20 }, (_, i) => `<label>Field ${i + 1} <input name=f${i + 1}></label>`).join('')}</form></main>`,
     '/drawn': '<title>Lobby</title><div id=app></div><p id=log></p><script>setTimeout(() => { document.getElementById("app").innerHTML = "<h1>Lobby</h1><button>Join table</button>"; document.querySelector("#app button").onclick = () => { document.getElementById("log").textContent += " joined"; }; }, 600)</script>',
     '/timed': '<title>Timed table</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div role=region aria-label="Table 9"><p id=status>Waiting for the others</p><div id=controls></div></div><p id=log></p></main><script src="/timed.js"></script>',

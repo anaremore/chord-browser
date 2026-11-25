@@ -108,6 +108,8 @@ export interface ControlScope {
    * of M2g-1, B2): no answer drops what the page sent, so it always gets its full wait.
    */
   readonly sendWaitMs?: number;
+  /** wait_for is offered (outside agents alone: Neon's round 1 of M2g-1, B-4); absent, it's refused as no such tool. */
+  readonly waits?: boolean;
   /** No diff after an action (batch's steps but its last: one diff for the whole batch, M2g-1). */
   readonly noDiff?: boolean;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */

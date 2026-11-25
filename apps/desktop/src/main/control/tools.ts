@@ -78,6 +78,7 @@ import type { ActAnswer, ActOp } from './act';
 import type { DeepAnswer, DeepSession } from './deep';
 import { CARD_ORIGINS, normalUrl, shownOrigin, type Allowed, type SendWatch } from './sends';
 import type { PageRead } from './extract';
+import type { WaitAnswer } from './snapshot';
 import type { AgentInputEvent } from './input';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
 import type { ControlAgent } from './gate';
@@ -153,7 +154,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
         if (spec.name === 'read_form' || spec.name === 'propose_fill') return await formTool(call, spec.name, args);
         if (spec.name === 'page_diagnostics') return await diagnosticsTool(call, args);
         if (spec.name === 'snapshot') return await snapshotTool(call, args);
-        if (spec.name === 'wait_for') return await waitForTool(call, args);
+        if (spec.name === 'wait_for') return scope.waits ? await waitForTool(call, args) : refuse('There’s no tool called wait_for.');
         if (spec.level === 'act') return await actTool(call, spec.name as ActTool, args);
         return await readTool(call, spec.name, args);
       } catch (error) {
@@ -444,7 +445,9 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   const outline = snapshotOutline(read, issued, find ? { find } : {});
   const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : snapshotNote(read.cut);
   const retrievedAt = Date.now();
-  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}) });
+  // Its later ranges are of the page's whole outline, never a find's (N-3).
+  const whole = find ? snapshotOutline(read, issued) : outline;
+  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}) });
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
@@ -472,13 +475,21 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
   const read = await page.snapshot(call.scope.agent.id, token, false);
   if (!read || call.stopped() || page.id !== kept.pageId) return null;
+  // Read under a read's rules (Neon's round 1 of M2g-1, B-6): never from a page that may not be read, nor of another
+  // origin than the snapshot it's compared with. Nothing of it is kept then.
+  if (blockedNow(call, nodeId, page, 'That page could not be read.', read.url)) return null;
+  if (originOf(read.url) !== originOf(kept.url)) return null;
+  // Its own envelope (S-4): the page and address it's of.
+  const of = { page_id: page.id, url: read.url };
+  // A read cut short (too big, or too slow) would show what it didn't reach as gone.
+  if (read.cut.elements || read.cut.time || read.cut.refs) return { page_changes: { ...of, note: 'The page is too big to compare all of it: call snapshot to see it.' } };
   const issued = refs.issue(page.id, token, snapshotKeys(read), sidsOf(read), false);
   const lines = snapshotLines(read, issued);
   const outline = snapshotOutline(read, issued);
   refs.remember({ pageId: page.id, retrievedAt: Date.now(), url: read.url, title: read.title, text: outline.text, refs: outline.refs, lines });
   const changes = snapshotDiff(kept.lines, lines);
-  if (changes.length > DIFF_MAX_LINES) return { page_changes: { lines: changes.length, note: 'Much of the page changed: call snapshot to see it.' } };
-  return { page_changes: changes };
+  if (changes.length > DIFF_MAX_LINES) return { page_changes: { ...of, changed: changes.length, note: 'Much of the page changed: call snapshot to see it.' } };
+  return { page_changes: { ...of, lines: changes } };
 }
 
 /** The roles an element is found by, by its name (M2g-1, Neon's B3): what's clicked, typed in or chosen. */
@@ -498,15 +509,22 @@ async function refByName(call: Call, nodeId: NodeId, page: NonNullable<Awaited<R
   const refs = (call.scope.memory.elements ??= new Map()).get(nodeId) ?? new ElementRefs();
   call.scope.memory.elements.set(nodeId, refs);
   const token = randomBytes(12).toString('hex');
-  const read = await page.snapshot(call.scope.agent.id, token, false);
+  // The page it's read on, taken first (Neon's round 1 of M2g-1, B-2): one that went elsewhere meanwhile, or whose
+  // read came from a page that may not be read, gives no element.
+  const pageId = page.id;
+  // Its own slot (S-1): never in place of the agent's snapshot or a diff's.
+  const read = await page.snapshot(call.scope.agent.id, token, 'named');
   if (!read) return refuse('That page could not be read.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  const blocked = blockedNow(call, nodeId, page, 'That page could not be read.', read.url);
+  if (blocked) return refuse(blocked);
+  if (page.id !== pageId) return refuse(ELEMENT_REFUSALS.stale);
   if (read.cut.elements || read.cut.time || read.cut.refs) return refuse('That page is too big to find an element by its name. Call snapshot and use its ref.');
   const found = read.nodes.filter((n) => n.key !== undefined && n.role === role && n.name === name);
   if (found.length === 0) return refuse(`There’s no ${role} named that on the page that can be acted on. Call snapshot to see its elements.`);
   if (found.length > 1) return refuse(`There are ${found.length} of them with that role and name. Call snapshot and use the one’s ref.`);
-  if (found[0]!.aria) return refuse('That element’s name isn’t what it shows (it comes from its aria-label), so it isn’t found by its name. Call snapshot and use its ref.');
-  const issued = refs.issue(page.id, token, snapshotKeys(read), sidsOf(read), false);
+  if (!found[0]!.seen) return refuse('That element’s name isn’t what it shows on the page (it comes from a label, title or text that’s hidden), so it isn’t found by its name. Call snapshot and use its ref.');
+  const issued = refs.issueNamed(page.id, token, snapshotKeys(read), sidsOf(read));
   const ref = issued.get(found[0]!.key!);
   return ref ?? refuse('That field is one the user fills (a password, code or card field). Ask them to.');
 }
@@ -541,28 +559,40 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   const node = found;
   if (!scope.readable(node)) return refuse(unreadable(scope, node));
   if (browser.readers.viewFor(node.id)) return refuse('That tab is in reader view, which hides its page. Ask the user to close reader view first.');
-  const what = text !== undefined ? `“${text}”` : `${role} “${name}”`;
-  const refused = await call.card('snapshot', node, `Wait for ${what} in “${node.title || safeHost(node.url)}”`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
+  // Chord's words on the card and in the activity, never the agent's (what it waits for: B-4).
+  const refused = await call.card('snapshot', node, `Watch “${node.title || safeHost(node.url)}” for a change`, [node.url], 'The user said no to reading that tab. Carry on without it, or ask them.');
   if (refused) return refused;
+  // The agent's one wait, held from here (S-2): a second started meanwhile is refused, even while this one loads.
   if (waiting.has(scope.agent)) return refuse('You’re waiting already: one wait at a time.');
-  const page = await loadedPage(browser, node.id);
-  if (!page) return refuse('That tab could not be loaded.');
-  const before = blockedNow(call, node.id, page, 'That tab could not be loaded.');
-  if (before) return refuse(before);
-  const pageId = page.id;
-  const document = page.mark.document;
-  const began = Date.now();
-  const want = text !== undefined ? { text, gone } : { role: role!, name: name!, gone };
   waiting.add(scope.agent);
-  scope.act?.doing(node.id, { tool: 'wait_for' });
-  let answer: { met: boolean; cut: boolean } | null = null;
+  let looked: WaitAnswer | null = null;
+  let page: Awaited<ReturnType<typeof loadedPage>> = null;
+  let pageId = '';
+  const began = Date.now();
   try {
+    page = await loadedPage(browser, node.id);
+    if (!page) return refuse('That tab could not be loaded.');
+    const before = blockedNow(call, node.id, page, 'That tab could not be loaded.');
+    if (before) return refuse(before);
+    pageId = page.id;
+    const document = page.mark.document;
+    // The user taking the tab over (its cards let go of) ends it too (S-2).
+    const released = scope.agent.releases(node.id);
+    scope.act?.doing(node.id, { tool: 'wait_for' });
+    // The client's cancel and Stop answer at once (S-2): the page's chunk ends on its own within a second.
+    const cancelled = new Promise<null>((resolve) => {
+      if (call.signal.aborted) resolve(null);
+      else call.signal.addEventListener('abort', () => resolve(null), { once: true });
+    });
+    let after = 0;
     for (;;) {
       const left = timeout - (Date.now() - began);
       if (left <= 0) break;
-      answer = await page.waitFor(want, Math.min(WAIT_CHUNK_MS, left));
+      const want = text !== undefined ? { text, gone, after } : { role: role!, name: name!, gone, after };
+      const answer = await Promise.race([page.waitFor(want, Math.min(WAIT_CHUNK_MS, left)), cancelled]);
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
       if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+      if (scope.agent.releases(node.id) !== released) return refuse(ACT_REFUSALS.takenOver);
       // During, and after: the tab closed, the page went somewhere it may not be read, or somewhere else at all.
       const during = blockedNow(call, node.id, page, 'That page could not be read.');
       if (during) return refuse(during);
@@ -570,19 +600,28 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
       // since what's waited for often comes with it (its refs are stale then: said in the result).
       if (page.mark.document !== document) return { text: toolResult({ tab_id: scope.refs.refFor(node.id), met: false, waited_ms: Date.now() - began, navigated: true, note: 'The page changed while you waited: call snapshot again.' }) };
       if (!answer) return refuse('That page didn’t answer while you waited.');
+      if (answer.editor) return refuse('That page is an editor: what shows in it is what’s typed there, so wait_for looks only for an element by its role and name there.');
+      if (answer.looked !== false) looked = answer;
       if (answer.met) break;
+      // The next chunk's first look waits out the throttle from this one's last (S-2).
+      after = answer.looked === false ? after : Math.max(0, Math.round(Math.max(150, 4 * (answer.ms ?? 0)) - (answer.since ?? 0)));
     }
   } finally {
     waiting.delete(scope.agent);
     scope.act?.doing(node.id, null);
   }
   const waited = Date.now() - began;
-  const met = answer?.met === true;
+  const met = looked?.met === true;
   scope.memory.read.add(node.id);
-  await call.activity('wait_for', `Waited for ${what} in “${node.title || safeHost(node.url)}”`, met ? `after ${waited} ms` : `not after ${waited} ms`, met);
+  await call.activity('wait_for', `Watched “${node.title || safeHost(node.url)}” for a change`, met ? `met after ${waited} ms` : `not met after ${waited} ms`, met);
   const moved = page.id !== pageId;
-  const note = answer?.cut ? 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' : moved ? 'The page went to another address while you waited (the same document): refs from before are stale.' : undefined;
-  const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(moved ? { navigated: true } : {}), ...(note ? { note } : {}) };
+  // Every note that's so (S-3): a cut look says what it couldn't tell, waiting to show or to go; a pushState, that refs
+  // went with it.
+  const notes = [
+    ...(looked?.cut && !met ? [gone ? 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' : 'The page is too big to look at all of it: it may be in the part not looked at.'] : []),
+    ...(moved ? ['The page went to another address while you waited (the same document): refs from before are stale.'] : []),
+  ];
+  const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(moved ? { navigated: true } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) };
   if (!met || args['snapshot'] !== true) return { text: toolResult(result) };
   // Met, with what changed since the agent's last snapshot of this page (the owner's token goal); with none, the outline
   // as snapshot gives it (its refs the tab's latest): always the outline after a pushState (its refs went with it).
@@ -719,7 +758,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           description: `go to ${barAddress(goingTo)}`,
           target: [page.url()],
           tab: node.id,
-          subject: `${node.id}|${page.id}|${tool}|${goingTo}`,
+          subject: JSON.stringify([node.id, page.id, tool, goingTo]),
           step: { why: goingWhy, site: goingSite, fields: [], more: 0 },
         },
         call.signal,
@@ -771,13 +810,14 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
                 description: tool === 'navigate' ? `go to ${barAddress(target)}` : 'go back',
                 target: [page.url()],
                 tab: node.id,
-                subject: `${node.id}|${tool}|sends|${randomBytes(4).toString('hex')}`,
+                subject: JSON.stringify([node.id, tool, 'sends', randomBytes(4).toString('hex')]),
                 step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
                 takeDown,
               },
               AbortSignal.any([call.signal, w.cancelled]),
-              // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks.
-              scope.cardWaitMs ?? CONTROL_WAIT_MS,
+              // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks; an
+              // outside agent's its full wait, never a call's budget for cards (M2g-1, B2; round 1, B-5).
+              scope.sendWaitMs ?? scope.cardWaitMs ?? CONTROL_WAIT_MS,
             ),
           halt,
           originOf(page.url()),
@@ -1225,7 +1265,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           target: [page.url()],
           tab: node.id,
           // Never late: what was held is dropped when no one answers, so a late Allow would have nothing to send.
-          subject: `${stepKey}|sends|${randomBytes(4).toString('hex')}`,
+          // Subjects as JSON (N-5): no value runs into the next.
+          subject: JSON.stringify([stepKey, 'sends', randomBytes(4).toString('hex')]),
           // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or isn't the page's.
           step: why ? { why, site: shownOrigin(sites[0] ?? '', page.url()), fields: [], more: 0, going: barAddress(held.find((h) => h.why)?.url ?? '') } : { why: 'send', site: shownOrigin(originOf(page.url()), page.url()), fields: [], more: 0, sends: sites.map((o) => shownOrigin(o, page.url())) },
           show: () => void actOn({ op: 'point', highlight: true }),
@@ -1598,11 +1639,14 @@ function originOf(url: string): string {
   }
 }
 
+/**
+ * The step's element as a card shows it and a late Allow covers it: its name, the items it's in and its place (Neon's
+ * round 1 of M2g-1, B-2: refs stay, so the same ref after a rename or a move is another step), then its risk's shape.
+ */
 function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
   const risk = element.risk;
-  if (!risk) return '';
-  const form = risk.form;
-  return JSON.stringify([risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]);
+  const form = risk?.form;
+  return JSON.stringify([element.name, element.items ?? '', element.path ?? '', !risk ? null : [risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]]);
 }
 
 

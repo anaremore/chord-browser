@@ -132,6 +132,35 @@ export const SNAPSHOT_LIB = String.raw`
     }
     return clip(el.getAttribute('title'), NAME_MAX);
   };
+  // What an element visibly shows as its name (Neon's round 1 of M2g-1, B-1): its own words that show, a label of
+  // its that shows, or a button's value. Never aria, a title, alt text, a placeholder, or words hidden by CSS. An
+  // element found by its name must have exactly this name, so a page can't name a button for what it doesn't show.
+  const shownWords = (node) => {
+    if (node.isContentEditable || VALUE_TAGS.has(node.tagName)) return '';
+    let out = '';
+    let steps = 0;
+    const walk = (n) => {
+      for (const c of n.childNodes) {
+        if (out.length > 240 || ++steps > 2000) return;
+        if (c.nodeType === 3) out += c.nodeValue;
+        else if (c.nodeType === 1 && !NO_WORDS.has(c.tagName) && !c.isContentEditable && !c.hidden && (typeof c.checkVisibility !== 'function' || c.checkVisibility({ opacityProperty: true, visibilityProperty: true }))) walk(c);
+      }
+    };
+    walk(node);
+    return clip(out, 120);
+  };
+  const shownNameOf = (el, role) => {
+    if (!shown(el) || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return '';
+    if (TYPED.has(role) && !isField(el)) return '';
+    if (isField(el)) {
+      const type = typeOf(el);
+      if (type === 'submit' || type === 'button' || type === 'reset') return clip(el.value || (type === 'submit' ? 'Submit' : ''), NAME_MAX);
+      if (type === 'image') return '';
+      return clip(labelsOf(el).filter(shown).map(shownWords).filter(Boolean).join(' '), NAME_MAX);
+    }
+    if (ACTED.has(role) || role === 'generic') return clip(shownWords(el), NAME_MAX);
+    return '';
+  };
   const statesOf = (el, role) => {
     const s = [];
     const aria = (name) => el.getAttribute('aria-' + name);
@@ -273,11 +302,11 @@ export const SNAPSHOT_HISTORY = 4;
  * An owner's snapshot by its token, in the page: the latest, or one kept behind it (SNAPSHOT_HISTORY). For act.ts' and
  * deep.ts' scripts: `snapshotFind(owner, token)` there.
  */
-export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; return r || null; };`;
+export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; if (r) return r; const n = globalThis.__chordNamed && globalThis.__chordNamed.get(owner); return n && n.token === token ? n : null; };`;
 
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
-export function snapshotScript(owner: string, token: string, pinned = true): string {
-  const args = { owner, token, pinned, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
+export function snapshotScript(owner: string, token: string, pinned: boolean | 'named' = true): string {
+  const args = { owner, token, pinned: pinned === true, slot: pinned === 'named' ? 'named' : 'history', scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   const started = performance.now();
@@ -360,8 +389,8 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const node = { depth, role, name: nameOf(el, role), sid: sidOf(el) };
-      // A name from aria-label or aria-labelledby, not what it shows (Neon's review of M2g-1, B3): never found by name.
-      if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) node.aria = true;
+      // Its name is what it visibly shows (B3; Neon's round 1, B-1): only such an element is found by its name.
+      if (node.name && (ACTED.has(role) || role === 'generic') && shownNameOf(el, role) === node.name) node.seen = true;
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -448,6 +477,14 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
   // stay behind it, at most SNAPSHOT_HISTORY in all (M2g-1): a ref the agent got from one of them (a diff after an action
   // takes a snapshot too) still names its element there, and one the page replaced is found again from there (#117).
   // The agent's own snapshot (it read it: pinned) stays until its next one; the ones a diff took, the last few.
+  // A read to find an element by its name (S-1): its own slot, the latest only; the snapshots' history untouched.
+  if (args.slot === 'named') {
+    const named = (globalThis.__chordNamed = globalThis.__chordNamed || new Map());
+    named.delete(args.owner);
+    named.set(args.owner, read);
+    while (named.size > args.owners) named.delete(named.keys().next().value);
+    return { url: location.href, title: document.title, nodes, cut };
+  }
   read.pinned = args.pinned;
   const before = reads.get(args.owner);
   const kept = [read];
@@ -469,9 +506,13 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
 }
 
 /** What wait_for looks for (M2g-1): a text, or an element by its role and exact name; and whether it's to show or go. */
-export type WaitFor = { text?: string; role?: string; name?: string; gone: boolean };
-/** One look's answer: met, and whether the look was cut short (then it never proves something gone). */
-export type WaitAnswer = { met: boolean; cut: boolean };
+/** `after`: how long the chunk waits before its first look (the throttle, carried from the chunk before: S-2). */
+export type WaitFor = { text?: string; role?: string; name?: string; gone: boolean; after?: number };
+/**
+ * One chunk's answer: met, and whether its last look was cut short (then it never proves something gone); `ms`, that
+ * look's time, and `since`, how long ago it ended (the next chunk's throttle); `looked` false when there was none.
+ */
+export type WaitAnswer = { met: boolean; cut: boolean; editor?: boolean; ms?: number; since?: number; looked?: boolean };
 
 /**
  * wait_for in the page, for at most `ms` (the caller waits in chunks: tools.ts). It looks as the snapshot does (SNAPSHOT_LIB:
@@ -486,6 +527,10 @@ export function waitScript(want: WaitFor, ms: number): string {
   ${SNAPSHOT_LIB}
   const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
   const want = args.text !== undefined ? norm(args.text) : '';
+  // A page that is an editor (its body editable, or designMode on: Neon's round 1 of M2g-1, B-3): what shows is what's
+  // typed, so its text is never looked at, or a wait would be an oracle on it. Only an element by role and name.
+  const editorPage = document.designMode === 'on' || Boolean(document.body && document.body.isContentEditable);
+  if (editorPage && args.text !== undefined) return done({ met: false, cut: false, editor: true });
   const look = () => {
     const began = performance.now();
     let looked = 0;
@@ -501,6 +546,8 @@ export function waitScript(want: WaitFor, ms: number): string {
         if (found || cut) return;
         if (child.nodeType === 3) {
           if (over()) return;
+          // Never text in an editor (what's typed), wherever it is.
+          if (parent.nodeType === 1 && parent.isContentEditable) continue;
           if (args.text !== undefined && norm(child.nodeValue).includes(want)) found = true;
           continue;
         }
@@ -510,41 +557,63 @@ export function waitScript(want: WaitFor, ms: number): string {
         if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
         let role = roleNow(el);
         if (!role && !keyed && pointerGeneric(el)) role = 'generic';
-        if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name) { found = true; return; }
-        // A field's inside is what's typed in it: never looked at.
-        if (isField(el) || TYPED.has(role)) continue;
+        // One that can be acted on counts only when it's on screen, as the snapshot gives it a ref (S-5).
+        if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name && (!(ACTED.has(role) || role === 'generic') || shown(el))) { found = true; return; }
+        // A field's inside is what's typed in it: never looked at. A frame's is its fallback, never shown (S-5).
+        if (isField(el) || TYPED.has(role) || el.localName === 'iframe' || el.localName === 'frame') continue;
         const inner = keyed || ACTED.has(role) || role === 'generic';
-        if (el.shadowRoot) walk(el.shadowRoot, inner);
+        if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot, inner); }
         walk(el, inner);
       }
     };
     walk(document.body || document.documentElement, false);
-    return { found, cut, ms: performance.now() - began };
+    const ended = performance.now();
+    return { found, cut, ms: ended - began, ended };
   };
   const met = (r) => (args.gone ? !r.found && !r.cut : r.found);
-  let last = look();
-  if (met(last)) return done({ met: true, cut: last.cut });
+  // Open shadow roots a look passed: watched too (N-6), so a change inside a component wakes a look.
+  const roots = new Set();
+  const observed = new Set();
+  const OBSERVE = { subtree: true, childList: true, characterData: true, attributes: true };
+  const observeRoots = () => { if (!watch) return; for (const r of roots) if (!observed.has(r)) { observed.add(r); watch.observe(r, OBSERVE); } };
+  // The chunk's answer: its last look's, how long it took and how long ago it ended (the next chunk's throttle).
+  const answer = (r) => (r ? { met: met(r), cut: r.cut, ms: r.ms, since: performance.now() - r.ended } : { met: false, cut: false, looked: false });
+  let last = null;
   let timer = 0;
   let pending = false;
-  const finish = (r) => { watch.disconnect(); clearTimeout(timer); clearTimeout(end); done({ met: met(r), cut: r.cut }); };
-  const watch = new MutationObserver(() => {
-    if (pending) return;
-    pending = true;
-    timer = setTimeout(() => {
-      pending = false;
-      last = look();
-      if (met(last)) finish(last);
-    }, Math.max(150, 4 * last.ms));
-  });
-  watch.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
-  const end = setTimeout(() => { if (!pending) return finish(last); clearTimeout(timer); last = look(); finish(last); }, args.ms);
+  let watch = null;
+  const finish = (r) => { if (watch) watch.disconnect(); clearTimeout(timer); clearTimeout(end); done(answer(r)); };
+  const first = () => {
+    pending = false;
+    last = look();
+    if (met(last)) return finish(last);
+    watch = new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      timer = setTimeout(() => {
+        pending = false;
+        last = look();
+        if (met(last)) return finish(last);
+        observeRoots();
+      }, Math.max(150, 4 * last.ms));
+    });
+    watch.observe(document, OBSERVE);
+    observeRoots();
+  };
+  // At most one look per throttle across chunks too (S-2): the chunk before's last look may be too recent.
+  const end = setTimeout(() => { if (!last) return finish(null); if (!pending) return finish(last); clearTimeout(timer); last = look(); finish(last); }, args.ms);
+  if (args.after > 0 && args.after < args.ms) { pending = true; timer = setTimeout(first, args.after); }
+  else if (!(args.after >= args.ms)) first();
 })`;
 }
 
 export async function waitInPage(contents: WebContents, want: WaitFor, ms: number): Promise<WaitAnswer | null> {
   if (contents.isDestroyed()) return null;
   const answer = await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: waitScript(want, ms) }]), null, ms + 2000);
-  return answer && typeof answer === 'object' && typeof (answer as WaitAnswer).met === 'boolean' ? (answer as WaitAnswer) : null;
+  if (!answer || typeof answer !== 'object' || typeof (answer as WaitAnswer).met !== 'boolean') return null;
+  const a = answer as WaitAnswer;
+  const num = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) && n >= 0 && n < 60_000 ? n : 0);
+  return { met: a.met, cut: a.cut === true, ms: num(a.ms), since: num(a.since), ...(a.editor === true ? { editor: true } : {}), ...(a.looked === false ? { looked: false } : {}) };
 }
 
 /**
@@ -567,7 +636,7 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned: boolean | 'named' = true): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
   return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned) }]), null, SNAPSHOT_MS));
 }

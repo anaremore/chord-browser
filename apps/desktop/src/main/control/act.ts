@@ -71,7 +71,7 @@ export interface ActRisk {
 }
 
 export type ActAnswer =
-  | { ok: true; role: string; name: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
+  | { ok: true; role: string; name: string; items?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
   | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
@@ -150,7 +150,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const editable = el.isContentEditable || (el.localName === 'textarea' && !el.readOnly) || (el.localName === 'input' && !el.readOnly && TEXT_TYPES.has(String(el.type || '').toLowerCase()));
   const select = el.localName === 'select';
   // A field as it is now, for main's sensitiveField: a page can turn a field into a password field after the snapshot.
-  const said = { role: entry.role, name: entry.name, ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
+  // Its items and place too (Neon's round 1 of M2g-1, B-2): part of the step a card asks about and a late Allow covers.
+  const said = { role: entry.role, name: entry.name, items: itemsOf(el), path: refPath(el), ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
   // What has the focus now, through open shadow roots: text and keys go to it, so it must be this element.
   const deepFocus = () => {
     let f = document.activeElement;
