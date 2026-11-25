@@ -177,9 +177,12 @@ test('the assistant acts in your tab: the site card and Send data card in the ch
     const siteCard = card(/^Let the assistant click and type on /);
     await expect(siteCard).toBeVisible({ timeout: 20_000 });
     await expect(siteCard).toContainText('It wants to click “Raise”.');
-    // Its first moment takes no click (F6): one right away does nothing.
-    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    // Its first moment takes no click (F6), and says so: its buttons can't be pressed yet, and one pressed anyway does
+    // nothing (the release check, 2026-11-25: never dropped unseen).
+    await expect(siteCard.getByRole('button', { name: 'Allow for this chat' })).toHaveAttribute('aria-disabled', 'true');
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click({ force: true });
     await expect(siteCard.getByRole('button', { name: 'Allow for this chat' })).toBeVisible();
+    await expect(siteCard.getByRole('button', { name: 'Allow for this chat' })).not.toHaveAttribute('aria-disabled');
     await shell.waitForTimeout(700);
     await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
     const sendCard = card(/^Send data to /);
