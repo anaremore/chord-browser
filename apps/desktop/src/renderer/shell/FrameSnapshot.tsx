@@ -29,7 +29,7 @@ import type { DrawablePane, DrawableSnapshotEvent } from './snapshot-events';
 const PORT_MESSAGE: typeof SNAPSHOT_PORT_MESSAGE = 'chord:frame-port';
 
 /** The transform that takes a picture drawn at `from` to `to` (its origin is its top-left corner). */
-export function transformFor(from: Rect, to: Rect): string {
+function transformFor(from: Rect, to: Rect): string {
   const sx = from.width > 0 ? to.width / from.width : 1;
   const sy = from.height > 0 ? to.height / from.height : 1;
   return `translate(${to.x - from.x}px, ${to.y - from.y}px) scale(${sx}, ${sy})`;

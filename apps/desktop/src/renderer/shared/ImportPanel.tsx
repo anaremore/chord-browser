@@ -159,7 +159,7 @@ const PROBLEMS: Record<ImportProblem, (browser: string) => string> = {
 };
 
 /** What the progress line says. */
-export function progressText(progress: ImportProgress): string {
+function progressText(progress: ImportProgress): string {
   switch (progress.phase) {
     case 'bookmarks':
       return 'Adding bookmarks and tabs…';

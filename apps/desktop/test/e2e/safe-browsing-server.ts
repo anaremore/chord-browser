@@ -16,7 +16,7 @@ import { encodeRice32 } from '../../src/main/safe-browsing/rice';
 export const THREAT = { malware: 1, phishing: 2, unwanted: 3 } as const;
 const LIST_FOR: Record<number, string> = { 1: 'mw-4b', 2: 'se-4b', 3: 'uws-4b' };
 
-export interface SafeBrowsingRequest {
+interface SafeBrowsingRequest {
   path: string;
   params: URLSearchParams;
   headers: IncomingHttpHeaders;

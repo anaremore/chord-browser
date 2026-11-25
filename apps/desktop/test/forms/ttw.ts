@@ -25,13 +25,13 @@ import { cacheDir, treeHash } from './corpus';
 
 /** bitwarden/test-the-web main, 2026-11-16. */
 export const SITE_COMMIT = '9f78cc52f29c445f1ba768622dab2a3ae31b694a';
-export const SITE_TARBALL_SHA256 = '98c2c439d309a4dfd1ef6205719f391273d5a16a3fa003c90748f6e745930b80';
+const SITE_TARBALL_SHA256 = '98c2c439d309a4dfd1ef6205719f391273d5a16a3fa003c90748f6e745930b80';
 /** What's unpacked at that commit, `client/` and the one API file it imports: every file's path and SHA-256 (corpus.ts's treeHash). */
-export const SITE_TREE_SHA256 = 'cfe1fd07b79554c973b99bfd1338017a6ca242ff4462829617b2fc0f9476304f';
+const SITE_TREE_SHA256 = 'cfe1fd07b79554c973b99bfd1338017a6ca242ff4462829617b2fc0f9476304f';
 /** The client's build imports the API's route names from this one file. */
 const UNPACK = ['client', 'api/constants.ts'];
 
-export const siteDir = join(cacheDir, `ttw-${SITE_COMMIT.slice(0, 12)}`, 'site');
+const siteDir = join(cacheDir, `ttw-${SITE_COMMIT.slice(0, 12)}`, 'site');
 const stamp = join(siteDir, '..', 'built.json');
 
 const sha256 = (data: Buffer) => createHash('sha256').update(data).digest('hex');

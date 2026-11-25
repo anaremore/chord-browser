@@ -18,7 +18,7 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const box = (r: PaneRect): CSSProperties => ({ left: r.x, top: r.y, width: r.width, height: r.height });
 
 /** The size the edge is at: dragged (`live`), or the setting for the docked side. */
-export const dockedSize = (settings: DevtoolsSettings, live: number | null): number => live ?? devtoolsSize(settings);
+const dockedSize = (settings: DevtoolsSettings, live: number | null): number => live ?? devtoolsSize(settings);
 
 /**
  * The edge between the page and its developer tools: invisible until

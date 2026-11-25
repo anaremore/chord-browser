@@ -8,7 +8,7 @@
  */
 
 /** One runner's numbers. */
-export interface Baseline {
+interface Baseline {
   /** Where they were measured: the Linux container, or a CI run. */
   from: string;
   /** When, as YYYY-MM-DD. */
@@ -36,7 +36,7 @@ export const UPDATE_COMMAND = 'pnpm --filter @chord/desktop perf:baseline';
  * 15% or 5 MB, whichever is more, and launch by 25%. Each is several times
  * the run-to-run spread measured (docs/testing/performance.md).
  */
-export const MARGIN = { memoryShare: 0.15, memoryMb: 5, launchShare: 0.25 } as const;
+const MARGIN = { memoryShare: 0.15, memoryMb: 5, launchShare: 0.25 } as const;
 
 export const memoryLimit = (base: number): number => round(base + Math.max(base * MARGIN.memoryShare, MARGIN.memoryMb));
 export const launchLimit = (base: number): number => round(base * (1 + MARGIN.launchShare), 100);

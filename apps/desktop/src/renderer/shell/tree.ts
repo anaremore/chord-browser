@@ -8,7 +8,7 @@
 import { childrenShared, type ChordId, type NodeId, type State } from '@chord/core';
 
 /** One indent level, in px (DESIGN.md §3.2: 12 px per level). */
-export const INDENT = 12;
+const INDENT = 12;
 /** Indents stop growing past this depth; the tree can go deeper. */
 export const MAX_VISUAL_DEPTH = 4;
 

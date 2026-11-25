@@ -43,7 +43,7 @@ const rectOf = (el: Element): Rect => {
 };
 
 /** The first line of an action's title: some put instructions on later lines. */
-export const actionName = (action: ExtensionAction) => action.title.split('\n')[0] || 'Extension';
+const actionName = (action: ExtensionAction) => action.title.split('\n')[0] || 'Extension';
 
 function ActionButton({ action }: { action: ExtensionAction }) {
   const name = actionName(action);
@@ -97,7 +97,7 @@ function AddButton({ bar }: { bar: ExtensionsBarState }) {
 }
 
 /** Whether there's anything to show: extensions in this profile, or a Web Store page to add one from. */
-export const hasExtensionsUi = (bar: ExtensionsBarState) => bar.installed > 0 || bar.offer !== null;
+const hasExtensionsUi = (bar: ExtensionsBarState) => bar.installed > 0 || bar.offer !== null;
 
 /** The sidebar's shelf: pinned buttons, then the puzzle piece at the end. */
 export function ExtensionsShelf({ bar }: { bar: ExtensionsBarState }) {
