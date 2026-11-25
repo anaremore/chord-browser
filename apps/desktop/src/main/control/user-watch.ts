@@ -42,8 +42,9 @@ const PATTERNS = [{ urlPattern: '*', requestStage: 'Request' }];
 /** Auto-attach to frames in other processes (and theirs), held at their start until their requests are held too. */
 /**
  * Auto-attach to frames in other processes (and theirs), held at their start until their requests are held too; and to
- * dedicated workers, which are paused at their start by the same setting and run at once (what they send goes through
- * their page's hold: Claude's B1, round 2 of #150; agents/pickers.ts attaches them the same way).
+ * dedicated workers, which are paused at their start by the same setting and run at once (what they send is paused in
+ * their page's own Fetch session, so it's held as the page's is: Electron 45.5, the final check of #150). Claude's B1,
+ * round 2 of #150; agents/pickers.ts attaches them the same way.
  */
 const AUTO_ATTACH = {
   autoAttach: true,
@@ -100,11 +101,13 @@ interface Lease {
   deps: UserTabDeps;
   /** Until when what the page sends is the assistant's (held): its last action's end and TAIL_MS. */
   sendsUntil: number;
-  /** The clipboard as the lease began (a snapshot), and what the page copied onto it since, if it did. */
-  clipboard: unknown;
+  /** The clipboard as the lease began (a snapshot, being taken), and what the page copied onto it since, if it did. */
+  clipboard: Promise<unknown>;
   pageCopy: unknown;
   /** The page's copy being taken now (putBackClipboard waits for it). */
   copying?: Promise<void>;
+  /** A change the page's top frame didn't make was said (once a lease). */
+  changeSaid?: boolean;
   /** Its downloads' cards, to take down when it ends. */
   cancel: AbortController;
   /** Download cards up now: the lease waits for them (up to CARD_WAIT_MS) before it ends by time. */
@@ -246,7 +249,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     owner,
     deps,
     sendsUntil: 0,
-    clipboard: await takeClipboard(deps),
+    // Taken alongside the set-up, never on the first action's path (invariant 9: the final check of #150).
+    clipboard: takeClipboard(deps),
     pageCopy: undefined,
     cancel: new AbortController(),
     asking: 0,
@@ -285,13 +289,10 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     if (method !== 'Target.attachedToTarget' || !p.sessionId) return;
     const frame = p.sessionId;
     // A dedicated worker: run at once, during the lease or as it lets go; never left waiting (it would stall the page's
-    // feature until a reload: Claude's B1, round 2 of #150).
+    // feature until a reload: Claude's B1, round 2 of #150). What it sends is paused in its page's own Fetch session
+    // (Electron 45.5: the final check of #150; a worker's session has no Fetch at all), so it's held as the page's is.
     if ((params as { targetInfo?: { type?: string } }).targetInfo?.type === 'worker') {
-      void (async () => {
-        // Its own requests held too while the lease is on, where its session takes them (best effort: never a stall).
-        if (!lease.ended) await command(debug, 'Fetch.enable', { patterns: PATTERNS }, frame).catch(() => undefined);
-        if (p.waitingForDebugger) await command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
-      })();
+      if (p.waitingForDebugger) void command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
       return;
     }
     if (lease.ended) return;
@@ -410,12 +411,21 @@ async function putBackClipboard(lease: Lease): Promise<void> {
   await lease.copying;
   const page = lease.pageCopy;
   const clipboard = lease.deps.clipboard;
-  if (page === undefined || lease.clipboard === undefined || !clipboard) return;
-  lease.pageCopy = undefined;
+  const start = await lease.clipboard;
+  if (start === undefined || !clipboard) return;
   try {
-    if (!(await clipboard.same(page)) || (await clipboard.same(lease.clipboard))) return;
-    if (await clipboard.restore(lease.clipboard)) lease.deps.note('clipboard', 'the clipboard, put back');
-    else lease.deps.note('clipboard', 'what was on it couldn’t be put back');
+    if (page === undefined) {
+      // Changed with no copy the page's top frame saw (a frame's copy, or yours elsewhere): never put back, but said once,
+      // to check before pasting (the final check of #150).
+      if (!lease.changeSaid && !(await clipboard.same(start))) {
+        lease.changeSaid = true;
+        lease.deps.note('clipboard', 'changed');
+      }
+      return;
+    }
+    lease.pageCopy = undefined;
+    if (!(await clipboard.same(page)) || (await clipboard.same(start))) return;
+    lease.deps.note('clipboard', (await clipboard.restore(start)) ? 'put back' : 'not put back');
   } catch {
     // Unreadable now: left as it is.
   }

@@ -2233,7 +2233,15 @@ export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   // An alert has no Cancel: it was closed (its OK); a confirm or a prompt was answered Cancel.
   dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
   popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,
-  clipboard: () => 'The page changed your clipboard; Chord put it back',
+  // What happened to the clipboard (control/user-watch.ts), or a clipboard permission refused (permissions.ts).
+  clipboard: (detail) =>
+    detail === 'put back'
+      ? 'The page changed your clipboard; Chord put it back'
+      : detail === 'not put back'
+        ? 'The page changed your clipboard, and what was on it couldn’t be put back; check it before you paste'
+        : detail === 'changed'
+          ? 'The clipboard changed while the assistant acted; check it before you paste'
+          : 'The page asked to use your clipboard; Chord said no',
   unload: () => 'The page has unsaved changes, so it stayed',
   external: (detail) => `The page tried to open ${detail} in another program; it wasn’t opened`,
 };

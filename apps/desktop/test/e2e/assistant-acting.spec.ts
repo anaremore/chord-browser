@@ -55,7 +55,8 @@ test.beforeAll(async () => {
   const server = createServer((req, res) => {
     if (req.url === '/w.js') {
       res.writeHead(200, { 'content-type': 'text/javascript' });
-      res.end("postMessage('ok');");
+      // It sends (a POST of its own), then says so: held as its page's sends are (the final check of #150).
+      res.end("fetch('/wmove', { method: 'POST', body: 'w' }).then(() => postMessage('posted'), () => postMessage('failed'));");
       return;
     }
     if (req.url === '/sw.js') {
@@ -293,6 +294,9 @@ test('after a turn that only filled a form (its card answered), the next message
 
 test('what the assistant’s click sets off in your tab is caught: a window, a file picker, the clipboard, a passkey, a download (M2e-2b)', async () => {
   test.setTimeout(150_000);
+  // It writes and reads the system clipboard: only where that's the test's own (the Linux container, CI's runners),
+  // never on a desktop someone is using (the final check of #150).
+  test.skip(!process.env['CI'] && !process.env['CHORD_E2E_DISPLAY'], 'uses the system clipboard: run it in the Linux container or CI');
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
   const app = await launch(profile, config);
@@ -325,6 +329,13 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 15_000 }).toBe('yours');
     // A link opening a file in a new tab, a payment, a sign-in with another site (Neon's B1 and B2 on #150).
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Get file' }, { tool: 'click', name: 'Open sheet' }, { tool: 'click', name: 'Identity' }, { tool: 'click', name: 'Start worker' }]));
+    // The worker the click started sends: held, and asked about as the page's own would be.
+    const workerCard = panel.getByRole('group', { name: /^Send data to / }).last();
+    await expect(workerCard).toBeVisible({ timeout: 30_000 });
+    expect(reached.filter((x) => x.startsWith('POST /wmove'))).toEqual([]);
+    await shell.waitForTimeout(700);
+    await workerCard.getByRole('button', { name: 'Allow', exact: true }).click();
+    await expect.poll(() => reached.filter((x) => x.startsWith('POST /wmove'))).toEqual(['POST /wmove']);
     await expect.poll(() => actingTurns(config), { timeout: 40_000 }).toBe(2);
     // No tab, no download, said.
     await expect(panel.getByText(/file\.zip in a new tab or window; it wasn’t opened/)).toBeVisible();
@@ -334,8 +345,8 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await expect(page.locator('#log')).toContainText(/pay-\w+/);
     await expect(page.locator('#log')).not.toContainText('pay-ok');
     await expect(page.locator('#log')).toContainText('signin-NetworkError', { timeout: 15_000 });
-    // A worker the click started: it ran.
-    await expect(page.locator('#log')).toContainText('worker-ok', { timeout: 15_000 });
+    // A worker the click started: it ran, and what it sent went once allowed.
+    await expect(page.locator('#log')).toContainText('worker-posted', { timeout: 15_000 });
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(windows);
     // A download its click starts asks first; Don't, and nothing is saved.
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Download' }]));

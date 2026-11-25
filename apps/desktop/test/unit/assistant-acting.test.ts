@@ -205,7 +205,7 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     t.pageCopies('the page’s');
     await vi.advanceTimersByTimeAsync(AFTER_MS + 10);
     expect(t.clip.get()).toBe('yours');
-    expect(t.notes).toContain('clipboard: the clipboard, put back');
+    expect(t.notes).toContain('clipboard: put back');
     const u = yourTab();
     await beginUserAction(u.contents, 'chat:1', u.deps());
     u.clip.set('copied by you');
@@ -223,6 +223,9 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     endUserAction(t.contents);
     await vi.advanceTimersByTimeAsync(AFTER_MS + 10);
     expect(t.clip.get()).toBe('copied by you elsewhere');
+    // Never put back, but said once: a frame's copy (which the page's top frame never sees) changes it the same way
+    // (the final check of #150).
+    expect(t.notes.filter((n) => n.startsWith('clipboard:'))).toEqual(['clipboard: changed']);
     // The page copied, then you copied elsewhere: yours, left alone.
     const u = yourTab();
     await beginUserAction(u.contents, 'chat:1', u.deps());
@@ -241,7 +244,7 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     endUserAction(w.contents);
     await vi.advanceTimersByTimeAsync(0);
     expect(w.clip.get()).toBe('the page’s');
-    expect(w.notes).toContain('clipboard: what was on it couldn’t be put back');
+    expect(w.notes).toContain('clipboard: not put back');
   });
 
   it('the clipboard is put back as each action ends, and whenever the lease ends but by your own input: Stop, a tab switch, the panel closed, the debugger gone (Neon’s B6 on #150)', async () => {
