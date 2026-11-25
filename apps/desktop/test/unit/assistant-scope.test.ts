@@ -27,6 +27,7 @@ function setup() {
     pointed: new Set(),
     actTab: null,
     actEnded: null,
+    elsewhere: false,
     windowId: 'w1',
     control: new ControlAgent('chat:1', async () => 'once'),
     pdfs: new Map(),

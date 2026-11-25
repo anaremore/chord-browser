@@ -759,6 +759,32 @@
   align-items: center;
 }
 
+/* Four buttons wrap rather than clip in the 380 px panel (Neon's SF1 on #151). */
+.approvalActions {
+  flex-wrap: wrap;
+}
+
+/* A card's lines: a long address wraps anywhere, and a very long one scrolls so the buttons stay in reach. */
+.approvalText {
+  overflow-wrap: anywhere;
+  max-height: 14em;
+  overflow-y: auto;
+}
+
+/* What it types, whole, in a box that scrolls past about six lines. */
+.approvalLong {
+  margin: 0;
+  max-height: 9.5em;
+  overflow-y: auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-item-hover);
+  font: var(--text-small);
+  font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* A fill card (D16): each field's label over its value, a checkbox to leave it out, Fill always in reach. */
 .fill p {
   margin: 0;

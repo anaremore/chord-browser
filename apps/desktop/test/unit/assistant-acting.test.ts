@@ -3,7 +3,7 @@
  * agent's), the lease on the tab's debugger and send hold, and the cards it shows in the chat.
  */
 import { EventEmitter } from 'node:events';
-import { emptyState, nodeOf, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
+import { assistantTools, emptyState, nodeOf, TabRefs, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DuetChat, DuetHost } from '../../src/main/assistant/scope';
@@ -14,7 +14,7 @@ const { AGENT_TAB_REFUSALS, duetScope, USER_TAB_REFUSALS } = await import('../..
 const { ControlAgent } = await import('../../src/main/control/gate');
 const { Store } = await import('../../src/main/store');
 const watch = await import('../../src/main/control/user-watch');
-const { AFTER_MS, askUserTabDownload, COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, userTabCatching, TAIL_MS } = watch;
+const { AFTER_MS, askUserTabDownload, COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, userTabCatching, userTabGoing, TAIL_MS } = watch;
 /** Each action's own end, by tab, as its begin handed it (round 3 of #147: an end belongs to its own lease). */
 const actionEnds = new Map<object, (() => void)[]>();
 const beginUserAction = async (...args: Parameters<typeof watch.beginUserAction>) => {
@@ -49,6 +49,9 @@ function setup() {
     pointed: new Set(),
     actTab: { nodeId: mine, windowId: 'w1' },
     actEnded: null,
+    elsewhere: false,
+    readFrom: new Set(),
+    listed: new Set(),
     windowId: 'w1',
     control: new ControlAgent('chat:1', async () => 'once'),
     pdfs: new Map(),
@@ -57,7 +60,7 @@ function setup() {
     read: new Set(),
   };
   const looks = { on: true, alone: true };
-  const lease = { begin: async () => null, end: () => undefined };
+  const lease = { begin: async () => null, end: () => undefined, going: () => undefined };
   const host = {
     browser: { store } as unknown as DuetHost['browser'],
     settings: () => ({ readsNothing: false, neverSites: [] }),
@@ -100,6 +103,65 @@ describe('Where the assistant may act (S18 M2e-2a, A1)', () => {
       const node = t.tab(which(t));
       expect(t.scope.act!.mayAct(node), what).toBe(expected(t));
     }
+  });
+
+  it('never batch nor wait_for: outside agents’ alone, by the list it’s given and by its scope (M2g-1 beside M2e-2c)', () => {
+    const names = assistantTools(true, true).map((t) => t.name);
+    expect(names).toContain('click');
+    expect(names).not.toContain('wait_for');
+    expect(names).not.toContain('batch');
+    expect((setup().scope as { waits?: boolean }).waits).toBeFalsy();
+  });
+
+  it('leaving the site asks, every time, with the address; the same site doesn’t (M2e-2c, B3)', () => {
+    const t = setup();
+    const leaving = t.scope.act!.leaving!;
+    expect(leaving('https://game.example/table', 'https://game.example/rules')).toBe(false);
+    expect(leaving('https://game.example/table', 'https://tracker.example/collect?q=secret')).toBe(true);
+    expect(leaving('https://game.example/table', 'mailto:someone@example.test')).toBe(true);
+    // From https to plain http on the same site is leaving too: what it carries goes in the clear (Neon's SF5 on #151).
+    expect(leaving('https://game.example/table', 'http://game.example/collect?q=secret')).toBe(true);
+    expect(leaving('http://game.example/table', 'https://game.example/rules')).toBe(false);
+  });
+
+  it('what taints is what it read, by site: the same tab read on another site, other tabs listed (Neon’s B3 on #151)', () => {
+    const here = 'https://game.example/table';
+    // [what, set up, whether its typing asks]
+    const rows: [string, (t: ReturnType<typeof setup>) => void, boolean][] = [
+      ['this tab, read here', (t) => (t.chat.read.add(t.mine), t.chat.readFrom!.add('https://game.example')), false],
+      ['this tab, read when it was on another site', (t) => (t.chat.read.add(t.mine), t.chat.readFrom!.add('https://mail.example')), true],
+      ['the list of tabs, with another tab in it', (t) => t.chat.listed!.add(t.other), true],
+      ['the list of tabs, with only this one', (t) => t.chat.listed!.add(t.mine), false],
+      ['something from elsewhere (history, an image, an earlier session)', (t) => void (t.chat.elsewhere = true), true],
+    ];
+    for (const [what, arrange, asks] of rows) {
+      const t = setup();
+      arrange(t);
+      expect(t.scope.act!.typeAsks!(t.tab(t.mine), here), what).toBe(asks);
+    }
+  });
+
+  it('a chat that read anything but the tab it acts on shows what it types first (M2e-2c, B3; the owner’s answer 6)', () => {
+    const t = setup();
+    const asks = () => t.scope.act!.typeAsks!(t.tab(t.mine), 'https://game.example/table');
+    expect(asks()).toBe(false);
+    // It read the tab it acts on: nothing to show.
+    t.chat.read.add(t.mine);
+    expect(asks()).toBe(false);
+    // Another tab of yours, read in this chat (or an attached one, or an agent's you pointed at).
+    t.chat.read.add(t.other);
+    expect(asks()).toBe(true);
+    // History or the archive, searched.
+    const u = setup();
+    u.chat.elsewhere = true;
+    expect(u.scope.act!.typeAsks!(u.tab(u.mine), 'https://game.example/table')).toBe(true);
+  });
+
+  it('searching history or the archive marks the chat as having read elsewhere (Claude’s review of #151: a gate only the E2E caught)', async () => {
+    const t = setup();
+    await t.scope.search!('search_history', 'order');
+    expect(t.chat.elsewhere).toBe(true);
+    expect(t.scope.act!.typeAsks!(t.tab(t.mine), 'https://game.example/table')).toBe(true);
   });
 
   it('once off screen, not back for the rest of the message: switching back doesn’t let it act again', () => {
@@ -148,7 +210,7 @@ function yourTab() {
   return { contents, debug, sent, post, how, notes, deps: tabDeps, bypass, pageCopies, clip: { get: () => clip, set: (text: string) => void (clip = text), unrestorable: () => void (restorable = false) }, attached: () => attached };
 }
 
-const deps = (ask: SendHoldDeps['ask'] = async () => 'once') => ({ siteOf: (u: string) => new URL(u).origin, ask, note: () => undefined, askDownload: async () => false });
+const deps = (ask: SendHoldDeps['ask'] = async () => 'once') => ({ siteOf: (u: string) => new URL(u).origin, ask, note: () => undefined, askDownload: async () => false, siteOfPage: (u: string) => new URL(u).hostname });
 
 describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
   const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -299,6 +361,45 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     await tick();
     expect(userTabActing(t.contents)).toBe(false);
     expect(t.attached()).toBe(false);
+  });
+
+  it('a page the assistant went to sending your tab on to another site is held, and asks as leaving does (M2e-2c, B3)', async () => {
+    const t = yourTab();
+    const asked: (string | null)[] = [];
+    await beginUserAction(t.contents, 'chat:1', t.deps(async (_sites, why) => (asked.push(why), 'deny')));
+    userTabGoing(t.contents, 'https://game.example/out');
+    const doc = (requestId: string, url: string) => t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method: 'GET', url }, resourceType: 'Document' });
+    // Where it asked to go: on its way. The same site's redirect: too. Another site's: held, and asked.
+    doc('d1', 'https://game.example/out?to=https://tracker.example/');
+    doc('d2', 'https://game.example/landing');
+    doc('d3', 'https://tracker.example/collect?q=secret');
+    await new Promise((r) => setTimeout(r, 0));
+    expect([t.how('d1'), t.how('d2')]).toEqual(['Fetch.continueRequest', 'Fetch.continueRequest']);
+    expect(asked).toEqual(['leave']);
+    expect(t.how('d3')).toBe('Fetch.fulfillRequest');
+    endUserLease(t.contents);
+  });
+
+  it('where it went is held through the tail: the page’s own redirect right after its load still asks, http on the same site asks, and the next action starts clean (Neon’s SF3, SF5 on #151)', async () => {
+    const t = yourTab();
+    const asked: (string | null)[] = [];
+    await beginUserAction(t.contents, 'chat:1', t.deps(async (_sites, why) => (asked.push(why), 'deny')));
+    userTabGoing(t.contents, 'https://game.example/out');
+    const doc = (requestId: string, url: string) => t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method: 'GET', url }, resourceType: 'Document' });
+    // Its load is done (the action ends); a meta refresh or a timer sends the tab on, inside the tail.
+    endUserAction(t.contents);
+    doc('m1', 'https://tracker.example/collect?q=secret');
+    doc('h1', 'http://game.example/collect?q=secret');
+    await tick();
+    expect(asked).toEqual(['leave', 'leave']);
+    expect([t.how('m1'), t.how('h1')]).toEqual(['Fetch.fulfillRequest', 'Fetch.fulfillRequest']);
+    // The next action (a click, going nowhere it named): a link to another site is no leaving card's.
+    await beginUserAction(t.contents, 'chat:1', t.deps(async (_sites, why) => (asked.push(why), 'deny')));
+    doc('c1', 'https://news.example/');
+    await tick();
+    expect(t.how('c1')).toBe('Fetch.continueRequest');
+    expect(asked).toHaveLength(2);
+    endUserLease(t.contents);
   });
 
   it('one owner: another chat acting in the tab meanwhile is refused, even when both begin at once (Neon’s B3 on #147, E8)', async () => {
@@ -694,6 +795,38 @@ describe('The acting cards in the chat (S18 M2e-2a)', () => {
       'After the assistant’s last step, the page is doing this on its own.',
     );
     expect(actCard({ ...base, kind: 'read', subject: 'read_tab', description: 'Read “Article”' })).toBeNull();
+    // M2e-2c: leaving the site, with the whole address; what it types, in a chat that read elsewhere.
+    expect(actCard({ ...base, kind: 'step', subject: 's', description: 'go to tracker.example/collect', step: { why: 'leave', site: 'tracker.example', fields: [], more: 0, going: 'https://tracker.example/collect?q=secret' } })).toEqual({
+      kind: 'step',
+      title: 'Go to tracker.example?',
+      note: 'The assistant wants to open this in your tab:',
+      lines: ['https://tracker.example/collect?q=secret'],
+      danger: false,
+      showable: false,
+    });
+    expect(actCard({ ...base, kind: 'step', subject: 's', description: 'type in “Order number”', step: { why: 'confirm', site: 'shop.example', fields: [], more: 0, typed: 'W-104388', taint: true } })).toMatchObject({
+      kind: 'step',
+      title: 'Type this in “Order number”?',
+      lines: [],
+      long: '“W-104388”',
+    });
+  });
+
+  it('a redirect’s leaving card says what sent the tab on, with the whole address; what it types is shown whole, however long (Neon’s B1, B2, N5 on #151)', () => {
+    const away = 'https://tracker.example/collect?secret=W-104388&ref=abc#done';
+    expect(actCard({ ...base, kind: 'step', subject: 's', description: 'go to shop.example/out', step: { why: 'leave', site: 'tracker.example', fields: [], more: 0, going: away, from: 'shop.example/out' } })).toMatchObject({
+      title: 'Go to tracker.example?',
+      note: 'shop.example/out sends your tab to:',
+      lines: [away],
+    });
+    expect(actCard({ ...base, kind: 'step', subject: 's', description: 'After the assistant’s last step here', step: { why: 'leave', site: 'tracker.example', fields: [], more: 0, going: away, idle: true } })).toMatchObject({
+      note: 'After the assistant’s last step, the page is sending your tab to:',
+      lines: [away],
+    });
+    const text = `${'Thanks for the order. '.repeat(120)}W-104388`;
+    const card = actCard({ ...base, kind: 'step', subject: 's', description: 'type in “Notes”', step: { why: 'confirm', site: 'shop.example', fields: [], more: 0, typed: text, taint: true } });
+    expect(card?.long).toBe(`“${text}”`);
+    expect(card?.long).toContain('W-104388');
   });
 });
 

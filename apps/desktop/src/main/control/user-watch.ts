@@ -73,6 +73,8 @@ export interface UserTabDeps extends Omit<SendHoldDeps, 'whose'> {
   note(what: UserTabNote, detail: string): void;
   /** A download its click started: the chat's card (*Save invoice.pdf from shop.example?*). */
   askDownload(download: UserTabDownload, signal: AbortSignal): Promise<boolean>;
+  /** The site an address is on (registrable domain, as the site card's), for what leaves it (M2e-2c). */
+  siteOfPage(url: string): string | null;
   /**
    * The clipboard (Electron's), to put back what the page copied in the window: a snapshot of everything on it (text,
    * HTML, RTF, an image), whether it's still as a snapshot was, and putting one back (false: it held what can't be put
@@ -112,6 +114,12 @@ interface Lease {
   cancel: AbortController;
   /** Download cards up now: the lease waits for them (up to CARD_WAIT_MS) before it ends by time. */
   asking: number;
+  /**
+   * Where navigate or back is going (M2e-2c): its site, and whether over https. The tab's own page going on to another
+   * site, or to plain http from https, asks, through the action and its tail (a meta refresh or a timer right after the
+   * load: Neon's SF3 and SF5 on #151). Each action starts with none.
+   */
+  going: { site: string | null; https: boolean } | null;
   /** Chord attached the debugger for this lease (else someone else's attachment, used as it is: never detached). */
   mine: boolean;
   actions: number;
@@ -216,6 +224,7 @@ export async function beginUserAction(contents: WebContents, owner: string, deps
       return NOT_ON('no');
     }
     lease.actions++;
+    lease.going = null;
     if (lease.timer) clearTimeout(lease.timer);
     lease.timer = null;
     // Each action tells what must close for it (the vault's menu), not only the lease's first (Neon's S2 on #150).
@@ -256,6 +265,7 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     pageCopy: undefined,
     cancel: new AbortController(),
     asking: 0,
+    going: null,
     mine,
     actions: 1,
     ended: false,
@@ -343,6 +353,11 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     // A new request: the assistant's only in an action or its tail. No request (a card being settled, sends.ts): still
     // the assistant's while the lease lives, so an Allow after the tail sends what it held (Neon's B4 on #150).
     whose: (request) => (lease.ended || !handedOut ? 'user' : !request || lease.actions > 0 || Date.now() < lease.sendsUntil ? 'agent' : 'user'),
+    leaving: (url) =>
+      !lease.ended &&
+      lease.going !== null &&
+      (lease.actions > 0 || Date.now() < lease.sendsUntil) &&
+      (deps.siteOfPage(url) !== lease.going.site || (lease.going.https && /^http:/i.test(url))),
   });
   debug.on('message', lease.onMessage);
   const giveUp = async (): Promise<UserAction> => {
@@ -447,11 +462,18 @@ async function putBackClipboard(lease: Lease): Promise<void> {
   }
 }
 
+/** navigate or back is going to `url` (M2e-2c): until the action ends, the page going on to another site asks. */
+export function userTabGoing(contents: WebContents, url: string): void {
+  const lease = leases.get(contents);
+  if (lease && !lease.ended) lease.going = { site: lease.deps.siteOfPage(url), https: /^https:/i.test(url) };
+}
+
 /** The action's done: the lease ends AFTER_MS after the last one, once nothing's held (or CARD_WAIT_MS on). */
 function endAction(contents: WebContents, lease: Lease): void {
   lease.actions = Math.max(0, lease.actions - 1);
   void putBackClipboard(lease);
   if (lease.actions > 0) return;
+  // Where it went stays held through the tail (Neon's SF3 on #151): leaving() checks the time.
   const started = Date.now();
   lease.sendsUntil = started + TAIL_MS;
   const later = () => {

@@ -60,8 +60,9 @@ export const AGENTS_RELEASED = true as boolean;
 export const AGENT_ACTIONS_RELEASED = true as boolean;
 
 /**
- * The assistant clicking and typing in a tab of yours (S18 M2e): off in packaged builds until M2e-2b (what a click
- * sets off, the leaving card, the tainted chat) lands with it. Development builds have it.
+ * The assistant clicking and typing in a tab of yours (S18 M2e): off in packaged builds until #151's last commit turns
+ * it on, after a full Claude and Neon security pass on M2e-2a to 2c and the owner's OK (a preview installer built with
+ * CHORD_PREVIEW_ACTING=1 has it meanwhile: assistant/preview.ts).
  */
 export const ASSISTANT_ACTING_RELEASED = false as boolean;
 

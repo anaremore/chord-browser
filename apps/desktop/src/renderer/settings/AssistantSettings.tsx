@@ -115,7 +115,9 @@ export function AssistantSettings({ snapshot }: { snapshot: SettingsSnapshot }) 
         })}
       </RadioGroup>
       <p className={styles.groupNote}>
-        Each chat can choose for itself from the panel, except Nothing, which only changes here. Whatever you choose, it only reads, and never sees private windows, form fields, or the sites below.
+        {snapshot.assistantActing
+          ? 'Each chat can choose for itself from the panel, except Nothing, which only changes here. Whatever you choose, it never reads private windows, form fields, or the sites below. It clicks and types only as set in Acting on pages.'
+          : 'Each chat can choose for itself from the panel, except Nothing, which only changes here. Whatever you choose, it only reads, and never sees private windows, form fields, or the sites below.'}
       </p>
       <div className={`${styles.group} ${styles.groupAfter}`}>
         <Row
@@ -153,10 +155,11 @@ export function AssistantSettings({ snapshot }: { snapshot: SettingsSnapshot }) 
           <div className={styles.group}>
             <Row
               label="Click and type on pages"
-              description="When you ask, it clicks, types and presses keys in the tab on screen. It asks before acting on a site, and before anything it does sends data, submits, pays, sends or deletes. Pages can still send some things on their own after it clicks, like live game moves."
+              description={`When you ask, it clicks, types and presses keys in the tab on screen. It asks before acting on a site, and before anything it does sends data, submits, pays, sends or deletes. Pages can still send some things on their own after it clicks, like live game moves.${assistant.readsNothing ? ' Off while it reads nothing: it can’t act on a page it can’t read.' : ''}`}
               changed={assistant.acting !== DEFAULT_SETTINGS.assistant.acting}
               onReset={() => set({ acting: DEFAULT_SETTINGS.assistant.acting })}
-              control={<Switch label="Click and type on pages" checked={assistant.acting} onChange={(acting) => set({ acting })} />}
+              // With Nothing, main doesn't let it act: shown off, and not to be changed until it reads (Neon's N3 on #151).
+              control={<Switch label="Click and type on pages" checked={assistant.acting && !assistant.readsNothing} disabled={assistant.readsNothing} onChange={(acting) => set({ acting })} />}
             />
           </div>
           <div className={`${styles.group} ${styles.groupAfter}`} role="group" aria-label="Sites it can click and type on">

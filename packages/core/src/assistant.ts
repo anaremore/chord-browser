@@ -133,6 +133,8 @@ export interface AssistantActCard {
   note: string;
   /** More lines: what goes with it (by label), where it goes, what it reads or types. */
   lines: string[];
+  /** Text shown whole in a box that scrolls: what it types, in a chat that read elsewhere (S18 M2e-2c; Neon's B2 on #151). */
+  long?: string;
   /** Allow in the danger color (paying, deleting, data to another site). */
   danger: boolean;  /** Show me: the card has an element to point at in its page (an action's step, not a load's or a tail's). */
   showable: boolean;

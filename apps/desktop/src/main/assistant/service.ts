@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import {
   agentChords,
   barAddress,
+  wholeAddress,
   barDoing,
   CONTROL_WAIT_MS,
   sendTitle,
@@ -93,7 +94,7 @@ import { siteOfUrl } from '../agents/shares';
 import { shownOrigin, type SendHoldDeps } from '../control/sends';
 import { buildActs } from './preview';
 import { dropAgentGuard } from '../control/page';
-import { beginUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing, type UserTabNote } from '../control/user-watch';
+import { beginUserAction, endUserLease, onUserLeaseEnd, userLeaseOwner, userTabActing, userTabGoing, type UserTabNote } from '../control/user-watch';
 
 type Decision = 'once' | 'thread' | 'always' | 'denied';
 
@@ -403,6 +404,9 @@ export class AssistantService {
       pointed: new Set(),
       actTab: null,
       actEnded: null,
+      elsewhere: false,
+      readFrom: new Set(),
+      listed: new Set(),
       shows: new Map(),
       leased: new Set(),
       sentTabs: new Map(),
@@ -443,6 +447,9 @@ export class AssistantService {
     const result = await this.persistence.assistant({ op: 'thread', threadId });
     const state = this.blank(chordId, result.thread ?? null);
     state.messages = result.messages ?? [];
+    // Turns from before this session (resumed, continued, imported) may have read anything: what it types, and where it
+    // goes, are shown first (failing closed: Neon's B3 on #151).
+    state.elsewhere = state.messages.some((m) => m.body.role === 'user' || m.body.role === 'assistant');
     // Handles and attachments carry over, so earlier tabs stay readable and citations resolve.
     for (const m of state.messages) {
       if (m.body.role === 'user') {
@@ -583,7 +590,8 @@ export class AssistantService {
           target: [page],
           tab: nodeId,
           subject: `${nodeId}|tail|${randomBytes(4).toString('hex')}`,
-          step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
+          // Leaving: the whole address (Neon's B1 on #151); another step's, the bar's short one.
+          step: why ? { why, site: hosts[0] ?? site, fields: [], more: 0, idle: true, ...(going ? { going: why === 'leave' ? wholeAddress(going) : barAddress(going) } : {}) } : { why: 'send', site, fields: [], more: 0, sends: hosts, idle: true },
           takeDown: takeDown.signal,
         },
         signal,
@@ -742,6 +750,7 @@ export class AssistantService {
       codexImages: this.codexMakesImages(),
       firstUse: !this.firstUseSeen,
       lookingInWsl: this.lookingInWsl,
+      acting: this.acting(),
     };
     if (!chordId || privateWindow)
       return { ...base, thread: null, continueFrom: null, threads: [], messages: [], busy: false, startedAt: null, queue: [], attachments: [], attachable: [], readTabIds: [], error: null, draft: '', context: null, pendingImages: [], imageThumbs: {}, tabNames: {} };
@@ -1302,6 +1311,8 @@ export class AssistantService {
     this.pending.delete(windowId);
     for (const p of pending) await this.images.save(p.image, p.bytes, p.thumb);
     const images = nothing ? [] : (reuseImages ?? pending.map((p) => p.image));
+    // What's in an image came from elsewhere (Neon's B3 on #151).
+    if (images.length > 0) state.elsewhere = true;
     const sent = await this.addMessage(state, images.length > 0 ? { role: 'user', text: trimmed, attachments, images: [...images] } : { role: 'user', text: trimmed, attachments });
     state.sentTabs.set(sent.id, state.actTab);
     delete this.drafts[thread.id];
@@ -1627,6 +1638,7 @@ export class AssistantService {
               return answer === 'once';
             },
             clipboard: electronClipboard,
+            siteOfPage: siteOfUrl,
           });
           const begun = action.begun;
           if (begun === 'busy') return 'Another chat is acting in this tab. Wait for it to finish, or ask the user.';
@@ -1644,6 +1656,11 @@ export class AssistantService {
         },
         // This action's own end: it does nothing to a lease that came after it (Neon's B3, round 3 of #147).
         end: (node) => s.actionEnds.get(node.id)?.shift()?.(),
+        // Where navigate or back goes (M2e-2c): a page there sending the tab on to another site asks.
+        going: (node, url) => {
+          const contents = this.browser.tabs.get(node.id)?.webContents;
+          if (contents && !contents.isDestroyed()) userTabGoing(contents, url);
+        },
       },
     };
   }
@@ -2269,6 +2286,25 @@ export function actCard(card: ControlCard): AssistantActCard | null {
       note: step.idle ? `After the assistant’s last step, the page is sending something to ${where}.` : `The assistant ${did}, and the page is sending something to ${where}.`,
       lines: [`Goes to: ${step.sends.join(', ')}`],
       danger: other,
+      showable: Boolean(card.show),
+    };
+  }
+  // Leaving the site (M2e-2c, B3): the whole address, which can carry data out; a redirect says what sent the tab on
+  // (Neon's N5 on #151).
+  if (step.why === 'leave') {
+    const note = step.idle ? 'After the assistant’s last step, the page is sending your tab to:' : step.from ? `${step.from} sends your tab to:` : 'The assistant wants to open this in your tab:';
+    return { kind: 'step', title: stepTitle('leave', step.site), note, lines: [step.going ?? ''], danger: false, showable: false };
+  }
+  // What it types, in a chat that read anything but this tab (M2e-2c, B3): shown in full first.
+  if (step.taint) {
+    return {
+      kind: 'step',
+      title: `Type this ${card.description.replace(/^type /, '')}?`,
+      note: 'It read another tab, history or the archive in this chat, so it shows what it types first.',
+      // All of it, in a box that scrolls (Neon's B2 and SF1 on #151).
+      lines: [],
+      long: `“${step.typed ?? ''}”`,
+      danger: false,
       showable: Boolean(card.show),
     };
   }

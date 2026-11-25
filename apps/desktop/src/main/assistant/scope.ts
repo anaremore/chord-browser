@@ -30,6 +30,12 @@ export interface DuetChat extends ToolMemory {
   actTab: { nodeId: NodeId; windowId: WindowId } | null;
   /** Why acting ended for this message (you switched away, used the tab, or turned acting off), or null. */
   actEnded: string | null;
+  /**
+   * The chat read from elsewhere than the tabs it read (M2e-2c, B3): it searched history or the archive, a message had an
+   * image, or it has turns from before this session (resumed, continued, imported: Neon's B3 on #151, failing closed). What
+   * it types, and every address it goes to, is shown first from then on.
+   */
+  elsewhere: boolean;
 }
 
 /** What the assistant's service gives its scope. */
@@ -166,6 +172,20 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
             doing: acting.doing,
             lease: acting.lease,
             ...(acting.caught ? { caught: acting.caught } : {}),
+            // Another site than the page's: asks every time, with the address (M2e-2c, B3; the owner's answer 2).
+            // From https to plain http on the same site too: what the address carries goes in the clear (Neon's SF5 on #151).
+            leaving: (from, to) => {
+              const there = acting.siteOf(to);
+              return there === null || there !== acting.siteOf(from) || (/^https:/i.test(from) && /^http:/i.test(to));
+            },
+            // A chat that read anything but the tab it acts on as it is now (another tab, this one on another site, the
+            // list of tabs, history, the archive, an image, an earlier session): what it types is shown first, every time
+            // (M2e-2c, B3; the owner's answer 6; Neon's B3 on #151).
+            typeAsks: (node, url) => {
+              if (chat.elsewhere || [...chat.read].some((id) => id !== node.id) || [...(chat.listed ?? [])].some((id) => id !== node.id)) return true;
+              const here = acting.siteOf(url);
+              return [...(chat.readFrom ?? [])].some((origin) => here === null || acting.siteOf(origin) !== here);
+            },
           };
           return { act };
         })()
@@ -183,7 +203,10 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
         : 'Forms are filled only on the tab on screen. Ask the user to switch to it, then to ask again.';
     },
     activity: (tool, summary, detail, ok) => host.activity(chat, tool, summary, detail, ok),
-    search: (tool, query) => host.search(chat, tool, query),
+    search: (tool, query) => {
+      chat.elsewhere = true;
+      return host.search(chat, tool, query);
+    },
     fills: host.fills(chat),
   };
 }

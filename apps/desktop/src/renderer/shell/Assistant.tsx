@@ -367,7 +367,7 @@ function ActApproval({ message, act: card }: { message: AssistantMessage; act: A
   return (
     <div className={styles.approval} data-pending={pending || undefined} data-act={card.kind} role={pending ? 'group' : undefined} aria-label={pending ? card.title : undefined} aria-describedby={pending ? `ask-${message.id}` : undefined} onKeyDown={onKey} tabIndex={pending ? 0 : -1}>
       <p className={styles.approvalTitle}>{card.title}</p>
-      <p id={`ask-${message.id}`} className={styles.muted}>
+      <p id={`ask-${message.id}`} className={`${styles.muted} ${styles.approvalText}`}>
         {card.note}
         {card.lines.map((line, i) => (
           <Fragment key={i}>
@@ -376,6 +376,12 @@ function ActApproval({ message, act: card }: { message: AssistantMessage; act: A
           </Fragment>
         ))}
       </p>
+      {/* What it types, all of it, in a box that scrolls (Neon's B2 and SF1 on #151). */}
+      {card.long !== undefined && (
+        <p className={styles.approvalLong} tabIndex={0}>
+          {card.long}
+        </p>
+      )}
       {pending ? (
         <div className={styles.approvalActions}>
           {shown.map((b) => (
@@ -982,7 +988,15 @@ function useAssistantAnnouncements(view: AssistantView): void {
       if (m.body.role === 'approval') {
         asked.current.add(m.id);
         // An acting card says its own buttons (S18 M2e-2a).
-        const choices = m.body.act ? { site: 'Always on this site, Allow for this chat, or No', step: 'Allow, Don’t, or Show me', send: 'Allow, Allow for this chat, Don’t, or Show me' }[m.body.act.kind] : 'Allow once, Allow for this chat, or No';
+        // Show me only where the card has it (Neon's N4 on #151).
+        const show = Boolean(m.body.act?.showable);
+        const choices = m.body.act
+          ? {
+              site: 'Always on this site, Allow for this chat, or No',
+              step: show ? 'Allow, Don’t, or Show me' : 'Allow or Don’t',
+              send: show ? 'Allow, Allow for this chat, Don’t, or Show me' : 'Allow, Allow for this chat, or Don’t',
+            }[m.body.act.kind]
+          : 'Allow once, Allow for this chat, or No';
         if (m.body.decision === 'pending') announce(`The assistant is asking: ${m.body.description}. ${choices}.`);
       } else if (m.body.role === 'tool' && m.body.fill) {
         asked.current.add(m.id);
@@ -1264,7 +1278,7 @@ export function AssistantPanel({ view, windowId, slide }: { view: AssistantView;
               <p>
                 {view.readsNothing
                   ? `What you type goes to ${providerName} through your own account. It’s set to read nothing, so it can’t see your tabs.`
-                  : `What you attach goes to ${providerName} through your own account. It reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.`}
+                  : `What you attach goes to ${providerName} through your own account. It reads only what’s attached to your message, unless you let it see more. It never sees what you type into forms.${view.acting ? ' When you ask, it can also click and type in the tab on screen. It asks before acting on a new site, and you can turn this off in Settings.' : ''}`}
               </p>
               <button type="button" className={styles.secondary} data-autofocus onClick={() => act({ do: 'dismissFirstUse' })}>
                 Got it
