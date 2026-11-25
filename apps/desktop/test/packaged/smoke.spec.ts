@@ -18,7 +18,7 @@ import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { AGENTS_RELEASED } from '@chord/core/agent-tools';
+import { AGENTS_RELEASED, agentActions, agentToolList } from '@chord/core/agent-tools';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
 /** electron-builder's unpacked output for this OS and arch. */
@@ -366,7 +366,10 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
   try {
     const init = await mcp.request('initialize', hello);
     expect(init.result).toMatchObject({ protocolVersion: '2025-11-25', serverInfo: { name: 'chord' }, capabilities: { tools: { listChanged: true } } });
-    expect(((await mcp.request('tools/list', {})).result['tools'] as unknown[]).length).toBe(8);
+    // The tools this build releases (M1's, and M2's once AGENT_ACTIONS_RELEASED), by name, from the list the bridge
+    // serves: never a count written here, which acting outgrew unseen (8 → 18; v0.15.0's release run).
+    const listed = ((await mcp.request('tools/list', {})).result['tools'] as { name: string }[]).map((t) => t.name);
+    expect(listed).toEqual(agentToolList(agentActions({ packaged: true })).map((t) => t.name));
     // Settled: one process (GPU and network service in-process), within its memory budget.
     await new Promise((done) => setTimeout(done, 1000));
     // An AppImage's runtime (1 MB) mounts it and runs Chord as its one child: that's the relay.
