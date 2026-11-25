@@ -3,18 +3,20 @@
  * listeners are the window's first (the preload runs before any of the page's scripts), so a capture listener the
  * page puts on the window can't see a key first, move the focus to a password field and stop everything after it.
  *
- * Main (control/page.ts) arms it, through this world (Electron's preload world, 999), right before its last focus
- * check; the element focused then is the one input may reach. A trusted key or insertion bound anywhere else is
- * stopped before the page sees it. Disarming waits for the input's last event (the key's keyup, the text's
- * beforeinput), at most `waitMs`, and says whether anything was stopped (`moved`) or that last event never came
- * here (`lost`: the focus went where this document doesn't see, into a frame). keyup is watched, not stopped: a key
- * may move the focus on purpose (Tab).
+ * Main (control/page.ts) arms it, through this world (Electron's preload world, 999), with an event name only main
+ * knows; its focus check (act.ts, in Chord's world) then fires that event at the element, and that element is the one
+ * input may reach (the review of #117: never what had the focus when it was armed, which the page could have moved
+ * there and back). Until then, and once it's another, a trusted key or insertion is stopped before the page sees it.
+ * Disarming waits for the input's last event (the key's keyup, the text's beforeinput), at most `waitMs`, and says
+ * whether anything was stopped (`moved`) or that last event never came here (`lost`: the focus went where this
+ * document doesn't see, into a frame). keyup is watched, not stopped: a key may move the focus on purpose (Tab).
  */
-type GuardEvent = { type: string; isTrusted: boolean; preventDefault(): void; stopImmediatePropagation(): void };
+type GuardEvent = { type: string; isTrusted: boolean; preventDefault(): void; stopImmediatePropagation(): void; composedPath?(): unknown[] };
 type Focusable = { shadowRoot?: { activeElement?: Focusable | null } | null };
 type GuardWindow = {
   document: { activeElement: Focusable | null };
   addEventListener(type: string, listener: (event: GuardEvent) => void, capture: boolean): void;
+  removeEventListener(type: string, listener: (event: GuardEvent) => void, capture: boolean): void;
   setTimeout(callback: () => void, ms: number): number;
   clearTimeout(id: number): void;
   __chordAgentGuard?: unknown;
@@ -22,8 +24,28 @@ type GuardWindow = {
 
 export const GUARDED_EVENTS = ['keydown', 'keypress', 'keyup', 'beforeinput', 'compositionstart', 'compositionupdate', 'compositionend'] as const;
 
+/** The name main arms the guard with (page.ts makes it): random, so no page listens for it or fires it. */
+export const GUARD_MARK = /^chord-guard-[0-9a-f]{32}$/;
+
 export function installAgentGuard(win: GuardWindow): void {
-  let armed: { expected: Focusable | null; until: string; moved: boolean; done: boolean; finished: (() => void) | null; timer: number } | null = null;
+  let armed: {
+    expected: Focusable | null;
+    mark: string;
+    until: string;
+    moved: boolean;
+    done: boolean;
+    finished: (() => void) | null;
+    timer: number;
+    /** Trusted keydowns that reached this document since it went up, and whether one went through to the page. */
+    keydowns: number;
+    keydownPassed: boolean;
+    /** Events that went through to the page (keyup aside): none, and nothing of the input reached it. */
+    passed: number;
+    /** The last keydown was stopped: its keyup is too (never an orphan keyup for the page; round 5 of #117). */
+    lastKeydownStopped: boolean;
+    /** Who waits for a keydown to have been handled (seen). */
+    onKeydown: (() => void)[];
+  } | null = null;
   /** A guard was up in this document (this preload is the document's): one not up now ran out, or was dropped. */
   let everArmed = false;
   const deepFocus = (): Focusable | null => {
@@ -38,31 +60,116 @@ export function installAgentGuard(win: GuardWindow): void {
       guard.done = true;
       guard.finished?.();
     }
-    if (event.type === 'keyup' || deepFocus() === guard.expected) return;
+    // Nothing marked yet (null): nothing passes, even with no focus anywhere (Neon, round 4). A keyup goes wherever the
+    // focus is (a key may move it on purpose), unless its keydown was stopped.
+    const passes = event.type === 'keyup' ? !guard.lastKeydownStopped : guard.expected !== null && deepFocus() === guard.expected;
+    if (event.type === 'keydown') {
+      guard.lastKeydownStopped = !passes;
+      guard.keydowns++;
+      if (passes) guard.keydownPassed = true;
+      // Those waiting hear of it a task later, once the page's own keydown handlers have run.
+      const waiting = guard.onKeydown.splice(0);
+      if (waiting.length) win.setTimeout(() => waiting.forEach((w) => w()), 0);
+    }
+    if (passes) {
+      if (event.type !== 'keyup') guard.passed++;
+      return;
+    }
     guard.moved = true;
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   for (const type of GUARDED_EVENTS) win.addEventListener(type, stop, true);
+  /**
+   * Presses this document saw (trusted mouseups), counted by the window's first listener, before any of the page's
+   * scripts (round 5 of #117: typing goes in only after the page saw its click; a page's own listener can't hide it).
+   */
+  let presses = 0;
+  const onPress: (() => void)[] = [];
+  win.addEventListener(
+    'mouseup',
+    (event: GuardEvent) => {
+      if (!event.isTrusted) return;
+      presses++;
+      // A task later, once the page's own handlers for it have run.
+      const waiting = onPress.splice(0);
+      if (waiting.length) win.setTimeout(() => waiting.forEach((w) => w()), 0);
+    },
+    true,
+  );
+  /**
+   * The element Chord's focus check found focused, by the event it fires at it (only Chord's world fires it: it's
+   * untrusted, as any script's, but no page knows its name). Its first node on the way, so inside an open shadow root
+   * too; a closed one's host, as deepFocus sees it.
+   */
+  const marked = (event: GuardEvent) => {
+    const guard = armed;
+    if (!guard || event.type !== guard.mark) return;
+    event.stopImmediatePropagation();
+    guard.expected = ((event.composedPath?.() ?? [])[0] as Focusable | undefined) ?? null;
+  };
+  const down = (guard: NonNullable<typeof armed>) => {
+    win.clearTimeout(guard.timer);
+    win.removeEventListener(guard.mark, marked, true);
+    if (armed === guard) armed = null;
+  };
   win.__chordAgentGuard = {
-    arm(until: string): boolean {
-      if (armed) win.clearTimeout(armed.timer);
-      const guard = { expected: deepFocus(), until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0 };
+    arm(until: string, mark: string): boolean {
+      if (!GUARD_MARK.test(mark)) return false;
+      if (armed) down(armed);
+      // Nothing may take input until Chord's check says which element does.
+      const guard = { expected: null, mark, until: until === 'keyup' ? 'keyup' : 'beforeinput', moved: false, done: false, finished: null, timer: 0, keydowns: 0, keydownPassed: false, passed: 0, lastKeydownStopped: false, onKeydown: [] };
+      win.addEventListener(mark, marked, true);
       // Never left up for good: main takes it down when the input's in (or the action ends), at the latest after
       // 30 s, longer than an action's worst path between arming and the input (its checks' limits).
-      guard.timer = win.setTimeout(() => {
-        if (armed === guard) armed = null;
-      }, 30_000);
+      guard.timer = win.setTimeout(() => down(guard), 30_000);
       armed = guard;
       everArmed = true;
       return true;
     },
+    /**
+     * Whether `count` trusted keydowns have reached this document, and the page's handlers for them have run (the
+     * review of #117, round 5: a key's keydown is sent as input, its check after as a script, and the script can reach
+     * the page first). False after `waitMs` (at most 1 s), or with no guard up.
+     */
+    seen(count: number, waitMs: number): Promise<boolean> {
+      const guard = armed;
+      if (!guard) return Promise.resolve(false);
+      if (guard.keydowns >= count) return new Promise((resolve) => win.setTimeout(() => resolve(true), 0));
+      return new Promise((resolve) => {
+        const timer = win.setTimeout(() => resolve(false), Math.max(0, Math.min(waitMs, 1000)));
+        const check = () => {
+          if (guard.keydowns >= count) {
+            win.clearTimeout(timer);
+            resolve(true);
+          } else guard.onKeydown.push(check);
+        };
+        guard.onKeydown.push(check);
+      });
+    },
+    /** How many presses this document has seen so far (pressSeen waits for one more). */
+    pressMark(): number {
+      return presses;
+    },
+    /** Whether a press after `mark` has been seen (and its handlers have run), at most `waitMs` (1 s). */
+    pressSeen(mark: number, waitMs: number): Promise<boolean> {
+      if (presses > mark) return new Promise((resolve) => win.setTimeout(() => resolve(true), 0));
+      return new Promise((resolve) => {
+        const timer = win.setTimeout(() => resolve(false), Math.max(0, Math.min(waitMs, 1000)));
+        const check = () => {
+          if (presses > mark) {
+            win.clearTimeout(timer);
+            resolve(true);
+          } else onPress.push(check);
+        };
+        onPress.push(check);
+      });
+    },
     /** Down at once: the user took the tab (their key or click), and their keys are never stopped. */
     drop(): void {
-      if (armed) win.clearTimeout(armed.timer);
-      armed = null;
+      if (armed) down(armed);
     },
-    disarm(waitMs: number): Promise<{ moved: boolean; lost: boolean } | { expired: true } | null> {
+    disarm(waitMs: number): Promise<{ moved: boolean; lost: boolean; keydownPassed: boolean; passed: number } | { expired: true } | null> {
       const guard = armed;
       // None up: in this document, it ran out (or was dropped); null only in another document (the page went).
       if (!guard) return Promise.resolve(everArmed ? { expired: true } : null);
@@ -70,9 +177,8 @@ export function installAgentGuard(win: GuardWindow): void {
         const finish = () => {
           // A task later: the last event's own dispatch is over.
           win.setTimeout(() => {
-            if (armed === guard) armed = null;
-            win.clearTimeout(guard.timer);
-            resolve({ moved: guard.moved, lost: !guard.done });
+            down(guard);
+            resolve({ moved: guard.moved, lost: !guard.done, keydownPassed: guard.keydownPassed, passed: guard.passed });
           }, 0);
         };
         if (guard.done) return finish();

@@ -5,6 +5,18 @@ and where to read more. Keep it under 200 lines (`scripts/test/agents-md.test.ts
 every path named here exists). The long docs are references: read the section the table below points to, not the
 whole file.
 
+## You own this codebase
+
+Chord's code, tests, docs and CI are yours to keep healthy: no one else will fix what you leave behind.
+- **Finish what you start.** Carry a change through tests, review findings and CI until it merges. Never stop
+  half-done waiting for a go-ahead on an engineering call.
+- **Fix what you find.** When you notice a bug, a flake or a stale doc on the way, fix it, or file an issue with the
+  cause and a reproduction.
+- **Don't repeat work.** Read what's already decided (the decision records, this file) before re-deriving it, and
+  don't re-litigate settled choices.
+- **Know whose decision it is.** Engineering calls are yours. The owner decides product direction, how things
+  look, anything that costs money, and what ships in a release. For those, stop and say exactly what's needed.
+
 ## Commands
 
 From the repo root (Node 24, pnpm 10):
@@ -42,7 +54,9 @@ pnpm deadcode                  # Knip, on demand only
   Remove one only after its PR shows MERGED.
 - **Docker for the container runner** is Docker Engine in WSL 2. Don't `wsl --shutdown` casually: other threads'
   containers run there.
-- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges.
+- **Never `--no-verify`, never `gh pr merge --admin`.** The planner merges, through main's merge queue:
+  `gh pr merge <n> --merge --auto` queues a pull request whose `E2E` passed, and it merges once its merge group
+  passes. A plain `gh pr merge <n> --merge` is refused while the queue is on.
 
 ## Invariants (never broken; reviewers check every one)
 
@@ -126,7 +140,11 @@ New decision records (S20 and on) are a small folder each, not one growing file:
 - **Threat checklist first.** A slice that touches agents, passwords, IPC, sessions or anything web content can
   reach starts with a threat checklist and a design review, before code (S18's *M2e: threat checklist* is the
   model).
-- **CI is tiered.** Every push gets the fast tier (Linux X11); the `ready` label adds every other platform. The
-  merge gate is the `E2E` commit status (`.github/workflows/ci.yml`).
+- **CI is tiered.** Every push gets the fast tier (Linux X11). The merge queue adds Windows x64 and macOS arm64
+  for platform-sensitive code, every platform for an Electron change; the rest run nightly. Adding the `ready`
+  label runs every platform now, once. A draft or a PR stacked on another's branch runs the checks only; a
+  draft labeled `ready` fails *What changed* (mark it ready first). One platform's E2E alone, with no throwaway
+  branch: `gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=<file> -f grep=<title> -f repeat=5`. The merge gate is the `E2E`
+  commit status, on pull requests and merge groups (`.github/workflows/ci.yml`).
 - **PR descriptions** say what changed, what was measured, which invariants it touches and how each is tested.
   Commits use Conventional Commits prefixes.

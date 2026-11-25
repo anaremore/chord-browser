@@ -82,7 +82,8 @@ describe('What an agent sees', () => {
 });
 
 describe('The bar, throttling and your hands', () => {
-  it('working while a call runs on a tab (at full speed), idle after; stopped on every tab until it continues', async () => {
+  it('working while a call runs on a tab (at full speed), and for AGENT_STEADY_MS after; idle then; stopped on every tab until it continues', async () => {
+    vi.useFakeTimers();
     const t = setup();
     let finish!: () => void;
     const running = t.agent.call('a1', () => new Promise<void>((r) => (finish = r)), () => undefined);
@@ -91,6 +92,9 @@ describe('The bar, throttling and your hands', () => {
     expect(t.pages.get('a1')!.throttled).toBe(false);
     finish();
     await running;
+    // Still worked on a while (the frame steady between actions), then idle.
+    expect(agentLive(t.store, 'a1')).toMatchObject({ state: 'working' });
+    await vi.advanceTimersByTimeAsync(45_000);
     expect(agentLive(t.store, 'a1')).toBeNull();
     expect(t.pages.get('a1')!.throttled).toBe(true);
     t.chords.stopAll();
@@ -99,6 +103,7 @@ describe('The bar, throttling and your hands', () => {
     t.chords.continue(t.chordId);
     expect(agentLive(t.store, 'a1')).toBeNull();
     await expect(t.agent.call('a1', async () => 'ran', (why) => why)).resolves.toBe('ran');
+    vi.useRealTimers();
   });
 
   it('a key you press in its tab pauses the agent there until you leave the tab, or let it continue', async () => {
@@ -353,14 +358,23 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
   it('a page closed while an action waits on its load: the wait ends at once, not at its limit', async () => {
     let destroyed = false;
     const contents = Object.assign(new EventEmitter(), { isDestroyed: () => destroyed, isLoading: () => true }) as unknown as WebContents;
-    const started = Date.now();
-    const waiting = pageLoaded(contents, 10_000);
-    setTimeout(() => {
-      destroyed = true;
-      (contents as unknown as EventEmitter).emit('destroyed');
-    }, 20);
-    await waiting;
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // On fake timers, so no wall clock decides it (issue #85): the wait ends as the page goes, 20 ms in, not at 10 s.
+    vi.useFakeTimers();
+    try {
+      let ended = false;
+      const waiting = pageLoaded(contents, 10_000).then(() => (ended = true));
+      setTimeout(() => {
+        destroyed = true;
+        (contents as unknown as EventEmitter).emit('destroyed');
+      }, 20);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(ended).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ended).toBe(true);
+      await waiting;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a tab of yours: nothing', () => {
@@ -554,6 +568,47 @@ describe('Review 1 of #77', () => {
     await answer(3, 'close_tab', { tab_id: 'a1' });
     expect(sent.find((m) => m.id === 3)?.result).toMatchObject({ isError: false, content: [{ text: 'Closed.' }] });
     expect(nodeOf(t.store.state, 'b1')).toBeUndefined();
+  });
+
+  it('the frame stays on while the agent works: never off and on between its actions, off once it’s quiet AGENT_STEADY_MS, at once on Stop (the owner, 2026-11-24)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    // What the tab's bar and frame were each time they changed (null: off).
+    const seen: (string | null)[] = [];
+    const dispatch = t.store.dispatch.bind(t.store);
+    t.store.dispatch = ((c: Command) => {
+      if (c.t === 'tab.live' && c.nodeId === 'a1') seen.push((c.live as { agent: { state: string } | null }).agent?.state ?? null);
+      return dispatch(c);
+    }) as typeof t.store.dispatch;
+    const act = (name: string) =>
+      t.agent.call(
+        'a1',
+        async () => {
+          t.chords.doing('a1', { tool: 'click', name, role: 'button' });
+          await vi.advanceTimersByTimeAsync(100);
+          t.chords.doing('a1', null);
+        },
+        () => undefined,
+      );
+    // Three moves, the model thinking 5 to 20 s between them: on the whole time.
+    await act('Fold');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await act('Call');
+    await vi.advanceTimersByTimeAsync(20_000);
+    await act('Raise');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain(null);
+    expect(agentLive(t.store, 'a1')).toMatchObject({ state: 'working' });
+    // Quiet past AGENT_STEADY_MS: off.
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(agentLive(t.store, 'a1')).toBeNull();
+    // Working again, then Stop: shown as stopped at once, never left on as working.
+    await act('Check');
+    t.agent.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(agentLive(t.store, 'a1')).toMatchObject({ state: 'stopped' });
+    vi.useRealTimers();
   });
 
   it('Keep and Close all wait until the agent is done; Undo asks again; a page made while it works runs at full speed', async () => {

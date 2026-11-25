@@ -147,6 +147,35 @@ export function AssistantSettings({ snapshot }: { snapshot: SettingsSnapshot }) 
         ))}
       </div>
 
+      {snapshot.assistantActing && (
+        <>
+          <h2 className={styles.groupTitle}>Acting on pages</h2>
+          <div className={styles.group}>
+            <Row
+              label="Click and type on pages"
+              description="When you ask, it clicks, types and presses keys in the tab on screen. It asks before acting on a site, and before anything it does sends data, submits, pays, sends or deletes. Pages can still send some things on their own after it clicks, like live game moves."
+              changed={assistant.acting !== DEFAULT_SETTINGS.assistant.acting}
+              onReset={() => set({ acting: DEFAULT_SETTINGS.assistant.acting })}
+              control={<Switch label="Click and type on pages" checked={assistant.acting} onChange={(acting) => set({ acting })} />}
+            />
+          </div>
+          <div className={`${styles.group} ${styles.groupAfter}`} role="group" aria-label="Sites it can click and type on">
+            <Row label="Sites it can click and type on" description={assistant.actSites.length > 0 ? 'It asks before acting on any other site.' : 'Asks before acting on any site.'} control={null} />
+            {[...assistant.actSites].reverse().map((s) => (
+              <Row
+                key={s}
+                label={s}
+                control={
+                  <button type="button" className={styles.linkButton} aria-label={`Remove ${s}`} onClick={() => set({ actSites: assistant.actSites.filter((x) => x !== s) })}>
+                    Remove
+                  </button>
+                }
+              />
+            ))}
+          </div>
+        </>
+      )}
+
       <h2 className={styles.groupTitle}>Chats</h2>
       <div className={styles.group}>
         <Row
