@@ -60,11 +60,11 @@ export const AGENTS_RELEASED = true as boolean;
 export const AGENT_ACTIONS_RELEASED = true as boolean;
 
 /**
- * The assistant clicking and typing in a tab of yours (S18 M2e): off in packaged builds until #151's last commit turns
- * it on, after a full Claude and Neon security pass on M2e-2a to 2c and the owner's OK (a preview installer built with
- * CHORD_PREVIEW_ACTING=1 has it meanwhile: assistant/preview.ts).
+ * The assistant clicking and typing in a tab of yours (S18 M2e): on in packaged builds from M2e-2c (#151), which lands
+ * the last of the plan (the leaving card, the open-redirect hold, the tainted chat) after M2e-2a and 2b, a full Claude
+ * and Neon security pass on all three, and the owner's OK.
  */
-export const ASSISTANT_ACTING_RELEASED = false as boolean;
+export const ASSISTANT_ACTING_RELEASED = true as boolean;
 
 /** Whether this build lets the assistant act (ASSISTANT_ACTING_RELEASED, or any build that isn't packaged), with M2 in it. */
 export const assistantActing = (build: { packaged: boolean }, released = ASSISTANT_ACTING_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
