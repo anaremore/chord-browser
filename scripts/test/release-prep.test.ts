@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,6 +19,18 @@ function copy(): string {
     cpSync(join(repo, path), join(root, path));
   }
   return root;
+}
+
+/**
+ * A version above every one the files name (the app's, each metainfo <release>, each notes heading), its patch one
+ * more: never one a release already used, whatever state the repo's own files are in (a patch's notes ported to main
+ * before the app's version moves, as #138 did for 0.14.1).
+ */
+function unusedVersion({ pkg, xml, md }: { pkg: string; xml: string; md: string }): string {
+  const named = [packageVersion(pkg), ...[...xml.matchAll(/<release version="(\d+\.\d+\.\d+)"/g)].map((m) => m[1]!), ...[...md.matchAll(/^## (\d+\.\d+\.\d+) /gm)].map((m) => m[1]!)];
+  const top = named.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
+  const [major, minor, patch] = top.split('.').map(Number);
+  return `${major}.${minor}.${patch! + 1}`;
 }
 
 const files = (root: string) => ({ pkg: readFileSync(join(root, PACKAGE), 'utf8'), xml: readFileSync(join(root, METAINFO), 'utf8'), md: readFileSync(join(root, NOTES), 'utf8') });
@@ -56,8 +68,7 @@ describe('the release commit’s edits', () => {
   it('on the repo’s own files: writes all three, the check wants the notes written, then passes', () => {
     const root = copy();
     const current = packageVersion(files(root).pkg);
-    const [major, minor, patch] = current.split('.').map(Number);
-    const next = `${major}.${minor}.${patch! + 1}`;
+    const next = unusedVersion(files(root));
     const logged: string[] = [];
     expect(main([next, '--kind', 'security', '--date', '2026-12-01'], root, (l: string) => logged.push(l))).toBe(0);
     const made = files(root);
@@ -70,6 +81,27 @@ describe('the release commit’s edits', () => {
     expect(check({ ...made, md: written }, next)).toEqual([]);
     // The repo's own release commit as it stands is complete for its version.
     expect(check(files(repo), current)).toEqual([]);
+  });
+
+  it('picks a version for itself that the files don’t name yet, even with a later patch’s notes already in', () => {
+    const pkg = '{ "version": "0.14.0" }';
+    const xml = '<releases>\n  <release version="0.14.1" date="d"/>\n  <release version="0.14.0" date="d"/>\n</releases>';
+    const md = '## 0.14.1 · security · 2026-11-24\n\n## 0.14.0 · preview · 2026-11-22\n';
+    expect(unusedVersion({ pkg, xml, md })).toBe('0.14.2');
+    expect(unusedVersion({ pkg: '{ "version": "0.15.0" }', xml, md })).toBe('0.15.1');
+  });
+
+  it('refuses a version a release already used, though it’s newer than the app’s (a patch from a release branch)', () => {
+    const root = copy();
+    const before = files(root);
+    // The repo's own files as main has them after a patch's notes were ported (#138): 0.14.1 in the notes and the
+    // metainfo, the app still 0.14.0. release:prep 0.14.1 there must refuse, and write nothing.
+    const pkg = setPackageVersion(before.pkg, '0.14.0');
+    const xml = before.xml.includes('<release version="0.14.1"') ? before.xml : addMetainfoRelease(before.xml, '0.14.1', '2026-11-24');
+    writeFileSync(join(root, PACKAGE), pkg);
+    writeFileSync(join(root, METAINFO), xml);
+    expect(() => main(['0.14.1'], root, () => {})).toThrow(/already has 0\.14\.1/);
+    expect(files(root)).toEqual({ ...before, pkg, xml });
   });
 
   it('refuses a version that isn’t newer, and changes nothing when it does', () => {
