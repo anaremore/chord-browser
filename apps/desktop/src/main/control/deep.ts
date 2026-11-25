@@ -28,7 +28,7 @@ import type { WebContents } from 'electron';
 import { pickersLost, retryPickers } from '../agents/pickers';
 import { withDebugger } from '../debugger-queue';
 import { pageCall } from '../page-call';
-import { SNAPSHOT_LIB } from './snapshot';
+import { SNAPSHOT_LIB, SNAPSHOT_FIND } from './snapshot';
 
 /** At most this long for the whole session (a hung page): then it's let go, and whatever waited is refused. */
 const DEEP_SESSION_MS = 20_000;
@@ -59,9 +59,10 @@ type Node = { shadowRoots?: (Node & { shadowRootType?: string })[]; children?: N
 /** A frame's title or what covers a point, as act.ts names it. */
 const CHECK_FN = String.raw`function (owner, token, key) {
   ${SNAPSHOT_LIB}
+  ${SNAPSHOT_FIND}
   const hit = this;
-  const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner);
-  if (!read || read.token !== token) return { ok: false, why: 'stale' };
+  const read = snapshotFind(owner, token);
+  if (!read) return { ok: false, why: 'stale' };
   if (read.finish) read.finish();
   const entry = read.keep[key];
   const el = entry && entry.ref.deref();
@@ -183,7 +184,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
         ? await send<{ result: { objectId?: string } }>('Runtime.evaluate', {
             contextId: world,
             objectGroup: OBJECT_GROUP,
-            expression: `(() => { const r = globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return null; const e = r.keep[${JSON.stringify(key)}]; return (e && e.ref.deref()) || null; })()`,
+            expression: `(() => { ${SNAPSHOT_FIND} const r = snapshotFind(${JSON.stringify(owner)}, ${JSON.stringify(token)}); if (!r) return null; const e = r.keep[${JSON.stringify(key)}]; return (e && e.ref.deref()) || null; })()`,
           })
         : null;
       const elementId = element?.result.objectId;
@@ -232,7 +233,7 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           const now = await send<{ result: { objectId?: string; value?: unknown } }>('Runtime.evaluate', {
             contextId: worldId,
             objectGroup: OBJECT_GROUP,
-            expression: `(() => { const r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (!r || r.token !== ${JSON.stringify(token)}) return 'stale'; if (r.finish) r.finish(); const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.path !== undefined ? 'replaced' : 'changed'; })()`,
+            expression: `(() => { ${SNAPSHOT_FIND} const r = snapshotFind(${JSON.stringify(owner)}, ${JSON.stringify(token)}); if (!r) return 'stale'; if (r.finish) r.finish(); const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.path !== undefined ? 'replaced' : 'changed'; })()`,
           });
           if (!now) return { ok: false, why: 'no-check', step: `open ${lastError}` };
           const currentId = now.result.objectId;

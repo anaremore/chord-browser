@@ -12,7 +12,7 @@ import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentChords, type Going } from '../../src/main/agents/chords';
-import { agentConnection } from '../../src/main/agents/connection';
+import { AGENT_PROGRESS, agentConnection } from '../../src/main/agents/connection';
 import { AuthBroker } from '../../src/main/http-auth';
 import { agentScope, NOT_YOURS } from '../../src/main/agents/scope';
 import { ControlAgent, type CardPresenter } from '../../src/main/control/gate';
@@ -541,6 +541,110 @@ describe('Review 1 of #77', () => {
     expect(broker.login(pageAt('https://intranet.test/', 'mine'), details, info, vi.fn())).toBe(true);
   });
 
+  it('a call that asked for progress hears it while a card waits on the user, and none after its answer (#143)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    type Sent = { id?: number; method?: string; params?: { progressToken?: unknown; progress?: number; message?: string } };
+    const sent: Sent[] = [];
+    let allow: (grant: 'once') => void = () => undefined;
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+      present: () => new Promise((done) => (allow = done)),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+      progressMs: 1000,
+    });
+    const progress = () => sent.filter((m) => m.method === 'notifications/progress');
+    // The connection card is up: each beat says so, with the client's token, counting up.
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'list_tabs', arguments: {}, _meta: { progressToken: 'p1' } } });
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(progress().map((m) => m.params)).toEqual([1, 2, 3].map((progress) => ({ progressToken: 'p1', progress, message: AGENT_PROGRESS.card })));
+    // Allowed: the answer, and no beat after it.
+    allow('once');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.find((m) => m.id === 1)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(progress()).toHaveLength(3);
+    // A call without a token hears none; nor one whose token is past its bound.
+    connection.message({ id: 2, method: 'tools/call', params: { name: 'list_tabs', arguments: {} } });
+    connection.message({ id: 3, method: 'tools/call', params: { name: 'list_tabs', arguments: {}, _meta: { progressToken: 'x'.repeat(300) } } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sent.find((m) => m.id === 2)).toBeDefined();
+    expect(progress()).toHaveLength(3);
+    // Stop while a card waits: the call answers stopped, and no beat comes after (round 1 of #145).
+    connection.message({ id: 4, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://agent.test/x' }, _meta: { progressToken: 'p4' } } });
+    await vi.advanceTimersByTimeAsync(1500);
+    const before = progress().length;
+    connection.agent.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.find((m) => m.id === 4)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(progress()).toHaveLength(before);
+    vi.useRealTimers();
+  });
+
+  it('progress names a card only when it’s this call’s (its tab’s, or the agent-wide one), and stops on the client’s cancel (Neon’s review of M2g-1, S4)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    type Sent = { id?: number; method?: string; params?: { progressToken?: unknown; progress?: number; message?: string } };
+    const sent: Sent[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+      present: (card) => (card.kind === 'connection' ? Promise.resolve('once') : new Promise(() => undefined)),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+      progressMs: 1000,
+    });
+    const chordId = t.chords.chordFor(connection.agent, 'Claude Code', null);
+    t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'b1', url: 'https://agent.test/b1' });
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'list_tabs', arguments: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    t.store.dispatch({ t: 'agent.tab.add', chordId, nodeId: 'b2', url: 'https://agent.test/b2' });
+    // A call on b1 (a1) waits: the user has that tab. A card is up on b2 meanwhile: not this call's.
+    connection.agent.pause('b1', true);
+    void connection.agent.ask({ kind: 'step', tool: 'click', description: 'click “Buy”', target: ['https://agent.test/b2'], tab: 'b2', subject: 'b2|step' }, new AbortController().signal);
+    connection.message({ id: 2, method: 'tools/call', params: { name: 'close_tab', arguments: { tab_id: 'a1' }, _meta: { progressToken: 7 } } });
+    await vi.advanceTimersByTimeAsync(2500);
+    const progress = () => sent.filter((m) => m.method === 'notifications/progress');
+    expect(progress().map((m) => m.params?.message)).toEqual([AGENT_PROGRESS.working, AGENT_PROGRESS.working]);
+    // A card on its own tab: that's this call's.
+    void connection.agent.ask({ kind: 'step', tool: 'click', description: 'click “Fold”', target: ['https://agent.test/b1'], tab: 'b1', subject: 'b1|step' }, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(progress().at(-1)?.params).toEqual({ progressToken: 7, progress: 3, message: AGENT_PROGRESS.card });
+    // The client cancels: no beat after.
+    connection.message({ method: 'notifications/cancelled', params: { requestId: 2 } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(progress()).toHaveLength(3);
+    vi.useRealTimers();
+  });
+
+  it('one call waits on its cards 50 s in all: a step card after a slow connection card gets what’s left, then waiting (#143)', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const sent: { id?: number; result?: { content: { text: string }[]; isError: boolean } }[] = [];
+    const answers: ((grant: 'once') => void)[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Codex' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
+      present: () => new Promise((done) => void answers.push(done)),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+    });
+    // open_tab of an address that signs out: the connection card, answered after 40 s, then the step card.
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://mail.test/logout' } } });
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(answers).toHaveLength(1);
+    answers[0]!('once');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answers).toHaveLength(2);
+    // The step card waits what's left of the 50 s (10 s), not its own 45: the call answers waiting by 50 s, under
+    // Codex's 60.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(sent.find((m) => m.id === 1)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(sent.find((m) => m.id === 1)?.result?.content[0]?.text).toBe(CONTROL_REFUSALS.waiting);
+    vi.useRealTimers();
+  });
+
   it('close_tab waits while you use the tab: it answers paused, and the tab stays', async () => {
     vi.useFakeTimers();
     const t = setup();
@@ -562,6 +666,14 @@ describe('Review 1 of #77', () => {
     await answer(2, 'close_tab', { tab_id: 'a1' });
     await vi.advanceTimersByTimeAsync(45_000);
     expect(sent.find((m) => m.id === 2)?.result).toMatchObject({ isError: true, content: [{ text: CONTROL_REFUSALS.paused }] });
+    expect(nodeOf(t.store.state, 'b1')).toBeDefined();
+    // Asked again, and the client gives up while it waits (round 1 of #145, SF3): it never closes the tab later.
+    connection.agent.pause('b1', true);
+    await answer(4, 'close_tab', { tab_id: 'a1' });
+    connection.message({ method: 'notifications/cancelled', params: { requestId: 4 } });
+    await vi.advanceTimersByTimeAsync(0);
+    connection.agent.pause('b1', false);
+    await vi.advanceTimersByTimeAsync(10);
     expect(nodeOf(t.store.state, 'b1')).toBeDefined();
     // Once you leave it, it closes.
     connection.agent.pause('b1', false);
@@ -691,6 +803,34 @@ describe('open_tab and a Never site (security review)', () => {
     expect(a.tabs()).toHaveLength(stays ? 1 : 0);
     // Nothing of it comes later either.
     expect(JSON.stringify(await a.reply(2, 'list_tabs'))).not.toMatch(PRIVATE);
+  });
+
+  it('the client giving up while open_tab’s page loads answers at once, never at the load’s limit (round 2 of #145)', async () => {
+    const t = setup(['bank.test']);
+    const a = connected(t);
+    a.connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://agent.test/slow' } } });
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBeGreaterThan(0));
+    a.connection.message({ method: 'notifications/cancelled', params: { requestId: 1 } });
+    // Answered within a moment (the load's own limit is 15 s).
+    await vi.waitFor(() => expect(a.sent.find((m) => m.id === 1)).toBeDefined(), { timeout: 1000 });
+    expect(a.sent.find((m) => m.id === 1)!.result!.content[0]!.text).toBe(CONTROL_REFUSALS.stopped);
+    // And its own wait for the page ends too, not at the load's limit: it stops listening for the load.
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBe(0), { timeout: 1000 });
+  });
+
+  it('open_tab’s step card names its address as a JSON tuple (round 2 of #145)', async () => {
+    const t = setup();
+    const asked: { subject: string }[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, () => undefined, {
+      present: async (card) => ((asked.push(card as never), card.kind === 'step' ? 'deny' : 'once')),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+    });
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://mail.test/logout' } } });
+    await vi.waitFor(() => expect(asked.some((c) => (c as unknown as { kind: string }).kind === 'step')).toBe(true));
+    const step = asked.find((c) => (c as unknown as { kind: string }).kind === 'step')!;
+    expect(JSON.parse(step.subject)).toEqual(['open', 'https://mail.test/logout']);
   });
 
   it('a tab that goes to a Never site after open_tab returned (its wait ended while it loaded) closes, and list_tabs and later replies never show it', async () => {

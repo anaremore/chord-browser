@@ -5,8 +5,9 @@
  * its own (`@chord/core/agent-tools`) by the bridge, which must start fast:
  * nothing here pulls in the rest of core.
  */
+import { PRESS_KEYS, TYPE_TEXT_MAX } from './control-act';
 import { CONTROL_REFUSALS } from './control-gate';
-import { ASSISTANT_READ_MAX, CONTROL_TOOLS, type ControlTier } from './control-tools';
+import { ASSISTANT_READ_MAX, CONTROL_TOOLS, type ControlTier, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS } from './control-tools';
 
 /** What a call says while no Chord is running (or it quit mid-call): the bridge says it itself. */
 export const AGENT_NOT_OPEN = CONTROL_REFUSALS.notOpen;
@@ -134,6 +135,10 @@ export const AGENT_TOOLS: readonly AgentToolSpec[] = [
   },
 ];
 
+/** batch (M2g-1, the owner's token goal): the element tools it takes, and how many steps at most. */
+export const BATCH_TOOLS = ['click', 'type', 'press_key', 'select_option', 'hover'] as const;
+export const BATCH_STEPS_MAX = 20;
+
 /**
  * M2's tools for outside agents (docs/decisions/S18-agent-mcp.md, "M2: plan"), in builds that have M2 (agentActions).
  * Fixed names, never added or taken away as pages come and go (WebMCP's tools, later, come behind fixed meta-tools).
@@ -141,11 +146,11 @@ export const AGENT_TOOLS: readonly AgentToolSpec[] = [
 export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
-    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
+    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. A ref stays good while its element is on the page; a page that goes elsewhere makes them all stale. After an action, its result lists what changed since your last snapshot (page_changes: + new, ~ changed, - gone), so you rarely need another. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Long runs of rows alike show their first few: pass find (text in a name) to get just the elements you want, with refs. Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
   ),
   ...(
     [
-      ['click', 'Click an element in one of your own tabs by its ref from that tab’s latest snapshot. The first action on a site asks the user. Returns what happened: whether the page went somewhere else (then its refs are stale: call snapshot).', true],
+      ['click', 'Click an element in one of your own tabs by its ref from a snapshot. The first action on a site asks the user. Returns what happened: whether the page went somewhere else (then its refs are stale: call snapshot), and what changed.', true],
       ['type', 'Type text into a text field in one of your own tabs by its ref: what’s there is replaced unless replace is false; submit presses Enter after. Never a password, code or card number (those fields have no ref: the user fills them).', true],
       ['press_key', 'Press one key in an element of one of your own tabs, by its ref. Only the keys listed; text goes in with type.', true],
       ['select_option', 'Choose an option of a list in one of your own tabs, by the list’s ref and the option’s label from the snapshot.', false],
@@ -154,6 +159,39 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
       ['back', 'Go back a page in one of your own tabs. Waits for the page to load.', false],
     ] as const
   ).map(([name, description, destructive]): AgentToolSpec => ({ name, level: 'act', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: false, destructiveHint: destructive, openWorldHint: true } })),
+  {
+    name: 'batch',
+    level: 'act',
+    description: `Several steps on one of your tabs in one call, in order (fill a form's fields, then submit): each a click, type, press_key, select_option or hover by its ref, as that tool takes it, asking the user as that tool would. Stops at the first step refused, and says which; at most ${BATCH_STEPS_MAX} steps.`,
+    inputSchema: object(
+      {
+        tab_id: { type: 'string' },
+        steps: {
+          type: 'array',
+          minItems: 1,
+          maxItems: BATCH_STEPS_MAX,
+          items: object(
+            {
+              tool: { type: 'string', enum: [...BATCH_TOOLS] },
+              ref: { type: 'string', pattern: '^e[1-9][0-9]{0,8}$' },
+              text: { type: 'string', maxLength: TYPE_TEXT_MAX },
+              replace: { type: 'boolean' },
+              submit: { type: 'boolean' },
+              key: { type: 'string', enum: [...PRESS_KEYS] },
+              option: { type: 'string', maxLength: 500 },
+            },
+            ['tool', 'ref'],
+          ),
+        },
+      },
+      ['tab_id', 'steps'],
+    ),
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  read(
+    'wait_for',
+    `Wait, instead of polling with snapshots or sleeping, until a text (text) or an element (role and its exact name) shows in one of your tabs, or with gone, stops showing; at most timeout_ms (${WAIT_FOR_MAX_MS} ms, ${WAIT_FOR_DEFAULT_MS} by default). Answers met (true or false) and waited_ms; with snapshot true, the tab's outline and refs when it's met, as snapshot gives them. One wait at a time. For a turn-based page: wait for your turn's controls with snapshot, then act.`,
+  ),
 ];
 
 /** The tools of this build: M1's, and M2's when it has them (agentActions). */

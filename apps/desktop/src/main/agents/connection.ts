@@ -13,6 +13,9 @@
  * downloads) comes with its next result. Loaded only when the first connection
  * arrives.
  */
+import { imageTokens } from '../control/extract';
+import { runBatch } from '../control/batch';
+import { noteResult, tokensOf } from '../control/phases';
 import {
   ACT_REFUSALS,
   CONTROL_REFUSALS,
@@ -30,8 +33,7 @@ import {
   type Command,
   type Grant,
   type NodeId,
-  type ProfileId,
-} from '@chord/core';
+  type ProfileId } from '@chord/core';
 import { ControlAgent, type CardPresenter, type ControlCard } from '../control/gate';
 import { controlPage } from '../control/page';
 import type { ToolOutput } from '../control/scope';
@@ -68,7 +70,33 @@ export interface ConnectionDeps {
   loadMs?: number;
   /** Acting (M2c): the sites it may act on for good (its allowance's), and keeping one (*Always on this site*). */
   sites?: { allowed(site: string): boolean; keep(site: string): void };
+  /** How often a call that asked for progress hears it (PROGRESS_MS; tests shorten it). */
+  progressMs?: number;
+  /** How long one call waits on cards in all (CALL_WAIT_MS; tests shorten it). */
+  callWaitMs?: number;
 }
+
+/**
+ * How long one call waits on cards in all (#143): the connection's, a site's and a step's can come one after another,
+ * 45 s each, and a client gives up on a call before that (Codex at 60 s by default). Past it, the call answers
+ * *waiting* and the card stays up: the user's Allow counts for the agent's retry of that same step (M2d's late Allow).
+ * A card asked at the very end still shows, for CARD_WAIT_MIN_MS. Send data cards are never cut (scope.sendWaitMs: no
+ * answer drops what the page sent).
+ */
+const CALL_WAIT_MS = 50_000;
+const CARD_WAIT_MIN_MS = 1_000;
+
+/**
+ * A call that carries a progressToken hears this often that it's still under way (#143): what a client counts as
+ * activity (Claude Code's idle limit), and how its user sees that Chord waits on them, not that it hung.
+ */
+const PROGRESS_MS = 5_000;
+/** A progressToken longer than this isn't echoed back (it's the client's; a string one is usually a few characters). */
+const PROGRESS_TOKEN_MAX = 256;
+export const AGENT_PROGRESS = {
+  card: 'Waiting for the user to answer Chord’s card.',
+  working: 'Still working in Chord.',
+} as const;
 
 /** What open_tab waits for its page: at most this long (S18 §5). */
 const LOAD_MS = 30_000;
@@ -135,10 +163,10 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   if (hello.toolsVersion !== agentToolsVersion(agentToolList(actions))) send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
 
   /** The connection card, once per connection (or for good, with Always or a no). */
-  const connectionAnswer = async (signal: AbortSignal): Promise<'go' | Grant | 'waiting'> => {
+  const connectionAnswer = async (signal: AbortSignal, wait: number): Promise<'go' | Grant | 'waiting'> => {
     if (allowed) return 'go';
     const card: Omit<ControlCard, 'id'> = { kind: 'connection', tool: 'connect', description: `“${name}” wants to use Chord`, target: [], tab: null, subject: name };
-    const answer = await agent.ask(card, signal, waitMs);
+    const answer = await agent.ask(card, signal, wait);
     if (answer === 'once' || answer === 'always') {
       allowed = true;
       profile ??= deps.allowedProfile?.() ?? null;
@@ -147,7 +175,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** open_tab: a tab in its Agent chord, signed in as the user, once its page has loaded (at most LOAD_MS). */
-  const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal): Promise<ToolOutput> => {
+  const openTab = async (args: Record<string, unknown>, callSignal: AbortSignal, cardWait: () => number): Promise<ToolOutput> => {
     const url = typeof args['url'] === 'string' ? args['url'].trim() : '';
     if (!WEB_ADDRESS.test(url) || url.length > 2048) return { text: 'Only http and https addresses, up to 2,048 characters.', isError: true };
     if (isNeverReadable(url, neverSites())) return { text: 'That site is one the user keeps private, so it can’t be opened for you.', isError: true };
@@ -157,10 +185,10 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     if (why) {
       const site = siteOfUrl(url) ?? barAddress(url);
       const answer = await agent.ask(
-        { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: `open|${url}`, step: { why, site, fields: [], more: 0 } },
+        { kind: 'step', tool: 'open_tab', description: `open ${barAddress(url)}`, target: [url], tab: null, subject: JSON.stringify(['open', url]), step: { why, site, fields: [], more: 0 } },
         // The call's own signal (Neon's review 2 of #112): Stop or the agent cancelling takes the card down for it.
         callSignal,
-        waitMs,
+        cardWait(),
       );
       if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
       if (answer === 'deny') return { text: ACT_REFUSALS.stepDenied, isError: true };
@@ -209,11 +237,13 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         return { text: toolResult({ tab_id: ref, url: WEB_ADDRESS.test(page.url()) ? page.url() : url, title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
       },
       refused,
+      // The client giving up ends its wait for the page too (round 2 of #145).
+      callSignal,
     );
   };
 
   /** close_tab: one of its own tabs, never yours; through the gate on that tab, so it waits while you're using it. */
-  const closeTab = async (args: Record<string, unknown>): Promise<ToolOutput> => {
+  const closeTab = async (args: Record<string, unknown>, cancelled: AbortSignal): Promise<ToolOutput> => {
     const state = deps.browser.store.state;
     const found = scope.refs.resolve(args['tab_id'], (id) => nodeOf(state, id)?.kind === 'tab');
     if (!found.ok) return { text: found.why === 'closed' ? CONTROL_REFUSALS.closed : 'No such tab. Use list_tabs.', isError: true };
@@ -228,6 +258,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         return { text: 'Closed.' };
       },
       refused,
+      // The client giving up while it waits (a paused tab): it never closes the tab later (round 1 of #145, SF3).
+      cancelled,
     );
   };
 
@@ -240,29 +272,71 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     return [{ type: 'text', text: JSON.stringify({ trust: 'untrusted', held: list, note }) }];
   };
 
+  /**
+   * batch (M2g-1, the owner's token goal: fewer calls): its steps in order, each through the same layer as its own call
+   * (every check, card, the send hold and the guard), on the batch's tab. The first step refused stops it. One compact
+   * answer: what each step did, and the page after; or which step was refused, and why.
+   */
   const call = async (m: Message) => {
     const tool = typeof m.params?.['name'] === 'string' ? m.params['name'] : '';
     const args = (m.params?.['arguments'] && typeof m.params['arguments'] === 'object' ? m.params['arguments'] : {}) as Record<string, unknown>;
     const cancel = new AbortController();
     calls.set(m.id, cancel);
     lastCallAt = Date.now();
+    // What's left of the call's wait on cards, for the next card it asks (CALL_WAIT_MS).
+    const started = Date.now();
+    const cardWait = () => Math.min(waitMs, Math.max(CARD_WAIT_MIN_MS, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)));
+    const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait } });
+    // Progress, when the client asked for it (MCP's progressToken, a string or a number, bounded): every PROGRESS_MS
+    // until the answer or the client's cancel, saying whether a card this call waits on is up: one for its tab, or the
+    // agent-wide one (the connection's) (#143; Neon's review of M2g-1, S4).
+    const token = (m.params?.['_meta'] as { progressToken?: unknown } | undefined)?.progressToken;
+    const tokenOk = (typeof token === 'string' && token.length > 0 && token.length <= PROGRESS_TOKEN_MAX) || (typeof token === 'number' && Number.isFinite(token));
+    const tabOf = () => {
+      const found = scope.refs.resolve(args['tab_id'], () => true);
+      return found.ok ? found.id : null;
+    };
+    let beats = 0;
+    const beat = tokenOk
+      ? setInterval(() => {
+          const tab = tabOf();
+          const card = agent.state(null).cards.length > 0 || (tab !== null && agent.state(tab).cards.length > 0);
+          send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: card ? AGENT_PROGRESS.card : AGENT_PROGRESS.working } });
+        }, deps.progressMs ?? PROGRESS_MS)
+      : null;
+    // Never what keeps the process up (round 1 of #145).
+    beat?.unref?.();
+    if (beat) cancel.signal.addEventListener('abort', () => clearInterval(beat), { once: true });
     try {
       const out = await agent.call(
         null,
         async (signal): Promise<ToolOutput> => {
-          const answer = await connectionAnswer(AbortSignal.any([signal, cancel.signal]));
+          const answer = await connectionAnswer(AbortSignal.any([signal, cancel.signal]), cardWait());
           if (answer === 'waiting') return { text: CONTROL_REFUSALS.waiting, isError: true };
           if (answer === 'deny') return { text: CONTROL_REFUSALS.denied, isError: true };
           if (!agentTools(actions).some((t) => t.name === tool)) return { text: `There’s no tool called ${tool.slice(0, 60)}. Call tools/list.`, isError: true };
-          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]));
-          if (tool === 'close_tab') return closeTab(args);
-          return toPlain(await runControlTool(scope, deps.browser, tool, args));
+          if (tool === 'open_tab') return openTab(args, AbortSignal.any([signal, cancel.signal]), cardWait);
+          if (tool === 'close_tab') return closeTab(args, cancel.signal);
+          if (tool === 'batch') return runBatch(callScope, deps.browser, args, cancel.signal);
+          return toPlain(await runControlTool(callScope, deps.browser, tool, args, cancel.signal));
         },
         refused,
+        cancel.signal,
       );
       const answer = output(out);
-      reply(m.id, { ...answer, content: [...answer.content, ...held()] });
+      if (beat) clearInterval(beat);
+      const result = { ...answer, content: [...answer.content, ...held()] };
+      // What the result costs the agent, by tool (the owner, 2026-11-24: as few tokens as can be): in the log, and kept
+      // for the eval journeys (phases.ts).
+      // A picture by its pixels, not its bytes (a model sees the image, never its base64).
+      const chars = JSON.stringify(result.content).length;
+      const shot = out.image?.width && out.image.height ? out.image : null;
+      const tokens = shot ? imageTokens(shot.width!, shot.height!) + tokensOf(JSON.stringify(result.content.slice(1)).length) : tokensOf(chars);
+      noteResult(tool, chars, tokens);
+      deps.log?.('result', tool, `${chars} chars`, `~${tokens} tokens`);
+      reply(m.id, result);
     } finally {
+      if (beat) clearInterval(beat);
       calls.delete(m.id);
     }
   };

@@ -43,6 +43,8 @@ export interface AgentServiceDeps {
   restrict?(path: string): Promise<number>;
   /** How long a call waits on a card (CONTROL_WAIT_MS unless a test says). */
   waitMs?: number;
+  /** How often a call that asked for progress hears it (connection.ts; tests shorten it). */
+  progressMs?: number;
   log?(...args: unknown[]): void;
   /** For the agents' chords (M1c), made with the first connection; absent, agents open no tabs. */
   chords?: AgentChordsDeps;
@@ -143,6 +145,7 @@ export class AgentService {
             const connection = agentConnection(hello, send, {
               browser: this.deps.browser,
               waitMs: this.deps.waitMs,
+              ...(this.deps.progressMs ? { progressMs: this.deps.progressMs } : {}),
               actions: this.deps.actions !== false,
               log: this.deps.log,
               ...(this.chords ? { chords: this.chords } : {}),

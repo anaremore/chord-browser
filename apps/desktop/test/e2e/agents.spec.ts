@@ -253,6 +253,16 @@ test('Always on this site: offered to an agent you always allow, kept, listed in
   }
 });
 
+/**
+ * wait_for's answer, met or not, and the lines to find refs in: the outline (no snapshot of the page before), or what
+ * changed since (M2g-1), its gone lines left out.
+ */
+function waitAnswer(text: string): { met: boolean; lines: string } {
+  const w = JSON.parse(text) as { content?: string; wait?: { met: boolean }; data?: { met: boolean; page_changes?: { lines?: string[] } } };
+  if (w.content !== undefined) return { met: w.wait?.met === true, lines: w.content };
+  return { met: w.data?.met === true, lines: (w.data?.page_changes?.lines ?? []).filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).join('\n') };
+}
+
 /** A list of rows of links, buttons and text: `rows` of 5 elements each. */
 const rowsPage = (rows: number) =>
   `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
@@ -1231,6 +1241,53 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
   }
 });
 
+test('a control the page renames in place, or behind a diff too big to show: its old ref never acts on it (round 1 of #145, B1)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/rename` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const CHANGED = 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.';
+    const inPage = (js: string) => app.evaluate(({ webContents }, [url, code]) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript(code), [`${site.origin}/rename`, js] as const);
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    const draft = refOf(outline, 'button "Draft 1"');
+    const other = refOf(outline, 'button "Other"');
+    // Renamed in place (the same node): the diff shows it gone and the new one, with a new ref.
+    await inPage('document.getElementById("d").textContent = "Production DB"; 0');
+    const hovering = mcp.call('hover', { tab_id: 'a1', ref: other });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    const hovered = JSON.parse((await hovering).text) as { data: { page_changes: { lines: string[] } } };
+    expect(hovered.data.page_changes.lines).toContain(`- - button "Draft 1" [ref=${draft}]`);
+    const renamed = hovered.data.page_changes.lines.find((l) => l.startsWith('+ - button "Production DB"'));
+    expect(renamed).toBeTruthy();
+    expect(renamed).not.toContain(`[ref=${draft}]`);
+    // The old ref never acts on it.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: draft })).text).toBe(CHANGED);
+    expect(await inPage('document.getElementById("log").textContent')).toBe('');
+    // Renamed again, behind a diff too big to show (70 rows more): still never by the ref the agent last saw.
+    const production = /\[ref=(e\d+)\]/.exec(renamed!)![1]!;
+    await inPage('document.getElementById("d").textContent = "Drop all"; const list = document.getElementById("list"); for (let i = 0; i < 70; i++) { const li = document.createElement("li"); li.textContent = "Row " + i; list.append(li); } 0');
+    const big = JSON.parse((await mcp.call('hover', { tab_id: 'a1', ref: other })).text) as { data: { page_changes: { note?: string } } };
+    expect(big.data.page_changes.note).toBe('Much of the page changed: call snapshot to see it.');
+    expect((await mcp.call('click', { tab_id: 'a1', ref: production })).text).toBe(CHANGED);
+    expect(await inPage('document.getElementById("log").textContent')).toBe('');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('the first look at a tab just opened: a page that draws itself after it loads gives its outline and its picture, never an empty one (the owner, 2026-11-24)', async () => {
   test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1262,6 +1319,342 @@ test('the first look at a tab just opened: a page that draws itself after it loa
       expect(await dark(image!.data!), 'not black').toBeLessThan(0.5);
       expect(outline).toContain('button "Join table"');
     }
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a timed table: played as an agent does today (polling snapshots), then with wait_for and its outline, no sleeps; where each move’s time goes (M2g-1)', async () => {
+  test.setTimeout(240_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/timed` });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text).toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const inPage = (code: string) => app.evaluate(({ webContents }, [prefix, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(prefix))!.executeJavaScript(js), [`${site.origin}/timed`, code] as const);
+    const phases = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { agentPhaseTimes(): Promise<{ tool: string; phase: string; ms: number }[]> } }).chordTestHooks.agentPhaseTimes());
+    const timed = async <T,>(f: () => Promise<T>) => {
+      const t0 = Date.now();
+      const out = await f();
+      return { out, ms: Date.now() - t0 };
+    };
+    const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
+    let siteAllowed = false;
+    /** Call, by its ref in `outline`; the site card answered the first time. */
+    const call = async (outline: string) => {
+      const clicking = timed(() => mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'generic "Call"') }));
+      if (!siteAllowed) {
+        const siteCard = siteCardOf(popover, 'Codex');
+        await expect(siteCard).toBeVisible({ timeout: 15_000 });
+        await popover.waitForTimeout(600);
+        await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+        siteAllowed = true;
+      }
+      const click = await clicking;
+      expect(click.out.text).toMatch(/^\{/);
+      await expect.poll(() => inPage('document.getElementById("log").textContent')).toContain('Call after');
+      await inPage('document.getElementById("log").textContent = ""');
+      return click.ms;
+    };
+    const report = async (how: string, moves: number[], calls: number, laps: { tool: string; phase: string; ms: number }[]) => {
+      const byPhase = new Map<string, number[]>();
+      for (const l of laps) byPhase.set(`${l.tool}:${l.phase}`, [...(byPhase.get(`${l.tool}:${l.phase}`) ?? []), l.ms]);
+      console.log(`[timed table] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${how}: turn start to Chord's click done, median ${med(moves)} ms; ${calls} tool calls for ${moves.length} moves (each a model round trip for an agent); phases (median ms): ${[...byPhase].map(([k, v]) => `${k} ${med(v).toFixed(0)}`).join(', ')}`);
+    };
+    await phases();
+    // Today: a snapshot each 500 ms until it's the agent's turn (a model round trip each, and a sleep), then Call.
+    {
+      const moves: number[] = [];
+      let calls = 0;
+      for (let turn = 0; turn < 3; turn++) {
+        let outline = '';
+        for (;;) {
+          calls++;
+          outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+          if (outline.includes('generic "Call"')) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        calls++;
+        await call(outline);
+        if (turn > 0) moves.push(Date.now() - Number(await inPage('window.turnAt')));
+      }
+      await report('polling', moves, calls, await phases());
+    }
+    // With wait_for: one call waits for the turn's controls and gives the outline, then Call. No sleeps.
+    {
+      const moves: number[] = [];
+      let calls = 0;
+      for (let turn = 0; turn < 3; turn++) {
+        calls++;
+        const waited = waitAnswer((await mcp.call('wait_for', { tab_id: 'a1', role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
+        expect(waited.met, `turn ${turn}`).toBe(true);
+        calls++;
+        await call(waited.lines);
+        moves.push(Date.now() - Number(await inPage('window.turnAt')));
+      }
+      expect(String(await inPage('document.getElementById("log").textContent'))).not.toContain('auto-folded');
+      await report('wait_for', moves, calls, await phases());
+      // Every move well inside the 15 s clock (Chord's share: the agent's thinking is the rest).
+      expect(Math.max(...moves)).toBeLessThan(3000);
+    }
+    // A text, coming and going: the turn's words show, then go once it's played.
+    expect(JSON.parse((await mcp.call('wait_for', { tab_id: 'a1', text: 'Your turn', timeout_ms: 20_000 })).text)).toMatchObject({ data: { met: true } });
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    await call(outline);
+    expect(JSON.parse((await mcp.call('wait_for', { tab_id: 'a1', text: 'Your turn', gone: true, timeout_ms: 5_000 })).text)).toMatchObject({ data: { met: true } });
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('the token eval: its journeys, each as an agent would play it with the tools this build offers; success, tool calls, tokens and wall time (the owner, 2026-11-24)', async () => {
+  test.setTimeout(300_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const popover = await pageWhere(app, isPopover);
+    const tools = (await mcp.request('tools/list', {})).result['tools'] as { name: string }[];
+    const toolList = JSON.stringify(tools).length;
+    // Played with what this build offers: #145's tools (wait_for, batch, by name), else main's (the before: snapshots,
+    // refs, polling). The same spec measures both (on main's build, a copy of it).
+    const lean = tools.some((t) => t.name === 'wait_for') && tools.some((t) => t.name === 'batch');
+    /** What the model gets back from each call: every result's content, counted (tokens, call by call). */
+    let meter = { calls: 0, chars: 0, results: [] as number[], pictures: [] as { width: number; height: number }[] };
+    /** A picture's size, from its header (a model is charged by a picture's pixels, never its base64). */
+    const pictureSize = (b: Buffer): { width: number; height: number } | null => {
+      // A PNG (main's pictures): its header's width and height.
+      if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+      for (let i = 2; i + 9 < b.length; ) {
+        if (b[i] !== 0xff) return null;
+        const marker = b[i + 1]!;
+        if (marker >= 0xc0 && marker <= 0xc3) return { height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7) };
+        i += 2 + b.readUInt16BE(i + 2);
+      }
+      return null;
+    };
+    const ask = async (name: string, args: Record<string, unknown>) => {
+      const r = (await mcp.request('tools/call', { name, arguments: args })).result as { content: { type: string; text?: string; data?: string; mimeType?: string }[]; isError?: boolean };
+      meter.calls++;
+      let chars = 0;
+      for (const c of r.content) {
+        const size = c.type === 'image' ? pictureSize(Buffer.from(c.data ?? '', 'base64')) : null;
+        // A picture: a token for each 750 pixels (counted here as characters, four to a token).
+        chars += size ? Math.ceil((size.width * size.height) / 750) * 4 : JSON.stringify(c).length;
+        if (size) meter.pictures.push(size);
+      }
+      meter.chars += chars;
+      meter.results.push(Math.ceil(chars / 4));
+      return { text: r.content[0]?.text ?? '', error: r.isError === true };
+    };
+    /** A call, with any card it raises allowed as the user would (the site's for now, a step's, a connection's once). */
+    const act = async (name: string, args: Record<string, unknown>) => {
+      const calling = ask(name, args);
+      for (;;) {
+        const card = popover.getByRole('alertdialog').first();
+        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+        if (next === 'done') return calling;
+        await popover.waitForTimeout(600);
+        for (const label of ['Allow once', 'Allow for now', 'Allow']) {
+          const button = card.getByRole('button', { name: label, exact: true });
+          if (await button.count()) {
+            await button.click();
+            break;
+          }
+        }
+        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+      }
+    };
+    const inPage = (prefix: string, code: string) => app.evaluate(({ webContents }, [p, js]) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(p))!.executeJavaScript(js), [`${site.origin}${prefix}`, code] as const);
+    const outlineOf = (text: string) => (JSON.parse(text) as { content: string }).content;
+    let tabs = 0;
+    const open = async (path: string) => {
+      const opened = await act('open_tab', { url: `${site.origin}${path}` });
+      tabs++;
+      return (JSON.parse(opened.text) as { data: { tab_id: string } }).data.tab_id;
+    };
+    /**
+     * What the model reads, estimated (the plan's assumptions): each call is a model turn that sends the tool list and a
+     * fixed 8,000 tokens of system prompt and history, and every result so far (each result is read again on every
+     * later turn of the journey).
+     */
+    const CONTEXT = 8000;
+    const defs = Math.ceil(toolList / 4);
+    const modelInput = (results: number[]) => results.reduce((sum, _, k) => sum + defs + CONTEXT + results.slice(0, k + 1).reduce((a, b) => a + b, 0), 0);
+    const rows: { journey: string; success: boolean; calls: number; tokens: number; defs: number; input: number; ms: number }[] = [];
+    const journey = async (name: string, play: () => Promise<boolean>) => {
+      meter = { calls: 0, chars: 0, results: [], pictures: [] };
+      const began = Date.now();
+      let success = false;
+      try {
+        success = await play();
+      } catch (e) {
+        console.log(`[token eval] ${name} failed: ${String(e)}`);
+      }
+      rows.push({ journey: name, success, calls: meter.calls, tokens: meter.results.reduce((a, b) => a + b, 0), defs, input: modelInput(meter.results), ms: Date.now() - began });
+    };
+    void tabs;
+
+    await journey('bot game, one hand', async () => {
+      const tab = await open('/game');
+      if (!lean) {
+        // Main's tools, played as well as they allow (round 1 of #145, SF5): one look, and its refs throughout (main
+        // finds a redrawn control again too: #117).
+        const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+        await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
+        await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
+        await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
+        return /Call.*bet 20.*Raise/.test(String(await inPage('/game', 'document.getElementById("log").textContent')));
+      }
+      // As an agent would (Neon's round 1, B-8): it looks first, knowing nothing of the page, then acts by the refs it
+      // saw; each action's result says what changed, so no second look.
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+      await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
+      await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
+      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
+      const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
+      return /Call.*bet 20.*Raise/.test(log);
+    });
+    if (lean) {
+      const body = await open('/aria-body');
+      // Nor does wait_for look at a page's text when the page is an editor (B-3): what shows is what's typed there.
+      const EDITOR = 'That page is an editor: what shows in it is what’s typed there, so wait_for looks only for an element by its role and name there.';
+      expect((await ask('wait_for', { tab_id: body, text: 'Draft', timeout_ms: 1000 })).text).toBe(EDITOR);
+      const design = await open('/design');
+      expect((await ask('wait_for', { tab_id: design, text: 'typed secret', timeout_ms: 1000 })).text).toBe(EDITOR);
+      // The page's root editable (round 1 of #145).
+      const root = await open('/root-editor');
+      expect((await ask('wait_for', { tab_id: root, text: 'typed root', timeout_ms: 1000 })).text).toBe(EDITOR);
+      // Never what doesn't show (S-5): a frame's fallback text, a button with no size.
+      const ghosts = await open('/ghosts');
+      for (const want of [{ text: 'Ghost text' }, { role: 'button', name: 'Ghost' }]) {
+        expect(JSON.parse((await ask('wait_for', { tab_id: ghosts, ...want, timeout_ms: 500 })).text), JSON.stringify(want)).toMatchObject({ data: { met: false } });
+      }
+      expect(JSON.parse((await ask('wait_for', { tab_id: ghosts, text: 'Shown text', timeout_ms: 500 })).text)).toMatchObject({ data: { met: true } });
+      // A change inside an open shadow root wakes a look (N-6): met well before the page's one-second chunk ends.
+      await inPage('/ghosts', 'setTimeout(() => { document.getElementById("host").shadowRoot.querySelector("p").textContent = "Shadow ready"; }, 200); 0');
+      const shadow = JSON.parse((await ask('wait_for', { tab_id: ghosts, text: 'Shadow ready', timeout_ms: 3000 })).text) as { data: { met: boolean; waited_ms: number } };
+      expect(shadow.data.met).toBe(true);
+      expect(shadow.data.waited_ms).toBeLessThan(800);
+    }
+    await journey('timed table, two turns', async () => {
+      const tab = await open('/timed?others=1500');
+      for (let turn = 0; !lean && turn < 2; turn++) {
+        // Polling (main): a snapshot each second until Call shows, then Call by its ref.
+        for (;;) {
+          const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+          if (o.includes('generic "Call"')) {
+            await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        // The click's own turn: the others play again before Call shows.
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      // A first look, as an agent knowing nothing of the page would (round 1 of #145, SF5); then it waits for its turn.
+      if (lean) await ask('snapshot', { tab_id: tab });
+      for (let turn = 0; lean && turn < 2; turn++) {
+        const waited = waitAnswer((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
+        await act('click', { tab_id: tab, ref: refOf(waited.lines, 'generic "Call"') });
+      }
+      const log = String(await inPage('/timed', 'document.getElementById("log").textContent'));
+      return (log.match(/Call after/g) ?? []).length === 2 && !log.includes('auto-folded');
+    });
+    await journey('a 20-field form', async () => {
+      const tab = await open('/form20');
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      if (!lean) {
+        for (let i = 1; i <= 20; i++) await act('type', { tab_id: tab, ref: refOf(o, `textbox "Field ${i}"`), text: `v${i}` });
+        return ((await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string) === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
+      }
+      // Every field in one call (batch): each step as its own type call would go, gates and all.
+      const filled = await act('batch', { tab_id: tab, steps: Array.from({ length: 20 }, (_, i) => ({ tool: 'type', ref: refOf(o, `textbox "Field ${i + 1}"`), text: `v${i + 1}` })) });
+      if (filled.error) throw new Error(filled.text);
+      const values = (await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string;
+      return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
+    });
+    // Not metered (Neon's round 1, B-8): a step that can't go, found before any step runs.
+    if (lean) {
+      const tab = await open('/form20?again=1');
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const stopped = await act('batch', { tab_id: tab, steps: [{ tool: 'type', ref: refOf(o, 'textbox "Field 1"'), text: 'w1' }, { tool: 'type', ref: 'e999', text: 'x' }, { tool: 'type', ref: refOf(o, 'textbox "Field 3"'), text: 'w3' }] });
+      // A ref never given (or from another page) is refused before step 1 runs (round 2 of #145): nothing typed.
+      expect(stopped.error).toBe(true);
+      expect(stopped.text).toMatch(/^Step 2: (There’s no element e999 in that tab|That ref is from an earlier snapshot)/);
+      expect(await inPage('/form20?again=1', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')).toBe(',,');
+    }
+    await journey('a page that draws itself after it loads', async () => {
+      const tab = await open('/drawn');
+      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // Empty at first look: an agent looks again.
+      for (let i = 0; i < 5 && !o.includes('Join table'); i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      }
+      await act('click', { tab_id: tab, ref: refOf(o, 'button "Join table"') });
+      return String(await inPage('/drawn', 'document.getElementById("log").textContent')).includes('joined');
+    });
+    await journey('a 300-row list', async () => {
+      const tab = await open('/rows-300');
+      if (!lean) {
+        const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        return (await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') })).text.startsWith('{');
+      }
+      // As an agent would (B-8): it looks first; the outline shows 5 rows of 300 and says how many more, so it asks for
+      // the one it wants by its words (find), then clicks it by its ref.
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      if (o.includes('Act 150')) throw new Error('the 300 rows weren’t collapsed');
+      const found = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Act 150' })).text);
+      const clicked = await act('click', { tab_id: tab, ref: refOf(found, 'button "Act 150"') });
+      return clicked.text.startsWith('{');
+    });
+    await journey('a picture of the view', async () => {
+      const tab = await open('/game');
+      await ask('tab_screenshot', { tab_id: tab });
+      const [view] = meter.pictures;
+      console.log(`[token eval] the view's picture: ${view?.width} x ${view?.height}`);
+      return Boolean(view && view.width > 0);
+    });
+
+    // wait_for's cost on a page that renders every frame (its looks are throttled, in the page's own thread): the page's
+    // frames in 3 s, without a wait and during one that's never met.
+    if (lean) {
+      const tab = await open('/game?raf=1');
+      const frames = () => inPage('/game?raf=1', 'new Promise((done) => { let n = 0; const end = performance.now() + 3000; const f = () => { n++; if (performance.now() < end) requestAnimationFrame(f); else done(n); }; requestAnimationFrame(f); })') as Promise<number>;
+      const alone = await frames();
+      const [during, waited] = await Promise.all([frames(), ask('wait_for', { tab_id: tab, text: 'A text this page never shows', timeout_ms: 3000 })]);
+      console.log(`[token eval] wait_for on a page rendering every frame: ${alone} frames in 3 s alone, ${during} during the wait`);
+      expect(JSON.parse(waited.text)).toMatchObject({ data: { met: false } });
+      // Loose (shared runners): the wait never takes the page's frames down by half.
+      expect(during).toBeGreaterThan(alone / 2);
+    }
+
+    const table = [
+      `| Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |`,
+      `|---|---|---|---|---|---|---|`,
+      ...rows.map((r) => `| ${r.journey} | ${r.success ? 'yes' : 'no'} | ${r.calls} | ${r.tokens} | ${r.defs} | ${r.input} | ${(r.ms / 1000).toFixed(1)} |`),
+    ].join('\n');
+    console.log(`[token eval] ${lean ? 'this build' : 'main'} ${process.env['CHORD_E2E_DISPLAY'] ?? ''}\n${table}`);
+    mkdirSync(join(appDir, 'test-results'), { recursive: true });
+    writeFileSync(join(appDir, 'test-results', 'token-eval.json'), JSON.stringify({ played: lean ? 'lean' : 'main', rows, toolListTokens: defs, context: CONTEXT }, null, 2));
+    // Effectiveness is the gate: every journey succeeds.
+    for (const r of rows) expect(r.success, r.journey).toBe(true);
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -1597,7 +1990,8 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     // A second snapshot: new refs, counted on.
     const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
     const firstMax = Math.max(...[...snap.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])));
-    expect(Math.min(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax + 1);
+    // The same elements keep their refs from one snapshot to the next (M2g-1: the page's own ids).
+    expect(Math.max(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax);
 
     // Budgets (docs/decisions/S18-agent-mcp.md, "M2: plan"): a typical page (about 1,500 elements) and a 20,000-element one.
     type Times = { times: number[]; after: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
@@ -2155,6 +2549,19 @@ test.beforeAll(async () => {
     // from on its tick; a real button beside them.
     // A page that draws itself after it loads (an app's lobby: the owner's first look at a new tab, 2026-11-24).
     '/lobby': '<title>Lobby</title><style>body{margin:0;background:#fff}</style><div id=app></div><script>setTimeout(() => { document.getElementById("app").innerHTML = "<h1>Lobby</h1><button>Join table</button><div style=\\"background:#e33;width:600px;height:400px\\"></div>"; }, 600)</script>',
+    // A timed table (M2g-1's acceptance journey): your turn comes after the others', a shot clock of 15 s then, and
+    // the action controls (pointer divs, re-rendered every 100 ms) only while it's your turn. Out of time: folded.
+    // The token eval (the owner, 2026-11-24): a 20-field form, and a lobby that draws itself 600 ms after it loads.
+    // A name that isn't what it shows (Neon's B3 for M2g-1): never found by it.
+    // A button the page renames in place (round 1 of #145, B1), and a list it grows.
+    '/rename': '<title>Rename</title><main><ul id=list></ul><button id=d onclick="document.getElementById(\'log\').textContent += \' clicked \' + this.textContent">Draft 1</button><button id=x>Other</button><p id=log></p></main>',
+    '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
+    '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
+    '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
+    '/ghosts': '<title>Ghosts</title><main><p>Shown text</p><iframe srcdoc="<p>in the frame</p>">Ghost text</iframe><button style="width:0;height:0;padding:0;border:0;overflow:hidden">Ghost</button><div id=host></div></main><script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<p>Shadow wait</p>";</script>',
+    '/form20': `<title>Sign up</title><main><form onsubmit="return false"><h1>Sign up</h1>${Array.from({ length: 20 }, (_, i) => `<label>Field ${i + 1} <input name=f${i + 1}></label>`).join('')}</form></main>`,
+    '/drawn': '<title>Lobby</title><div id=app></div><p id=log></p><script>setTimeout(() => { document.getElementById("app").innerHTML = "<h1>Lobby</h1><button>Join table</button>"; document.querySelector("#app button").onclick = () => { document.getElementById("log").textContent += " joined"; }; }, 600)</script>',
+    '/timed': '<title>Timed table</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div role=region aria-label="Table 9"><p id=status>Waiting for the others</p><div id=controls></div></div><p id=log></p></main><script src="/timed.js"></script>',
     '/game': '<title>Game</title><style>.act{cursor:pointer;display:inline-block;padding:8px 12px;margin:4px;border:1px solid #888}</style><main><div id=table role=region aria-label="Table 3" tabindex=-1><div id=controls></div><label>Bet <input id=bet></label> <button id=rankings>Hand rankings</button></div><p id=log></p></main><script src="/game.js"></script>',
     // The press tried again (the review of #117, round 3): the page replaces its button as the pointer arrives, once
     // armed (window.arm), in the way ?m= says.
@@ -2186,6 +2593,41 @@ test.beforeAll(async () => {
         ' if (e.data === "putback") { try { delete self.fetch; } catch {} try { self.fetch = () => 0; } catch {} report(fetch("/worker-putback", { method: "POST", body: "x" }), "putback"); }' +
         '};',
       '/shared.js': 'onconnect = (e) => { const port = e.ports[0]; port.onmessage = () => fetch("/shared-save", { method: "POST", body: "x" }); };',
+      '/timed.js': `
+        const status = document.getElementById('status');
+        const c = document.getElementById('controls');
+        const log = document.getElementById('log');
+        const OTHERS_MS = Number(new URLSearchParams(location.search).get('others') || 3000);
+        const CLOCK_MS = 15000;
+        let turn = null;
+        const render = () => {
+          if (!turn) { c.innerHTML = ''; return; }
+          const left = Math.max(0, Math.ceil((CLOCK_MS - (performance.now() - turn.at)) / 1000));
+          c.innerHTML = '<div class=act>Fold</div><div class=act>Call</div><div class=act>Raise</div>';
+          status.textContent = 'Your turn: ' + left + ' s';
+        };
+        const yourTurn = () => {
+          turn = { at: performance.now(), n: (turn ? turn.n : 0) + 1 };
+          window.turnAt = Date.now();
+          turn.clock = setTimeout(() => { log.textContent += ' auto-folded'; others(); }, CLOCK_MS);
+          render();
+        };
+        const others = () => {
+          if (turn) clearTimeout(turn.clock);
+          turn = null;
+          status.textContent = 'Waiting for the others';
+          render();
+          setTimeout(yourTurn, OTHERS_MS);
+        };
+        setInterval(render, 100);
+        c.addEventListener('click', (e) => {
+          const a = e.target.closest('.act');
+          if (!a || !turn) return;
+          log.textContent += ' ' + a.textContent + ' after ' + Math.round(performance.now() - turn.at) + ' ms';
+          others();
+        });
+        others();
+      `,
       '/game.js': `
         const c = document.getElementById('controls');
         const log = document.getElementById('log');

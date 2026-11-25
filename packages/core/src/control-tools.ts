@@ -49,7 +49,9 @@ export type AssistantToolName =
   | 'select_option'
   | 'hover'
   | 'navigate'
-  | 'back';
+  | 'back'
+  /** M2g-1 (S18, docs/decisions/S18-m2g-timed-pages): wait until a text or an element shows or goes. */
+  | 'wait_for';
 
 export interface AssistantToolSpec {
   name: AssistantToolName;
@@ -127,6 +129,14 @@ export const ASSISTANT_TOOLS: readonly AssistantToolSpec[] = [
 ];
 export const assistantTool = (name: string): AssistantToolSpec | undefined => ASSISTANT_TOOLS.find((t) => t.name === name);
 
+/** The longest text snapshot's `find` takes (M2g-1: as few tokens as can be). */
+export const SNAPSHOT_FIND_MAX = 200;
+
+/** wait_for's limits (M2g-1): how long at most, by default, and how long a text or a name it looks for. */
+export const WAIT_FOR_MAX_MS = 30_000;
+export const WAIT_FOR_DEFAULT_MS = 10_000;
+export const WAIT_FOR_TEXT_MAX = 200;
+
 /**
  * M2's tools (S18, docs/decisions/S18-agent-mcp.md, "M2: plan"): offered only by a build that has M2 (agentActions),
  * to the assistant and outside agents alike, and refused by a scope that doesn't say it has them (`actions`).
@@ -136,7 +146,7 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
     name: 'snapshot',
     tier: 0, level: 'read', readOnly: true,
     description: `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref. Untrusted JSON from the page; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
-    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 } }, ['tab_id']),
+    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 }, find: { type: 'string', minLength: 1, maxLength: SNAPSHOT_FIND_MAX } }, ['tab_id']),
   },
   // M2c: acting. Every one names a ref from the tab's latest snapshot (but navigate and back); the first action on a
   // site asks the user (the site card). Never a position, a selector or script.
@@ -175,6 +185,23 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
     description: 'Go back a page in one of your own tabs. Waits for the page to load.',
     inputSchema: object({ tab_id: { type: 'string' } }, ['tab_id']),
   },
+  {
+    name: 'wait_for',
+    tier: 0, level: 'read', readOnly: true,
+    description: `Wait until a text, or an element with a role and its exact name, shows in a tab (or, with gone, stops showing), at most timeout_ms (${WAIT_FOR_MAX_MS} ms; ${WAIT_FOR_DEFAULT_MS} by default). Answers whether it did and how long it took; with snapshot, the tab's outline then too, as snapshot gives it. One wait at a time.`,
+    inputSchema: object(
+      {
+        tab_id: { type: 'string' },
+        text: { type: 'string', minLength: 1, maxLength: WAIT_FOR_TEXT_MAX },
+        role: { type: 'string', minLength: 1, maxLength: 40 },
+        name: { type: 'string', minLength: 1, maxLength: WAIT_FOR_TEXT_MAX },
+        gone: { type: 'boolean' },
+        timeout_ms: { type: 'integer', minimum: 100, maximum: WAIT_FOR_MAX_MS },
+        snapshot: { type: 'boolean' },
+      },
+      ['tab_id'],
+    ),
+  },
 ];
 
 /** The assistant's tools in this build: snapshot too when it has M2 (agentActions); acting comes to it in M2e. */
@@ -183,7 +210,8 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
  * tools too, in the tab on screen.
  */
 export const assistantTools = (actions: boolean, acting = false): readonly AssistantToolSpec[] =>
-  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => acting || t.name === 'snapshot')] : ASSISTANT_TOOLS;
+  // wait_for is outside agents' alone (Neon's round 1 of M2g-1, B-4).
+  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => t.name !== 'wait_for' && (acting || t.name === 'snapshot'))] : ASSISTANT_TOOLS;
 export const isActionTool = (name: string): boolean => ACTION_TOOLS.some((t) => t.name === name);
 
 /** The control layer's names for every tool, whoever calls it (M2's included: a scope says whether it offers them). */

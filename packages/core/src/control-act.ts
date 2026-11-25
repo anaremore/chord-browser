@@ -110,7 +110,7 @@ export function actDone(a: ActDescription): string {
 }
 
 /** What the bar says while an agent acts (present tense, after its name): `is clicking “Start a return”`. */
-export type BarDoing = { tool: ElementTool; name: string; role: string; key?: PressKey; choice?: string } | { tool: 'navigate'; to: string } | { tool: 'back' };
+export type BarDoing = { tool: ElementTool; name: string; role: string; key?: PressKey; choice?: string } | { tool: 'navigate'; to: string } | { tool: 'back' } | { tool: 'wait_for' };
 
 export function barDoing(d: BarDoing): string {
   switch (d.tool) {
@@ -118,6 +118,9 @@ export function barDoing(d: BarDoing): string {
       return `is going to ${d.to}`;
     case 'back':
       return 'is going back';
+    // Never what it waits for (the agent's words in Chord's own bar): only that it waits (M2g-1).
+    case 'wait_for':
+      return 'is waiting on this page';
     case 'click':
       return `is clicking ${quotedName(d.name, d.role)}`;
     case 'type':

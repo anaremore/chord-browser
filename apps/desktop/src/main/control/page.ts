@@ -22,7 +22,7 @@ import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './se
 import { userLeaseLost } from './user-watch';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
-import { pageShows, snapshotPage } from './snapshot';
+import { pageShows, snapshotPage, waitInPage, type WaitAnswer, type WaitFor } from './snapshot';
 
 export interface ControlPage {
   /** The page id now (see above). */
@@ -36,11 +36,14 @@ export interface ControlPage {
   /** The page went (its tab closed, slept or crashed). */
   gone(): boolean;
   read(): Promise<PageRead | null>;
-  screenshot(): Promise<{ data: string; mimeType: string } | null>;
+  screenshot(): Promise<{ data: string; mimeType: string; width: number; height: number } | null>;
   diagnostics(): Promise<DiagnosticsRead>;
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */
-  snapshot(owner: string, token: string): Promise<SnapshotRead | null>;
+  /** `pinned`: the agent's own (it reads it), kept until its next; false for a diff's (M2g-1). */
+  snapshot(owner: string, token: string, pinned?: boolean): Promise<SnapshotRead | null>;
+  /** wait_for in the page, at most `ms` (snapshot.ts' waitScript); null if the page didn't answer. */
+  waitFor(want: WaitFor, ms: number): Promise<WaitAnswer | null>;
   /** Whether the page shows anything yet, waiting for it at most `waitMs` (snapshot.ts' pageShows). */
   shows(waitMs: number): Promise<boolean>;
   fillForm(args: { token: string; writes: FillWrite[]; undo: string; highlight: FillHighlight }): Promise<FillOutcome>;
@@ -99,7 +102,8 @@ export interface ControlPage {
    * Runs `act` (the input), then waits for what it set off: a navigation's load (at most ACT_LOAD_MS), or the page
    * quiet for a moment. Says whether the page went somewhere else (its page id changed).
    */
-  afterActing(act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }>;
+  /** `acted`: told when the action itself is done, before the page settles (phases.ts). */
+  afterActing(act: () => void | Promise<void>, acted?: () => void): Promise<{ navigated: boolean; loading: boolean }>;
   /** Goes to an address and waits for the load (at most ACT_LOAD_MS). */
   navigate(url: string): Promise<{ loading: boolean }>;
   /**
@@ -231,7 +235,8 @@ export function controlPage(contents: WebContents): ControlPage {
     screenshot: () => screenshot(contents),
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
-    snapshot: (owner, token) => snapshotPage(contents, owner, token),
+    snapshot: (owner, token, pinned) => snapshotPage(contents, owner, token, pinned),
+    waitFor: (want, ms) => waitInPage(contents, want, ms),
     shows: (waitMs) => pageShows(contents, waitMs),
     fillForm: (args) => fillFormPage(contents, args),
     undoFill: (undo) => undoFillPage(contents, undo),
@@ -283,7 +288,7 @@ export function controlPage(contents: WebContents): ControlPage {
     insertText: async (text) => {
       if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
     },
-    afterActing: (act) => afterActing(contents, act),
+    afterActing: (act, acted) => afterActing(contents, act, acted),
     navigate: async (url) => {
       const yours = await focusedPage();
       try {
@@ -354,7 +359,7 @@ function loaded(contents: WebContents, start: () => unknown): Promise<{ loading:
 const NAVIGATION_START_MS = 150;
 
 /** The input, then a navigation it set off (to its load) or the page settling. */
-async function afterActing(contents: WebContents, act: () => void | Promise<void>): Promise<{ navigated: boolean; loading: boolean }> {
+async function afterActing(contents: WebContents, act: () => void | Promise<void>, acted?: () => void): Promise<{ navigated: boolean; loading: boolean }> {
   if (contents.isDestroyed()) return { navigated: false, loading: false };
   const before = pageIdOf(contents);
   // Where your focus is: an agent's tab never keeps it after its action (a page it took somewhere can take it).
@@ -366,10 +371,14 @@ async function afterActing(contents: WebContents, act: () => void | Promise<void
   contents.on('did-start-navigation', onStart);
   try {
     await act();
+    acted?.();
+    // The page's quiet is waited for from now, alongside the wait for a navigation to start (M2g-1, measured: one after
+    // the other, 251 ms of a click's 279 on a table that redraws every 100 ms).
+    const quiet = settle(contents);
     await new Promise((r) => setTimeout(r, NAVIGATION_START_MS));
     let loading = false;
     if (started && !contents.isDestroyed() && contents.isLoading()) loading = (await loaded(contents, () => undefined)).loading;
-    else await settle(contents);
+    else await quiet;
     return { navigated: contents.isDestroyed() || pageIdOf(contents) !== before, loading };
   } finally {
     if (!contents.isDestroyed()) contents.off('did-start-navigation', onStart);
