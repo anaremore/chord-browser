@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addressWhy, classifyStep, pageAddressWhy, riskWordsWhy, stepDanger, stepFields, stepTitle, type RiskAction, type RiskElement, type RiskForm } from '../src/control-risk';
+import { addressWhy, classifyStep, pageAddressWhy, riskWordsWhy, sentLabels, stepDanger, stepFields, stepTitle, type RiskAction, type RiskElement, type RiskForm } from '../src/control-risk';
 
 const form = (f: Partial<RiskForm> = {}): RiskForm => ({ method: 'post', search: false, searchFields: 0, hidden: 0, overflow: false, textFields: 2, otherFields: 1, payment: false, password: false, labels: [], action: '', ...f });
 const el = (e: Partial<RiskElement> = {}): RiskElement => ({ tag: 'button', role: 'button', type: 'button', name: '', href: '', editable: false, multiline: false, submits: false, form: null, ...e });
@@ -111,6 +111,19 @@ describe('the step card’s words', () => {
   it('lists up to 6 fields by label, then how many more, cleaned and cut', () => {
     expect(stepFields(['Name', 'Email', '', 'Address\u200B', 'Phone', 'City', 'Zip', 'Country'])).toEqual({ fields: ['Name', 'Email', 'Address', 'Phone', 'City', 'Zip'], more: 1 });
     expect(stepFields(['x'.repeat(80)]).fields[0]).toHaveLength(60);
+    // A label's trailing colon isn't part of its name (the owner's test of 982ce10).
+    expect(stepFields(['Customer name:', 'Telephone :', 'Ratio 3:2']).fields).toEqual(['Customer name', 'Telephone', 'Ratio 3:2']);
+  });
+  it('what goes with a submit, by label: filled fields, the checked radio once, checked boxes; never what stays behind (the owner’s test of 982ce10)', () => {
+    // [the fields as the page describes them (goes: whether a submit would send it), the labels the card lists]
+    const rows: [string, { label: string; goes?: boolean }[], string[]][] = [
+      ['filled text fields only', [{ label: 'Customer name:', goes: true }, { label: 'Telephone:', goes: false }, { label: 'E-mail address:', goes: true }], ['Customer name:', 'E-mail address:']],
+      ['the checked radio, not its siblings', [{ label: 'Small', goes: false }, { label: 'Medium', goes: true }, { label: 'Large', goes: false }], ['Medium']],
+      ['checked boxes only', [{ label: 'Bacon', goes: true }, { label: 'Extra cheese', goes: false }, { label: 'Onion', goes: true }], ['Bacon', 'Onion']],
+      ['a label twice, once', [{ label: 'Topping', goes: true }, { label: 'Topping', goes: true }], ['Topping']],
+      ['a page that says nothing of it (an older describe): listed, as before', [{ label: 'Shipping' }], ['Shipping']],
+    ];
+    for (const [what, fields, labels] of rows) expect(sentLabels(fields), what).toEqual(labels);
   });
   it('words: the costliest wins', () => {
     expect(riskWordsWhy('Pay and delete')).toBe('pay');

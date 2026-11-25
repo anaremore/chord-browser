@@ -13,6 +13,7 @@ import {
   VALUE_TYPES,
   valueFits,
   classifyStep,
+  sentLabels,
   stepFields,
   type RiskAction,
   type RiskClass,
@@ -1043,7 +1044,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // As JSON (Neon's review of M2g-1, B4): no value can run into the next.
   const stepKey = JSON.stringify([node.id, page.id, String(refArg), tool, isPressKey(key) ? key : '', args['submit'] === true, typed, shown]);
   if (step.class === 'risky') {
-    const { fields, more } = stepFields(element.risk?.form?.fields.map((f) => f.label) ?? []);
+    // Only what the submit sends (the owner's test of 982ce10): the risk checks above still see every field.
+    const { fields, more } = stepFields(sentLabels(element.risk?.form?.fields ?? []));
     const released = scope.agent.releases(node.id);
     const answer = await scope.agent.ask(
       {
