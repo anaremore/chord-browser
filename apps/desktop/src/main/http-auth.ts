@@ -579,22 +579,43 @@ export class AuthBroker {
    */
   async respond(id: number, answer: AuthAnswer, remember = false, windowId?: WindowId): Promise<void> {
     const prompt = this.pending.find((p) => p.id === id);
-    if (!prompt || prompt.busy || !prompt.ready || !this.fromItsWindow(prompt, windowId)) return;
+    const kind = answer === null ? 'cancel' : 'account' in answer ? 'account' : 'typed';
+    if (!prompt || prompt.busy || !prompt.ready || !this.fromItsWindow(prompt, windowId)) {
+      const why = !prompt ? 'no such box' : prompt.busy ? 'busy' : !prompt.ready ? 'not ready' : 'another window';
+      return void this.answered(`box ${id}: ${kind} ignored (${why})`);
+    }
     if (answer && 'account' in answer) {
       const account = prompt.accounts[answer.account];
       const vault = this.deps?.vault;
       // The list changed since the popover drew it (locked, unlocked, deleted): it asks again rather than guess.
-      if (!account || account.username !== answer.username || !vault || !prompt.tab) return;
+      if (!account || account.username !== answer.username || !vault || !prompt.tab) return void this.answered(`box ${id}: account ignored (the list changed)`);
       prompt.busy = true;
       const password = await vault.password(account.id, prompt.origin, prompt.realm, prompt.tab.chordId).catch(() => null);
       prompt.busy = false;
       if (!this.pending.includes(prompt)) return;
       // Locked (or deleted) meanwhile: the box asks the vault again, and stays.
       if (password === null) return void this.lookUp(prompt);
+      this.answered(`box ${id}: account sent`);
       return this.finish(prompt, { username: account.username, password });
     }
+    this.answered(`box ${id}: ${kind} sent`);
     this.finish(prompt, answer);
     if (answer && remember && prompt.remember !== null && prompt.tab && !prompt.tab.private && !prompt.proxy && prompt.followed && !prompt.shared) this.hold(prompt, answer);
+  }
+
+  /** What became of the last answers from a box, for tests (chordTestHooks.httpAuth): no usernames, no passwords. */
+  private readonly answers: string[] = [];
+  private answered(what: string): void {
+    this.answers.push(what);
+    if (this.answers.length > 20) this.answers.shift();
+  }
+
+  /** The boxes waiting and what became of the last answers, for tests (chordTestHooks.httpAuth). */
+  forTests(): { pending: { id: number; origin: string; realm: string; ready: boolean; busy: boolean; retry: boolean; fill: boolean; accounts: number; locked: boolean }[]; answers: string[] } {
+    return {
+      pending: this.pending.map((p) => ({ id: p.id, origin: p.origin, realm: p.realm, ready: p.ready, busy: p.busy, retry: p.retry, fill: p.fill, accounts: p.accounts.length, locked: p.locked })),
+      answers: this.answers.slice(),
+    };
   }
 
   private finish(prompt: Pending, credentials: { username: string; password: string } | null): void {
