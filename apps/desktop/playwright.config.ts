@@ -1,7 +1,24 @@
+import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
+import { filesFor } from '../../scripts/ci/e2e-shards.mjs';
+
+// CI's shards (scripts/ci/e2e-shards.mjs): CHORD_E2E_SHARD=<index>/<count> runs that shard's spec files, balanced by
+// how long each takes, and CHORD_E2E_SHARD=perf runs perf.spec.ts alone. Unset, every file runs.
+// A repro by hand (ci.yml's workflow_dispatch with a platform) names its own: CHORD_E2E_SPEC (spec files,
+// space-separated; every file when empty), CHORD_E2E_GREP (a title filter) and CHORD_E2E_REPEAT (runs of each test).
+const shard = process.env['CHORD_E2E_SHARD'];
+const spec = process.env['CHORD_E2E_SPEC']?.split(/\s+/).filter(Boolean) ?? [];
+const grep = process.env['CHORD_E2E_GREP'];
+const repeat = Number(process.env['CHORD_E2E_REPEAT']) || 1;
+const testDir = join(import.meta.dirname, 'test/e2e');
+const exactly = (file: string) => new RegExp(`[\\\\/]${file.replaceAll('.', '\\.')}$`);
+const testMatch = spec.length ? spec.map(exactly) : shard ? filesFor(shard, testDir).map(exactly) : undefined;
 
 export default defineConfig({
   testDir: 'test/e2e',
+  ...(testMatch ? { testMatch } : {}),
+  ...(grep ? { grep: new RegExp(grep) } : {}),
+  ...(repeat > 1 ? { repeatEach: repeat } : {}),
   outputDir: 'test-results',
   // One temp folder per run, removed when it ends: profiles never pile up. Spelling dictionaries
   // from a local server, never downloaded from Google during a test (test/dictionaries.ts).

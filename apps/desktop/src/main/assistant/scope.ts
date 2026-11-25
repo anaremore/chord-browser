@@ -4,9 +4,9 @@
  * the chat's scope (Settings → Assistant, or the panel's menu), the tabs
  * attached to its messages, and readNeedsApproval, as they always were.
  */
-import { nodeList, nodeOf, readNeedsApproval, type AssistantScope, type AssistantThread, type AssistantToolName, type NodeId, type TabNode, type TabRefs, type WindowId } from '@chord/core';
+import { nodeList, nodeOf, readNeedsApproval, splitOf, type AssistantScope, type AssistantThread, type AssistantToolName, type NodeId, type TabNode, type TabRefs, type WindowId } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
-import type { ControlScope, FillProposals, ToolMemory } from '../control/scope';
+import type { ActHost, ControlScope, FillProposals, ToolMemory } from '../control/scope';
 import type { ControlBrowser } from '../control/tools';
 
 /** What of a chat its scope reads. */
@@ -23,6 +23,13 @@ export interface DuetChat extends ToolMemory {
   windowId: WindowId | null;
   /** The chat's gate: its grants ("Allow for this chat"), cards and Stop. */
   control: ControlAgent;
+  /**
+   * The message's tab (S18 M2e-2a, A1): the tab on screen in the window the message came from, when it was sent. The
+   * assistant acts there only, while it's still on screen; null between turns.
+   */
+  actTab: { nodeId: NodeId; windowId: WindowId } | null;
+  /** Why acting ended for this message (you switched away, used the tab, or turned acting off), or null. */
+  actEnded: string | null;
 }
 
 /** What the assistant's service gives its scope. */
@@ -36,6 +43,22 @@ export interface DuetHost {
   agentOf(node: TabNode): string | null;
   activeTab(windowId: WindowId): TabNode | null;
   activity(chat: DuetChat, tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
+  /**
+   * Acting in the tab on screen (S18 M2e-2a): absent where the build or Settings → Assistant's *Click and type on pages*
+   * says no. `offScreen`: null while the tab is on screen in that window (no Peek over it, the window not minimized),
+   * else what was seen instead, in a few words (*another tab is on screen*).
+   */
+  acting?(chat: DuetChat): {
+    on(): boolean;
+    offScreen(node: TabNode, windowId: WindowId): string | null;
+    /** A step refused for a reason latched earlier in the message (the chat may say it now: your taking the tab). */
+    latched?(why: string): void;
+    siteOf(url: string): string | null;
+    siteAllowed(site: string): boolean;
+    keepSite(site: string): void;
+    doing: ActHost['doing'];
+    lease: NonNullable<ActHost['lease']>;
+  };
   search(chat: DuetChat, tool: 'search_history' | 'search_archive', query: string): Promise<Record<string, string>[]>;
   fills(chat: DuetChat): FillProposals;
 }
@@ -47,6 +70,19 @@ export interface DuetHost {
 export const AGENT_TAB_REFUSALS = {
   read: (agent: string) => `That tab is ${agent}’s. You read an agent’s tab only when the user points you at it: ask them to attach it, or to switch to it and ask again.`,
   act: (agent: string) => `That tab is ${agent}’s. Keep it first to make it yours, then I can act in it.`,
+} as const;
+
+/** Why the assistant can't act in a tab of yours (S18 M2e-2a): one sentence each, to the model. */
+export const USER_TAB_REFUSALS = {
+  off: 'The user turned off clicking and typing on pages, in Settings → Assistant. Tell them what to do instead.',
+  noMessage: 'Act only for a message of the user’s that asks you to.',
+  notThatTab: (title: string) => `You can act only in the tab that was on screen when the user wrote (“${title}”). Ask them to switch to the tab they mean, then to ask again.`,
+  /** What was seen (the owner's preview: a refusal must say which, so a real switch is told from anything else). */
+  switched: (seen: string) =>
+    `That tab left the screen while you were working on this message (${seen}), so acting stopped for it. Stop, and tell the user that: they switched away while you were working, what you did and what’s left, and that if they ask again with the tab on screen you’ll pick up from there.`,
+  split: 'Acting works on a tab shown alone, not in a split. Ask the user to show the tab on its own.',
+  tookOver: 'The user took over the tab. Stop, and tell them what you did and what’s left.',
+  left: 'The user left this chat or closed the assistant, so acting stopped. Stop, and tell them what you did and what’s left.',
 } as const;
 
 export function duetScope(chat: DuetChat, host: DuetHost, actions = false): ControlScope {
@@ -92,6 +128,45 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
       })
         ? { kind: 'read', subject: tool }
         : null,
+    // Acting in the tab on screen (S18 M2e-2a): only the message's tab, only while it's on screen there, alone.
+    ...(actions && host.acting
+      ? (() => {
+          const acting = host.acting(chat);
+          const act: ActHost = {
+            mayAct: (node) => {
+              if (!acting.on()) return USER_TAB_REFUSALS.off;
+              const agent = host.agentOf(node);
+              if (agent !== null) return AGENT_TAB_REFUSALS.act(agent);
+              if (chat.actEnded) {
+                acting.latched?.(chat.actEnded);
+                return chat.actEnded;
+              }
+              const at = chat.actTab;
+              if (!at) return USER_TAB_REFUSALS.noMessage;
+              if (at.nodeId !== node.id) {
+                const named = nodeOf(state(), at.nodeId);
+                return USER_TAB_REFUSALS.notThatTab(named?.kind === 'tab' ? named.title || named.url : 'it was closed');
+              }
+              // Off screen once (switched away, a popup took the screen, another window): for the rest of this message.
+              // In a split: said, not latched (you may close the split). Anything else off screen (another tab, Peek,
+              // minimized, another window): over for this message (Neon's B6 on #147).
+              if (splitOf(state(), node.id)) return USER_TAB_REFUSALS.split;
+              const seen = acting.offScreen(node, at.windowId);
+              if (seen) {
+                chat.actEnded = USER_TAB_REFUSALS.switched(seen);
+                return chat.actEnded;
+              }
+              return null;
+            },
+            siteOf: acting.siteOf,
+            siteAllowed: acting.siteAllowed,
+            keepSite: acting.keepSite,
+            doing: acting.doing,
+            lease: acting.lease,
+          };
+          return { act };
+        })()
+      : {}),
     // The tab on screen is read live, at each check (before the card, after it, after the read), never kept: the user may
     // switch tabs while a card waits, and only what's on screen at that moment may be inspected.
     mayInspect: (node, tool) => {

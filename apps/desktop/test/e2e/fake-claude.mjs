@@ -120,6 +120,33 @@ async function turn(sent, images = []) {
     const sizes = images.map((i) => `${i.source.media_type} ${jpegSize(i.source.data)}`).join(', ');
     return finish(await say(`I see ${images.length === 1 ? 'one image' : `${images.length} images`}: ${sizes}. You asked: ${text.split('\n')[0]}`));
   }
+  // Asked to act (S18 M2e-2a): `Act: [{"tool":"snapshot"},{"tool":"click","name":"Raise"}, …]` on the attached tab (t1
+  // when nothing's attached). A step with a `name` finds its ref in the last snapshot by the element's name. Each
+  // result is kept, one line per turn, in acting.jsonl where the test can see it.
+  if (/^Act: /.test(text)) {
+    const tab = ref ?? 't1';
+    const steps = JSON.parse(text.slice(5).split('\n')[0]);
+    const results = [];
+    let outline = '';
+    for (const step of steps) {
+      // A model thinking before its first step: the test does something meanwhile (the owner's preview).
+      if (step.sleep) {
+        await new Promise((done) => setTimeout(done, step.sleep));
+        continue;
+      }
+      const args = { tab_id: tab, ...(step.args ?? {}) };
+      // The element's ref, by its name as the outline quotes it: `button "Raise" [ref=e3]`.
+      if (step.name) args.ref = outline.split('\n').find((line) => line.includes(`"${step.name}" [ref=`))?.match(/\[ref=(e\d+)\]/)?.[1] ?? 'e0';
+      const result = toolText(await callTool(step.tool, args));
+      if (step.tool === 'snapshot') {
+        const parsed = JSON.parse(result || '{}');
+        outline = String(parsed.content ?? parsed.data?.content ?? result);
+      }
+      results.push({ tool: step.tool, result: result.slice(0, 600) });
+    }
+    appendFileSync(join(config, 'acting.jsonl'), `${JSON.stringify(results)}\n`);
+    return finish(await say('Done.'));
+  }
   // Asked to fill a form (D16): it lists Chord's tools, reads the form on the attached tab (t1 when nothing's attached,
   // as a confused model might), tries a field id Chord never gave, proposes values for the fields it knows from what
   // the user wrote, then tries a second card in the same turn. Each answer is kept where the test can see it.

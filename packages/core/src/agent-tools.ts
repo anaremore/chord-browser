@@ -58,6 +58,15 @@ export const AGENTS_RELEASED = true as boolean;
  */
 export const AGENT_ACTIONS_RELEASED = true as boolean;
 
+/**
+ * The assistant clicking and typing in a tab of yours (S18 M2e): off in packaged builds until M2e-2b (what a click
+ * sets off, the leaving card, the tainted chat) lands with it. Development builds have it.
+ */
+export const ASSISTANT_ACTING_RELEASED = false as boolean;
+
+/** Whether this build lets the assistant act (ASSISTANT_ACTING_RELEASED, or any build that isn't packaged), with M2 in it. */
+export const assistantActing = (build: { packaged: boolean }, released = ASSISTANT_ACTING_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
+
 /** Whether this build has M2's slices (AGENT_ACTIONS_RELEASED, or any build that isn't packaged). */
 export const agentActions = (build: { packaged: boolean }, released = AGENT_ACTIONS_RELEASED): boolean => !build.packaged || released;
 
