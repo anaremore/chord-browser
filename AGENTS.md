@@ -142,7 +142,9 @@ New decision records (S20 and on) are a small folder each, not one growing file:
   model).
 - **CI is tiered.** Every push gets the fast tier (Linux X11). The merge queue adds Windows x64 and macOS arm64
   for platform-sensitive code, every platform for an Electron change; the rest run nightly. Adding the `ready`
-  label runs every platform now, once. The merge gate is the `E2E`
+  label runs every platform now, once. A draft or a PR stacked on another's branch runs the checks only; a
+  draft labeled `ready` fails *What changed* (mark it ready first). One platform's E2E alone, with no throwaway
+  branch: `gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=<file> -f grep=<title> -f repeat=5`. The merge gate is the `E2E`
   commit status, on pull requests and merge groups (`.github/workflows/ci.yml`).
 - **PR descriptions** say what changed, what was measured, which invariants it touches and how each is tested.
   Commits use Conventional Commits prefixes.

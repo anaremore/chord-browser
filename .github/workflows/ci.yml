@@ -36,8 +36,28 @@ on:
   # Every platform on main each night, whatever merged during the day.
   schedule:
     - cron: '0 8 * * *'
-  # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>).
+  # Run the whole matrix on any branch by hand (gh workflow run ci.yml --ref <branch>), or one platform's E2E alone
+  # (a repro): gh workflow run ci.yml --ref <branch> -f platform=windows-x64 -f spec=agents.spec.ts -f grep='snapshot'
+  # -f repeat=5. A repro runs that one job (and posts no `E2E` status): no throwaway branch that edits this file.
   workflow_dispatch:
+    inputs:
+      platform:
+        description: One platform's E2E alone (a repro), or all for the full tier
+        type: choice
+        default: all
+        options: [all, linux-x64-x11, linux-x64-wayland, linux-arm64-x11, windows-x64, windows-arm64, macos-arm64, macos-x64]
+      spec:
+        description: 'A repro''s spec files, space-separated (e.g. agents.spec.ts); empty for every one'
+        type: string
+        default: ''
+      grep:
+        description: A repro's test title filter (a regular expression; Playwright's -g)
+        type: string
+        default: ''
+      repeat:
+        description: How many times a repro runs each test (Playwright's --repeat-each)
+        type: string
+        default: '1'
 
 permissions:
   contents: read
@@ -57,15 +77,14 @@ jobs:
   changes:
     name: What changed
     runs-on: ubuntu-24.04
-    # Renovate's pull requests can wait here for others' runs (the `Renovate waits its turn` step).
-    timeout-minutes: ${{ github.event.pull_request.user.login == 'renovate[bot]' && 150 || 5 }}
+    timeout-minutes: 5
     permissions:
       contents: read
       # Whether a merge group already tested a commit pushed to main.
       actions: read
     outputs:
       # A tier of none runs no E2E: as a pull request of docs alone does.
-      code: ${{ steps.tier.outputs.tier != 'none' && steps.diff.outputs.code || 'false' }}
+      code: ${{ steps.tier.outputs.tier != 'none' && steps.tier.outputs.tier != 'checks' && steps.diff.outputs.code || 'false' }}
       tier: ${{ steps.tier.outputs.tier }}
       queue: ${{ steps.queue.outputs.queue }}
       # The tier's other platforms, as matrices for `e2e-full` and `e2e-perf` (the `Which tier?` step).
@@ -105,7 +124,7 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Anything but docs?
+      - name: Does E2E need to run?
         id: diff
         env:
           EVENT: ${{ github.event_name }}
@@ -129,13 +148,17 @@ jobs:
           code=false
           while IFS= read -r file; do
             case "$file" in
-              # Test fixtures are code, Markdown or not.
-              apps/*/test/* | packages/*/test/*) code=true; echo "Test file: $file"; break ;;
+              # What only the checks job tests (typecheck, lint, unit tests, invariants): unit tests, the local
+              # container runner and dev scripts, the agents' skills, Renovate's config. No E2E reads these.
+              apps/*/test/unit/* | apps/*/test/web/* | packages/*/test/* | scripts/test/* | scripts/dev/* | \
+              scripts/e2e-linux/* | .claude/* | renovate.json) ;;
+              # E2E's own tests and fixtures, Markdown or not.
+              apps/*/test/*) code=true; echo "E2E's tests or fixtures: $file"; break ;;
               *.md | docs/* | site/* | mocks/*) ;;
-              *) code=true; echo "Not docs: $file"; break ;;
+              *) code=true; echo "Code E2E runs: $file"; break ;;
             esac
           done < "$RUNNER_TEMP/changed"
-          echo "$(wc -l < "$RUNNER_TEMP/changed") files changed; anything but docs: $code"
+          echo "$(wc -l < "$RUNNER_TEMP/changed") files changed; E2E needed: $code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
       # Whether the pull request is platform-sensitive: whether its diff touches code that behaves differently by
       # OS. Its `E2E` status then needs the full tier; otherwise the fast tier is enough (the `e2e` job).
@@ -229,31 +252,6 @@ jobs:
           else
             echo "Not platform-sensitive: none of the changed files."
           fi
-      # Renovate waits its turn: while anyone else's pull request or merge group has a CI run queued or running,
-      # a run of Renovate's waits here (one Linux runner, polling each minute) before its shards take ~9 runners.
-      # Not Electron (its security patches go first: ARCHITECTURE.md §14.3) and not a vulnerability fix (labeled
-      # `security`). After two hours it goes ahead anyway.
-      - name: Renovate waits its turn
-        if: >-
-          github.event_name == 'pull_request' && github.event.pull_request.user.login == 'renovate[bot]' &&
-          steps.platform.outputs.electron != 'true' && !contains(github.event.pull_request.labels.*.name, 'security')
-        timeout-minutes: 125
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          for minute in $(seq 1 120); do
-            others="$(for status in queued in_progress waiting pending; do
-                gh api "repos/$REPO/actions/workflows/ci.yml/runs?status=$status&per_page=100" \
-                  --jq '.workflow_runs[] | select(.event == "pull_request" or .event == "merge_group")
-                    | select(.head_branch | startswith("renovate/") | not) | "\(.id) \(.head_branch)"'
-              done | grep -v "^$RUN_ID " | sort -u || true)"
-            if [ -z "$others" ]; then echo "No one else's CI is queued or running: going ahead."; exit 0; fi
-            [ "$minute" = 1 ] && { echo "Waiting for others' runs:"; echo "$others"; }
-            sleep 60
-          done
-          echo "::warning::Waited two hours for others' CI runs; going ahead."
       # The tier. A pull request's labels and draft state are the event's: a run re-run by hand keeps the tier it had.
       # With a merge queue, a pull request always gets the fast tier, except the run the `ready` label itself starts
       # (the escape hatch: the full tier now, once). Without one, as before: `ready` (and not a draft) runs the full
@@ -268,31 +266,44 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft }}
           READY: ${{ contains(github.event.pull_request.labels.*.name, 'ready') }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPRO: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.platform || '' }}
           PLATFORM: ${{ steps.platform.outputs.platform }}
           ELECTRON: ${{ steps.platform.outputs.electron }}
           PLAYER: ${{ steps.platform.outputs.player }}
           QUEUE: ${{ steps.queue.outputs.queue }}
           TESTED: ${{ steps.queue.outputs.tested }}
         run: |
+          if [ "$EVENT" = pull_request ] && [ "$DRAFT" = true ] && [ "$READY" = true ]; then
+            # Said loudly: a draft runs the checks only, so `ready` on one would otherwise wait for E2E that never comes.
+            echo "::error::Labeled ready but still a draft: mark it ready for review (gh pr ready <n>), and the label runs every platform"
+            exit 1
+          fi
           if [ "$EVENT" = push ] && [ "$TESTED" = true ]; then tier=none; why="a merge group already tested this commit"
+          elif [ -n "$REPRO" ]; then tier=repro; why="a repro by hand: $REPRO's E2E alone"
           elif [ "$EVENT" = merge_group ] && [ "$ELECTRON" = true ]; then tier=full; why="a merge group that changes Electron: every platform"
           elif [ "$EVENT" = merge_group ] && [ "$PLATFORM" = true ]; then tier=merge; why="a merge group of platform-sensitive code"
           elif [ "$EVENT" = merge_group ]; then tier=fast; why="a merge group of code that isn't platform-sensitive (every platform runs nightly)"
           elif [ "$EVENT" = push ]; then tier=merge; why="a push to main no merge group tested"
           elif [ "$EVENT" != pull_request ]; then tier=full; why="a $EVENT run"
+          # A draft, or a pull request stacked on another's branch: the checks only, no E2E, until it's ready and
+          # targets main (its E2E would run again then anyway).
+          elif [ "$DRAFT" = true ]; then tier=checks; why="a draft: the checks only, until it's marked ready for review"
+          elif [ "$BASE_REF" != main ]; then tier=checks; why="stacked on $BASE_REF: the checks only, until it targets main"
           elif [ "$QUEUE" = true ] && [ "$ACTION" = labeled ] && [ "$LABEL" = ready ]; then tier=full; why="just labeled ready: the full tier now"
           elif [ "$QUEUE" = true ]; then tier=fast; why="a pull request: the merge queue runs the full tier"
           elif [ "$AUTHOR" = 'renovate[bot]' ] && [ "$PLATFORM" = true ]; then tier=full; why="Renovate's platform-sensitive update"
-          elif [ "$READY" = true ] && [ "$DRAFT" != true ]; then tier=full; why="labeled ready"
-          elif [ "$READY" = true ]; then tier=fast; why="labeled ready, but still a draft"
+          elif [ "$READY" = true ]; then tier=full; why="labeled ready"
           else tier=fast; why="not labeled ready"
           fi
           echo "Tier: $tier ($why)."
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
           echo "why=$why" >> "$GITHUB_OUTPUT"
           # ── The platforms each tier runs, besides the fast tier's Linux x64 X11 shards ──────────────────────
-          # Per merge: Windows x64 and macOS arm64, and perf.spec.ts on those and Linux x64 X11, where the budgets
-          # are. Nightly adds the rest. macOS has 2 shards: GitHub's free plan runs 5 macOS jobs at a time.
+          # Per merge: Windows x64 and macOS arm64, and perf.spec.ts on Linux x64 X11 and Windows x64, which have
+          # baselines (perf-baseline.json has no macOS entry, so its perf job holds nothing to a budget). Nightly adds
+          # the rest. macOS: GitHub's free plan runs 5 macOS jobs at a time, so a merge group takes 2 (its shards),
+          # and the queue builds 2 groups at once: 4.
           merge_shards='{"name":"Windows x64","os":"windows-latest","shard":1,"shards":3}
           {"name":"Windows x64","os":"windows-latest","shard":2,"shards":3}
           {"name":"Windows x64","os":"windows-latest","shard":3,"shards":3}
@@ -310,14 +321,22 @@ jobs:
           {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":2,"shards":3}
           {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":3,"shards":3}'
           merge_perf='{"name":"Linux x64 · X11","os":"ubuntu-24.04","display":"x11","shard":"perf","shards":1}
-          {"name":"Windows x64","os":"windows-latest","shard":"perf","shards":1}
-          {"name":"macOS arm64","os":"macos-26","shard":"perf","shards":1}'
-          nightly_perf='{"name":"Linux x64 · Wayland","os":"ubuntu-24.04","display":"wayland","shard":"perf","shards":1}
+          {"name":"Windows x64","os":"windows-latest","shard":"perf","shards":1}'
+          nightly_perf='{"name":"macOS arm64","os":"macos-26","shard":"perf","shards":1}
+          {"name":"Linux x64 · Wayland","os":"ubuntu-24.04","display":"wayland","shard":"perf","shards":1}
           {"name":"Linux arm64 · X11","os":"ubuntu-24.04-arm","display":"x11","shard":"perf","shards":1}
           {"name":"Windows arm64","os":"windows-11-arm","shard":"perf","shards":1}
           {"name":"macOS x64","os":"macos-15-intel","shard":"perf","shards":1}'
           # ─────────────────────────────────────────────────────────────────────────────────────────────────────
+          # A repro: its one platform, one job, every spec file it names (CHORD_E2E_SPEC; playwright.config.ts).
+          # Linux x64 X11's shards are the fast tier's own job, so its line is here.
+          x11='{"name":"Linux x64 · X11","os":"ubuntu-24.04","display":"x11","shard":1,"shards":1}'
+          repro_shards="$(printf '%s\n%s\n%s\n' "$x11" "$merge_shards" "$nightly_shards" | jq -c --arg p "$REPRO" '
+            select((.name | ascii_downcase | gsub(" · "; "-") | gsub(" "; "-")) == $p) | .shard = 1 | .shards = 1' | head -n 1)"
           case "$tier" in
+            repro)
+              if [ -z "$repro_shards" ]; then echo "::error::No platform called $REPRO"; exit 1; fi
+              shards="$repro_shards" perf="$merge_perf" ;;
             merge) shards="$merge_shards" perf="$merge_perf" ;;
             full) shards="$merge_shards"$'\n'"$nightly_shards" perf="$merge_perf"$'\n'"$nightly_perf" ;;
             # None runs; a matrix can't be empty, and the jobs are skipped.
@@ -336,7 +355,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           TIER: ${{ steps.tier.outputs.tier }}
         run: |
-          if [ "$TIER" = none ]; then
+          if [ "$TIER" = none ] || [ "$TIER" = checks ] || [ "$TIER" = repro ]; then
             echo "forms=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -380,6 +399,10 @@ jobs:
             echo
             if [ "$TIER" = none ]; then
               echo "A merge group already ran the full tier on this commit and passed: only the checks run."
+            elif [ "$TIER" = checks ]; then
+              echo "**The checks only** ($WHY). \`E2E\` stays pending: E2E runs once the pull request is ready for review and targets main."
+            elif [ "$TIER" = repro ]; then
+              echo "**A repro by hand:** one platform's E2E alone, with the spec, title filter and repeats given. It posts no \`E2E\` status."
             elif [ "$EVENT" = merge_group ]; then
               echo "A merge group: the $TIER tier, on the commit main gets. If it fails, the queue drops the pull request."
             elif [ "$EVENT" != pull_request ]; then
@@ -387,7 +410,7 @@ jobs:
             elif [ "$QUEUE" = true ] && [ "$CODE" = true ]; then
               echo "A pull request: \`E2E\` passes with the fast tier, and its merge group runs the platforms it needs before it merges (\`gh pr merge <n> --merge --auto\`). Label it \`ready\` to run every platform now."
             elif [ "$CODE" != true ]; then
-              echo "**Docs alone changed:** no E2E to run, and \`E2E\` passes."
+              echo "**No E2E needed:** only docs, unit tests, dev or container-runner scripts, skills or Renovate's config changed. The checks run, and \`E2E\` passes."
             else
               echo "### Platform-sensitive: $PLATFORM"
               echo
@@ -417,6 +440,8 @@ jobs:
 
   checks:
     name: Typecheck · lint · unit tests
+    # Not for a repro by hand: that's one platform's E2E alone.
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -538,7 +563,8 @@ jobs:
   # E2E on every OS, each split into shards that run side by side on their own runners. A shard is a set of spec
   # files balanced by how long each takes (CHORD_E2E_SHARD; scripts/ci/e2e-shards.mjs and its map,
   # e2e-shards.json), each file's tests together and in order. Each shard sets its runner up in full.
-  # Linux x64 X11 has 6 shards, so the fast tier takes minutes; macOS has 2, the rest 3: GitHub's free plan runs
+  # Linux x64 X11 has 4 shards (about 5.7 min of tests each, and 4 of the 20 free Linux runners per push, where 6 took
+  # 6: fewer jobs wait less in the queue); macOS has 2, the rest 3: GitHub's free plan runs
   # 5 macOS jobs at a time (and 20 jobs in all), and Chord Player takes 2 of those 5.
   # perf.spec.ts runs in a job of its own on each platform, on the full tier (`e2e-perf`): about 9 minutes, and
   # its timings are only reported on CI's shared machines.
@@ -547,7 +573,7 @@ jobs:
   e2e-fast:
     name: E2E · fast tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.tier != 'repro'
     runs-on: ${{ matrix.os }}
     # A Linux shard took up to 18 minutes. The limit only has to catch a hung job.
     timeout-minutes: 40
@@ -555,17 +581,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 1, shards: 6 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 2, shards: 6 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 3, shards: 6 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 4, shards: 6 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 5, shards: 6 }
-          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 6, shards: 6 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 1, shards: 4 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 2, shards: 4 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 3, shards: 4 }
+          - { name: Linux x64 · X11, os: ubuntu-24.04, display: x11, shard: 4, shards: 4 }
     env: &e2e-env
       # Names this shard's artifacts: captures-, perf- and e2e-failures-<runner>[-display]-<shard>of<shards>.
       ARTIFACT_SUFFIX: ${{ matrix.os }}${{ matrix.display && format('-{0}', matrix.display) || '' }}-${{ matrix.shard }}of${{ matrix.shards }}
       # The spec files this job runs (playwright.config.ts): <shard>/<shards>, or `perf` for perf.spec.ts alone.
       CHORD_E2E_SHARD: ${{ matrix.shard == 'perf' && 'perf' || format('{0}/{1}', matrix.shard, matrix.shards) }}
+      # A repro by hand (workflow_dispatch with a platform): which spec files, which tests, how many times.
+      CHORD_E2E_SPEC: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.spec || '' }}
+      CHORD_E2E_GREP: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.grep || '' }}
+      CHORD_E2E_REPEAT: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' && inputs.repeat || '' }}
     steps: &e2e-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -764,7 +792,7 @@ jobs:
   e2e-full:
     name: E2E · ${{ needs.changes.outputs.tier }} tier · ${{ matrix.name }} · ${{ matrix.shard }}/${{ matrix.shards }}
     needs: changes
-    if: needs.changes.outputs.code == 'true' && (needs.changes.outputs.tier == 'full' || needs.changes.outputs.tier == 'merge')
+    if: needs.changes.outputs.code == 'true' && contains(fromJSON('["full", "merge", "repro"]'), needs.changes.outputs.tier)
     runs-on: ${{ matrix.os }}
     # A whole suite took 30 to 46 minutes with perf.spec.ts, and Playwright's --shard (by test count, not time)
     # once gave a macOS Intel shard 28 minutes (2026-11-22). Shards are balanced by time now, and the weights are
@@ -797,10 +825,10 @@ jobs:
   # The tier's E2E verdict, and the `E2E` commit status: the one status that says a pull request can merge, and
   # main's ruleset's one required check (for pull requests and merge groups alike). So it covers the whole run:
   # it fails when the checks, the password detector's corpora or Chord Player failed too.
-  # This job passes when every shard of its tier passed, or none had to run (a pull request of docs alone), and
+  # This job passes when every shard of its tier passed, or none had to run (docs, unit tests, dev scripts alone), and
   # fails when any shard failed or was cancelled, or what changed couldn't be told. Its name says which tier ran.
   # The `E2E` status, posted on the pull request's head commit (or the pushed one), is:
-  # - success when the full tier passed, or docs alone changed, or the fast tier passed on a pull request that
+  # - success when the full tier passed, or no E2E was needed, or the fast tier passed on a pull request that
   #   isn't platform-sensitive (the `changes` job);
   # - pending when the fast tier passed on a platform-sensitive pull request: every platform still has to (label
   #   it `ready`);
@@ -864,11 +892,19 @@ jobs:
           elif [ "$TIER" = none ]; then
             # main's push of a commit a merge group already passed: its `E2E` stands, nothing to post.
             pass=true state='' desc="Tested in the merge queue: nothing more to run"
+          elif [ "$TIER" = checks ]; then
+            path="the checks only: a draft, or stacked on another pull request"
+            pass=true state=pending desc="Checks passed; E2E runs once it's ready for review and targets main"
+          elif [ "$TIER" = repro ]; then
+            # A repro posts no status: one spec on one platform says nothing about the commit as a whole.
+            path="a repro by hand: one platform's E2E"
+            # Its one job is a shard; it runs no perf job.
+            if [ "$FULL_SHARDS" = success ]; then pass=true state='' desc="Repro passed"; else state='' desc="Repro failed ($FULL_SHARDS)"; fi
           elif [ "$CODE" != true ]; then
             if [ "$FAST" = skipped ] && [ "$FULL" = skipped ]; then
-              pass=true state=success desc="Docs alone changed: no E2E to run"
+              pass=true state=success desc="No E2E needed: docs, unit tests or dev scripts alone changed"
             else
-              desc="Docs alone changed, but the shards were $FAST and $FULL"
+              desc="No E2E needed, but the shards were $FAST and $FULL"
             fi
           elif [ "$FAST" = cancelled ] || [ "$FULL" = cancelled ]; then
             pass=true state='' desc="Cancelled (fast tier: $FAST, full tier: $FULL)"

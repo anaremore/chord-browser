@@ -4,6 +4,7 @@
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":configMigration", ":maintainLockFilesWeekly"],
   "dependencyDashboard": true,
   "rangeStrategy": "pin",
+  "rebaseWhen": "conflicted",
   "minimumReleaseAge": "7 days",
   "ignoreTests": false,
   "platformAutomerge": false,
@@ -18,7 +19,7 @@
   },
   "packageRules": [
     {
-      "description": "Everything waits for the weekend (UTC), and comes in groups, so updates don't fill CI's free runners while people's pull requests wait; CI also holds Renovate's runs while anyone else's are queued or running (ci.yml, `changes`). Electron (below) and security fixes (vulnerabilityAlerts) don't wait.",
+      "description": "Everything waits for the weekend (UTC), and comes in groups, so updates don't fill CI's free runners while people's pull requests wait; and a pull request is rebased only when it conflicts (rebaseWhen), not on every push to main. Electron (below) and security fixes (vulnerabilityAlerts) don't wait.",
       "matchPackageNames": ["*"],
       "schedule": ["* * * * 0,6"]
     },
