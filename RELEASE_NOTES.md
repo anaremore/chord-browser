@@ -2,6 +2,12 @@
 
 Newest first. Entries are only ever added, never rewritten. Each release's GitHub page links here.
 
+## 0.15.1 · preview · 2026-11-25
+
+0.15.0 was never published: everything in its entry below comes in this release.
+
+- **Long tasks fold as they go.** The latest updates stay in view, earlier ones fold into *Earlier in this task (N)*, and anything waiting for you or that stopped it stays visible.
+
 ## 0.15.0 · preview · 2026-11-25
 
 - **The assistant can click and type in your tab.** Ask it to fill in a return form, change a setting, narrow a store's results or draft a reply, and it does it in the tab on screen, with the same kinds of cards in the chat. It's on unless you turn it off, in Settings → Assistant → *Click and type on pages*.
