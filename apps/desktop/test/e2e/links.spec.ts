@@ -380,6 +380,10 @@ test('Peek moves and resizes: dragged, resized, remembered for the next Peek, an
     await pageWhere(app, (url) => url === `${site.other}/other`);
     // Grown in from the click, at home: its page goes in once the card has landed.
     await expect.poll(async () => (await viewBounds(app, `${site.other}/other`))?.width ?? 0).toBeGreaterThan(0);
+    // Home is where the card lands: measured once its entrance (growing from 92% of its size) is over. Main puts the
+    // page in after the entrance's length, but a busy machine starts the entrance late, and a card measured while it
+    // still grows is smaller than the page in it (#197).
+    await expect.poll(() => peek.evaluate((card) => getComputedStyle(card).transform)).toBe('none');
     const home = await box();
     await expectPageIn(home);
 
