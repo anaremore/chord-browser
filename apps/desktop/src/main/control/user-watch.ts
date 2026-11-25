@@ -129,6 +129,8 @@ interface Lease {
 }
 
 const leases = new WeakMap<WebContents, Lease>();
+/** Frame sessions an earlier lease left attached on someone else's debugger (its auto-attach couldn't be turned off). */
+const leftovers = new WeakMap<WebContents, Set<string>>();
 /** Tabs whose lease was lost (the debugger let go, the renderer gone): an action there checks this before any input. */
 const lost = new WeakSet<WebContents>();
 /** Begins under way (queued, or setting up), per tab: an end meanwhile cancels its owner's (or, from your hands, all). */
@@ -285,7 +287,10 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
       if (method === 'Page.fileChooserOpened') return deps.note('file', 'a file picker');
       if (method === 'Page.javascriptDialogOpening') return deps.note('dialog', `${p.type ?? 'alert'}: “${String(p.message ?? '').slice(0, 120)}”`);
     }
-    if (method === 'Target.detachedFromTarget' && p.sessionId) return void lease.sessions.delete(p.sessionId);
+    if (method === 'Target.detachedFromTarget' && p.sessionId) {
+      leftovers.get(contents)?.delete(p.sessionId);
+      return void lease.sessions.delete(p.sessionId);
+    }
     if (method !== 'Target.attachedToTarget' || !p.sessionId) return;
     const frame = p.sessionId;
     // A dedicated worker: run at once, during the lease or as it lets go; never left waiting (it would stall the page's
@@ -295,11 +300,18 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
       if (p.waitingForDebugger) void command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
       return;
     }
-    if (lease.ended) return;
+    // Ended already (cancelled while it's set up): not held, but known, so its cleanup can hand it on if auto-attach
+    // can't be turned off (leftovers).
+    if (lease.ended) return void lease.sessions.add(frame);
+    holdFrame(frame, Boolean(p.waitingForDebugger));
+  };
+  /**
+   * A frame in another process: its requests held (and its own frames attached) before it runs; one that can't be held
+   * stays paused at its start (a blank frame), never running unheld (fail closed: Claude's S3). One there as the lease
+   * begins that can't be held: no lease (Neon's S3, round 2).
+   */
+  const holdFrame = (frame: string, waiting: boolean) => {
     lease.sessions.add(frame);
-    // A frame in another process: its requests held (and its own frames attached) before it runs; one that can't
-    // be held stays paused at its start (a blank frame), never running unheld (fail closed: Claude's S3). One there
-    // as the lease begins that can't be held: no lease (Neon's S3, round 2).
     const ready = (async () => {
       try {
         await command(debug, 'Fetch.enable', { patterns: PATTERNS }, frame);
@@ -310,7 +322,7 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
         if (!handedOut) lease.frameFailed = true;
         return;
       }
-      if (p.waitingForDebugger && !lease.ended) await command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
+      if (waiting && !lease.ended) await command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
     })();
     lease.pending.add(ready);
     void ready.finally(() => lease.pending.delete(ready));
@@ -343,6 +355,10 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   try {
     await command(debug, 'Fetch.enable', { patterns: PATTERNS });
     await command(debug, 'Target.setAutoAttach', AUTO_ATTACH);
+    // Frames an earlier lease left attached on someone else's debugger (its auto-attach couldn't be turned off): never
+    // announced again, and running with Fetch off, so held again here, or no lease (the factory's sim, seed 87).
+    for (const frame of leftovers.get(contents) ?? []) if (!lease.sessions.has(frame)) holdFrame(frame, false);
+    leftovers.delete(contents);
     // Frames already there: attached as setAutoAttach answers (and theirs, as they come); held before any input.
     while (lease.pending.size) await Promise.all([...lease.pending]);
     await catching();
@@ -524,8 +540,18 @@ async function turnOff(contents: WebContents, lease: Lease): Promise<void> {
   const quiet = (method: string, params: object = {}, sessionId?: string) => command(debug, method, params, sessionId).catch(() => undefined);
   // The service worker always back first (C3), whatever ended the lease, before anything else goes.
   for (const sessionId of [undefined, ...lease.sessions]) await quiet('Network.setBypassServiceWorker', { bypass: false }, sessionId);
-  if (lease.mine) return void debug.detach();
-  await quiet('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true });
+  if (lease.mine) {
+    leftovers.delete(contents);
+    return void debug.detach();
+  }
+  // Auto-attach off detaches what it attached; if it can't be turned off, those frames stay attached (and, once Fetch is
+  // off there, unheld): the next lease holds them again.
+  const off = await command(debug, 'Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }).then(
+    () => true,
+    () => false,
+  );
+  if (off) leftovers.delete(contents);
+  else leftovers.set(contents, new Set(lease.sessions));
   for (const sessionId of [...lease.sessions, undefined]) {
     await quiet('Fetch.disable', {}, sessionId);
     await quiet('Network.disable', {}, sessionId);

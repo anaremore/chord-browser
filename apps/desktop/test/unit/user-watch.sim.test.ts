@@ -1,258 +1,243 @@
 /**
- * The lease on a tab of yours (control/user-watch.ts), under seeded interleavings: two chats beginning (some left in
- * flight) and ending actions, a chat's Stop, your hands, the debugger let go, the renderer gone, the page sending, the
- * page copying, you copying elsewhere, a download card, a frame, a catch that fails, and time, in every order a seed
- * picks. After each step:
- *
- * - an owner exactly while the lease is catching, and acting only while catching;
- * - an action under way on the lease that's on: acting;
- * - a lease that's on holds the tab (attached, Fetch on);
- * - nothing the page sent left unanswered once Fetch is off;
- * - once no lease is on: the page's copy put back (unless your input ended it), and what you copied never undone.
- *
- * At the end, every lease over: Chord's attachment let go, the service worker back, nothing unanswered.
- *
- * A failure names its seed and the steps that led there: `SIM_SEED=<n>` runs that one alone; `SIM_SEEDS=<n>` runs more.
- * Checked against broken leases: an action's end that reaches a later lease fails here (seed 47); so does a put-back
- * over what you copied after the page (seed 33), and the clipboard never put back on Stop (seed 1). A stale cleanup that
- * tears the next lease down only makes that lease lost (closed, not open), and needs a stop at the very moment of
- * handout, which a step here can't reach: assistant-acting.test.ts covers it (Neon's B4, round 3 of #147).
+ * The lease on a tab of yours (control/user-watch.ts, S18 M2e-2a) through 400 random orders of what can happen to it:
+ * two chats beginning and ending actions, either chat's acting ended, your hands taking the tab, DevTools taking the
+ * debugger, the renderer going, frames attaching (some that can't be held), the tail timer, and a debugger that's
+ * slow, fails or never answers. Its invariants are checked after every step, and once it has all settled.
+ * The template: sim-kit.ts.
  */
 import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SendHoldDeps } from '../../src/main/control/sends';
+import { describe, it, vi } from 'vitest';
+import { forSeeds, invariant, type Sim } from './sim-kit';
 
-vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
-const watch = await import('../../src/main/control/user-watch');
+/** The send hold, stood in for: how many holds each tab has on (sends.ts' holdSends and unholdSends). */
+const hold = vi.hoisted(() => ({ count: new Map<object, number>(), holding: false }));
+vi.mock('../../src/main/control/sends', () => ({
+  holdSends: (contents: object) => void hold.count.set(contents, (hold.count.get(contents) ?? 0) + 1),
+  unholdSends: (contents: object) => void hold.count.set(contents, (hold.count.get(contents) ?? 0) - 1),
+  failHeld: () => undefined,
+  holding: () => hold.holding,
+  sendHoldDeps: () => undefined,
+}));
 
-afterEach(() => vi.useRealTimers());
+const { beginUserAction, endUserLease, userLeaseOwner, userTabActing, TAIL_MS, COMMAND_MS } = await import('../../src/main/control/user-watch');
 
-/** A small seeded generator (mulberry32): the same seed, the same run. */
-function random(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** A tab of yours whose debugger answers at once, keeping what it was asked, and whether Fetch is on. */
-function tab() {
-  const debug = new EventEmitter();
-  const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, getURL: () => 'https://game.example/table', debugger: debug }) as unknown as WebContents;
-  const state = { attached: false, fetch: false, bypass: false, answered: new Map<string, string>(), paused: new Set<string>(), failNext: false };
-  Object.assign(debug, {
-    isAttached: () => state.attached,
-    attach: () => {
-      if (state.attached) throw new Error('Another debugger is already attached');
-      state.attached = true;
-    },
-    detach: () => {
-      if (!state.attached) return;
-      state.attached = false;
-      state.fetch = false;
-      state.bypass = false;
-      // Chromium lets go of what it had paused when its debugger detaches (the record's stated limit).
-      for (const id of state.paused) if (!state.answered.has(id)) state.answered.set(id, 'detached');
-      debug.emit('detach', {}, 'target closed');
-    },
-    sendCommand: async (method: string, params: { requestId?: string; bypass?: boolean }, sessionId?: string) => {
-      if (!state.attached) throw new Error('not attached');
-      // A catch that can't be turned on (the next set-up's WebAuthn): the lease fails closed.
-      if (state.failNext && method === 'WebAuthn.enable' && !sessionId) {
-        state.failNext = false;
-        throw new Error('not supported');
-      }
-      if (sessionId) return;
-      if (method === 'Fetch.enable') state.fetch = true;
-      if (method === 'Fetch.disable') state.fetch = false;
-      if (method === 'Network.setBypassServiceWorker') state.bypass = Boolean(params.bypass);
-      if (params?.requestId && method.startsWith('Fetch.')) state.answered.set(params.requestId, method);
-    },
-  });
-  return { contents, debug, state };
-}
-
-const ANSWERS: Awaited<ReturnType<SendHoldDeps['ask']>>[] = ['once', 'deny', 'until'];
-const flush = () => vi.advanceTimersByTimeAsync(0);
-
-async function run(seed: number, steps: number): Promise<string[]> {
-  vi.useFakeTimers();
-  const rnd = random(seed);
-  const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!;
-  const t = tab();
-  const log: string[] = [];
-  /** Actions under way, each with its own end and the lease it began on (by the sim's count of leases). */
-  const actions: { owner: string; end: () => void; lease: number }[] = [];
-  /** Begins still under way (queued or setting up), resolved by a later step. */
-  const inflight: Promise<void>[] = [];
-  /** The lease on now, by the sim's own count (a new one each time catching starts again), or null. */
-  let current: number | null = null;
-  let leasesSeen = 0;
-  const took = (owner: string, action: Awaited<ReturnType<typeof watch.beginUserAction>>) => {
-    if (action.begun !== 'on') return;
-    if (current === null) current = ++leasesSeen;
-    actions.push({ owner, end: action.end, lease: current });
-  };
-  let clip = 'yours';
-  /** The clipboard as the lease that's on began, and whether the page changed it during that lease (not you since). */
-  let clipAtStart = clip;
-  let clipDirty = false;
-  /** What should be on the clipboard once no lease is on: the last thing put there, or what a lease put back. */
-  let clipShould = clip;
-  let wasCatching = false;
-  const deps = (owner: string) => ({
-    siteOf: (u: string) => new URL(u).origin,
-    // The chat's card: answered after a while, or never.
-    ask: (() => {
-      const answer = pick(ANSWERS);
-      const after = Math.floor(rnd() * 3000);
-      return () => new Promise<Awaited<ReturnType<SendHoldDeps['ask']>>>((done) => setTimeout(() => done(answer), after));
-    })(),
-    note: () => undefined,
-    // A download card: answered after a while, or not before the lease would end.
-    askDownload: () => new Promise<boolean>((done) => setTimeout(() => done(rnd() < 0.5), Math.floor(rnd() * 50_000))),
-    clipboard: { snapshot: async () => clip, same: async (s: unknown) => s === clip, restore: async (s: unknown) => ((clip = s as string), true) },
-    kept: owner === 'chat:1' ? new Set<string>() : undefined,
-  });
-  let requests = 0;
-  const pending = new Set<string>();
-
-  let lastClipAtBegin = clip;
-  const check = (step: string) => {
-    const where = `seed ${seed}, after ${log.length} steps (${log.slice(-6).join(' · ')})`;
-    const owner = watch.userLeaseOwner(t.contents);
-    const catching = watch.userTabCatching(t.contents);
-    expect(Boolean(owner), `${where}: an owner iff catching`).toBe(catching);
-    if (watch.userTabActing(t.contents)) expect(catching, `${where}: acting only while catching`).toBe(true);
-    // No lease, and its cleanup done: nothing left waiting on an answer.
-    if (!catching && !t.state.fetch) for (const id of pending) expect(t.state.answered.has(id), `${where}: ${id} left unanswered (${step})`).toBe(true);
-    if (!catching) current = null;
-    // The page's change to the clipboard during a lease is put back by the time it's over, unless your input ended it.
-    if (catching && !wasCatching) clipAtStart = lastClipAtBegin;
-    if (!catching && clipDirty) {
-      expect(clip, `${where}: the clipboard left as the page made it`).toBe(clipAtStart);
-      clipDirty = false;
-      clipShould = clipAtStart;
-    }
-    // Never put back over yours (Claude's B2, round 2 of #150): what you copied stays.
-    if (!catching) expect(clip, `${where}: the clipboard isn't what was last put there`).toBe(clipShould);
-    wasCatching = catching;
-    // An action still under way on the lease that's on: it's acting there (never its tail started early, never let go).
-    if (current !== null && actions.some((a) => a.lease === current)) expect(watch.userTabActing(t.contents), `${where}: an action under way, not acting`).toBe(true);
-    // A lease that's on holds the tab: attached, Fetch on (else what the page sends would go unheld).
-    if (catching) expect(t.state.attached && t.state.fetch, `${where}: a lease on with the tab not held`).toBe(true);
-  };
-
-  for (let i = 0; i < steps; i++) {
-    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'elsewhere', 'download', 'frame', 'failing', 'time', 'time'] as const);
-    if (op === 'begin') {
-      const owner = pick(['chat:1', 'chat:2']);
-      log.push(`begin ${owner}`);
-      if (!watch.userTabCatching(t.contents)) lastClipAtBegin = clip;
-      const begun = watch.beginUserAction(t.contents, owner, deps(owner) as never);
-      if (rnd() < 0.3) {
-        // Something else happens while it's being had: your key, or the chat's Stop.
-        if (rnd() < 0.5) {
-          watch.endUserLease(t.contents);
-          clipDirty = false;
-          clipShould = clip;
-        } else watch.endUserLease(t.contents, owner);
-        log.push('…ended while beginning');
-      }
-      // Half the time it's left under way, and other steps go on meanwhile.
-      if (rnd() < 0.5) took(owner, await begun);
-      else inflight.push(begun.then((a) => took(owner, a)));
-    } else if (op === 'settle' && inflight.length) {
-      log.push('begins settle');
-      await Promise.all(inflight.splice(0));
-    } else if (op === 'end' && actions.length) {
-      const a = actions.splice(Math.floor(rnd() * actions.length), 1)[0]!;
-      log.push(`end ${a.owner}`);
-      a.end();
-      // Ending twice is never a second end.
-      if (rnd() < 0.3) a.end();
-    } else if (op === 'stop') {
-      const owner = pick(['chat:1', 'chat:2']);
-      log.push(`stop ${owner}`);
-      watch.endUserLease(t.contents, owner);
-    } else if (op === 'hands') {
-      log.push('your key');
-      watch.endUserLease(t.contents);
-      // What's on the clipboard as you take the tab is yours from here.
-      clipDirty = false;
-      clipShould = clip;
-    } else if (op === 'detach') {
-      log.push('detach');
-      (t.debug as unknown as { detach(): void }).detach();
-    } else if (op === 'gone') {
-      log.push('renderer gone');
-      (t.contents as unknown as EventEmitter).emit('render-process-gone', {}, { reason: 'crashed' });
-    } else if (op === 'post' && t.state.fetch) {
-      const id = `r${++requests}`;
-      pending.add(id);
-      t.state.paused.add(id);
-      log.push(`post ${id}`);
-      t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId: id, request: { method: 'POST', url: 'https://game.example/move' }, resourceType: 'XHR' });
-    } else if (op === 'clipboard') {
-      // The page copies (its copy event, reported): during a lease, put back by the time it's over.
-      clip = `page-${i}`;
-      clipShould = clip;
-      if (watch.userTabCatching(t.contents)) {
-        clipDirty = true;
-        watch.userTabCopied(t.contents);
-      }
-      log.push('the page copied');
-      await vi.advanceTimersByTimeAsync(60);
-    } else if (op === 'elsewhere') {
-      // You copy in the chat or another app: yours, never put back (Claude's B2, round 2 of #150).
-      clip = `you-${i}`;
-      clipShould = clip;
-      clipDirty = false;
-      log.push('you copied elsewhere');
-    } else if (op === 'failing') {
-      log.push('the next catch fails');
-      t.state.failNext = true;
-    } else if (op === 'download') {
-      log.push('a download');
-      void watch.askUserTabDownload(t.contents, { filename: 'file.zip', url: 'https://files.example/file.zip' });
-    } else if (op === 'frame' && t.state.attached) {
-      log.push('a frame');
-      t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: `f${i}`, waitingForDebugger: true, targetInfo: { type: 'iframe' } });
-    } else if (op === 'time') {
-      const ms = pick([10, 300, 1600, 6500, 46_000]);
-      log.push(`+${ms} ms`);
-      await vi.advanceTimersByTimeAsync(ms);
-    }
-    await flush();
-    check(op);
+/** A tab's debugger: slow, failing or silent as the seed says; frames attach as auto-attach is turned on. */
+class FakeDebugger extends EventEmitter {
+  /** Whose attachment: Chord's (attach()), someone else's (DevTools, an extension), or none. */
+  by: 'chord' | 'other' | null = null;
+  /** Sessions with Fetch on ('' is the page's own). */
+  fetch = new Set<string>();
+  autoAttach = false;
+  frames = 0;
+  /** Frames attached: whether each was already running (not paused at its start), and whether it's running now. */
+  attached = new Map<string, { runningFromStart: boolean; running: boolean }>();
+  /** A frame let run (runIfWaitingForDebugger) before its requests were held: never allowed. */
+  ranUnheld: string[] = [];
+  /** A Fetch.disable that failed or never answered: Fetch may be left on, which the end state allows then. */
+  disableFailed = false;
+  constructor(private readonly sim: Sim) {
+    super();
   }
+  isAttached(): boolean {
+    return this.by !== null;
+  }
+  attach(): void {
+    if (this.by) throw new Error('Another debugger is already attached');
+    if (this.sim.rng.chance(0.03)) throw new Error('No target');
+    this.by = 'chord';
+  }
+  detach(): void {
+    this.by = null;
+    this.fetch.clear();
+    this.autoAttach = false;
+    this.attached.clear();
+  }
+  /** Taken away from outside (DevTools opened): Electron says so with 'detach'. */
+  takenAway(): void {
+    this.by = 'other';
+    this.fetch.clear();
+    this.autoAttach = false;
+    this.attached.clear();
+    this.emit('detach', {}, 'replaced');
+  }
+  /**
+   * A frame in another process, attached while auto-attach is on. A new one is paused at its start
+   * (waitForDebuggerOnStart); one already there when auto-attach was turned on may be running already.
+   */
+  frameArrives(existing = false): void {
+    if (!this.isAttached() || !this.autoAttach) return;
+    const sessionId = `frame-${++this.frames}`;
+    const waiting = existing ? this.sim.rng.chance(0.5) : true;
+    this.attached.set(sessionId, { runningFromStart: !waiting, running: !waiting });
+    this.emit('message', {}, 'Target.attachedToTarget', { sessionId, waitingForDebugger: waiting });
+  }
+  /** Each session's commands, answered in the order they were sent, as CDP does: the last one's settling. */
+  private tails = new Map<string, Promise<unknown>>();
+  /** Sessions whose page stopped answering: everything sent there after waits forever too. */
+  private hung = new Set<string>();
 
-  // The end: every begin settled, every action ended, the lease let go, time enough for every tail and card.
-  await Promise.all(inflight.splice(0));
-  for (const a of actions.splice(0)) a.end();
-  // Each chat ends (not your input: the clipboard is put back).
-  watch.endUserLease(t.contents, 'chat:1');
-  watch.endUserLease(t.contents, 'chat:2');
-  await vi.advanceTimersByTimeAsync(60_000);
-  await flush();
-  const where = `seed ${seed}, at the end (${log.slice(-8).join(' · ')})`;
-  expect(watch.userTabCatching(t.contents), `${where}: still catching`).toBe(false);
-  expect(t.state.attached, `${where}: Chord's attachment not let go`).toBe(false);
-  expect(t.state.bypass, `${where}: the service worker not back`).toBe(false);
-  for (const id of pending) expect(t.state.answered.has(id), `${where}: ${id} never answered`).toBe(true);
-  if (clipDirty) expect(clip, `${where}: the clipboard left as the page made it`).toBe(clipAtStart);
-  return log;
+  sendCommand(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<unknown> {
+    const { rng } = this.sim;
+    if (!this.isAttached()) return Promise.reject(new Error('Debugger is not attached'));
+    const key = sessionId ?? '';
+    const fate = rng.next();
+    if (fate < 0.03) this.hung.add(key);
+    if (this.hung.has(key)) {
+      // Never answered (a page stuck in a loop, window.print): the module's own limit (COMMAND_MS) must end it.
+      if (method === 'Fetch.disable') this.disableFailed = true;
+      return new Promise(() => undefined);
+    }
+    const before = this.tails.get(key) ?? Promise.resolve();
+    const answer = before.then(
+      () =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => {
+            // A frame's session that's gone (detached with auto-attach, or the debugger let go) answers nothing more.
+            if (fate < 0.08 || (sessionId && fate < 0.12) || !this.isAttached() || (sessionId && !this.attached.has(key))) {
+              if (method === 'Fetch.disable') this.disableFailed = true;
+              return reject(new Error(`${method} failed`));
+            }
+            if (method === 'Fetch.enable') this.fetch.add(key);
+            if (method === 'Runtime.runIfWaitingForDebugger' && sessionId) {
+              if (!this.fetch.has(key)) this.ranUnheld.push(key);
+              const frame = this.attached.get(key);
+              if (frame) frame.running = true;
+            }
+            if (method === 'Fetch.disable') this.fetch.delete(key);
+            if (method === 'Target.setAutoAttach' && !sessionId) {
+              this.autoAttach = Boolean(params['autoAttach']);
+              // Turned off, the frames it attached are detached (Chromium's TargetHandler drops its auto-attached
+              // sessions): the next lease attaches them afresh. (An assumption of this fake, from Chromium's source.)
+              if (!this.autoAttach) {
+                for (const id of this.attached.keys()) {
+                  this.fetch.delete(id);
+                  this.emit('message', {}, 'Target.detachedFromTarget', { sessionId: id });
+                }
+                this.attached.clear();
+              }
+              // Frames already there are attached before auto-attach answers (Chromium sends their attachedToTarget first).
+              if (this.autoAttach) for (let i = rng.int(3); i > 0; i--) this.frameArrives(true);
+            }
+            resolve({});
+          }, rng.latency(2 * COMMAND_MS));
+        }),
+    );
+    this.tails.set(key, answer.catch(() => undefined));
+    return answer;
+  }
 }
 
-describe('The lease under seeded interleavings (M2e-2a and 2b)', () => {
-  const only = process.env['SIM_SEED'];
-  const seeds = only ? [Number(only)] : Array.from({ length: Number(process.env['SIM_SEEDS'] ?? 150) }, (_, i) => i + 1);
-  it(`${seeds.length} seeds × 40 steps: one owner, nothing left waiting, everything let go at the end`, async () => {
-    for (const seed of seeds) await run(seed, 40);
-  }, 120_000);
+class FakeTab extends EventEmitter {
+  destroyed = false;
+  readonly debugger: FakeDebugger;
+  constructor(sim: Sim) {
+    super();
+    this.debugger = new FakeDebugger(sim);
+  }
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+}
+
+type Action = { owner: string; begun: 'on' | 'busy' | 'no'; end(): void; ended: boolean };
+
+const OPS = ['begin A', 'begin A', 'begin B', 'end', 'end', 'stop A', 'stop B', 'your hands', 'DevTools', 'renderer gone', 'frame', 'wait', 'wait', 'wait'] as const;
+
+describe('the lease on a tab of yours, in random orders', () => {
+  it('keeps its invariants after every step, and lets go of everything once it settles (400 seeds)', { timeout: 30_000 }, async () => {
+    await forSeeds(400, async (sim) => {
+      const { rng } = sim;
+      hold.count.clear();
+      hold.holding = false;
+      const tab = new FakeTab(sim);
+      const contents = tab as unknown as WebContents;
+      const debug = tab.debugger;
+      // Sometimes someone else's client is attached already: used as it is, never detached.
+      const someoneElse = rng.chance(0.2);
+      if (someoneElse) debug.by = 'other';
+      const actions: Action[] = [];
+      let begins = 0;
+      // Ends that cancel begins under way: your hands (anyone's), a chat's Stop (its own).
+      const cancels = { hands: 0, A: 0, B: 0 } as Record<string, number>;
+      // What a begin's answer broke: noted where it's heard, failed at the next step's check (a throw there would be lost).
+      const broken: string[] = [];
+      const note = (ok: boolean, what: string) => void (ok || broken.push(what));
+
+      const check = (when: string) => {
+        invariant(broken.length === 0, `${when}: ${broken.join('; ')}`);
+        const owner = userLeaseOwner(contents);
+        invariant(userTabActing(contents) === (owner !== null), `${when}: acting and the owner agree`);
+        if (owner === null || tab.destroyed) return;
+        invariant(debug.isAttached(), `${when}: a lease on (${owner}'s) has the debugger`);
+        invariant(debug.fetch.has(''), `${when}: a lease on has Fetch on in the page`);
+        invariant((hold.count.get(contents) ?? 0) > 0, `${when}: a lease on has the send hold`);
+        invariant(debug.ranUnheld.length === 0, `${when}: a frame paused at its start was let run before it was held: ${debug.ranUnheld}`);
+      };
+
+      for (let step = 0; step < 30; step++) {
+        const op = rng.pick(OPS);
+        sim.log(`${step}: ${op} (owner ${userLeaseOwner(contents)}, attached ${debug.by}, fetch [${[...debug.fetch]}], holds ${hold.count.get(contents) ?? 0})`);
+        if (op === 'begin A' || op === 'begin B') {
+          const owner = op.slice(-1);
+          const n = ++begins;
+          const before = { hands: cancels['hands']!, own: cancels[owner]! };
+          void beginUserAction(contents, owner, {} as never).then((action) => {
+            const now = userLeaseOwner(contents);
+            sim.log(`   begin #${n} (${owner}): ${action.begun}, owner now ${now}`);
+            // A begin that says on is its owner's lease, then and there.
+            if (action.begun === 'on') note(now === owner, `begin #${n} on for ${owner} while the owner is ${now}`);
+            // A begin under way when your hands, or its chat's Stop, ended the lease never comes back on.
+            if (action.begun === 'on') note(cancels['hands'] === before.hands && cancels[owner] === before.own, `begin #${n} (${owner}) on after an end that cancels it`);
+            // Handed out only with every frame that was already running held: one that couldn't be means no lease.
+            if (action.begun === 'on' && begins === n) {
+              const unheld = [...debug.attached].filter(([id, f]) => f.runningFromStart && !debug.fetch.has(id)).map(([id]) => id);
+              note(unheld.length === 0, `begin #${n} on with frames running unheld: ${unheld}`);
+            }
+            actions.push({ owner, begun: action.begun, end: action.end, ended: false });
+          });
+        } else if (op === 'end') {
+          const open = actions.filter((a) => !a.ended);
+          if (open.length) {
+            const action = rng.pick(open);
+            action.ended = true;
+            action.end();
+            // Ending twice does nothing.
+            if (rng.chance(0.3)) action.end();
+          }
+        } else if (op === 'stop A' || op === 'stop B') {
+          cancels[op.slice(-1)]!++;
+          endUserLease(contents, op.slice(-1));
+        } else if (op === 'your hands') {
+          cancels['hands']!++;
+          endUserLease(contents);
+        }
+        else if (op === 'DevTools') {
+          if (debug.by === 'chord') debug.takenAway();
+        } else if (op === 'renderer gone') tab.emit('render-process-gone', {}, { reason: 'crashed' });
+        else if (op === 'frame') debug.frameArrives();
+        else {
+          hold.holding = rng.chance(0.2);
+          await sim.advance(rng.chance(0.3) ? TAIL_MS + rng.int(500) : rng.int(400));
+        }
+        await sim.advance(0);
+        check(`after step ${step} (${op})`);
+      }
+
+      // Everything ends: every action, then time runs out (the tail, any card's wait, every command's limit).
+      hold.holding = false;
+      for (const action of actions) if (!action.ended) action.end();
+      await sim.settle();
+      for (const action of actions) if (!action.ended) action.end();
+      await sim.settle();
+      check('settled');
+      invariant(userLeaseOwner(contents) === null, 'settled: no lease is on');
+      invariant((hold.count.get(contents) ?? 0) === 0, `settled: every hold let go of (${hold.count.get(contents) ?? 0} left)`);
+      if (someoneElse || debug.by === 'other') invariant(debug.by === 'other', "settled: someone else's attachment is left as it was");
+      else invariant(debug.by === null, 'settled: Chord let go of its own attachment');
+      if (!debug.disableFailed) invariant(!debug.fetch.has('') || debug.by === null, 'settled: Fetch is off in the page');
+      invariant(debug.listenerCount('message') === 0 && debug.listenerCount('detach') === 0, 'settled: no debugger listener left');
+      invariant(tab.listenerCount('render-process-gone') === 0, 'settled: no tab listener left');
+    });
+  });
 });
