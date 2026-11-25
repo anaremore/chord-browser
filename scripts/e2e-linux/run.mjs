@@ -29,7 +29,9 @@
 // that aren't ignored, uncommitted changes included, copied into a container of
 // its own. node_modules and the build are made in there (never the Windows
 // ones), the pnpm store and Electron download are cached in the named volumes
-// chord-e2e-pnpm-store and chord-e2e-electron-cache, and test-results (and a
+// chord-e2e-pnpm-store and chord-e2e-electron-cache, and so is the build: the
+// last few builds, by a hash of what they're built from (buildKey), so a run
+// that changes only tests skips `pnpm build`. test-results (and a
 // report, if a reporter wrote one) are copied back to apps/desktop as a local
 // run leaves them. Every Docker object is named chord-e2e-*; each run's
 // container has a name of its own, so runs from several worktrees don't collide.
@@ -125,6 +127,31 @@ export function imageTag(dockerfile, pnpmVersion) {
   return `chord-e2e-runner:${createHash('sha256').update(dockerfile).update(`\0${pnpmVersion}`).digest('hex').slice(0, 12)}`;
 }
 
+/**
+ * Files no build reads: tests and their configs, docs, the website, CI. A change to these alone keeps the last
+ * build (buildKey). When unsure, a path is left out of this list: it then counts, and the build just runs again.
+ */
+export const NOT_BUILT_FROM = [
+  /^(apps|packages)\/[^/]+\/test\//,
+  /^apps\/[^/]+\/playwright(\.[\w-]+)?\.config\.ts$/,
+  /^scripts\/(test|ci|dev|e2e-linux)\//,
+  /^(docs|site|mocks|\.github)\//,
+  /\.md$/,
+];
+
+/**
+ * The build's cache key: a hash of the image, the variables that change a build (CHORD_NO_MINIFY), and every
+ * file of the tree it could be built from (all but NOT_BUILT_FROM), by path and content.
+ */
+export function buildKey(entries, image, env = {}) {
+  const hash = createHash('sha256').update(image).update(`\0${env.CHORD_NO_MINIFY ? 'unminified' : 'minified'}\0`);
+  for (const { path, body, link } of [...entries].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
+    if (NOT_BUILT_FROM.some((pattern) => pattern.test(path))) continue;
+    hash.update(path).update('\0').update(link !== undefined ? `link:${link}` : body).update('\0');
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
 /** A name of its own for each run's container: chord-e2e-run-<worktree folder>-<random>. */
 export function containerName(root, random = randomBytes(3).toString('hex')) {
   const slug = basename(root).toLowerCase().replaceAll(/[^a-z0-9_.-]+/g, '-').slice(0, 40);
@@ -160,7 +187,7 @@ export function staleRuns(inspected, now = Date.now()) {
 export const PASSED_ENV = ['CHORD_NO_MINIFY', 'CHORD_PERF_ENFORCE', 'CHORD_PERF_PROFILE', 'CHORD_E2E_SCREEN', 'CHORD_E2E_CPU_THROTTLE'];
 
 /** `docker run`'s arguments: the tar of the working tree arrives on stdin and is unpacked in /work. */
-export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpuset = null, quota = null, share = null, env = {} }) {
+export function dockerRunArgs({ name, image, display, root, startedAt, playwright, cpuset = null, quota = null, share = null, build = null, env = {} }) {
   return [
     'run',
     '--interactive',
@@ -204,6 +231,8 @@ export function dockerRunArgs({ name, image, display, root, startedAt, playwrigh
     ...(share ? ['--volume', `${share}:/share`, '--env', 'CHORD_E2E_SHARE=/share'] : []),
     '--env', `CHORD_E2E_DISPLAY=${display}`,
     '--env', `CHORD_E2E_STARTED=${Math.round(startedAt / 1000)}`,
+    // The build's cache key (buildKey): in-container.sh reuses the build it names, if one is kept.
+    ...(build ? ['--env', `CHORD_E2E_BUILD_KEY=${build}`] : []),
     ...PASSED_ENV.filter((key) => env[key]).flatMap((key) => ['--env', `${key}=${env[key]}`]),
     image,
     'bash', '-c', 'tar -xf - -C /work && exec bash /work/scripts/e2e-linux/in-container.sh "$@"', 'bash',
@@ -419,7 +448,7 @@ async function main() {
   const where = `${options.display === 'x11' ? 'X11 (Xvfb with openbox)' : 'Wayland (headless Weston)'}${cpusSaid}${options.throttle ? `, pages ${options.throttle}x slower` : ''}`;
   log(`Running in ${name} on ${where}${options.playwright.length ? `: playwright test ${options.playwright.join(' ')}` : ''}`);
   const share = options.share === null ? null : dockerPath(resolve(options.share));
-  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota, share, env }), tar);
+  const code = await dockerLive(dockerRunArgs({ name, image, display: options.display, root, startedAt, playwright: options.playwright, cpuset, quota, share, build: buildKey(entries, image, env), env }), tar);
 
   // Results, back where a local run leaves them. A folder the run didn't write isn't touched.
   const appInDocker = dockerPath(appDir);

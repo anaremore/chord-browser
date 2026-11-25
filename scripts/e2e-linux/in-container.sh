@@ -23,8 +23,24 @@ export CHORD_DICTIONARY_CACHE="$HOME/.cache/electron/chord-dictionaries"
 step "pnpm install (store and Electron download cached in volumes)"
 # The store is a volume and /work isn't, so pnpm copies packages out of it rather than linking them.
 pnpm install --frozen-lockfile --prefer-offline --store-dir "$HOME/.cache/pnpm-store" --package-import-method copy
-step "pnpm build"
-pnpm build
+# The last few builds are kept in the Electron volume, by a hash of what they're built from (CHORD_E2E_BUILD_KEY,
+# from run.mjs: the tree without its tests, docs and CI). A run that changed only tests reuses the build.
+builds="$HOME/.cache/electron/chord-builds"
+key="${CHORD_E2E_BUILD_KEY:-}"
+if [ -n "$key" ] && [ -f "$builds/$key.tar" ]; then
+  step "pnpm build: skipped, nothing it's built from changed (the build kept as $key)"
+  tar -xf "$builds/$key.tar" -C /work
+else
+  step "pnpm build"
+  pnpm build
+  if [ -n "$key" ]; then
+    mkdir -p "$builds"
+    # Written aside, then moved: a run that stops halfway leaves no half a build to reuse.
+    tar -cf "$builds/$key.tar.part" -C /work apps/desktop/out && mv "$builds/$key.tar.part" "$builds/$key.tar"
+    # The newest 5 stay (each about the size of apps/desktop/out).
+    ls -1t "$builds"/*.tar | tail -n +6 | xargs -r rm -f
+  fi
+fi
 step "E2E on $display"
 
 case "$display" in
