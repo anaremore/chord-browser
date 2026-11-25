@@ -2707,6 +2707,30 @@ describe('acting through the gate (S18 M2c)', () => {
     }
   });
 
+  it('navigate to another site: one card, the leaving card with the whole address; never the destination’s site card nor its grant (the owner’s test of the 0.15 preview)', async () => {
+    const leaving = (from: string, to: string) => new URL(from).host !== new URL(to).host;
+    const away = 'https://wiki.example/w/index.php?search=chord+progression&ns0=1';
+    // [what, the call, the chat read elsewhere, the cards it shows (kind, why, address)]
+    const rows: [string, string, boolean, [string, string | undefined, string | undefined][]][] = [
+      ['another site', away, false, [['step', 'leave', away]]],
+      ['another site, an address that signs out', 'https://wiki.example/logout?next=%2F', false, [['step', 'leave', 'https://wiki.example/logout?next=%2F']]],
+      ['the same site, not allowed yet: its site card', 'https://news.test/b?q=1', false, [['site', undefined, undefined]]],
+      ['the same site in a chat that read elsewhere: its site card, then the whole address', 'https://news.test/b?q=1', true, [['site', undefined, undefined], ['step', 'leave', 'https://news.test/b?q=1']]],
+    ];
+    for (const [what, url, tainted, cards] of rows) {
+      const t = await acting({ act: { siteAllowed: () => false, leaving, typeAsks: () => tainted } });
+      await t.call('navigate', { tab_id: t.tab, url });
+      expect(t.cards.map((c) => [c.kind, c.step?.why, c.step?.going]), what).toEqual(cards);
+      // Going there grants nothing there: acting on its page later asks its own site card.
+      expect(t.kept, what).toEqual([]);
+      expect(t.at.loads, what).toEqual([url]);
+    }
+    // An outside agent (no leaving card: its own tabs): the destination's site card, as before.
+    const u = await acting({ act: { siteAllowed: () => false } });
+    await u.call('navigate', { tab_id: u.tab, url: away });
+    expect(u.cards.map((c) => [c.kind, c.subject])).toEqual([['site', 'wiki.example']]);
+  });
+
   it('navigate tells the lease where it goes, once its hold is on (Claude’s review of #151, Neon’s N2)', async () => {
     const told: string[] = [];
     const t = await acting({ act: { siteAllowed: () => true, lease: { begin: async () => null, end: () => undefined, going: (_n, url) => void told.push(url) } } });

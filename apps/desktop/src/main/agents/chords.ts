@@ -32,7 +32,7 @@ import { ACT_BAR_MIN_MS, AGENT_STEADY_MS, CONTROL_WAIT_MS, barAddress, barDoing,
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
-import { isAgentInput } from '../control/input';
+import { isAgentInput, usesTheTab } from '../control/input';
 import type { Change } from '../store';
 import type { AgentHeld } from '../tabs';
 import { onNeverSite } from './scope';
@@ -402,7 +402,8 @@ export class AgentChords {
       if (mouse.type === 'mouseDown' && !isAgentInput(contents)) yours();
     });
     contents.on('before-input-event', (_event, input) => {
-      if (input.type === 'keyDown' && !isAgentInput(contents)) yours();
+      // A modifier alone (Alt+Tab's Alt) isn't using the tab (the owner's test of the 0.15 preview).
+      if (usesTheTab(input) && !isAgentInput(contents)) yours();
     });
     contents.on('will-prevent-unload', (event) => event.preventDefault());
     // The page you sent it to: a new document committed in the main frame (`did-navigate` is the main frame's, and never

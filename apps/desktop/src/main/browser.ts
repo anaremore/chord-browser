@@ -71,7 +71,7 @@ import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { buildActs } from './assistant/preview';
 import { attachContextMenu } from './context-menu';
-import { isAgentInput } from './control/input';
+import { isAgentInput, usesTheTab } from './control/input';
 import { DevTools } from './devtools';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
 import { Effects } from './effects/service';
@@ -519,7 +519,8 @@ export class Browser {
         // Your key or click in a tab of yours: the assistant stops acting there for this message (S18 M2e-2a, F1). As the
         // page sees it (before it), never input Chord sends (control/input.ts).
         contents.on('before-input-event', (_event, input) => {
-          if (input.type === 'keyDown' && !isAgentInput(contents)) this.userInput?.(nodeId);
+          // A modifier alone (Alt+Tab's Alt) isn't using the tab (the owner's test of the 0.15 preview).
+          if (usesTheTab(input) && !isAgentInput(contents)) this.userInput?.(nodeId);
         });
         contents.on('before-mouse-event', (_event, mouse) => {
           if (mouse.type === 'mouseDown' && !isAgentInput(contents)) this.userInput?.(nodeId);

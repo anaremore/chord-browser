@@ -73,6 +73,18 @@ export function sendAgentInput(contents: Page, events: readonly AgentInputEvent[
 /** The input event being handled now is one Chord is sending for an agent, not yours. */
 export const isAgentInput = (contents: Page): boolean => (sending.get(contents) ?? 0) > 0;
 
+/** Keys that alone aren't using the page: a modifier held (Alt+Tab's Alt, which reaches the page while its Tab goes to the OS), or a lock. */
+const LONE_KEYS = new Set(['Alt', 'AltGraph', 'Control', 'Shift', 'Meta', 'OS', 'Super', 'Hyper', 'Fn', 'FnLock', 'CapsLock', 'NumLock', 'ScrollLock', 'Symbol', 'SymbolLock']);
+
+/**
+ * A key of yours in a tab that is using it (the assistant stops acting there, an agent pauses: F1): a key pressed, not
+ * a modifier or a lock alone. Alt+Tab to another app sends the page its Alt, and that's no use of the tab (the owner's
+ * test of the 0.15 preview); Alt+F, Ctrl+A, a letter, Enter or an IME's composition is.
+ */
+export function usesTheTab(input: { type: string; key?: string }): boolean {
+  return input.type === 'keyDown' && !LONE_KEYS.has(input.key ?? '');
+}
+
 /** Your key in this page (keyboard.ts, before the page or the menu sees it): its menu shortcuts are yours again. */
 export function yourKey(contents: Page): void {
   if (!menuOff.delete(contents) || contents.isDestroyed()) return;

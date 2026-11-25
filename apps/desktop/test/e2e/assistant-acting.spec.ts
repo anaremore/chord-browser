@@ -485,12 +485,13 @@ test('leaving the site asks with the address, an open redirect away asks too, an
     };
     const tabUrl = () => app.evaluate(({ webContents }, o) => webContents.getAllWebContents().find((w) => w.getURL().startsWith(o))?.getURL() ?? '', site.origin);
 
-    // navigate to another site: the site card for it, then the leaving card, with the whole address. Don't: it stays.
+    // navigate to another site: one card, the leaving card, with the whole address, never that site's own card (going
+    // to a page isn't acting on it: the owner's test of the 0.15 preview). Don't: it stays.
     const away = `${site.other}/checkout?from=table`;
     await send(panel, act([{ tool: 'navigate', args: { url: away } }]));
-    await answer(/^Let the assistant click and type on localhost:\d+\?$/, 'Allow for this chat');
     const leave = await answer(/^Go to localhost:\d+\?$/, 'Don’t');
     await expect(leave).toContainText(away);
+    await expect(card(/^Let the assistant click and type on /)).toHaveCount(0);
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(1);
     expect(lastActing(config)[0]?.result).toContain('The user said no to this step');
     expect(await tabUrl()).toBe(`${site.origin}/table`);
@@ -519,6 +520,39 @@ test('leaving the site asks with the address, an open redirect away asks too, an
     await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(3);
     const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
     await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('Alt+Tab to another app while it acts: Alt alone in the tab isn’t your using it, and the step goes on (the owner’s test of the 0.15 preview)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/order` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/order`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'type', name: 'Order number', args: { text: 'W-104388' } }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    // Alt+Tab away and back: the Alt goes to the page (its Tab to the OS), as a key you press there would.
+    await app.evaluate(({ webContents }, origin) => {
+      const tab = webContents.getAllWebContents().find((w) => w.getURL().startsWith(origin))!;
+      tab.sendInputEvent({ type: 'keyDown', keyCode: 'Alt', modifiers: ['alt'] });
+      tab.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
+    }, `${site.origin}/order`);
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
+    expect(lastActing(config).find((x) => x.tool === 'type')?.result).not.toContain('refused');
+    await expect(panel.getByText('Stopped: you used the tab')).toHaveCount(0);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

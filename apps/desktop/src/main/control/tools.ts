@@ -752,12 +752,16 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (!/^https?:\/\//i.test(back.url) || isNeverReadable(back.url, scope.neverSites())) return refuse(NEVER);
     }
     const goingTo = tool === 'navigate' ? target : (back?.url ?? '');
-    // The site it goes to asks first, as any action on a site does (Neon's review of #112): the site card, once.
     const goingSite = host.siteOf(goingTo);
     if (!goingSite) return refuse(ACT_REFUSALS.noSite);
-    const remembered = scope.agent.granted('site', goingSite);
+    // Leaving the site (the assistant in a tab of yours): one card, the leaving card with the whole address, below. Going
+    // to a page isn't acting on it: never that site's own card, nor its grant; acting on its page later asks it then (the
+    // owner's test of the 0.15 preview). An outside agent's own tabs: the site card for where it goes, as before.
+    const leavesSite = host.leaving?.(page.url(), goingTo) ?? false;
+    // The site it goes to asks first, as any action on a site does (Neon's review of #112): the site card, once.
+    const remembered = leavesSite ? null : scope.agent.granted('site', goingSite);
     if (remembered === 'deny') return refuse(ACT_REFUSALS.siteDenied(goingSite));
-    if (!remembered && !host.siteAllowed(goingSite)) {
+    if (!leavesSite && !remembered && !host.siteAllowed(goingSite)) {
       const released = scope.agent.releases(node.id);
       const answer = await scope.agent.ask({ kind: 'site', tool, description: `go to ${barAddress(goingTo)}`, target: [page.url()], tab: node.id, subject: goingSite }, call.signal, scope.cardWaitMs);
       if (answer === 'waiting') return refuse(CONTROL_REFUSALS.waiting);
@@ -767,9 +771,10 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       scope.agent.keep('site', goingSite, answer);
       if (answer === 'always') host.keepSite(goingSite);
     }
-    // An address that deletes or signs out (core's addressWhy, as a link's): the step card first (#112 review 1).
+    // An address that deletes or signs out (core's addressWhy, as a link's): the step card first (#112 review 1). Leaving
+    // the site, the leaving card names the whole address instead: one card.
     const goingWhy = addressWhy(goingTo);
-    if (goingWhy) {
+    if (goingWhy && !leavesSite) {
       const released = scope.agent.releases(node.id);
       const answer = await scope.agent.ask(
         {
@@ -793,7 +798,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     }
     // Leaving the site (the assistant in a tab of yours, M2e-2c, B3): every time, showing the whole address, which can
     // carry data out. In a chat that read elsewhere, any address does, the same site's too (Claude's C-B3 on #151).
-    const leaves = (host.leaving?.(page.url(), goingTo) ?? false) || (host.typeAsks?.(node, page.url()) ?? false);
+    const leaves = leavesSite || (host.typeAsks?.(node, page.url()) ?? false);
     if (leaves) {
       const released = scope.agent.releases(node.id);
       const answer = await scope.agent.ask(
