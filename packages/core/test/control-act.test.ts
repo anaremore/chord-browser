@@ -56,6 +56,12 @@ describe('Chord’s words for an action: the site card, the activity line, the b
 
   it('cuts a long name to 60 characters', () => {
     expect(quotedName('x'.repeat(100), 'button')).toBe(`“${'x'.repeat(59)}…”`);
+    // A field's label with its colon: shown without it (the owner's test of the 0.15 preview); one inside a name stays.
+    expect(quotedName('Customer name:', 'textbox')).toBe('“Customer name”');
+    expect(quotedName('Customer name :  ', 'textbox')).toBe('“Customer name”');
+    expect(quotedName('Ratio 3:2', 'combobox')).toBe('“Ratio 3:2”');
+    expect(quotedName(':', 'textbox')).toBe('the textbox');
+    expect(actPhrase({ tool: 'type', name: 'Customer name:', role: 'textbox' })).toBe('type in “Customer name”');
   });
 
   // [what it's doing, what the bar says after its name]
