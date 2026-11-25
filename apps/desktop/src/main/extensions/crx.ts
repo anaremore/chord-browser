@@ -21,7 +21,7 @@ const SIGNATURE_CONTEXT = Buffer.from('CRX3 SignedData\x00', 'latin1');
 const ZIP_TOKENS = ['PK\x05\x06', 'PK\x06\x07', 'PK\x06\x06'].map((t) => Buffer.from(t, 'latin1'));
 
 /** Extension IDs are 32 letters a–p. */
-export const EXTENSION_ID = /^[a-p]{32}$/;
+const EXTENSION_ID = /^[a-p]{32}$/;
 
 const hexToId = (hex: string) => [...hex].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
 

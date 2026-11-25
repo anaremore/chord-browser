@@ -34,7 +34,7 @@ import { ImportProcess, type ImportGate } from '../import';
 const READ_MS = 60_000;
 
 /** The vault's service, as far as import and export need it (main/passwords/service.ts). */
-export interface TransferVault {
+interface TransferVault {
   vaultState(): Promise<VaultState>;
   confirm(passphrase?: string): Promise<Exclude<PasswordRevealResult, { ok: true }> | null>;
   transferred(changed: boolean): void;
@@ -76,7 +76,7 @@ export interface PasswordTransferOptions {
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** "Chord passwords 2026-11-17.csv": this computer's date. */
-export const passwordExportName = (now: Date) => `Chord passwords ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`;
+const passwordExportName = (now: Date) => `Chord passwords ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`;
 
 const showOpen = (parent: BaseWindow | null, options: OpenDialogOptions) => (parent && !parent.isDestroyed() ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options));
 const showSave = (parent: BaseWindow | null, options: SaveDialogOptions) => (parent && !parent.isDestroyed() ? dialog.showSaveDialog(parent, options) : dialog.showSaveDialog(options));

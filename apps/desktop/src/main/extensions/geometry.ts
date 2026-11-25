@@ -3,7 +3,7 @@ import type { Rect } from '@chord/ipc';
 import { size, space } from '@chord/tokens';
 
 /** Chrome's limits for action popups (chrome/browser/ui/extensions/extension_popup_types.h). */
-export const POPUP_MIN = { width: 25, height: 25 };
+const POPUP_MIN = { width: 25, height: 25 };
 export const POPUP_MAX = { width: 800, height: 600 };
 
 /** Fit a page's preferred size into Chrome's popup limits and the window, with a margin. */

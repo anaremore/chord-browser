@@ -25,7 +25,7 @@ const MAX_FAVICON_BYTES = 64 * 1024;
 const SITE_ICONS = 256;
 
 /** A web page's site, for its icon: its origin. Null for anything else (Chord's pages, about:, files). */
-export function siteOf(url: string): string | null {
+function siteOf(url: string): string | null {
   if (!/^https?:\/\//i.test(url)) return null;
   try {
     return new URL(url).origin;
@@ -73,7 +73,7 @@ export interface TabManagerDeps {
 export type AgentHeld = 'dialog' | 'file' | 'popup' | 'download' | 'signin';
 
 /** What an agent's tab's preload looks for in its arguments (preload/page.ts has the same). */
-export const AGENT_TAB_ARG = '--chord-agent-tab';
+const AGENT_TAB_ARG = '--chord-agent-tab';
 
 /** A page that isn't a tab yet: a Peek's or a mini window's (DESIGN.md §7.9). */
 interface FloatingPage {

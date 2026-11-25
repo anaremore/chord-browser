@@ -13,7 +13,7 @@ import { app, session, type Session } from 'electron';
  * CDN (seen in a net log, 2026-10-23). One constant, so the Google-free mode
  * (ROADMAP Phase 3) can point it somewhere else.
  */
-export const SPELLCHECK_DICTIONARIES_URL = 'https://redirector.gvt1.com/edgedl/chrome/dict/';
+const SPELLCHECK_DICTIONARIES_URL = 'https://redirector.gvt1.com/edgedl/chrome/dict/';
 
 /**
  * Google-free mode's dictionary "server": port 9 on this computer, a port
@@ -22,7 +22,7 @@ export const SPELLCHECK_DICTIONARIES_URL = 'https://redirector.gvt1.com/edgedl/c
  * Dictionaries already downloaded keep working, and so does the system's own
  * spellchecker (macOS always; Windows for the languages it checks itself).
  */
-export const SPELLCHECK_OFFLINE_URL = 'http://127.0.0.1:9/';
+const SPELLCHECK_OFFLINE_URL = 'http://127.0.0.1:9/';
 
 /**
  * Development and E2E only: a local server with pinned dictionaries in place of Google's CDN

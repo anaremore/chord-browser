@@ -48,10 +48,10 @@ export const SETTLE_MS = 1500;
  */
 export const LATE_NAV_CAP_MS = SETTLE_MS + 10_000;
 
-export type SubmitSignal = Exclude<PasswordsCandidate['signal'], 'blur'>;
+type SubmitSignal = Exclude<PasswordsCandidate['signal'], 'blur'>;
 /** What was typed in a sign-in that was submitted: the username, and the password to save. */
 export type CandidateValues = NonNullable<PasswordsCandidate['values']>;
-export type ResponseHint = 'response-ok' | 'response-error' | null;
+type ResponseHint = 'response-ok' | 'response-error' | null;
 
 export type SavingOutcome =
   /**
