@@ -53,7 +53,7 @@ export const threadOf = (r: Row): AssistantThread => ({
 });
 
 /** The images in the messages of the threads `where` picks (a condition on `t`), read before they're deleted. */
-export function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): AssistantImage[] {
+function imagesIn(sql: Sql, where: string, ...params: (string | number)[]): AssistantImage[] {
   const rows = sql(`SELECT m.body FROM assistant_message m JOIN assistant_thread t ON t.id = m.thread_id WHERE ${where} AND m.body LIKE '%"images":%'`).all(...params) as Row[];
   return rows.flatMap((r) => {
     try {

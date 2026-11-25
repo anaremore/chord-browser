@@ -20,7 +20,7 @@ export function parseJson<T>(text: unknown, fallback: T): T {
   }
 }
 
-export const joinDataUrl = (mime: string, data: Uint8Array) => `data:${mime};base64,${Buffer.from(data).toString('base64')}`;
+const joinDataUrl = (mime: string, data: Uint8Array) => `data:${mime};base64,${Buffer.from(data).toString('base64')}`;
 
 /** A row's icon as the model keeps it: a `data:` URL, from the favicon row joined as icon_mime and icon_data. */
 export const iconOf = (r: Row): string | null =>

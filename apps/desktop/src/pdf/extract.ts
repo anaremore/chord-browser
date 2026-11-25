@@ -30,7 +30,7 @@ export class PdfReadError extends Error {
 }
 
 /** The text of one page: runs in reading order, with pdf.js's line ends. */
-export function pageText(items: readonly (TextItem | { type: string })[]): string {
+function pageText(items: readonly (TextItem | { type: string })[]): string {
   let out = '';
   for (const item of items) {
     if (!('str' in item)) continue;
