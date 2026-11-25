@@ -71,7 +71,7 @@ import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { buildActs } from './assistant/preview';
 import { attachContextMenu } from './context-menu';
-import { isAgentInput, usesTheTab } from './control/input';
+import { clicksTheTab, inputWhy, isAgentInput, usesTheTab } from './control/input';
 import { DevTools } from './devtools';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
 import { Effects } from './effects/service';
@@ -313,7 +313,7 @@ export class Browser {
   /** The assistant has a bar up over a tab of yours (S18 M2e-2a): the bars are kept in step for it too (Neon's B8 on #147). */
   assistantBars = false;
   /** Your key or click in a tab's page (never input Chord sends): the assistant stops acting there (S18 M2e-2a). Set by main. */
-  userInput: ((nodeId: NodeId) => void) | null = null;
+  userInput: ((nodeId: NodeId, why: string) => void) | null = null;
   /** What's on screen changed outside the store (Peek, a window minimized): the assistant checks its acting. Set by main. */
   screenChanged: (() => void) | null = null;
   /** The assistant's panel width (DESIGN.md §3: 380, 320–560). */
@@ -520,10 +520,11 @@ export class Browser {
         // page sees it (before it), never input Chord sends (control/input.ts).
         contents.on('before-input-event', (_event, input) => {
           // A modifier alone (Alt+Tab's Alt) isn't using the tab (the owner's test of the 0.15 preview).
-          if (usesTheTab(input) && !isAgentInput(contents)) this.userInput?.(nodeId);
+          if (usesTheTab(input) && !isAgentInput(contents)) this.userInput?.(nodeId, inputWhy(input));
         });
         contents.on('before-mouse-event', (_event, mouse) => {
-          if (mouse.type === 'mouseDown' && !isAgentInput(contents)) this.userInput?.(nodeId);
+          // A button pressed, never the pointer moving over the page (the owner's test of 9d1ad40).
+          if (clicksTheTab(mouse) && !isAgentInput(contents)) this.userInput?.(nodeId, inputWhy(mouse));
         });
         contents.on('input-event', (_event, input) => {
           // A click Chord sends for an agent (control/input.ts) doesn't move your focus to its pane.

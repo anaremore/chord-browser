@@ -341,7 +341,7 @@ function registerIpc(): void {
     // and you take the tab over (S18 M2e-1), as a reload of yours does.
     if (command.t === 'tab.navigate') {
       agents?.service?.chords?.takeOver(command.nodeId, undefined, { url: command.url });
-      assistant?.userUsedTab(command.nodeId);
+      assistant?.userUsedTab(command.nodeId, 'an address you typed');
     }
     // Sync's toasts: Undo for turning it off or removing a computer, before either happens; a problem's, opening Settings.
     if (command.t === 'sync.undo') return void syncService?.undo(command.token);
@@ -371,7 +371,7 @@ function registerIpc(): void {
     }
     else if (action === 'stop') {
       // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
-      assistant?.userMovedPage(contents);
+      assistant?.userMovedPage(contents, 'Stop');
       contents.stop();
     }
   });
@@ -1205,9 +1205,9 @@ if (!app.requestSingleInstanceLock()) {
     browser.agentHeld = (nodeId, what, detail, from) => agents?.service?.chords?.note(nodeId, what, detail, from);
     browser.userNavigates = (contents, going) => {
       agents?.service?.chords?.takeOverPage(contents, going);
-      assistant?.userMovedPage(contents);
+      assistant?.userMovedPage(contents, going === 'back' ? 'Back' : going === 'forward' ? 'Forward' : typeof going === 'object' ? 'a page you opened' : going === 'stay' ? 'your answer to a warning' : 'a reload');
     };
-    browser.userInput = (nodeId) => assistant?.userUsedTab(nodeId);
+    browser.userInput = (nodeId, why) => assistant?.userUsedTab(nodeId, why);
     browser.screenChanged = () => assistant?.screenChanged();
     // Ctrl+. / ⌘.: every agent, and every assistant reply, stops.
     browser.stopAll = () => {

@@ -560,6 +560,52 @@ test('Alt+Tab to another app while it acts: Alt alone in the tab isn’t your us
   }
 });
 
+test('read another tab, then type: each card answered with a click in the panel, the pointer left over the page, and nothing stops it (the owner’s test of 9d1ad40)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/order` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/order`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/order`))!;
+    // The list of tabs, the other tab read, a look at this one, then typing: as the owner asked it.
+    await send(panel, act([{ tool: 'list_tabs' }, { tool: 'read_tab', args: { tab_id: 't2' } }, { tool: 'snapshot' }, { tool: 'type', name: 'Order number', args: { text: 'W-104388' } }]));
+    // Every card answered with a real click in the panel; then the pointer rests over the page, as a hand on the mouse leaves it.
+    const deadline = Date.now() + 90_000;
+    const answered: string[] = [];
+    while ((await actingTurns(config)) < 1 && Date.now() < deadline) {
+      const pending = panel.locator('[data-pending]').last();
+      if ((await pending.count()) > 0 && (await pending.isVisible())) {
+        await shell.waitForTimeout(700);
+        for (const name of ['Allow once', 'Allow for this chat', 'Allow']) {
+          const button = pending.getByRole('button', { name, exact: true });
+          if ((await button.count()) > 0) {
+            answered.push(`${(await pending.getAttribute('aria-label')) ?? ''}: ${name}`);
+            await button.click();
+            break;
+          }
+        }
+        await page.mouse.move(40, 40);
+        await page.mouse.move(80, 60);
+      }
+      await shell.waitForTimeout(200);
+    }
+    console.log(`cards: ${answered.join(' | ')}`);
+    const steps = lastActing(config);
+    expect(steps.find((x) => x.tool === 'read_tab')?.result, 'the other tab was read').not.toContain('error');
+    expect(steps.find((x) => x.tool === 'type')?.result).not.toContain('took');
+    await expect(page.locator('input[name=order]')).toHaveValue('W-104388');
+    await expect(panel.getByText(/Stopped: you used the tab/)).toHaveCount(0);
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
 test('a page whose service worker sends its POSTs: while the assistant acts, its requests skip the worker and are held and asked about; after, the worker is back (M2e-2b, C3)', async () => {
   test.setTimeout(120_000);
   reached.length = 0;

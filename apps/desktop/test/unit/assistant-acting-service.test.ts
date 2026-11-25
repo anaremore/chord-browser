@@ -386,6 +386,17 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     expect(inner.scopeOf(s).act!.mayAct(node())).toBeNull();
   });
 
+  it('the chat says what of yours stopped it: a key, a click, Back, a reload (the owner’s test of 9d1ad40: the next preview tells which)', async () => {
+    const t = setup();
+    const s = (await t.inner.stateFor('c1')) as unknown as { actEnded: string | null; streaming: unknown; actTab: unknown; thread: unknown; messages: { body: { role: string; summary?: string } }[] };
+    s.thread = { id: 'th1', chordId: 'c1', title: 't', provider: 'claude', model: null, scope: 'ask', createdAt: 0, updatedAt: 0, lastUsedAt: 0, providerSessionId: null };
+    s.streaming = { id: 'reply' };
+    s.actTab = { nodeId: t.mine, windowId: 'w1' };
+    (t.service as unknown as { acted: WeakSet<object> }).acted.add(s);
+    t.service.userUsedTab(t.mine, 'a key: KeyA');
+    await vi.waitFor(() => expect(s.messages.map((m) => m.body.summary)).toContain('Stopped: you used the tab (a key: KeyA)'));
+  });
+
   it('your key or click in the tab during a reply ends its acting there; the chat says Stopped now if it was acting there, else at the first step it refuses (the owner’s answer 5; Claude’s S1, round 3)', async () => {
     const stopped = (s: { messages: { body: { role: string; summary?: string } }[] }) => s.messages.filter((m) => m.body.role === 'tool' && /Stopped: you used the tab/.test(m.body.summary ?? '')).length;
     for (const acting of [true, false]) {

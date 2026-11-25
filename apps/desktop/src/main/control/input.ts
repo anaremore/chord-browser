@@ -82,7 +82,26 @@ const LONE_KEYS = new Set(['Alt', 'AltGraph', 'Control', 'Shift', 'Meta', 'OS', 
  * test of the 0.15 preview); Alt+F, Ctrl+A, a letter, Enter or an IME's composition is.
  */
 export function usesTheTab(input: { type: string; key?: string }): boolean {
-  return input.type === 'keyDown' && !LONE_KEYS.has(input.key ?? '');
+  // No key the page could act on (Windows sends some with none, or `Unidentified`): not your using the tab either.
+  const key = input.key ?? '';
+  return input.type === 'keyDown' && key !== '' && key !== 'Unidentified' && !LONE_KEYS.has(key);
+}
+
+/**
+ * Your click in a tab that is using it: a button pressed. Never the pointer moving, entering or leaving the page (as it
+ * does when a card in the panel goes and the page is under it), a release alone, or the wheel (the owner's test of
+ * 9d1ad40).
+ */
+export function clicksTheTab(mouse: { type: string; button?: string }): boolean {
+  return mouse.type === 'mouseDown' && (mouse.button === 'left' || mouse.button === 'middle' || mouse.button === 'right');
+}
+
+/** What of yours it was, in a few words, for the chat's *Stopped: you used the tab (…)*: `a key: Ctrl+Enter`, `a click: left`. */
+export function inputWhy(input: { type: string; key?: string; code?: string; button?: string; control?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }): string {
+  if (input.type === 'mouseDown') return `a click: ${input.button ?? 'no button'}`;
+  const held = [input.control && 'Ctrl', input.alt && 'Alt', input.shift && 'Shift', input.meta && 'Meta'].filter(Boolean).join('+');
+  const key = input.code || input.key || 'unknown';
+  return `a key: ${held ? `${held}+` : ''}${key}`;
 }
 
 /** Your key in this page (keyboard.ts, before the page or the menu sees it): its menu shortcuts are yours again. */

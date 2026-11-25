@@ -137,6 +137,8 @@ interface ThreadState extends DuetChat {
   sendGrants: Map<NodeId, Set<string>>;
   /** Your key or click ended this message's acting before it acted: said at its first refused step (sayStopped). */
   stopUnsaid: boolean;
+  /** What of yours stopped its acting (a key and its code, a click, Back…), said with *Stopped: you used the tab*. */
+  stoppedBy: string | null;
   /** What the lease caught in each tab since its last result there (said in the next one). */
   caught: Map<NodeId, string[]>;
   /** Each action under way in a tab, its own end (user-watch's UserAction), oldest first. */
@@ -414,6 +416,7 @@ export class AssistantService {
       actionEnds: new Map(),
       caught: new Map(),
       stopUnsaid: false,
+      stoppedBy: null,
       queuedTab: [],
       // The chat is the agent; its cards are approval messages in the chat.
       control: new ControlAgent(`duet:${randomUUID()}`, (card, signal) => this.showCard(state, card, signal)),
@@ -535,7 +538,7 @@ export class AssistantService {
    * there ends at once, whatever the chat is doing, so nothing of yours is held or caught (Claude's and Neon's B2 on
    * #147). A chat acting there for this message stops, and says so once.
    */
-  userUsedTab(nodeId: NodeId): void {
+  userUsedTab(nodeId: NodeId, why = 'your input'): void {
     const contents = this.browser.tabs.get(nodeId)?.webContents;
     const acting = Boolean(contents && !contents.isDestroyed() && userTabActing(contents));
     if (contents && !contents.isDestroyed()) {
@@ -555,16 +558,18 @@ export class AssistantService {
       // Your key or click there ends this message's acting (the owner's answer 5). The chat says so: now, if it was acting
       // there; else at the first step it refuses because of it (Claude's S1, round 3): never silent, never for nothing.
       this.endActing(state, USER_TAB_REFUSALS.tookOver);
+      // What of yours it was, said with it (the owner's test of 9d1ad40: so the next preview tells which).
+      state.stoppedBy = why;
       if (busy) this.sayStopped(state);
       else state.stopUnsaid = true;
     }
   }
 
   /** Your reload, back, forward, Stop or address for a page (browser.ts' userNavigates): as your key or click there. */
-  userMovedPage(contents: WebContents): void {
+  userMovedPage(contents: WebContents, why = 'a reload'): void {
     // As userUsedTab, with the tab's node: whether it was acting is asked there before anything ends (Neon's N2).
     const nodeId = contents.isDestroyed() ? undefined : this.browser.tabs.nodeFor(contents);
-    if (nodeId) return this.userUsedTab(nodeId);
+    if (nodeId) return this.userUsedTab(nodeId, why);
     // A page no tab knows (one being adopted): its lease, whoever's, ends.
     if (!contents.isDestroyed()) endUserLease(contents);
   }
@@ -639,7 +644,7 @@ export class AssistantService {
   /** *Stopped: you used the tab*, once for the message. */
   private sayStopped(state: ThreadState): void {
     state.stopUnsaid = false;
-    if (state.thread) void this.activity(state, 'act', 'Stopped: you used the tab', '', false);
+    if (state.thread) void this.activity(state, 'act', `Stopped: you used the tab${state.stoppedBy ? ` (${state.stoppedBy})` : ''}`, '', false);
   }
 
   /** Stops hearing leases end (quit). */
