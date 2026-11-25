@@ -28,6 +28,12 @@ export const ACT_SETTLE_MS = 500;
 export const ACT_SETTLE_QUIET_MS = 100;
 /** The bar keeps each wording at least this long, so a fast agent doesn't make it flicker. */
 export const ACT_BAR_MIN_MS = 600;
+/**
+ * How long an agent's tab stays shown as worked on (its frame's blue edge and its bar) after its last call (the owner,
+ * 2026-11-24: the frame flashing off and on between actions was jarring; it stays on). Longer than a model's pause to
+ * think between moves; Stop, your taking the tab, or the agent letting go end it at once.
+ */
+export const AGENT_STEADY_MS = 45_000;
 
 /** press_key's keys, as an agent names them (the plan's list). */
 export const PRESS_KEYS = ['Enter', 'Tab', 'Shift+Tab', 'Escape', 'Backspace', 'Delete', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'] as const;

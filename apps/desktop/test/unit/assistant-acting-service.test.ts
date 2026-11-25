@@ -42,7 +42,8 @@ afterEach(() => {
   leases.owners.clear();
   leases.begin = async () => 'on';
   guards.dropped.length = 0;
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  // A chat may still be writing a row (an activity) as the test ends: retried, never a false failure.
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 });
 
 interface Inner {
