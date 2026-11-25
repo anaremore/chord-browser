@@ -130,7 +130,8 @@ export class AgentShares {
       const node = nodeOf(state, id);
       const stays = node?.kind === 'tab' && shareable(state, id, this.deps.neverSites()) && siteOfUrl(node.url) === share.site;
       if (!stays) this.end(id);
-      else if (state.live[id] && state.live[id]!.agent?.state !== 'shared') this.showBar(id);
+      // Only a bar lost with its page comes back: another's on the tab (the assistant acting there) stays until it clears it.
+      else if (state.live[id] && !state.live[id]!.agent) this.showBar(id);
     }
   }
 

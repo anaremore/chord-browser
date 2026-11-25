@@ -65,5 +65,7 @@ describe('The assistant’s panel and an agent’s tab (S18 M2e-1)', () => {
     t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: 'a1' });
     expect(state.queue).toEqual(['and summarize this']);
     expect(state.queuedWith.map((list) => list.map((a) => a.url))).toEqual([['https://mine.test/']]);
+    // And the tab it may act in (S18 M2e-2a, A1): yours on screen as it was sent, not the agent's you look at now.
+    expect((state as unknown as { queuedTab: unknown[] }).queuedTab).toEqual([{ nodeId: t.mine, windowId: 'w1' }]);
   });
 });
