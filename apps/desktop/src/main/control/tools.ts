@@ -66,6 +66,9 @@ import {
   WAIT_FOR_DEFAULT_MS,
   WAIT_FOR_MAX_MS,
   WAIT_FOR_TEXT_MAX,
+  snapshotDiff,
+  snapshotLines,
+  type SnapshotRead,
 } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
@@ -435,14 +438,46 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   // Refs for a page that moved on during the read are issued against no page: they resolve as stale.
   const samePage = sameId(page, pageId);
   // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
-  const issued = refs.issue(samePage ?? '', token, snapshotKeys(read));
+  // Refs from the page's own ids (M2g-1): an element still there keeps its ref, for the diff after the agent's actions.
+  const issued = refs.issue(samePage ?? '', token, snapshotKeys(read), sidsOf(read));
   const outline = snapshotOutline(read, issued, find ? { find } : {});
   const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : snapshotNote(read.cut);
   const retrievedAt = Date.now();
-  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, ...(note ? { note } : {}) });
+  refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: outline.text, refs: outline.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}) });
   scope.memory.read.add(node.id);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
   return { text: snapshotResult({ ref: scope.refs.refFor(node.id), url: read.url, title: read.title, outline: outline.text, refs: outline.refs, start, retrievedAt, ...(samePage ? { pageId: samePage } : {}), ...(note ? { note } : {}) }) };
+}
+
+/** The page's own ids of a snapshot's keyed elements (key → id), for refs that stay (core's ElementRefs). */
+function sidsOf(read: SnapshotRead): Map<number, number> {
+  return new Map(read.nodes.filter((n) => n.key !== undefined && n.sid !== undefined).map((n) => [n.key!, n.sid!]));
+}
+
+/** A diff past this many lines says to call snapshot instead (M2g-1: never more than the outline would have cost). */
+const DIFF_MAX_LINES = 60;
+
+/**
+ * What changed in the page since the agent's last snapshot of it (M2g-1, the owner's token goal): after an action, or
+ * when a wait is met. Read again as a snapshot is (its refs the tab's latest, an element still there with its ref), and
+ * only the lines that differ: new (+), changed as they are now (~), gone (-). Null with no snapshot of this page to
+ * compare with (then the agent calls snapshot), or if the page went elsewhere meanwhile.
+ */
+async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited<ReturnType<typeof loadedPage>>>): Promise<Record<string, unknown> | null> {
+  const refs = call.scope.memory.elements?.get(nodeId);
+  const kept = refs?.outline(page.id);
+  if (!refs || !kept?.lines) return null;
+  const token = randomBytes(12).toString('hex');
+  // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
+  const read = await page.snapshot(call.scope.agent.id, token, false);
+  if (!read || call.stopped() || page.id !== kept.pageId) return null;
+  const issued = refs.issue(page.id, token, snapshotKeys(read), sidsOf(read), false);
+  const lines = snapshotLines(read, issued);
+  const outline = snapshotOutline(read, issued);
+  refs.remember({ pageId: page.id, retrievedAt: Date.now(), url: read.url, title: read.title, text: outline.text, refs: outline.refs, lines });
+  const changes = snapshotDiff(kept.lines, lines);
+  if (changes.length > DIFF_MAX_LINES) return { page_changes: { lines: changes.length, note: 'Much of the page changed: call snapshot to see it.' } };
+  return { page_changes: changes };
 }
 
 /* ---------- wait_for (S18 M2g-1) ---------- */
@@ -511,7 +546,10 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   await call.activity('wait_for', `Waited for ${what} in “${node.title || safeHost(node.url)}”`, met ? `after ${waited} ms` : `not after ${waited} ms`, met);
   const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(answer?.cut ? { note: 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' } : {}) };
   if (!met || args['snapshot'] !== true) return { text: toolResult(result) };
-  // Met, with the outline: as snapshot gives it (its refs the tab's latest).
+  // Met, with what changed since the agent's last snapshot of this page (the owner's token goal); with none, the outline
+  // as snapshot gives it (its refs the tab's latest).
+  const changes = await pageChanges(call, node.id, page);
+  if (changes) return { text: toolResult({ ...result, ...changes }) };
   const snap = await snapshotTool(call, { tab_id: args['tab_id'] });
   if (snap.isError || !snap.text) return snap;
   return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), wait: result }) };
@@ -557,6 +595,9 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
     if (after) return refuse(after);
     if (navigated) scope.memory.elements?.get(node.id)?.forget();
     await call.activity(tool, what, page.url());
+    // What changed since the agent's last snapshot, after an action on an element of a page that didn't go elsewhere
+    // (M2g-1: the default; not between a batch's steps).
+    const changes = !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
     return {
       text: toolResult({
         tab_id: ref,
@@ -574,6 +615,7 @@ async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>)
         // Enter's keydown went, and the page then moved the focus (its handler did): done, once; never press it again.
         ...(focusTaken ? { focus: 'The page moved the focus away from that field after Enter. Enter was pressed once: call snapshot to see what it did, and don’t press it again.' } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
+        ...(changes ?? {}),
       }),
     };
   };

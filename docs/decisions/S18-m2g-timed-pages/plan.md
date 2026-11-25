@@ -68,6 +68,24 @@ Where the tokens go:
 - **`batch`:** up to 20 element steps on one tab in one call, each through the same layer as its own call (every check, card, the send hold and the guard). It stops at the first refusal, saying which step and what went before it, and gives one compact answer.
 - **The tool list is now the largest fixed cost** (2,290 tokens with every request). Trimming its descriptions needs a gate that a scripted journey can't give: whether a model still picks the right tool. That needs a model-in-the-loop eval (a real agent on these fixtures), which costs model usage: the owner's call.
 
+**After the diff** (every journey still succeeding):
+
+| Journey | Tool calls | Result tokens |
+|---|---|---|
+| Bot game, one hand | 8 → **6** (one snapshot, then the diffs) | 790 → 789 |
+| Timed table, two turns | 5 | 476 → 500 |
+| A 20-field form | 4 | 736 → 997 (its last step's diff lists the 20 fields filled) |
+| A page that draws itself | 3 | 214 |
+| A 300-row list | 4 | 490 |
+
+- **Refs that stay:** the page keeps its own id for each element, per agent (a WeakMap in Chord's world). A ref is made from it, numbered above every ref the tab had on pages before, so an element still there keeps its ref and an old ref never names another page's element. A replaced element gets a new one.
+- **The diff after an action** (the default for click, type, press_key, select_option and hover; a batch's at its last step): what changed since the agent's last snapshot of the page, as outline lines, new (+), changed as they are now (~), gone (-), inside the result's untrusted envelope. Past 60 lines, it says to call snapshot. With no snapshot of the page to compare with, none. `wait_for` with `snapshot` gives a diff too, when there's one to compare with.
+- **What the agent saw stays good:** a diff takes a snapshot, so the page and the tab's refs keep the agent's own last snapshot (pinned until its next) and the last 4 a diff took. A ref from any of them names its element there, and one the page replaced is found again from there, under #117's rules. A ref from before the agent's next snapshot of its own, or from before a navigation, is stale, as before.
+- *Tests:*
+  - core control-snapshot.test: refs that stay; a replaced element's ref; another page's ids; the diff's +, ~ and -; which snapshots are kept.
+  - control.test: the diff in an action's result; a navigation makes refs stale.
+  - agents.spec: the eval and every journey.
+
 The connection also logs each result's size (`result <tool> <chars> ~<tokens>`), and `agentResultSizes` reads them per tool.
 
 ## After Neon's design review (2026-11-24, through 7c4e271)

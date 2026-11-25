@@ -276,6 +276,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     if (steps.length < 1 || steps.length > BATCH_STEPS_MAX) return { text: `batch takes 1 to ${BATCH_STEPS_MAX} steps.`, isError: true };
     const done: string[] = [];
     const notes = new Set<string>();
+    let changes: unknown;
     let last: Record<string, unknown> = {};
     for (const [i, raw] of steps.entries()) {
       const step = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -284,7 +285,9 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       if (cancelled.aborted || agent.isStopped) return refused('stopped');
       const { tool: _tool, ...stepArgs } = step;
       void _tool;
-      const out = toPlain(await runControlTool(stepScope, deps.browser, tool, { ...stepArgs, tab_id: args["tab_id"] }, cancelled));
+      // One diff for the batch, at its last step (each step's own would repeat what the next changes).
+      const scopeOfStep: typeof scope = i < steps.length - 1 ? Object.create(stepScope, { noDiff: { value: true } }) : stepScope;
+      const out = toPlain(await runControlTool(scopeOfStep, deps.browser, tool, { ...stepArgs, tab_id: args["tab_id"] }, cancelled));
       if (out.isError) {
         const before = done.length ? ` Steps 1 to ${done.length} went: ${done.join('; ')}.` : ' None before it went.';
         return { text: `Step ${i + 1} (${tool}) was refused: ${out.text}${before}`, isError: true };
@@ -293,12 +296,13 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       done.push(String(data['done'] ?? tool));
       for (const k of ['refound', 'focus', 'dropped', 'note']) if (typeof data[k] === 'string') notes.add(data[k] as string);
       last = data;
+      if (data['page_changes'] !== undefined) changes = data['page_changes'];
       // A step that took the page elsewhere: the steps after it name refs of the page before.
       if (data['navigated'] === true && i < steps.length - 1) {
         return { text: toolResult({ tab_id: args['tab_id'], done, stopped_after: i + 1, why: 'The page changed: call snapshot before the rest.', url: last['url'], title: last['title'], page_id: last['page_id'] }) };
       }
     }
-    return { text: toolResult({ tab_id: args['tab_id'], done, navigated: last['navigated'] === true, page_id: last['page_id'], url: last['url'], title: last['title'], ...(notes.size ? { notes: [...notes] } : {}) }) };
+    return { text: toolResult({ tab_id: args['tab_id'], done, navigated: last['navigated'] === true, page_id: last['page_id'], url: last['url'], title: last['title'], ...(notes.size ? { notes: [...notes] } : {}), ...(changes !== undefined ? { page_changes: changes } : {}) }) };
   };
 
   const call = async (m: Message) => {

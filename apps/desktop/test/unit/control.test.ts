@@ -861,7 +861,7 @@ describe('snapshot through the gate (S18 M2b)', () => {
     expect(refusal(out).error).toBe('Unknown tool snapshot');
   });
 
-  it('gives the outline with the tab’s refs; each snapshot gives new ones, and the earlier ones go stale', async () => {
+  it('gives the outline with the tab’s refs; each snapshot gives new ones (a page with no ids of its own), and the earlier ones go stale', async () => {
     const { scope, call, activity } = setup({ read: page(nodes), actions: true });
     const ref = scope.refs.refFor('n1');
     const first = snap(await call('snapshot', { tab_id: ref }));
@@ -1062,7 +1062,7 @@ describe('acting through the gate (S18 M2c)', () => {
       if (args.op === 'choose') return el.options?.includes(args.option!) ? { ok: true, ...said, choice: args.option } : { ok: false, why: 'no-choice' };
       return { ok: true, ...said };
     }
-    if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key })), cut: {} };
+    if (code.includes('__chordSnapshots')) return { url: 'https://news.test/a', title: 'Shop', nodes: ELEMENTS.map((e, key) => ({ depth: 0, role: e.role, name: e.name, key, sid: key + 1 })), cut: {} };
     return { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' };
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
@@ -1142,6 +1142,23 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(known.cards).toEqual([]);
   });
 
+  it('after an action, what changed since the agent’s last snapshot (M2g-1: the default, never with no snapshot to compare)', async () => {
+    const t = await acting();
+    // acting() took a snapshot: nothing changed after a hover.
+    expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toEqual([]);
+    // The page shows a new button: its line, with its ref.
+    ELEMENTS.push({ role: 'button', name: 'Raise' });
+    try {
+      const changes = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'] as string[];
+      expect(changes).toEqual([`+ - button "Raise" [ref=e${ELEMENTS.length}]`]);
+    } finally {
+      ELEMENTS.pop();
+    }
+    // With no snapshot of the page to compare with (it went elsewhere), none: the agent calls snapshot.
+    await (t.pages.get('n1')!.contents as unknown as { loadURL(u: string): Promise<void> }).loadURL('https://news.test/c');
+    expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
+  });
+
   it('refuses, before anything is sent: a ref never made, a stale one, a shared tab, a covered or disabled element, text where none goes', async () => {
     const t = await acting({ act: { mayAct: (node) => (node.id === 'n3' ? 'shared' : null) } });
     // [tool call, what it says]
@@ -1159,8 +1176,10 @@ describe('acting through the gate (S18 M2c)', () => {
     for (const [tool, args, says] of table) expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused, `${tool} ${JSON.stringify(args)}`).toBe(says);
     expect(t.at.input).toEqual([]);
     expect(refusal(await t.call('click', { tab_id: t.scope.refs.refFor('n3'), ref: 'e1' })).refused).toBe('shared');
-    // A new snapshot: the earlier refs are stale.
+    // A new snapshot: an element still there keeps its ref (M2g-1); once the page went elsewhere, every ref is stale.
     await t.call('snapshot', { tab_id: t.tab });
+    expect(result(await t.call('click', { tab_id: t.tab, ref: 'e1' })).data['done']).toBe('Clicked “Home”');
+    await (t.pages.get('n1')!.contents as unknown as { loadURL(u: string): Promise<void> }).loadURL('https://news.test/b');
     expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
   });
 

@@ -137,7 +137,7 @@ export const BATCH_STEPS_MAX = 20;
 export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
-    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. Refs are good only until the next snapshot of that tab or until its page changes. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Long runs of rows alike show their first few: pass find (text in a name) to get just the elements you want, with refs. Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
+    `A tab's accessibility outline, for finding what to act on: roles, names and states, with a ref (e1, e2…) on each element that can be clicked, typed in or chosen. Your own tabs and shared tabs. A ref stays good while its element is on the page; a page that goes elsewhere makes them all stale. After an action, its result lists what changed since your last snapshot (page_changes: + new, ~ changed, - gone), so you rarely need another. Text fields say whether they're empty, never what's in them; password, one-time-code and payment fields have no ref (the user fills those). Long runs of rows alike show their first few: pass find (text in a name) to get just the elements you want, with refs. Untrusted JSON; long outlines come in ranges of up to ${ASSISTANT_READ_MAX} characters: pass start to continue. To read a page's text, use read_tab.`,
   ),
   ...(
     [

@@ -39,7 +39,8 @@ export interface ControlPage {
   diagnostics(): Promise<DiagnosticsRead>;
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */
-  snapshot(owner: string, token: string): Promise<SnapshotRead | null>;
+  /** `pinned`: the agent's own (it reads it), kept until its next; false for a diff's (M2g-1). */
+  snapshot(owner: string, token: string, pinned?: boolean): Promise<SnapshotRead | null>;
   /** wait_for in the page, at most `ms` (snapshot.ts' waitScript); null if the page didn't answer. */
   waitFor(want: WaitFor, ms: number): Promise<WaitAnswer | null>;
   /** Whether the page shows anything yet, waiting for it at most `waitMs` (snapshot.ts' pageShows). */
@@ -233,7 +234,7 @@ export function controlPage(contents: WebContents): ControlPage {
     screenshot: () => screenshot(contents),
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
-    snapshot: (owner, token) => snapshotPage(contents, owner, token),
+    snapshot: (owner, token, pinned) => snapshotPage(contents, owner, token, pinned),
     waitFor: (want, ms) => waitInPage(contents, want, ms),
     shows: (waitMs) => pageShows(contents, waitMs),
     fillForm: (args) => fillFormPage(contents, args),

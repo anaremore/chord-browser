@@ -253,6 +253,16 @@ test('Always on this site: offered to an agent you always allow, kept, listed in
   }
 });
 
+/**
+ * wait_for's answer, met or not, and the lines to find refs in: the outline (no snapshot of the page before), or what
+ * changed since (M2g-1), its gone lines left out.
+ */
+function waitAnswer(text: string): { met: boolean; lines: string } {
+  const w = JSON.parse(text) as { content?: string; wait?: { met: boolean }; data?: { met: boolean; page_changes?: string[] } };
+  if (w.content !== undefined) return { met: w.wait?.met === true, lines: w.content };
+  return { met: w.data?.met === true, lines: (w.data?.page_changes ?? []).filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).join('\n') };
+}
+
 /** A list of rows of links, buttons and text: `rows` of 5 elements each. */
 const rowsPage = (rows: number) =>
   `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
@@ -1327,10 +1337,10 @@ test('a timed table: played as an agent does today (polling snapshots), then wit
       let calls = 0;
       for (let turn = 0; turn < 3; turn++) {
         calls++;
-        const waited = JSON.parse((await mcp.call('wait_for', { tab_id: 'a1', role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text) as { content: string; wait: { met: boolean; waited_ms: number } };
-        expect(waited.wait.met, `turn ${turn}`).toBe(true);
+        const waited = waitAnswer((await mcp.call('wait_for', { tab_id: 'a1', role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
+        expect(waited.met, `turn ${turn}`).toBe(true);
         calls++;
-        await call(waited.content);
+        await call(waited.lines);
         moves.push(Date.now() - Number(await inPage('window.turnAt')));
       }
       expect(String(await inPage('document.getElementById("log").textContent'))).not.toContain('auto-folded');
@@ -1411,21 +1421,23 @@ test('the token eval: five journeys, each as an agent would play it with these t
 
     await journey('bot game, one hand', async () => {
       const tab = await open('/game');
-      let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
-      o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      // One snapshot: after each action its result says what changed (page_changes), and refs of what stayed stay good.
+      const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      const called = JSON.parse((await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') })).text) as { data: { page_changes?: string[] } };
+      if (!Array.isArray(called.data.page_changes)) throw new Error('no page_changes after a click');
       await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
       await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
-      o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
-      await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
+      // Raise by its ref from the last diff that named it, else the snapshot's (the controls redraw: found again).
+      const raise = called.data.page_changes.filter((l) => !l.startsWith('- ')).map((l) => l.slice(2)).find((l) => l.includes('generic "Raise"')) ?? o;
+      await act('click', { tab_id: tab, ref: refOf(raise, 'generic "Raise"') });
       const log = String(await inPage('/game', 'document.getElementById("log").textContent'));
       return /Call.*bet 20.*Raise/.test(log);
     });
     await journey('timed table, two turns', async () => {
       const tab = await open('/timed?others=1500');
       for (let turn = 0; turn < 2; turn++) {
-        const waited = JSON.parse((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text) as { content: string };
-        await act('click', { tab_id: tab, ref: refOf(waited.content, 'generic "Call"') });
+        const waited = waitAnswer((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
+        await act('click', { tab_id: tab, ref: refOf(waited.lines, 'generic "Call"') });
       }
       const log = String(await inPage('/timed', 'document.getElementById("log").textContent'));
       return (log.match(/Call after/g) ?? []).length === 2 && !log.includes('auto-folded');
@@ -1808,7 +1820,8 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     // A second snapshot: new refs, counted on.
     const again = JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string };
     const firstMax = Math.max(...[...snap.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])));
-    expect(Math.min(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax + 1);
+    // The same elements keep their refs from one snapshot to the next (M2g-1: the page's own ids).
+    expect(Math.max(...[...again.content.matchAll(/ref=e(\d+)/g)].map((m) => Number(m[1])))).toBe(firstMax);
 
     // Budgets (docs/decisions/S18-agent-mcp.md, "M2: plan"): a typical page (about 1,500 elements) and a 20,000-element one.
     type Times = { times: number[]; after: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;

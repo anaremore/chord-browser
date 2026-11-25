@@ -29,7 +29,7 @@ import { ACT_SETTLE_MS, ACT_SETTLE_QUIET_MS, SNAPSHOT_SCAN, type SnapshotField }
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 import { ASSISTANT_WORLD } from './extract';
-import { SNAPSHOT_LIB } from './snapshot';
+import { SNAPSHOT_LIB, SNAPSHOT_FIND } from './snapshot';
 
 /** How long a step in the page may take: a busy page answers within it. */
 const ACT_PAGE_MS = 3000;
@@ -87,8 +87,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const args = { owner, token, key, hitWait: HIT_WAIT_MS, refindScan: REFIND_SCAN, refindMs: REFIND_MS, ...op };
   return String.raw`(async (args) => {
   ${SNAPSHOT_LIB}
-  const read = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(args.owner);
-  if (!read || read.token !== args.token) return { ok: false, why: 'stale' };
+  ${SNAPSHOT_FIND}
+  const read = snapshotFind(args.owner, args.token);
+  if (!read) return { ok: false, why: 'stale' };
   // Its refs' items, place and shape, if the snapshot's own task hasn't taken them yet (snapshot.ts).
   if (read.finish) read.finish();
   const entry = read.keep[args.key];

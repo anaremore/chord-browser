@@ -103,6 +103,8 @@ export interface ControlScope {
    * of M2g-1, B2): no answer drops what the page sent, so it always gets its full wait.
    */
   readonly sendWaitMs?: number;
+  /** No diff after an action (batch's steps but its last: one diff for the whole batch, M2g-1). */
+  readonly noDiff?: boolean;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */
   activity(tool: string, summary: string, detail: string, ok: boolean): Promise<void>;
   /** search_history and search_archive, already kept to what may be read; absent, they're not offered. */

@@ -263,14 +263,32 @@ export const SNAPSHOT_LIB = String.raw`
   };
 `;
 
+/**
+ * How many snapshots a diff took (after an action, M2g-1) are kept behind an agent's latest, besides its own last one
+ * (pinned until its next): its refs, core's ElementRefs, the same.
+ */
+export const SNAPSHOT_HISTORY = 4;
+
+/**
+ * An owner's snapshot by its token, in the page: the latest, or one kept behind it (SNAPSHOT_HISTORY). For act.ts' and
+ * deep.ts' scripts: `snapshotFind(owner, token)` there.
+ */
+export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; return r || null; };`;
+
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
-export function snapshotScript(owner: string, token: string): string {
-  const args = { owner, token, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS };
+export function snapshotScript(owner: string, token: string, pinned = true): string {
+  const args = { owner, token, pinned, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   const started = performance.now();
   const nodes = [];
   const keep = [];
+  // Each element's own id in this document, for this agent (M2g-1): the same element, the same id, from one snapshot to
+  // the next; a replaced one gets another. Refs are made from it (core's ElementRefs), so an action's diff can name them.
+  const sidsAll = (globalThis.__chordSids = globalThis.__chordSids || new Map());
+  let sidsMine = sidsAll.get(args.owner);
+  if (!sidsMine) { sidsMine = { ids: new WeakMap(), next: 1 }; sidsAll.set(args.owner, sidsMine); }
+  const sidOf = (el) => { let id = sidsMine.ids.get(el); if (!id) { id = sidsMine.next++; sidsMine.ids.set(el, id); } return id; };
   const cut = {};
   let looked = 0;
   const stop = () => {
@@ -341,7 +359,7 @@ export function snapshotScript(owner: string, token: string): string {
       const acted = ACTED.has(role) || role === 'generic';
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
-      const node = { depth, role, name: nameOf(el, role) };
+      const node = { depth, role, name: nameOf(el, role), sid: sidOf(el) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -374,7 +392,7 @@ export function snapshotScript(owner: string, token: string): string {
   // contenteditable>, designMode, the data: notepad) is one typed field, named by its labels alone, never walked.
   const start = document.body || document.documentElement;
   if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
-    const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox') };
+    const node = { depth: 0, role: 'textbox', name: nameOf(start, 'textbox'), sid: sidOf(start) };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);
@@ -400,7 +418,6 @@ export function snapshotScript(owner: string, token: string): string {
     if (!pending) return;
     pending = false;
     // Another snapshot since (its refs replace these): nothing to keep.
-    if (reads.get(args.owner) !== read) return;
     const began = performance.now();
     let whole = !(cut.refs || cut.elements || cut.time);
     try {
@@ -425,7 +442,23 @@ export function snapshotScript(owner: string, token: string): string {
   };
   read.finish = finish;
   setTimeout(finish, 0);
-  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away.
+  // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away. The ones before it
+  // stay behind it, at most SNAPSHOT_HISTORY in all (M2g-1): a ref the agent got from one of them (a diff after an action
+  // takes a snapshot too) still names its element there, and one the page replaced is found again from there (#117).
+  // The agent's own snapshot (it read it: pinned) stays until its next one; the ones a diff took, the last few.
+  read.pinned = args.pinned;
+  const before = reads.get(args.owner);
+  const kept = [read];
+  let pinnedKept = read.pinned;
+  let diffs = read.pinned ? 0 : 1;
+  for (let r = before && before.url === location.href ? before : null; r; r = r.prev) {
+    if (r.pinned ? !pinnedKept : diffs < args.history) {
+      kept.push(r);
+      if (r.pinned) pinnedKept = true;
+      else diffs++;
+    }
+  }
+  kept.forEach((r, i) => { r.prev = kept[i + 1] || null; });
   reads.delete(args.owner);
   reads.set(args.owner, read);
   while (reads.size > args.owners) reads.delete(reads.keys().next().value);
@@ -532,7 +565,7 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
-  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token) }]), null, SNAPSHOT_MS));
+  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned) }]), null, SNAPSHOT_MS));
 }

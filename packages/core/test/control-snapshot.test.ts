@@ -10,6 +10,9 @@ import {
   ElementRefs,
   isActionTool,
   isNeverOffered,
+  SNAPSHOT_KEPT,
+  snapshotDiff,
+  snapshotLines,
   ROWS_COLLAPSE,
   ROWS_SHOWN,
   readNeedsApproval,
@@ -35,7 +38,7 @@ describe('Element refs (S18 M2b): per tab, never reused, good only from the late
     expect(refs.resolve('e2', 'p1')).toEqual({ ok: true, token: 'tokA', key: 7 });
   });
 
-  it('an earlier snapshot’s refs are stale, never another element; numbers go on', () => {
+  it('an earlier snapshot’s refs are stale once the agent takes another, never another element; numbers go on', () => {
     const refs = new ElementRefs();
     refs.issue('p1', 'tokA', [0, 1]);
     const second = refs.issue('p1', 'tokB', [0, 1]);
@@ -269,5 +272,61 @@ describe('the outline, for as few tokens (the owner, 2026-11-24)', () => {
     const outline = snapshotOutline(read, issued, { find: 'act 150' });
     expect(outline.text).toBe(['- main', '  - list', '    - listitem', `      - button "Act 150" [ref=${issued.get(301)}]`].join('\n'));
     expect(outline.refs).toBe(1);
+  });
+});
+
+describe('refs that stay, and the diff after an action (M2g-1)', () => {
+  it('the agent’s own snapshot stays behind the ones a diff takes, until its next; a diff’s, for SNAPSHOT_KEPT diffs', () => {
+    const refs = new ElementRefs();
+    refs.issue('p1', 'mine', [0]);
+    // Diffs after actions (not pinned): the agent's own snapshot's refs still name their elements there.
+    for (let i = 1; i <= SNAPSHOT_KEPT + 2; i++) refs.issue('p1', `d${i}`, [0], undefined, false);
+    expect(refs.resolve('e1', 'p1')).toMatchObject({ ok: true, token: 'mine' });
+    // The oldest diffs' refs went (only the last SNAPSHOT_KEPT are kept), the newest are good.
+    expect(refs.resolve('e2', 'p1')).toEqual({ ok: false, why: 'stale' });
+    expect(refs.resolve(`e${SNAPSHOT_KEPT + 3}`, 'p1')).toMatchObject({ ok: true, token: `d${SNAPSHOT_KEPT + 2}` });
+    // The agent's next snapshot: its last one's refs are stale.
+    refs.issue('p1', 'next', [0]);
+    expect(refs.resolve('e1', 'p1')).toEqual({ ok: false, why: 'stale' });
+  });
+
+  const read = (nodes: SnapshotRead['nodes']) => ({ url: 'https://game.test/', title: 'Table', nodes, cut: {} }) as SnapshotRead;
+  const sidsOf = (r: SnapshotRead) => new Map(r.nodes.filter((n) => n.key !== undefined && n.sid !== undefined).map((n) => [n.key!, n.sid!]));
+  const table = (status: string, buttons: [string, number][]) =>
+    read([
+      { depth: 0, role: 'region', name: 'Table 3', sid: 1 },
+      { depth: 1, role: 'text', name: status },
+      ...buttons.map(([name, sid], key) => ({ depth: 1, role: 'button', name, key, sid })),
+    ]);
+
+  it('an element still there keeps its ref; one replaced gets a new one; another page’s ids never take an old ref', () => {
+    const refs = new ElementRefs();
+    const a = table('Waiting', [['Fold', 2], ['Call', 3]]);
+    const first = refs.issue('p1', 't1', snapshotKeys(a), sidsOf(a));
+    // Call replaced (a new id), Fold still there.
+    // A diff after an action (not the agent's own snapshot).
+    const b = table('Your turn', [['Fold', 2], ['Call', 9]]);
+    const second = refs.issue('p1', 't2', snapshotKeys(b), sidsOf(b), false);
+    expect(second.get(0)).toBe(first.get(0));
+    expect(second.get(1)).not.toBe(first.get(1));
+    expect(refs.resolve(first.get(0), 'p1')).toMatchObject({ ok: true, token: 't2', key: 0 });
+    // The replaced one's ref still names it in the agent's own snapshot (found again there, #117).
+    expect(refs.resolve(first.get(1), 'p1')).toMatchObject({ ok: true, token: 't1', key: 1 });
+    // Another page: its ids start again at 1 in the page, but its refs are above every ref before.
+    const c = table('Lobby', [['Join', 2]]);
+    const third = refs.issue('p2', 't3', snapshotKeys(c), sidsOf(c));
+    expect(Number(third.get(0)!.slice(1))).toBeGreaterThan(Math.max(...[...first.values(), ...second.values()].map((r) => Number(r.slice(1)))));
+    expect(refs.resolve(first.get(0), 'p2')).toEqual({ ok: false, why: 'stale' });
+  });
+
+  it('the diff: lines new (+), changed (~, as they are now) and gone (-), by what they show; nothing for what didn’t change', () => {
+    const refs = new ElementRefs();
+    const a = table('Waiting', [['Fold', 2], ['Call', 3]]);
+    const before = snapshotLines(a, refs.issue('p1', 't1', snapshotKeys(a), sidsOf(a)));
+    const b = table('Your turn: 15 s', [['Fold', 2], ['Raise', 7]]);
+    const issued = refs.issue('p1', 't2', snapshotKeys(b), sidsOf(b));
+    const diff = snapshotDiff(before, snapshotLines(b, issued));
+    expect(diff).toEqual(['~ - text: "Your turn: 15 s"', `+ - button "Raise" [ref=${issued.get(1)}]`, expect.stringMatching(/^- - button "Call" \[ref=e\d+\]$/)]);
+    expect(snapshotDiff(before, before)).toEqual([]);
   });
 });
