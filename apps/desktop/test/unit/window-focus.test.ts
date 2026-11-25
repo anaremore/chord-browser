@@ -111,3 +111,63 @@ describe('coming back to a window, never the focus on a popover with no card (ag
     expect(page.page.focus).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A card never takes the keyboard unless it asks (#200): macOS makes a view just shown the window's first responder when
+ * nothing else in it has focus (a save card, as a sign-in's page navigated, on CI's macOS arm64 runners). Focus it gets on
+ * its own soon after it appears goes back to the page; focus Chord asked for (focusPopover: the sign-in box, find, an
+ * effect's card), or a click on it, stays.
+ */
+describe('a card never takes the keyboard on its own', () => {
+  const shown = () => {
+    vi.useFakeTimers();
+    const s = newWindow();
+    // A save card hangs from the page (not centered); macOS will hand it the focus.
+    let focused = false;
+    (s.popover.page as unknown as { isFocused: () => boolean }).isFocused = () => focused;
+    const osFocuses = () => {
+      focused = true;
+      s.popover.page.emit('focus');
+      vi.runAllTimers();
+    };
+    return { ...s, osFocuses };
+  };
+
+  it('focus it gets as it appears goes back to the page', () => {
+    const { w, page, osFocuses } = shown();
+    w.setPopoverSize(360, 200);
+    osFocuses();
+    expect(page.page.focus).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('a card that asked for the keyboard keeps it, as one shown with focus asked for does', () => {
+    const asked = shown();
+    asked.w.setPopoverSize(360, 200);
+    asked.w.focusPopover();
+    asked.osFocuses();
+    expect(asked.page.page.focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+    const before = shown();
+    before.w.focusPopover();
+    before.w.setPopoverSize(360, 200);
+    before.osFocuses();
+    expect(before.page.page.focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('a click on it keeps the focus, and focus long after it appeared is never taken back', () => {
+    const clicked = shown();
+    clicked.w.setPopoverSize(360, 200);
+    clicked.popover.page.emit('before-mouse-event', {}, { type: 'mouseDown' });
+    clicked.osFocuses();
+    expect(clicked.page.page.focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+    const later = shown();
+    later.w.setPopoverSize(360, 200);
+    vi.advanceTimersByTime(1500);
+    later.osFocuses();
+    expect(later.page.page.focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});

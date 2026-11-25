@@ -247,6 +247,8 @@ export class AppWindow {
   private readonly nudged = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
   private focusPopoverWhenShown = false;
+  /** When Chord last gave the popover the keyboard on purpose (a card that asks for it, F6): that focus stays. */
+  private popoverFocusAskedAt = 0;
   /**
    * The menu under a sign-in field (S17 §9): a small view of its own, so the popover's cards stay where they are
    * (and keep what's typed in them). Made the first time a window needs it, then shown and hidden, never made again.
@@ -1080,9 +1082,11 @@ export class AppWindow {
     const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0 && !this.snapshots.active;
     if (this.popover.getVisible() !== visible) {
       this.popover.setVisible(visible);
-      // An agent's connect card never takes the keyboard (S18): where the OS makes a view just shown the window's
-      // first responder (macOS, when nothing else in it has focus), the page or the shell gets it back.
-      if (visible && this.popoverCentered && !this.focusPopoverWhenShown) {
+      // A card never takes the keyboard unless it asks for it (focusPopover: the sign-in box, find, an effect's card):
+      // where the OS makes a view just shown the window's first responder (macOS, when nothing else in it has focus, as
+      // when a sign-in's page navigates), the page or the shell gets it back. Was only the agent's connect card (S18);
+      // a save card took it on CI's macOS arm64 runners (#200).
+      if (visible && !this.focusPopoverWhenShown) {
         this.cardShownAt = Date.now();
         this.watchCardFocus();
         this.giveCardFocusBack();
@@ -1090,11 +1094,12 @@ export class AppWindow {
     }
     if (visible && this.focusPopoverWhenShown) {
       this.focusPopoverWhenShown = false;
+      this.popoverFocusAskedAt = Date.now();
       pageOf(this.popover)?.focus();
     }
   }
 
-  /** When the agent's connect card last appeared, and whether its focus watch is set up (S18). */
+  /** When a card last appeared without asking for the keyboard, and whether the popover's focus watch is set up. */
   private cardShownAt = 0;
   private cardFocusWatched = false;
 
@@ -1109,18 +1114,20 @@ export class AppWindow {
       if (mouse.type === 'mouseDown') clicked = Date.now();
     });
     contents.on('focus', () => {
-      if (this.popoverCentered && Date.now() - this.cardShownAt < 1000 && Date.now() - clicked > 1000) setTimeout(() => this.giveCardFocusBack(), 0);
+      const now = Date.now();
+      if (now - this.cardShownAt < 1000 && now - clicked > 1000 && now - this.popoverFocusAskedAt > 1000) setTimeout(() => this.giveCardFocusBack(), 0);
     });
   }
 
   private giveCardFocusBack(): void {
-    if (this.window.isDestroyed() || !this.popoverCentered || !pageOf(this.popover)?.isFocused()) return;
+    if (this.window.isDestroyed() || Date.now() - this.popoverFocusAskedAt < 1000 || !pageOf(this.popover)?.isFocused()) return;
     const page = this.activeTabContents;
     (page && !page.isDestroyed() ? page : this.shell.webContents).focus();
   }
 
   /** Give the popover keyboard focus (the find bar), now or as soon as it's shown. */
   focusPopover(): void {
+    this.popoverFocusAskedAt = Date.now();
     if (this.popover.getVisible()) pageOf(this.popover)?.focus();
     else this.focusPopoverWhenShown = true;
   }
@@ -1290,6 +1297,7 @@ export class AppWindow {
     const tools = this.dockedDevtools(this.focusedPane);
     const target =
       to === 'popover' && this.popover.getVisible() ? pageOf(this.popover) : to === 'devtools' && tools ? pageOf(tools.view) : to === 'page' && this.tabView?.getVisible() ? pageOf(this.tabView) : undefined;
+    if (to === 'popover') this.popoverFocusAskedAt = Date.now();
     // The shell otherwise, or when the region's page is gone.
     (target ?? pageOf(this.shell))?.focus();
   }
