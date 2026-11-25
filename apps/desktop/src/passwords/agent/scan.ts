@@ -72,7 +72,7 @@ const documentProto = Document.prototype;
 const nodeTypeGetter = getter(nodeProto, 'nodeType');
 const hostGetter = getter(ShadowRoot.prototype, 'host');
 export const isElementNode = (n: unknown): n is Element => typeof n === 'object' && n !== null && (() => { try { return Number(nodeTypeGetter.call(n)) === 1; } catch { return false; } })();
-export const isDocumentNode = (n: unknown): n is Document => typeof n === 'object' && n !== null && (() => { try { return Number(nodeTypeGetter.call(n)) === 9; } catch { return false; } })();
+const isDocumentNode = (n: unknown): n is Document => typeof n === 'object' && n !== null && (() => { try { return Number(nodeTypeGetter.call(n)) === 9; } catch { return false; } })();
 /** A shadow root, of any realm: a document fragment with a host. */
 export const isShadowRootNode = (n: unknown): n is ShadowRoot => {
   if (typeof n !== 'object' || n === null) return false;
@@ -102,8 +102,8 @@ const bodyGetter = getter(documentProto, 'body');
 const titleGetter = getter(documentProto, 'title');
 const activeGetter = getter(documentProto, 'activeElement');
 /** A document's own properties, which named forms, images and embeds can clobber (`<form name="title">`): read through the prototype. */
-export const documentBody = (doc: Document): HTMLElement | null => bodyGetter.call(doc) as HTMLElement | null;
-export const documentTitle = (doc: Document): string => String(titleGetter.call(doc) ?? '');
+const documentBody = (doc: Document): HTMLElement | null => bodyGetter.call(doc) as HTMLElement | null;
+const documentTitle = (doc: Document): string => String(titleGetter.call(doc) ?? '');
 /**
  * The element with focus, through open shadow roots: the document's active element is the host of the root that holds
  * it, and each root's is the next one in. A chain of hosts, not a walk.
@@ -162,7 +162,7 @@ export const composedParentOf = (el: Element): Element | null => {
   return isShadowRootNode(root) ? (hostGetter.call(root) as Element) : null;
 };
 /** `closest`, on through the hosts of the shadow roots `el` is in. */
-export function composedClosest(el: Element, selector: string): Element | null {
+function composedClosest(el: Element, selector: string): Element | null {
   for (let node: Element | null = el, depth = 0; node && depth < 32; depth++) {
     const found = elementProto.closest.call(node, selector);
     if (found) return found;
@@ -172,7 +172,7 @@ export function composedClosest(el: Element, selector: string): Element | null {
   return null;
 }
 /** The `<form>` a control belongs to: its own, or, in a shadow root with none, the one its host (or its host's) is in. */
-export function formOfControl(el: Element): HTMLFormElement | null {
+function formOfControl(el: Element): HTMLFormElement | null {
   const tag = String(getter(elementProto, 'tagName').call(el));
   const own: unknown = (tag === 'INPUT' ? inputForm : tag === 'TEXTAREA' ? textAreaForm : tag === 'SELECT' ? selectForm : null)?.call(el) ?? null;
   if (isTag(own, 'FORM')) return own as HTMLFormElement;
@@ -204,12 +204,12 @@ export function framesIn(doc: Document, max: number): Element[] {
   return out;
 }
 /** The most open shadow roots the scan walks into: a page of thousands of components still costs a bounded walk. */
-export const MAX_ROOTS = 1000;
+const MAX_ROOTS = 1000;
 /**
  * Every control in `doc` and its open shadow roots, in tree order, and the roots the walk went into. It stops early at
  * the scan's own limits (`maxControls`, and `deadline` by `now`), and goes into at most `MAX_ROOTS` roots (review of 3B).
  */
-export function deepControls(
+function deepControls(
   doc: Document,
   limits: { maxControls?: number; deadline?: number; now?: () => number } = {},
 ): { controls: Element[]; roots: ShadowRoot[]; stopped: boolean } {
@@ -400,7 +400,7 @@ function headingBefore(el: Element): Element | null {
 
 const buttonText = (b: Element) => clip(tagOf(b) === 'INPUT' ? (b as HTMLInputElement).value : textOf(b), 60);
 /** A button that submits its form: `<button>` without a type or of type submit, `input[type=submit|image]`. */
-export const isSubmit = (b: Element) => (tagOf(b) === 'BUTTON' ? ((b as HTMLButtonElement).type || 'submit') === 'submit' : tagOf(b) === 'INPUT' && /^(submit|image)$/i.test((b as HTMLInputElement).type));
+const isSubmit = (b: Element) => (tagOf(b) === 'BUTTON' ? ((b as HTMLButtonElement).type || 'submit') === 'submit' : tagOf(b) === 'INPUT' && /^(submit|image)$/i.test((b as HTMLInputElement).type));
 
 /** Words on a button that isn't the form's submit: a password's show or hide toggle, help and recovery links, cancel, signing in with another site, and signing in with single sign-on or a passkey (no password: review of 3A-1). */
 const NOT_SUBMIT =

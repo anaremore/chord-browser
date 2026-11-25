@@ -7,7 +7,7 @@
 import type { ImportedPage } from '@chord/core';
 
 /** Pages per batch, and visits per batch: whichever fills first. */
-export const PAGES_PER_BATCH = 500;
+const PAGES_PER_BATCH = 500;
 const VISITS_PER_BATCH = 10_000;
 
 export function* pagesOf(rows: Iterable<unknown>, size = PAGES_PER_BATCH): Generator<ImportedPage[]> {

@@ -55,14 +55,14 @@ export interface PasswordsBridge {
 }
 
 /** How long after a submit signal the agent watches for the form to go, and for the page's requests (S17 §6, step 3). */
-export const SUBMIT_WATCH_MS = 10_000;
+const SUBMIT_WATCH_MS = 10_000;
 /**
  * After a submit, with the password field gone and nothing drawing it again, how long the page must stay quiet before
  * the agent says `gone`: no change to the document, no request answered (a `hint`), no busy marker shown. A spinner
  * standing in for the form while the request runs mustn't read as a sign-in (review rounds 2 and 3 of #59). A hint never
  * shortens it: a beacon's 200 says nothing of the sign-in's answer.
  */
-export const GONE_QUIET_MS = 1500;
+const GONE_QUIET_MS = 1500;
 /** While waiting for quiet, a scan for a field drawn again runs at most this often, and only when an input was added. */
 const REDRAW_SCAN_GAP_MS = 500;
 /** A busy marker shown on the page: a request may still be running (the agent can't see one until it's answered). */
@@ -78,9 +78,9 @@ const MAX_ERROR_HINTS = 10;
  * After a `gone` at the watch's deadline, how long the agent still reports the page's errors: a request started before it
  * may answer just after (review round 4 of #59). An earlier `gone` reports them until the deadline.
  */
-export const DEADLINE_TAIL_MS = 3000;
+const DEADLINE_TAIL_MS = 3000;
 /** Submit signals for one form within this long are one submit: Enter, then the form's `submit`, then the click a browser makes. */
-export const ONE_SUBMIT_MS = 1000;
+const ONE_SUBMIT_MS = 1000;
 /** A scan of the page runs at most this often; one wanted sooner runs at the next flush. */
 const SCAN_GAP_MS = 50;
 /** The flush runs on the next animation frame, or after this long if frames don't come. */

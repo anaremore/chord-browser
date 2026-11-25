@@ -32,7 +32,7 @@ const matches = (el: Element, selectors: readonly string[] | undefined): boolean
   });
 
 /** Whether a scanned form holds a field one of the recipe's field selectors matches. */
-export const holdsRecipeField = (scanned: ScannedForm, recipe: PasswordRecipe): boolean =>
+const holdsRecipeField = (scanned: ScannedForm, recipe: PasswordRecipe): boolean =>
   scanned.elements.some((el) => matches(el, recipe.username) || (controlType(el) === 'password' && matches(el, recipe.password)));
 
 /** Kinds a recipe never changes: a recipe is for signing in. */
