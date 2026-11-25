@@ -457,7 +457,7 @@ Each item says where its answer comes from: **carries over** (M2c or M2d, unchan
 - **F3. You type in the chat while it acts.** The assistant's input goes to the page's WebContents only. *Carries over*, with an E2E row.
 - **F4. Keys or text in the wrong place.** The typing guard, dormant in Chord's page preload (top frame), armed only during an action. Frames: E5. *New in M2e.*
 - **F5. A key does something of Chord's.** The key list, `agentInputAllowed`, `keyboard.ts`. *Carries over.*
-- **F6. A card answered by mistake.** Acting cards take no key and **no click** in their first 600 ms (`promptInputDelay`, as the vault's menu and the generator row, Neon's S3), and take keys only once focused. The composer's ⌘↵ / Esc (Assistant.tsx' `onKey`, which answers a pending read card) skips acting cards. *New in M2e.*
+- **F6. A card answered by mistake.** Acting cards take no key and **no click** in their first 500 ms (`promptInputDelay`, as the vault's menu and the generator row, Neon's S3), and take keys only once focused. The composer's ⌘↵ / Esc (Assistant.tsx' `onKey`, which answers a pending read card) skips acting cards. *New in M2e.*
 
 **G. An outside agent's tabs**
 
@@ -538,7 +538,7 @@ The eight tools of `ACTION_TOOLS`, same schemas, through `duetScope`'s new `act`
 - **Typing in a tainted chat** (B3; the owner's answer 6): *Type this in “Search”?* · the exact text, in full · **Allow** · **Don't**. Never remembered.
 - **The *Send data* card**: *Send data to game.example?* · *The assistant clicked “Raise”, and the page is sending something to its site.* · *Goes to: game.example* · **Allow** · **Allow for this chat** (the owner's answer 1) · **Don't** · **Show me**. *Allow for this chat* covers exactly the named origins, in this tab, until the chat ends, you take the tab over mid-action (F1), or *Remove* in Settings; a click of yours between turns doesn't end it (Neon on the question).
 - **A download**: *Save invoice.pdf from shop.example?* · **Allow** · **Don't**.
-- **Keys and clicks** (F6): none in the first 600 ms; ⌘↵ / Ctrl+↵ and Esc only once the card has the focus; the composer's shortcut skips acting cards. Answered, each shrinks to a muted line.
+- **Keys and clicks** (F6): none in the first 500 ms; ⌘↵ / Ctrl+↵ and Esc only once the card has the focus; the composer's shortcut skips acting cards. Answered, each shrinks to a muted line.
 
 ### While it acts
 
@@ -595,6 +595,9 @@ One quiet line per action, consecutive ones on a page folded (*Clicked “Raise�
 |---|---|---|
 | **M2e-1** | **An agent's tabs:** read only when pointed, never acted in (G1–G3, G2 as a unit); your taking over and closing (G4) | Small; closes M2d's open rows. After M2d merges. |
 | **M2e-2** | **The assistant acts in your tab:** first the spike (WebAuthn, PaymentRequest and FedCM in Electron 45, native dialogs over CDP and with the panel, print's signal); then the `act` host, the message's tab, the lease, the cards (taint included), A6's catches, the vault, the guard, Settings, instructions, rows, the journeys | After M2e-1. The spike's findings go in this record before the rest is built. A Claude and Neon security pass, as M2d had. |
+| **M2e-2a** (#147) | The `act` host, the message's tab (A1), the lease (C1: one owner, lost on a detach or a gone renderer, ended by your hands), the site, step and *Send data* cards in the chat (F6), *Allow for this chat* kept by the chat per tab, the vault and the typing guard, Settings → *Acting on pages*, the bar with Stop | Behind `ASSISTANT_ACTING_RELEASED` (false) and the preview switch (`CHORD_PREVIEW_ACTING=1`). Split from M2e-2 by size (the reviews of #147). |
+| **M2e-2b** (#150) | Before the flag flips: the 6 s window after an action (A6), passkeys and FedCM held, page dialogs and `beforeunload` reported, pickers and popups, downloads and the clipboard, the service-worker bypass (`Network.setBypassServiceWorker`, restored as the lease ends) | Still behind the flag. |
+| **M2e-2c** (#151) | The leaving-site card, tainted typing (Q6), searched results; flips `ASSISTANT_ACTING_RELEASED` | Only after a full Claude and Neon security pass, and the owner's OK. |
 | **M2g** | Adds *Risk from context* (below) for both callers (the owner, 2026-11-24) | After M2e. |
 
 ## Risk from context (for agents and the assistant; the owner, 2026-11-24: in M2g)
@@ -613,13 +616,39 @@ One quiet line per action, consecutive ones on a page folded (*Clicked “Raise�
 
 The owner answered every open question, each as recommended. Settled:
 
-1. **The *Send data* card's lasting answer:** **Allow for this chat**. It covers exactly the origins it names, in that tab, and ends when the chat ends, when you take the tab over mid-action (F1), or when the site is removed in Settings. A click of yours between turns doesn't end it.
+1. **The *Send data* card's lasting answer:** **Allow for this chat**. It covers exactly the origins it names, in that tab, and ends when the chat ends, when you take the tab over mid-action or in its moment after (F1), or when a site is removed in Settings (then every chat's grants end, whatever site they name: simpler, and the worst it does is ask again). A click of yours between turns doesn't end it.
 2. **Leaving the site:** asks every time, with the whole address shown, including when a same-site address redirects to another site (B3).
 3. **Money words in games:** no new words. *Bet*, *Wager* and *All in* are ordinary clicks, as *Raise*, *Call* and *Fold* are; real payments ask through the pay words and payment-card fields (D3).
 4. **What your tab can't hold** (C4–C6, E5): the assistant acts anyway, and the limits are stated (Settings → Assistant's line, DESIGN.md §7.17 in M2f).
 5. **Your key or click while it acts:** ends that message's acting (F1); your next message acts again.
 6. **Typing what it read elsewhere** (B3): once a chat has read anything besides the tab it acts on, every `type` asks first, showing the exact text.
 7. **Risk from context:** built in **M2g, for agents and the assistant**, after measuring each layer on fixtures. M2e ships with today's classifier plus answer 3.
+
+## M2e-2 spike (2026-11-24)
+
+*Electron 45.4.1, in a tab of yours (Chord's own `tab.open`), with a debugger session on the tab as the action's lease would hold it. `spikes/s18-m2e2/spike.spec.ts`, run in the Linux container (X11) and, by a run by hand of CI on a throwaway branch limited to it (run 45402836225), on Windows x64 and arm64 and macOS arm64 and x64. Every platform gave the same answers.*
+
+| Question | Seen | What M2e-2 does |
+|---|---|---|
+| **Passkeys** (WebAuthn `get` and `create`) | With `WebAuthn.enable({enableUI: false})` and no virtual authenticator, both reject as `NotAllowedError` when the page's own `timeout` runs out (4 s here), and nothing is shown, on Windows too. Without it, a request with no authenticator stays pending (on a desktop, Windows Hello, Touch ID or a security key prompt would show), and blocks any later one (*A request is already pending*). | `WebAuthn.enable({enableUI: false})` on the lease's session (and each frame's) for the action and its after-window; `WebAuthn.disable` on release. `passkeys.ts` stays as it is. *Check in the build:* whether a request still pending at `disable` ends then or at its own timeout (a long one would block your own passkey right after: if so, the lease keeps the domain on until it ends, and says so). |
+| **Page dialogs** | Not a native modal, and nothing hangs: in a tab of yours Electron answers `alert`, `confirm` and `prompt` at once (`confirm` is false), with no window; the shell and the page go on. With `Page.enable`, CDP reports `Page.javascriptDialogOpening` and `…Closed` (`hasBrowserHandler: true`), and `Page.handleJavaScriptDialog` finds nothing to answer. | Neon's B4 premise (a native modal that blocks the renderer) doesn't hold on 45.4.1. The lease watches `Page.javascriptDialogOpening` and the action's result says *The page tried to show a dialog (confirm: “…”); it was answered Cancel*, as for agents; the action isn't ended by it. A finding outside M2e: pages' own dialogs never reach you in a tab of yours today (filed separately, not changed here). |
+| **PaymentRequest** | Exists as a constructor, but `show()` and `canMakePayment()` reject at once (*could not establish … connection to the PaymentRequest service*): Electron has no payment service. | Nothing to hold. A unit row keeps it so (a later Electron that adds it fails the row). |
+| **FedCM** | Implemented: with `FedCm.enable`, an identity provider's account chooser comes to the debugger as `FedCm.dialogShown` (with the accounts) instead of being shown, and the page's `get` waits. | `FedCm.enable` on the lease's session during the action and its after-window; on `FedCm.dialogShown`, `FedCm.dismissDialog`, and the result says *The page asked to sign in with another site; Chord said no*. Whether Electron shows anything without CDP wasn't checked (the build's E2E row does, with the domain off). |
+| **`window.print()`** | Blocks the page's renderer (it stops answering), with no event in main or in CDP and no window Chord can see; the shell and main go on. On a desktop the system's print dialog is up, and nothing prints without you. | A stated limit, as planned: the action's page calls time out, the action ends with *The page stopped answering (a print dialog may be open). Ask the user.*, and nothing is sent while it doesn't answer. Overriding `print` in the page's own world isn't done (Chord never injects into the main world, and a page could keep the original). |
+
+## M2e-2a: as built (2026-11-24)
+
+**What a tab of yours pays for the typing guard** (invariant 9; `agent-guard.perf.test.ts` in `pnpm test:perf`, with budgets of 2 ms and 5 µs): installing it, dormant, in the top frame of every http(s) tab of yours, takes a median of 0.007 to 0.010 ms; each key the page gets costs 0.18 to 0.22 µs with it against 0.13 to 0.15 µs without (Node's `EventTarget`, Windows x64 here, three runs). Its listeners return at once while it's down.
+
+**Stated limits** (the reviews of #147; none needs a fix before the flag flips, each is said here and, where the user would see it, in the chat):
+
+- **The typing guard is in the top frame only.** A frame's page that moves the focus during the assistant's typing isn't stopped by it; the focus check before each input (C3) and the frame's sends held by the lease still are.
+- **What outlives the lease's tail** (`TAIL_MS`, 1.5 s, or as long as a card waits): a worker's or a `BroadcastChannel`'s message to another tab, a `keepalive` request or a beacon started inside the tail and sent after it. Each is the page's own, after the assistant's step; M2e-2b's 6 s window narrows it.
+- **WebSocket and WebRTC:** a socket open before the action carries what the page sends on it, unheld (the Fetch domain never sees its frames). The step's own risk card (submit, pay, send, delete) still asks first.
+- **`window.print()`** blocks the page's renderer (the spike): the action's page calls time out, the action says so, and nothing prints without you.
+- **A renderer crash mid-action:** the lease is lost (B3), what was held fails, and the action says so; what the crashed page had already sent is gone with it.
+- **A debugger detaching mid-lease** (your DevTools taking the tab): Chromium lets go of the requests it had paused, so they go on. The lease is lost at once, nothing more is pressed or typed, and the action says so.
+- **A slow cancelled action can hold a newer lease's tail** (Neon, the final pass on #147): each action's end is its own, and a chat's are ended oldest first, so a newer action's end can wait behind an older, cancelled one still unwinding. It fails closed (the lease stays on, what the page sends stays held and asked about), and your key, click or page move still lets go of it at once.
 
 ## Antigravity (2026-11-21, before 0.14.0)
 

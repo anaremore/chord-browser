@@ -1024,6 +1024,12 @@
   color: var(--color-fg);
 }
 
+/* An acting card's Allow for paying, deleting or data to another site (S18 M2e-2a): as the agents' card's. */
+.primary.allowDanger {
+  background: var(--color-danger);
+  color: var(--color-surface);
+}
+
 .quiet {
   align-self: flex-start;
   padding-inline: var(--space-2);

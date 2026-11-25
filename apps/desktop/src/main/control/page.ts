@@ -19,6 +19,7 @@ import { actOnPage, settle, type ActAnswer, type ActOp } from './act';
 import { openDeep, type DeepSession } from './deep';
 import { pickersLost, pickersUnsecured, retryPickers } from '../agents/pickers';
 import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
+import { userLeaseLost } from './user-watch';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
 import { pageShows, snapshotPage } from './snapshot';
@@ -273,7 +274,8 @@ export function controlPage(contents: WebContents): ControlPage {
       (await inPreload(contents, `globalThis.__chordAgentGuard && globalThis.__chordAgentGuard.seen ? globalThis.__chordAgentGuard.seen(${Number(count)}, ${Number(waitMs)}) : false`)) === true,
     deep: (owner, token, key) => openDeep(contents, owner, token, key),
     unsecured: () => pickersUnsecured(contents),
-    lost: () => pickersLost(contents),
+    // An agent's tab whose hold is down, or a tab of yours whose lease was lost (S18 M2e-2a): nothing goes there.
+    lost: () => pickersLost(contents) || userLeaseLost(contents),
     retryHold: () => retryPickers(contents),
     watchSends: (allowed) => watchSends(contents, allowed),
     droppedAfter: () => takeDroppedAfter(contents),
