@@ -1,9 +1,12 @@
 /** File naming for downloads (pure, so it's unit-testable). */
 import { extname, join, posix } from 'node:path';
 
-/** Characters no OS allows in a file name, plus control characters. */
+/**
+ * Characters no OS allows in a file name, plus control characters, and the bidi ones that make a name read as another
+ * (`invoice\u202Epiz.exe` shows as "invoiceexe.zip": Neon's B5 on #150).
+ */
 // eslint-disable-next-line no-control-regex -- control characters are exactly what this removes
-const UNSAFE = /[<>:"/\\|?*\u0000-\u001f]/g;
+const UNSAFE = /[<>:"/\\|?*\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** A suggested name made safe to save: no folders, no reserved characters, not empty. */
 export function safeFilename(suggested: string): string {

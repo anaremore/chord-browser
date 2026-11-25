@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { countShows, isCrossSite, isInternalUrl, pageAddressWhy, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
+import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
 import { isAgentInput } from './control/input';
 import { noteUserTab, userTabCatching } from './control/user-watch';
 import type { NavState } from '@chord/data';
@@ -588,16 +588,13 @@ export class TabManager {
       this.deps.onAgentRefused?.(openerNodeId, 'popup', url);
       return { action: 'deny' };
     }
-    // What the assistant's click set off in a tab of yours (S18 M2e-2b, A6; Neon's B5): a window of its own (unwatched, in
-    // front, with window.opener) is never made; a new tab opens behind, and never to an address that deletes or signs out.
+    // What the assistant's click set off in a tab of yours (S18 M2e-2b, A6; Neon's B5 and B1 on #150): nothing opens. A
+    // window would be unwatched; a new tab, in front or behind, would load with no lease of its own (a download saved
+    // unasked, a redirect to an address that deletes or signs out). Said in the chat; the assistant can go there itself,
+    // and leaving the site asks every time.
     const opener = pageOf(this.views.get(openerNodeId));
-    const assisted = opener !== undefined && userTabCatching(opener);
-    if (assisted && disposition === 'new-window' && features) {
-      noteUserTab(opener!, 'popup', url.slice(0, 120));
-      return { action: 'deny' };
-    }
-    if (assisted && (!/^https?:/i.test(url) || pageAddressWhy(url))) {
-      noteUserTab(opener!, 'popup', url.slice(0, 120));
+    if (opener !== undefined && userTabCatching(opener)) {
+      noteUserTab(opener, 'popup', url.slice(0, 120));
       return { action: 'deny' };
     }
     if (disposition === 'new-window' && features) {
@@ -619,15 +616,13 @@ export class TabManager {
       void pageOf(floating.view)?.loadURL(url).catch(() => {});
       return { action: 'deny' };
     }
-    // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click), or the
-    // assistant's click asked for it (a background tab, below).
-    if (!assisted && disposition !== 'background-tab' && opener && this.leadsToPeek(openerNodeId, opener, url)) {
+    // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click).
+    if (disposition !== 'background-tab' && opener && this.leadsToPeek(openerNodeId, opener, url)) {
       this.deps.onPeek(openerNodeId, url, null);
       return { action: 'deny' };
     }
     const windowId = this.deps.windowFor(openerNodeId);
-    if (assisted && opener) noteUserTab(opener, 'away', url.slice(0, 120));
-    if (windowId) this.deps.dispatch({ t: 'tab.open', windowId, url, background: assisted || disposition === 'background-tab' });
+    if (windowId) this.deps.dispatch({ t: 'tab.open', windowId, url, background: disposition === 'background-tab' });
     return { action: 'deny' };
   }
 

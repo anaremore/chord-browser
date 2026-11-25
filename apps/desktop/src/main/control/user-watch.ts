@@ -19,7 +19,7 @@
  *   lease ended while an action is under way counts as lost for that action too.
  * - **What its click sets off** (M2e-2b, A6) is caught for AFTER_MS after the last action, the activation's life and a
  *   margin: file pickers intercepted, passkeys refused before any prompt (`WebAuthn.enable` with no authenticator: the
- *   M2e-2 spike), FedCM's chooser dismissed, the site's service worker bypassed (its other tabs keep theirs: C3, always
+ *   M2e-2 spike), the site's service worker bypassed (its other tabs keep theirs: C3, always
  *   restored, whatever ends the lease), dialogs and unload noted, and (elsewhere, asking `userTabCatching`) popups,
  *   downloads and the clipboard. What the page *sends* is the assistant's only during an action and TAIL_MS after.
  * - **Let go of in order:** from the moment it ends, what the tab sends is yours (it goes), what was held for the
@@ -43,13 +43,19 @@ const PATTERNS = [{ urlPattern: '*', requestStage: 'Request' }];
 const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe', exclude: false }] };
 
 /** What the lease caught, for the chat (a muted row each). */
-export type UserTabNote = 'file' | 'dialog' | 'signin' | 'popup' | 'download' | 'clipboard' | 'unload' | 'away';
+export type UserTabNote = 'file' | 'dialog' | 'popup' | 'download' | 'clipboard' | 'unload' | 'external';
+
+/** A download the assistant's click started: its name (made safe) and where it comes from (its redirects' end). */
+export interface UserTabDownload {
+  filename: string;
+  url: string;
+}
 
 export interface UserTabDeps extends Omit<SendHoldDeps, 'whose'> {
   /** Something the assistant's action set off was caught (said in the chat). */
   note(what: UserTabNote, detail: string): void;
   /** A download its click started: the chat's card (*Save invoice.pdf from shop.example?*). */
-  askDownload(filename: string, signal: AbortSignal): Promise<boolean>;
+  askDownload(download: UserTabDownload, signal: AbortSignal): Promise<boolean>;
   /** The clipboard's text (Electron's), to put back what the page changed in the window. */
   clipboard?: { read(): Promise<string> | string; write(text: string): void };
 }
@@ -78,6 +84,8 @@ interface Lease {
   clipboard: string | null;
   /** Its downloads' cards, to take down when it ends. */
   cancel: AbortController;
+  /** Download cards up now: the lease waits for them (up to CARD_WAIT_MS) before it ends by time. */
+  asking: number;
   /** Chord attached the debugger for this lease (else someone else's attachment, used as it is: never detached). */
   mine: boolean;
   actions: number;
@@ -119,10 +127,15 @@ export function noteUserTab(contents: object, what: UserTabNote, detail: string)
 }
 
 /** A download the page started in the window: asked in the chat first (null when no lease: it isn't the assistant's). */
-export function askUserTabDownload(contents: object, filename: string): Promise<boolean> | null {
+export function askUserTabDownload(contents: object, download: UserTabDownload): Promise<boolean> | null {
   const lease = leases.get(contents as WebContents);
   if (!lease || lease.ended) return null;
-  return lease.deps.askDownload(filename, lease.cancel.signal).catch(() => false);
+  // The lease stays on while you're asked (its card would die with it): up to CARD_WAIT_MS (Neon's S1 on #150).
+  lease.asking++;
+  return lease.deps
+    .askDownload(download, lease.cancel.signal)
+    .catch(() => false)
+    .finally(() => void lease.asking--);
 }
 
 /** Whose lease is on in this tab now (a chat's gate id), or null. */
@@ -177,6 +190,8 @@ export async function beginUserAction(contents: WebContents, owner: string, deps
     lease.actions++;
     if (lease.timer) clearTimeout(lease.timer);
     lease.timer = null;
+    // Each action tells what must close for it (the vault's menu), not only the lease's first (Neon's S2 on #150).
+    for (const listener of beginning) listener(contents);
     return { begun: 'on', end: actionEnd(contents, lease) };
   };
   const was = leases.get(contents);
@@ -210,6 +225,7 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     sendsUntil: 0,
     clipboard: await readClipboard(deps),
     cancel: new AbortController(),
+    asking: 0,
     mine,
     actions: 1,
     ended: false,
@@ -223,24 +239,22 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   };
   let handedOut = false;
   /** What the action's click sets off, in the page or a frame: caught for the chat (each command bounded). */
-  const quiet = (method: string, params: object = {}, sessionId?: string) => command(debug, method, params, sessionId).catch(() => undefined);
-  const catching = (sessionId?: string) =>
-    Promise.all([
-      quiet('Page.enable', {}, sessionId),
-      quiet('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId),
-      quiet('WebAuthn.enable', { enableUI: false }, sessionId),
-      quiet('FedCm.enable', { disableRejectionDelay: true }, sessionId),
-      quiet('Network.enable', {}, sessionId).then(() => quiet('Network.setBypassServiceWorker', { bypass: true }, sessionId)),
+  // Every catch on, or none: one that fails (or times out) fails the lease closed, as Fetch does (Neon's B3 on #150).
+  // FedCM isn't one: Electron has no FedCM UI, so a page's sign-in request fails by itself (NetworkError), and with the
+  // domain on it would wait instead, where dismissing it takes the app down (Electron 45.5, the build's E2E row).
+  const catching = async (sessionId?: string) => {
+    await Promise.all([
+      command(debug, 'Page.enable', {}, sessionId),
+      command(debug, 'Page.setInterceptFileChooserDialog', { enabled: true }, sessionId),
+      command(debug, 'WebAuthn.enable', { enableUI: false }, sessionId),
+      command(debug, 'Network.enable', {}, sessionId).then(() => command(debug, 'Network.setBypassServiceWorker', { bypass: true }, sessionId)),
     ]);
-  lease.onMessage = (_event, method, params, sessionId) => {
-    const p = params as { sessionId?: string; waitingForDebugger?: boolean; message?: string; type?: string; dialogId?: string };
+  };
+  lease.onMessage = (_event, method, params) => {
+    const p = params as { sessionId?: string; waitingForDebugger?: boolean; message?: string; type?: string };
     if (!lease.ended && handedOut) {
       if (method === 'Page.fileChooserOpened') return deps.note('file', 'a file picker');
       if (method === 'Page.javascriptDialogOpening') return deps.note('dialog', `${p.type ?? 'alert'}: “${String(p.message ?? '').slice(0, 120)}”`);
-    }
-    if (method === 'FedCm.dialogShown' && !lease.ended) {
-      void quiet('FedCm.dismissDialog', { dialogId: p.dialogId }, sessionId);
-      return deps.note('signin', 'a sign-in with another site');
     }
     if (method === 'Target.detachedFromTarget' && p.sessionId) return void lease.sessions.delete(p.sessionId);
     if (method !== 'Target.attachedToTarget' || !p.sessionId) return;
@@ -254,12 +268,12 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
       try {
         await command(debug, 'Fetch.enable', { patterns: PATTERNS }, frame);
         await command(debug, 'Target.setAutoAttach', AUTO_ATTACH, frame);
+        // What the frame's page sets off, caught too, before it runs.
+        await catching(frame);
       } catch {
         if (!handedOut) lease.frameFailed = true;
         return;
       }
-      // What the frame's page sets off, caught too, before it runs.
-      await catching(frame);
       if (p.waitingForDebugger && !lease.ended) await command(debug, 'Runtime.runIfWaitingForDebugger', {}, frame).catch(() => undefined);
     })();
     lease.pending.add(ready);
@@ -276,7 +290,12 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   holdSends(contents);
   // During an action and TAIL_MS after it, what the tab sends is the assistant's: held and asked about. Then, or once
   // the lease ends (your hands, Stop), yours.
-  sendHoldDeps(contents, { ...deps, whose: () => (!lease.ended && handedOut && (lease.actions > 0 || Date.now() < lease.sendsUntil) ? 'agent' : 'user') });
+  sendHoldDeps(contents, {
+    ...deps,
+    // A new request: the assistant's only in an action or its tail. No request (a card being settled, sends.ts): still
+    // the assistant's while the lease lives, so an Allow after the tail sends what it held (Neon's B4 on #150).
+    whose: (request) => (lease.ended || !handedOut ? 'user' : !request || lease.actions > 0 || Date.now() < lease.sendsUntil ? 'agent' : 'user'),
+  });
   debug.on('message', lease.onMessage);
   const giveUp = async (): Promise<UserAction> => {
     lease.ended = true;
@@ -320,6 +339,19 @@ function onUnload(this: WebContents): void {
   noteUserTab(this, 'unload', 'the page has unsaved changes, so it stayed');
 }
 
+/**
+ * The clipboard the page changed in the window (execCommand('copy') on the click's activation isn't a permission), put
+ * back to what it was as the lease began: as each action ends, and as the lease ends unless by your own input (what you
+ * copy then is yours). Neon's B6 on #150: never left changed for the whole 6 s, nor after a Stop.
+ */
+async function putBackClipboard(lease: Lease): Promise<void> {
+  if (lease.clipboard === null) return;
+  const now = await readClipboard(lease.deps);
+  if (now === null || now === lease.clipboard) return;
+  lease.deps.clipboard?.write(lease.clipboard);
+  lease.deps.note('clipboard', 'the clipboard, put back');
+}
+
 async function readClipboard(deps: UserTabDeps): Promise<string | null> {
   try {
     return (await deps.clipboard?.read()) ?? null;
@@ -331,13 +363,14 @@ async function readClipboard(deps: UserTabDeps): Promise<string | null> {
 /** The action's done: the lease ends AFTER_MS after the last one, once nothing's held (or CARD_WAIT_MS on). */
 function endAction(contents: WebContents, lease: Lease): void {
   lease.actions = Math.max(0, lease.actions - 1);
+  void putBackClipboard(lease);
   if (lease.actions > 0) return;
   const started = Date.now();
   lease.sendsUntil = started + TAIL_MS;
   const later = () => {
     lease.timer = null;
     if (lease.ended || lease.actions > 0) return;
-    if (holding(contents) && Date.now() - started < CARD_WAIT_MS) {
+    if ((holding(contents) || lease.asking > 0) && Date.now() - started < CARD_WAIT_MS) {
       lease.timer = setTimeout(later, 250);
       lease.timer.unref?.();
       return;
@@ -358,7 +391,8 @@ export function endUserLease(contents: WebContents, owner?: string): void {
   const lease = leases.get(contents);
   if (!lease || lease.ended) return;
   if (owner !== undefined && lease.owner !== owner) return;
-  void release(contents, lease, false);
+  // The clipboard is put back unless it's your own input ending it (no owner).
+  void release(contents, lease, owner !== undefined);
 }
 
 /** Lost (the debugger let go, the renderer gone): what was held fails at once, and the action hears it. */
@@ -372,6 +406,7 @@ function lose(contents: WebContents, lease: Lease): void {
   if (leases.get(contents) === lease) leases.delete(contents);
   failHeld(contents);
   ended(contents, lease);
+  void putBackClipboard(lease);
   if (contents.isDestroyed()) return void debugOff(contents, lease);
   contents.off('will-prevent-unload', onUnload);
   // The renderer gone with the debugger still on: Fetch off (Chord's attachment let go of), or the reloaded tab's
@@ -423,12 +458,12 @@ async function turnOff(contents: WebContents, lease: Lease): Promise<void> {
   for (const sessionId of [...lease.sessions, undefined]) {
     await quiet('Fetch.disable', {}, sessionId);
     await quiet('WebAuthn.disable', {}, sessionId);
-    await quiet('FedCm.disable', {}, sessionId);
     await quiet('Page.setInterceptFileChooserDialog', { enabled: false }, sessionId);
   }
 }
 
-async function release(contents: WebContents, lease: Lease, byTime: boolean): Promise<void> {
+/** `putBack`: the clipboard too (every end but your own input's). */
+async function release(contents: WebContents, lease: Lease, putBack: boolean): Promise<void> {
   if (lease.ended) return;
   // Ended first: from here what the tab sends is yours (whose() says 'user'), and what was held for the assistant
   // fails now. The hold keeps answering until Fetch is off, so nothing of yours waits (Neon's B4 on #147).
@@ -441,17 +476,10 @@ async function release(contents: WebContents, lease: Lease, byTime: boolean): Pr
   if (leases.get(contents) === lease) leases.delete(contents);
   failHeld(contents);
   ended(contents, lease);
-  // The page changed the clipboard in the window (execCommand('copy') on the click's activation isn't a permission):
-  // put back. Only when it ended by time: your own input ends it first, and what you copy then is yours.
-  if (byTime && lease.clipboard !== null) {
-    const now = await readClipboard(lease.deps);
-    if (now !== null && now !== lease.clipboard) {
-      lease.deps.clipboard?.write(lease.clipboard);
-      lease.deps.note('clipboard', 'the clipboard, put back');
-    }
-  }
+  // Off before the clipboard's await (Neon's N3): an unload after the end isn't the assistant's.
+  if (!contents.isDestroyed()) contents.off('will-prevent-unload', onUnload);
+  if (putBack) await putBackClipboard(lease);
   if (contents.isDestroyed()) return void debugOff(contents, lease);
-  contents.off('will-prevent-unload', onUnload);
   await withDebugger(contents, async () => {
     if (superseded(contents, lease)) return debugOff(contents, lease);
     try {

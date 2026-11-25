@@ -456,4 +456,28 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       vi.useRealTimers();
     }
   });
+
+  it('the bar never comes back once acting has ended (Stop, your hands, a switch, the panel closed): its step ending clears it (Neon’s S3 on #150)', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const end of ['stop', 'hands', 'switch', 'panel'] as const) {
+        const t = setup();
+        const s = await t.turn();
+        const host = (t.service as unknown as { actingHost(s: unknown): { doing(nodeId: string, doing: unknown): void } }).actingHost(s);
+        const bar = () => t.store.state.live[t.mine]?.agent?.doing ?? null;
+        host.doing(t.mine, { tool: 'click', name: 'Raise', role: 'button' });
+        if (end === 'stop') await t.service.act('w1', { do: 'stop' } as never);
+        else if (end === 'hands') t.service.userUsedTab(t.mine);
+        else if (end === 'switch') t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.other });
+        else await t.service.act('w1', { do: 'toggle', open: false } as never);
+        // The step under way ends after: no "working" bar again.
+        host.doing(t.mine, null);
+        expect(bar(), end).toBeNull();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(bar(), end).toBeNull();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

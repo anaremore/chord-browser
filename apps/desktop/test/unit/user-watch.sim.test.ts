@@ -39,7 +39,7 @@ function random(seed: number): () => number {
 function tab() {
   const debug = new EventEmitter();
   const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, getURL: () => 'https://game.example/table', debugger: debug }) as unknown as WebContents;
-  const state = { attached: false, fetch: false, bypass: false, answered: new Map<string, string>(), paused: new Set<string>() };
+  const state = { attached: false, fetch: false, bypass: false, answered: new Map<string, string>(), paused: new Set<string>(), failNext: false };
   Object.assign(debug, {
     isAttached: () => state.attached,
     attach: () => {
@@ -57,6 +57,11 @@ function tab() {
     },
     sendCommand: async (method: string, params: { requestId?: string; bypass?: boolean }, sessionId?: string) => {
       if (!state.attached) throw new Error('not attached');
+      // A catch that can't be turned on (the next set-up's WebAuthn): the lease fails closed.
+      if (state.failNext && method === 'WebAuthn.enable' && !sessionId) {
+        state.failNext = false;
+        throw new Error('not supported');
+      }
       if (sessionId) return;
       if (method === 'Fetch.enable') state.fetch = true;
       if (method === 'Fetch.disable') state.fetch = false;
@@ -89,7 +94,10 @@ async function run(seed: number, steps: number): Promise<string[]> {
     actions.push({ owner, end: action.end, lease: current });
   };
   let clip = 'yours';
-  let yours = 'yours';
+  /** The clipboard as the lease that's on began, and whether the page changed it during that lease (not you since). */
+  let clipAtStart = clip;
+  let clipDirty = false;
+  let wasCatching = false;
   const deps = (owner: string) => ({
     siteOf: (u: string) => new URL(u).origin,
     // The chat's card: answered after a while, or never.
@@ -99,13 +107,15 @@ async function run(seed: number, steps: number): Promise<string[]> {
       return () => new Promise<Awaited<ReturnType<SendHoldDeps['ask']>>>((done) => setTimeout(() => done(answer), after));
     })(),
     note: () => undefined,
-    askDownload: async () => false,
+    // A download card: answered after a while, or not before the lease would end.
+    askDownload: () => new Promise<boolean>((done) => setTimeout(() => done(rnd() < 0.5), Math.floor(rnd() * 50_000))),
     clipboard: { read: () => clip, write: (text: string) => void (clip = text) },
     kept: owner === 'chat:1' ? new Set<string>() : undefined,
   });
   let requests = 0;
   const pending = new Set<string>();
 
+  let lastClipAtBegin = clip;
   const check = (step: string) => {
     const where = `seed ${seed}, after ${log.length} steps (${log.slice(-6).join(' · ')})`;
     const owner = watch.userLeaseOwner(t.contents);
@@ -115,6 +125,13 @@ async function run(seed: number, steps: number): Promise<string[]> {
     // No lease, and its cleanup done: nothing left waiting on an answer.
     if (!catching && !t.state.fetch) for (const id of pending) expect(t.state.answered.has(id), `${where}: ${id} left unanswered (${step})`).toBe(true);
     if (!catching) current = null;
+    // The page's change to the clipboard during a lease is put back by the time it's over, unless your input ended it.
+    if (catching && !wasCatching) clipAtStart = lastClipAtBegin;
+    if (!catching && clipDirty) {
+      expect(clip, `${where}: the clipboard left as the page made it`).toBe(clipAtStart);
+      clipDirty = false;
+    }
+    wasCatching = catching;
     // An action still under way on the lease that's on: it's acting there (never its tail started early, never let go).
     if (current !== null && actions.some((a) => a.lease === current)) expect(watch.userTabActing(t.contents), `${where}: an action under way, not acting`).toBe(true);
     // A lease that's on holds the tab: attached, Fetch on (else what the page sends would go unheld).
@@ -122,15 +139,18 @@ async function run(seed: number, steps: number): Promise<string[]> {
   };
 
   for (let i = 0; i < steps; i++) {
-    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'time', 'time'] as const);
+    const op = pick(['begin', 'begin', 'settle', 'end', 'end', 'stop', 'hands', 'detach', 'gone', 'post', 'post', 'clipboard', 'download', 'frame', 'failing', 'time', 'time'] as const);
     if (op === 'begin') {
       const owner = pick(['chat:1', 'chat:2']);
       log.push(`begin ${owner}`);
+      if (!watch.userTabCatching(t.contents)) lastClipAtBegin = clip;
       const begun = watch.beginUserAction(t.contents, owner, deps(owner) as never);
       if (rnd() < 0.3) {
         // Something else happens while it's being had: your key, or the chat's Stop.
-        if (rnd() < 0.5) watch.endUserLease(t.contents);
-        else watch.endUserLease(t.contents, owner);
+        if (rnd() < 0.5) {
+          watch.endUserLease(t.contents);
+          clipDirty = false;
+        } else watch.endUserLease(t.contents, owner);
         log.push('…ended while beginning');
       }
       // Half the time it's left under way, and other steps go on meanwhile.
@@ -152,7 +172,8 @@ async function run(seed: number, steps: number): Promise<string[]> {
     } else if (op === 'hands') {
       log.push('your key');
       watch.endUserLease(t.contents);
-      yours = clip;
+      // What's on the clipboard as you take the tab is yours from here.
+      clipDirty = false;
     } else if (op === 'detach') {
       log.push('detach');
       (t.debug as unknown as { detach(): void }).detach();
@@ -167,7 +188,17 @@ async function run(seed: number, steps: number): Promise<string[]> {
       t.debug.emit('message', {}, 'Fetch.requestPaused', { requestId: id, request: { method: 'POST', url: 'https://game.example/move' }, resourceType: 'XHR' });
     } else if (op === 'clipboard') {
       clip = `page-${i}`;
+      if (watch.userTabCatching(t.contents)) clipDirty = true;
       log.push('the page wrote the clipboard');
+    } else if (op === 'failing') {
+      log.push('the next catch fails');
+      t.state.failNext = true;
+    } else if (op === 'download') {
+      log.push('a download');
+      void watch.askUserTabDownload(t.contents, { filename: 'file.zip', url: 'https://files.example/file.zip' });
+    } else if (op === 'frame' && t.state.attached) {
+      log.push('a frame');
+      t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: `f${i}`, waitingForDebugger: true, targetInfo: { type: 'iframe' } });
     } else if (op === 'time') {
       const ms = pick([10, 300, 1600, 6500, 46_000]);
       log.push(`+${ms} ms`);
@@ -180,7 +211,9 @@ async function run(seed: number, steps: number): Promise<string[]> {
   // The end: every begin settled, every action ended, the lease let go, time enough for every tail and card.
   await Promise.all(inflight.splice(0));
   for (const a of actions.splice(0)) a.end();
-  watch.endUserLease(t.contents);
+  // Each chat ends (not your input: the clipboard is put back).
+  watch.endUserLease(t.contents, 'chat:1');
+  watch.endUserLease(t.contents, 'chat:2');
   await vi.advanceTimersByTimeAsync(60_000);
   await flush();
   const where = `seed ${seed}, at the end (${log.slice(-8).join(' · ')})`;
@@ -188,7 +221,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
   expect(t.state.attached, `${where}: Chord's attachment not let go`).toBe(false);
   expect(t.state.bypass, `${where}: the service worker not back`).toBe(false);
   for (const id of pending) expect(t.state.answered.has(id), `${where}: ${id} never answered`).toBe(true);
-  void yours;
+  if (clipDirty) expect(clip, `${where}: the clipboard left as the page made it`).toBe(clipAtStart);
   return log;
 }
 

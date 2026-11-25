@@ -670,7 +670,11 @@ export class AssistantService {
     if (!text && !this.bars.has(nodeId)) return;
     // Another chat's bar there now is left up (Neon's N4, round 3): only the chat that put it up takes it down.
     if (!text && owner !== undefined && this.bars.get(nodeId) !== owner) return;
-    if (!text) this.bars.delete(nodeId);
+    if (!text) {
+      this.bars.delete(nodeId);
+      clearTimeout(this.barIdle.get(nodeId));
+      this.barIdle.delete(nodeId);
+    }
     const node = nodeOf(this.browser.store.state, nodeId);
     if (node?.kind === 'tab' && text) this.bars.set(nodeId, owner ?? '');
     this.browser.assistantBars = this.bars.size > 0;
@@ -1477,7 +1481,7 @@ export class AssistantService {
     // Cards still waiting go with the turn, each answered no.
     // A tab of yours's lease asks on its own after the turn (what the page still sends, a download its click started:
     // M2e-2b): those cards stay until answered, or the lease ends.
-    state.control.cancelCards((subject) => /\|(tail|download)\|/.test(subject));
+    state.control.cancelCards(outlivesTurn);
     const text = streaming.body.text;
     const citations: AssistantCitation[] = [];
     for (const seg of splitCitations(text)) {
@@ -1565,6 +1569,8 @@ export class AssistantService {
           this.acted.add(s);
           return this.barFor(nodeId, barDoing(doing), s.control.id);
         }
+        // Acting over for the message (Stop, your hands, a switch, the panel closed: Neon's S3 on #150): no bar again.
+        if (s.actEnded || !s.streaming || s.control.isStopped || s.actTab?.nodeId !== nodeId) return this.barFor(nodeId, null, s.control.id);
         this.barFor(nodeId, BAR_BETWEEN, s.control.id);
         const idle = setTimeout(() => {
           this.barIdle.delete(nodeId);
@@ -1582,8 +1588,8 @@ export class AssistantService {
             ask: this.tailCard(s, node.id, contents),
             kept: this.sendGrantsFor(s, node.id),
             // What its click set off, caught in the moment after (M2e-2b, A6): a muted row each.
-            note: (what, detail) => void this.activity(s, 'act', USER_TAB_NOTES[what](detail), contents.isDestroyed() ? '' : contents.getURL(), false),
-            askDownload: async (filename, signal) => {
+            note: (what, detail) => void this.activity(s, 'act', USER_TAB_NOTES[what](plainNote(detail)), contents.isDestroyed() ? '' : contents.getURL(), false),
+            askDownload: async (download, signal) => {
               if (contents.isDestroyed()) return false;
               const takeDown = new AbortController();
               signal.addEventListener('abort', () => takeDown.abort(), { once: true });
@@ -1595,7 +1601,8 @@ export class AssistantService {
                   target: [contents.getURL()],
                   tab: node.id,
                   subject: `${node.id}|download|${randomBytes(4).toString('hex')}`,
-                  step: { why: 'confirm', site: siteOfUrl(contents.getURL()) ?? '', fields: [], more: 0, download: filename.slice(0, 120) },
+                  // Its own site, where its redirects end, never the page's (Neon's B5 on #150); its name already made safe.
+                  step: { why: 'confirm', site: siteOfUrl(download.url) ?? new URL(download.url).host, fields: [], more: 0, download: download.filename.slice(0, 120) },
                   takeDown: takeDown.signal,
                 },
                 signal,
@@ -2109,16 +2116,32 @@ function findMatches(contents: WebContents, text: string): Promise<number> {
  * The gate's acting card as the chat shows it (S18 M2e-2a; mocks/agents-s18-m2.html §7): the site card, a risky step,
  * or what an action sends. Chord's words only (card.description is Chord's: *click “Raise”*), never the model's.
  */
+/**
+ * A card a lease asks on its own (what the page sends in its tail, a download): it outlives the turn. Its whole subject is
+ * `<tab>|tail|<8 hex>` or `<tab>|download|<8 hex>`, never a match inside another card's address (Neon's S5 on #150).
+ */
+export function outlivesTurn(subject: string): boolean {
+  return /^[^|]+\|(tail|download)\|[0-9a-f]{8}$/.test(subject);
+}
+
+/**
+ * The page's own words in a note (a dialog's text, an address): one plain line, no control or bidi characters that could
+ * make it read as something else, at most 120 characters (Neon's N1 on #150).
+ */
+export function plainNote(text: string): string {
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what this removes
+  return text.replace(/[\u0000-\u001f\u007f؜‎‏‪-‮⁦-⁩]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
 /** What the chat says of something the assistant's click set off (M2e-2b, A6), Chord's words around the page's. */
 export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   file: () => 'The page tried to open a file picker; it wasn’t shown',
   dialog: (detail) => `The page showed a dialog (${detail}); it was answered Cancel`,
-  signin: () => 'The page asked to sign in with another site; Chord said no',
-  popup: (detail) => `The page tried to open a window (${detail}); it wasn’t opened`,
+  popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,
   download: (detail) => `The page tried to download ${detail}`,
   clipboard: () => 'The page changed your clipboard; Chord put it back',
   unload: () => 'The page has unsaved changes, so it stayed',
-  away: (detail) => `The page opened ${detail} in a background tab`,
+  external: (detail) => `The page tried to open ${detail} in another program; it wasn’t opened`,
 };
 
 export function actCard(card: ControlCard): AssistantActCard | null {

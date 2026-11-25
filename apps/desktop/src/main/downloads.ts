@@ -54,6 +54,11 @@ interface Entry {
   privateWindow: WindowId | null;
   ended: boolean;
   timer?: ReturnType<typeof setTimeout>;
+  /**
+   * The assistant's click started it in a tab of yours (S18 M2e-2b): null while the chat asks, then your answer. It
+   * stays under its pending name, paused, never opened or resumed, until you allow it; Don't deletes it.
+   */
+  asked?: boolean | null;
   /** Checked by Safe Browsing: written as `<finalPath>.crdownload` until it's finished and cleared. */
   screen: {
     finalPath: string;
@@ -78,22 +83,20 @@ export class DownloadManager {
         event.preventDefault();
         return;
       }
-      // A download the assistant's click started in a tab of yours (S18 M2e-2b, A6): paused until you say, in the chat.
-      const asking = contents ? askUserTabDownload(contents, item.getFilename()) : null;
-      if (asking) {
-        item.pause();
-        void asking.then((yes) => {
-          if (item.getState() !== 'progressing') return;
-          if (yes) item.resume();
-          else item.cancel();
-        });
-      }
+      // A download the assistant's click started in a tab of yours (S18 M2e-2b, A6): asked in the chat with its own
+      // site (where its redirects end) and a name that can't spoof one; paused, under its pending name, until you say.
+      const filename = safeFilename(item.getFilename());
+      const chain = item.getURLChain();
+      const asking = contents ? askUserTabDownload(contents, { filename, url: chain[chain.length - 1] ?? item.getURL() }) : null;
+      if (asking) item.pause();
       const id = this.deps.newId();
-      const finalPath = uniquePath(downloadsDir(), safeFilename(item.getFilename()), (p) => existsSync(p) || this.reserved.has(p));
-      const screening = this.deps.screen?.(item.getURLChain()) ?? null;
-      const entry: Entry = { item, session, privateWindow, ended: false, screen: screening ? { finalPath, verdict: null, settled: false } : null };
-      if (screening) this.reserved.add(finalPath);
-      item.setSavePath(screening ? `${finalPath}${PENDING_SUFFIX}` : finalPath);
+      const finalPath = uniquePath(downloadsDir(), filename, (p) => existsSync(p) || this.reserved.has(p));
+      const screening = this.deps.screen?.(chain) ?? null;
+      const pending = Boolean(screening || asking);
+      const entry: Entry = { item, session, privateWindow, ended: false, screen: pending ? { finalPath, verdict: screening ? null : false, settled: false } : null, ...(asking ? { asked: null } : {}) };
+      if (pending) this.reserved.add(finalPath);
+      item.setSavePath(pending ? `${finalPath}${PENDING_SUFFIX}` : finalPath);
+      void asking?.then((yes) => this.answeredAsk(id, yes));
       this.entries.set(id, entry);
       item.on('updated', () => {
         entry.timer ??= setTimeout(() => this.report(id), REPORT_MS);
@@ -157,11 +160,33 @@ export class DownloadManager {
     if (download) this.deps.onHeld?.(download);
   }
 
-  /** A finished download that's cleared (or kept) takes its real name. */
+  /** Your answer in the chat to a download the assistant's click started: on its way, or gone (finished or not). */
+  private answeredAsk(id: string, yes: boolean): void {
+    const entry = this.entries.get(id);
+    if (!entry || entry.asked !== null) return;
+    entry.asked = yes;
+    if (!yes) return this.dropAsked(id);
+    if (entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
+    void this.settle(id);
+  }
+
+  /** Don't, or no answer by quit: what's on disk of it goes, and so does its row. */
+  private dropAsked(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.entries.delete(id);
+    if (entry.screen) this.reserved.delete(entry.screen.finalPath);
+    if (entry.item.getState() === 'progressing') entry.item.cancel();
+    else void rm(entry.item.getSavePath(), { force: true }).catch(() => {});
+    this.deps.dispatch({ t: 'download.remove', id });
+  }
+
+  /** A finished download that's cleared (or kept), and allowed if it was asked about, takes its real name. */
   private async settle(id: string): Promise<void> {
     const entry = this.entries.get(id);
     const screen = entry?.screen;
     if (!entry || !screen || screen.verdict !== false || screen.settled || entry.item.getState() !== 'completed') return;
+    if (entry.asked === null || entry.asked === false) return;
     screen.settled = true;
     const from = entry.item.getSavePath();
     this.reserved.delete(screen.finalPath);
@@ -209,7 +234,8 @@ export class DownloadManager {
   run(id: string, action: DownloadAction): void {
     const download = this.deps.state().downloads[id];
     const entry = this.entries.get(id);
-    const held = Boolean(entry?.screen?.verdict);
+    // Held by Safe Browsing, or asked about in the chat and not yet allowed: never opened, never resumed.
+    const held = Boolean(entry?.screen?.verdict) || entry?.asked === null;
     switch (action) {
       case 'open':
         // A held file is never opened, by Chord or from its row; nor one that isn't cleared yet.
@@ -226,6 +252,7 @@ export class DownloadManager {
         if (!held && entry?.item.canResume()) entry.item.resume();
         return;
       case 'cancel':
+        if (entry?.asked === null) return this.dropAsked(id);
         if (held) return this.discard(id);
         if (entry?.item.getState() === 'progressing') entry.item.cancel();
         return;
@@ -236,6 +263,7 @@ export class DownloadManager {
         (entry?.session ?? this.deps.defaultSession()).downloadURL(download.url);
         return;
       case 'remove':
+        if (entry?.asked === null) return this.dropAsked(id);
         if (held) return this.discard(id);
         if (entry?.item.getState() === 'progressing') entry.item.cancel();
         this.entries.delete(id);
@@ -269,9 +297,12 @@ export class DownloadManager {
     this.deps.dispatch({ t: 'download.remove', id });
   }
 
-  /** Quitting: held downloads nobody kept are deleted, never left behind in the Downloads folder. */
+  /** Quitting: held downloads nobody kept, and asked ones nobody allowed, are deleted, never left behind. */
   discardHeld(): void {
-    for (const [id, entry] of [...this.entries]) if (entry.screen?.verdict) this.discard(id);
+    for (const [id, entry] of [...this.entries]) {
+      if (entry.asked === null) this.dropAsked(id);
+      else if (entry.screen?.verdict) this.discard(id);
+    }
   }
 
   openFolder(): void {

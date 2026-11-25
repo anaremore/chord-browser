@@ -110,6 +110,12 @@ export class PermissionBroker {
         noteUserTab(contents, 'clipboard', permission);
         return callback(false);
       }
+      // Another program (mailto:, an app's link): never, as in every tab; while the assistant's click is setting things
+      // off, said in the chat too (Neon's S4 on #150).
+      if (permission === 'openExternal' && contents && userTabCatching(contents)) {
+        noteUserTab(contents, 'external', String((details as { externalURL?: string }).externalURL ?? '').slice(0, 120));
+        return callback(false);
+      }
       if (HARMLESS.has(permission)) return callback(true);
       if (this.isAgent(contents)) return callback(false);
       if (ASKED_ELSEWHERE.has(permission)) return callback(true);
