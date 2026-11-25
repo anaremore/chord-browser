@@ -260,7 +260,7 @@ Wayland gives the same counts.
 | A snapshot of the 20,000-element page | 4.5 ms | 2.0 ms (a row's shape made only when it has a sibling of the same size) |
 | A typical page's snapshot | 0.45 ms | 0.3 ms |
 
-The page's own side (the snapshot script in the renderer, its shapes for re-finding) is unchanged. Its cost on 20k nodes, which Neon and Claude measured at 50–120 ms, is a limit for M2g-2 (below).
+The page's own side: round 2 caches each element's items on the walk's chain and compares an element's role, name and items field by field instead of building a string per node. The snapshot-timing E2E (X11 medians, before → after) gave `/rows-300` 15.0 → 15.0 ms and `/rows-4000` (20,000 elements) 83.0 → 80.1 ms, within noise. The rest of the page side is unchanged. Its cost on 20k nodes, which Neon and Claude measured at 50–120 ms, is a limit for M2g-2 (below).
 
 **The eval's assumptions (SF5):**
 - Main's bot hand is played with one snapshot and its refs throughout (main finds a redrawn control again too, #117).
