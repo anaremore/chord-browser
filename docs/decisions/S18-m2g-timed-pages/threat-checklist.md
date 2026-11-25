@@ -35,3 +35,7 @@ For the plan in `plan.md`. Written before the design review; each item gets a te
 - *`wait_for` left running after the client gave up* (B5): the client's cancel, Stop, the tab taken or a navigation end it and take its observer down; one wait per agent.
 - *A cut walk read as "gone"* (B5): it never proves `disappear`.
 - *A diff that mixes two pages* (B6): never across page IDs or origins; only the redacted outline.
+
+**Added with the last of slice (b) (2026-11-24):**
+- *`wait_for` across a `pushState`:* the same document keeps waiting, under the same readability check between chunks (`blockedNow`: a never-read address ends it). Its refs are stale, the result says so, and its outline is whole, never a diff across page IDs.
+- *The bar while it waits:* Chord's words only (*is waiting on this page*), never the agent's text.

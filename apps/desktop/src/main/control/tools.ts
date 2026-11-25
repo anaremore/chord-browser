@@ -549,9 +549,11 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
   const before = blockedNow(call, node.id, page, 'That tab could not be loaded.');
   if (before) return refuse(before);
   const pageId = page.id;
+  const document = page.mark.document;
   const began = Date.now();
   const want = text !== undefined ? { text, gone } : { role: role!, name: name!, gone };
   waiting.add(scope.agent);
+  scope.act?.doing(node.id, { tool: 'wait_for' });
   let answer: { met: boolean; cut: boolean } | null = null;
   try {
     for (;;) {
@@ -563,22 +565,27 @@ async function waitForTool(call: Call, args: Record<string, unknown>): Promise<T
       // During, and after: the tab closed, the page went somewhere it may not be read, or somewhere else at all.
       const during = blockedNow(call, node.id, page, 'That page could not be read.');
       if (during) return refuse(during);
-      if (page.id !== pageId) return { text: toolResult({ tab_id: scope.refs.refFor(node.id), met: false, waited_ms: Date.now() - began, navigated: true, note: 'The page changed while you waited: call snapshot again.' }) };
+      // Another document ends it; the same one going to another address (a pushState: a single-page app's) doesn't,
+      // since what's waited for often comes with it (its refs are stale then: said in the result).
+      if (page.mark.document !== document) return { text: toolResult({ tab_id: scope.refs.refFor(node.id), met: false, waited_ms: Date.now() - began, navigated: true, note: 'The page changed while you waited: call snapshot again.' }) };
       if (!answer) return refuse('That page didn’t answer while you waited.');
       if (answer.met) break;
     }
   } finally {
     waiting.delete(scope.agent);
+    scope.act?.doing(node.id, null);
   }
   const waited = Date.now() - began;
   const met = answer?.met === true;
   scope.memory.read.add(node.id);
   await call.activity('wait_for', `Waited for ${what} in “${node.title || safeHost(node.url)}”`, met ? `after ${waited} ms` : `not after ${waited} ms`, met);
-  const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(answer?.cut ? { note: 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' } : {}) };
+  const moved = page.id !== pageId;
+  const note = answer?.cut ? 'The page is too big to look at all of it, so it can’t be told whether that’s gone.' : moved ? 'The page went to another address while you waited (the same document): refs from before are stale.' : undefined;
+  const result = { tab_id: scope.refs.refFor(node.id), met, waited_ms: waited, ...(moved ? { navigated: true } : {}), ...(note ? { note } : {}) };
   if (!met || args['snapshot'] !== true) return { text: toolResult(result) };
   // Met, with what changed since the agent's last snapshot of this page (the owner's token goal); with none, the outline
-  // as snapshot gives it (its refs the tab's latest).
-  const changes = await pageChanges(call, node.id, page);
+  // as snapshot gives it (its refs the tab's latest): always the outline after a pushState (its refs went with it).
+  const changes = moved ? null : await pageChanges(call, node.id, page);
   if (changes) return { text: toolResult({ ...result, ...changes }) };
   const snap = await snapshotTool(call, { tab_id: args['tab_id'] });
   if (snap.isError || !snap.text) return snap;

@@ -42,9 +42,10 @@ const sizes: ResultSize[] = [];
 /** About how many tokens a result of this many characters costs a model (4 characters each). */
 export const tokensOf = (chars: number): number => Math.ceil(chars / 4);
 
-export function noteResult(tool: string, chars: number): void {
+/** `tokens`: what it costs when that isn't its characters' (a picture's: its pixels). */
+export function noteResult(tool: string, chars: number, tokens = tokensOf(chars)): void {
   if (!on) return;
-  sizes.push({ tool, bytes: chars, tokens: tokensOf(chars) });
+  sizes.push({ tool, bytes: chars, tokens });
   if (sizes.length > PHASES_MAX) sizes.shift();
 }
 

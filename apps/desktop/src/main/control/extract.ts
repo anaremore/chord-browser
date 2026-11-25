@@ -102,7 +102,11 @@ function oneColor(image: Electron.NativeImage): boolean {
   return true;
 }
 
-export async function screenshot(contents: WebContents): Promise<{ data: string; mimeType: string } | null> {
+/** What a picture costs a model, near enough: a token for each 750 pixels (Claude's rule; others' are close). */
+export const imageTokens = (width: number, height: number): number => Math.ceil((width * height) / 750);
+
+/** Its size goes with it: the result's cost is counted by its pixels (M2g-1's eval), never its base64. */
+export async function screenshot(contents: WebContents): Promise<{ data: string; mimeType: string; width: number; height: number } | null> {
   if (contents.isDestroyed()) return null;
   try {
     let image = await pageCall(contents.capturePage(), null, READ_MS);
@@ -115,7 +119,8 @@ export async function screenshot(contents: WebContents): Promise<{ data: string;
     }
     if (!image) return null;
     if (image.getSize().width > 1280) image = image.resize({ width: 1280 });
-    return { data: image.toPNG().toString('base64'), mimeType: 'image/png' };
+    const { width, height } = image.getSize();
+    return { data: image.toPNG().toString('base64'), mimeType: 'image/png', width, height };
   } catch {
     return null;
   }

@@ -12,7 +12,7 @@ import type { ControlAgent } from './gate';
 export interface ToolOutput {
   text?: string;
   /** Screenshots, for providers that take images through their CLI. */
-  image?: { data: string; mimeType: string };
+  image?: { data: string; mimeType: string; width?: number; height?: number };
   isError?: boolean;
 }
 

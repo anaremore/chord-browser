@@ -35,7 +35,7 @@ export interface ControlPage {
   /** The page went (its tab closed, slept or crashed). */
   gone(): boolean;
   read(): Promise<PageRead | null>;
-  screenshot(): Promise<{ data: string; mimeType: string } | null>;
+  screenshot(): Promise<{ data: string; mimeType: string; width: number; height: number } | null>;
   diagnostics(): Promise<DiagnosticsRead>;
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */

@@ -13,6 +13,7 @@ import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { runControlTool, stepSubmits, type ControlBrowser } from '../../src/main/control/tools';
 import { focusToGiveBack } from '../../src/main/control/page';
+import { imageTokens } from '../../src/main/control/extract';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
@@ -274,8 +275,8 @@ function fakePage(url: string, read: Answer) {
     off: (e: string, f: (...a: unknown[]) => void) => events.off(e, f),
     capturePage: async () => {
       at.onCapture?.();
-      // Two pixels of different colors: a page drawn (extract.ts' oneColor).
-      return { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('secret'), toBitmap: () => Buffer.from([1, 2, 3, 255, 9, 9, 9, 255]) };
+      // Two pixels of different colors: a page drawn (extract.ts' oneColor); the view 1280 x 800.
+      return { getSize: () => ({ width: 1280, height: 800 }), toPNG: () => Buffer.from('secret'), toBitmap: () => Buffer.from([1, 2, 3, 255, 9, 9, 9, 255]) };
     },
     executeJavaScriptInIsolatedWorld: (_world: number, [script]: { code: string }[]) =>
       // Whether the page shows anything yet (snapshot.ts' pageShows): it does.
@@ -836,6 +837,32 @@ describe('wait_for (S18 M2g-1)', () => {
     const t = setup({ read: page([{ met: false, cut: false }], (events) => events.emit('did-navigate')), actions: true });
     const out = data(await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 3000 }));
     expect(out.data).toMatchObject({ met: false, navigated: true });
+  });
+
+  it('the same document going to another address (a pushState) doesn’t end it: met, and its refs said to be stale', async () => {
+    let moved = false;
+    const doings: unknown[] = [];
+    const t = setup({
+      act: { doing: (_n, d) => void doings.push(d) },
+      read: page([{ met: false, cut: false }, { met: true, cut: false }], (events) => {
+        if (!moved) events.emit('did-navigate-in-page', {}, 'https://news.test/b', true);
+        moved = true;
+      }),
+      actions: true,
+    });
+    const out = data(await t.call('wait_for', { tab_id: t.scope.refs.refFor('n1'), text: 'Your turn', timeout_ms: 3000 }));
+    expect(out.data).toMatchObject({ met: true, navigated: true, note: 'The page went to another address while you waited (the same document): refs from before are stale.' });
+    // The bar says it waits (never what for: the agent's words), and stops saying so.
+    expect(doings).toEqual([{ tool: 'wait_for' }, null]);
+  });
+});
+
+describe('tab_screenshot’s size (S18 M2g-1: counted by its pixels)', () => {
+  it('a PNG at most 1280 wide, its size said', async () => {
+    const { scope, call } = setup({ read: { text: 'x' }, actions: true });
+    const out = await call('tab_screenshot', { tab_id: scope.refs.refFor('n1') });
+    expect(out.image).toMatchObject({ mimeType: 'image/png', width: 1280, height: 800 });
+    expect(imageTokens(out.image!.width!, out.image!.height!)).toBe(1366);
   });
 });
 

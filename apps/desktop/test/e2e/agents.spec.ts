@@ -1361,7 +1361,7 @@ test('a timed table: played as an agent does today (polling snapshots), then wit
   }
 });
 
-test('the token eval: five journeys, each as an agent would play it with these tools; success, tool calls, result tokens and wall time (the owner, 2026-11-24)', async () => {
+test('the token eval: its journeys, each as an agent would play it with the tools this build offers; success, tool calls, tokens and wall time (the owner, 2026-11-24)', async () => {
   test.setTimeout(300_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   const app = await launch(profile, { CHORD_AGENTS: '1' });
@@ -1370,13 +1370,37 @@ test('the token eval: five journeys, each as an agent would play it with these t
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
     const popover = await pageWhere(app, isPopover);
-    const toolList = JSON.stringify((await mcp.request('tools/list', {})).result['tools']).length;
-    /** What the model gets back from a call: every result's content, counted. */
-    let meter = { calls: 0, chars: 0 };
+    const tools = (await mcp.request('tools/list', {})).result['tools'] as { name: string }[];
+    const toolList = JSON.stringify(tools).length;
+    // Played with what this build offers: #145's tools (wait_for, batch, by name), else main's (the before: snapshots,
+    // refs, polling). The same spec measures both (on main's build, a copy of it).
+    const lean = tools.some((t) => t.name === 'wait_for') && tools.some((t) => t.name === 'batch');
+    /** What the model gets back from each call: every result's content, counted (tokens, call by call). */
+    let meter = { calls: 0, chars: 0, results: [] as number[], pictures: [] as { width: number; height: number }[] };
+    /** A picture's size, from its header (a model is charged by a picture's pixels, never its base64). */
+    const pictureSize = (b: Buffer): { width: number; height: number } | null => {
+      // A PNG (main's pictures): its header's width and height.
+      if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+      for (let i = 2; i + 9 < b.length; ) {
+        if (b[i] !== 0xff) return null;
+        const marker = b[i + 1]!;
+        if (marker >= 0xc0 && marker <= 0xc3) return { height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7) };
+        i += 2 + b.readUInt16BE(i + 2);
+      }
+      return null;
+    };
     const ask = async (name: string, args: Record<string, unknown>) => {
-      const r = (await mcp.request('tools/call', { name, arguments: args })).result as { content: { type: string; text?: string }[]; isError?: boolean };
+      const r = (await mcp.request('tools/call', { name, arguments: args })).result as { content: { type: string; text?: string; data?: string; mimeType?: string }[]; isError?: boolean };
       meter.calls++;
-      meter.chars += JSON.stringify(r.content).length;
+      let chars = 0;
+      for (const c of r.content) {
+        const size = c.type === 'image' ? pictureSize(Buffer.from(c.data ?? '', 'base64')) : null;
+        // A picture: a token for each 750 pixels (counted here as characters, four to a token).
+        chars += size ? Math.ceil((size.width * size.height) / 750) * 4 : JSON.stringify(c).length;
+        if (size) meter.pictures.push(size);
+      }
+      meter.chars += chars;
+      meter.results.push(Math.ceil(chars / 4));
       return { text: r.content[0]?.text ?? '', error: r.isError === true };
     };
     /** A call, with any card it raises allowed as the user would (the site's for now, a step's, a connection's once). */
@@ -1405,9 +1429,17 @@ test('the token eval: five journeys, each as an agent would play it with these t
       tabs++;
       return (JSON.parse(opened.text) as { data: { tab_id: string } }).data.tab_id;
     };
-    const rows: { journey: string; success: boolean; calls: number; tokens: number; ms: number }[] = [];
+    /**
+     * What the model reads, estimated (the plan's assumptions): each call is a model turn that sends the tool list and a
+     * fixed 8,000 tokens of system prompt and history, and every result so far (each result is read again on every
+     * later turn of the journey).
+     */
+    const CONTEXT = 8000;
+    const defs = Math.ceil(toolList / 4);
+    const modelInput = (results: number[]) => results.reduce((sum, _, k) => sum + defs + CONTEXT + results.slice(0, k + 1).reduce((a, b) => a + b, 0), 0);
+    const rows: { journey: string; success: boolean; calls: number; tokens: number; defs: number; input: number; ms: number }[] = [];
     const journey = async (name: string, play: () => Promise<boolean>) => {
-      meter = { calls: 0, chars: 0 };
+      meter = { calls: 0, chars: 0, results: [], pictures: [] };
       const began = Date.now();
       let success = false;
       try {
@@ -1415,12 +1447,22 @@ test('the token eval: five journeys, each as an agent would play it with these t
       } catch (e) {
         console.log(`[token eval] ${name} failed: ${String(e)}`);
       }
-      rows.push({ journey: name, success, calls: meter.calls, tokens: Math.ceil(meter.chars / 4), ms: Date.now() - began });
+      rows.push({ journey: name, success, calls: meter.calls, tokens: meter.results.reduce((a, b) => a + b, 0), defs, input: modelInput(meter.results), ms: Date.now() - began });
     };
     void tabs;
 
     await journey('bot game, one hand', async () => {
       const tab = await open('/game');
+      if (!lean) {
+        let o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+        o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        await act('type', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), text: '20' });
+        await act('press_key', { tab_id: tab, ref: refOf(o, 'textbox "Bet"'), key: 'Enter' });
+        o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        await act('click', { tab_id: tab, ref: refOf(o, 'generic "Raise"') });
+        return /Call.*bet 20.*Raise/.test(String(await inPage('/game', 'document.getElementById("log").textContent')));
+      }
       // No snapshot at all: each control by its role and name (M2g-1), each result saying what changed.
       const called = JSON.parse((await act('click', { tab_id: tab, role: 'generic', name: 'Call' })).text) as { data: { page_changes?: unknown } };
       if (called.data.page_changes !== undefined) throw new Error('a diff with no snapshot to compare with');
@@ -1431,7 +1473,7 @@ test('the token eval: five journeys, each as an agent would play it with these t
       return /Call.*bet 20.*Raise/.test(log);
     });
     // Never by a name that isn't what it shows (B3): its aria-label says Pay, it shows Join.
-    {
+    if (lean) {
       const tab = await open('/aria');
       const byLabel = await ask('click', { tab_id: tab, role: 'button', name: 'Pay' });
       expect(byLabel.text).toBe('That element’s name isn’t what it shows (it comes from its aria-label), so it isn’t found by its name. Call snapshot and use its ref.');
@@ -1439,7 +1481,20 @@ test('the token eval: five journeys, each as an agent would play it with these t
     }
     await journey('timed table, two turns', async () => {
       const tab = await open('/timed?others=1500');
-      for (let turn = 0; turn < 2; turn++) {
+      for (let turn = 0; !lean && turn < 2; turn++) {
+        // Polling (main): a snapshot each second until Call shows, then Call by its ref.
+        for (;;) {
+          const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+          if (o.includes('generic "Call"')) {
+            await act('click', { tab_id: tab, ref: refOf(o, 'generic "Call"') });
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        // The click's own turn: the others play again before Call shows.
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      for (let turn = 0; lean && turn < 2; turn++) {
         const waited = waitAnswer((await ask('wait_for', { tab_id: tab, role: 'generic', name: 'Call', snapshot: true, timeout_ms: 20_000 })).text);
         await act('click', { tab_id: tab, ref: refOf(waited.lines, 'generic "Call"') });
       }
@@ -1449,6 +1504,10 @@ test('the token eval: five journeys, each as an agent would play it with these t
     await journey('a 20-field form', async () => {
       const tab = await open('/form20');
       const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+      if (!lean) {
+        for (let i = 1; i <= 20; i++) await act('type', { tab_id: tab, ref: refOf(o, `textbox "Field ${i}"`), text: `v${i}` });
+        return ((await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string) === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
+      }
       // Every field in one call (batch): each step as its own type call would go, gates and all.
       const filled = await act('batch', { tab_id: tab, steps: Array.from({ length: 20 }, (_, i) => ({ tool: 'type', ref: refOf(o, `textbox "Field ${i + 1}"`), text: `v${i + 1}` })) });
       if (filled.error) throw new Error(filled.text);
@@ -1471,20 +1530,43 @@ test('the token eval: five journeys, each as an agent would play it with these t
     });
     await journey('a 300-row list', async () => {
       const tab = await open('/rows-300');
+      if (!lean) {
+        const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
+        return (await act('click', { tab_id: tab, ref: refOf(o, 'button "Act 150"') })).text.startsWith('{');
+      }
       // The row the agent wants, by its button's name: no outline needed (find, or a ref from one, would do too).
       const clicked = await act('click', { tab_id: tab, role: 'button', name: 'Act 150' });
       return clicked.text.startsWith('{');
     });
+    await journey('a picture of the view', async () => {
+      const tab = await open('/game');
+      await ask('tab_screenshot', { tab_id: tab });
+      const [view] = meter.pictures;
+      console.log(`[token eval] the view's picture: ${view?.width} x ${view?.height}`);
+      return Boolean(view && view.width > 0);
+    });
+
+    // wait_for's cost on a page that renders every frame (its looks are throttled, in the page's own thread): the page's
+    // frames in 3 s, without a wait and during one that's never met.
+    if (lean) {
+      const tab = await open('/game?raf=1');
+      const frames = () => inPage('/game?raf=1', 'new Promise((done) => { let n = 0; const end = performance.now() + 3000; const f = () => { n++; if (performance.now() < end) requestAnimationFrame(f); else done(n); }; requestAnimationFrame(f); })') as Promise<number>;
+      const alone = await frames();
+      const [during, waited] = await Promise.all([frames(), ask('wait_for', { tab_id: tab, text: 'A text this page never shows', timeout_ms: 3000 })]);
+      console.log(`[token eval] wait_for on a page rendering every frame: ${alone} frames in 3 s alone, ${during} during the wait`);
+      expect(JSON.parse(waited.text)).toMatchObject({ data: { met: false } });
+      // Loose (shared runners): the wait never takes the page's frames down by half.
+      expect(during).toBeGreaterThan(alone / 2);
+    }
 
     const table = [
-      `| Journey | Success | Tool calls | Result tokens | Wall (s) |`,
-      `|---|---|---|---|---|`,
-      ...rows.map((r) => `| ${r.journey} | ${r.success ? 'yes' : 'no'} | ${r.calls} | ${r.tokens} | ${(r.ms / 1000).toFixed(1)} |`),
-      `| the tool list (sent with every request) | | | ${Math.ceil(toolList / 4)} | |`,
+      `| Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |`,
+      `|---|---|---|---|---|---|---|`,
+      ...rows.map((r) => `| ${r.journey} | ${r.success ? 'yes' : 'no'} | ${r.calls} | ${r.tokens} | ${r.defs} | ${r.input} | ${(r.ms / 1000).toFixed(1)} |`),
     ].join('\n');
-    console.log(`[token eval] ${process.env['CHORD_E2E_DISPLAY'] ?? ''}\n${table}`);
+    console.log(`[token eval] ${lean ? 'this build' : 'main'} ${process.env['CHORD_E2E_DISPLAY'] ?? ''}\n${table}`);
     mkdirSync(join(appDir, 'test-results'), { recursive: true });
-    writeFileSync(join(appDir, 'test-results', 'token-eval.json'), JSON.stringify({ rows, toolListTokens: Math.ceil(toolList / 4) }, null, 2));
+    writeFileSync(join(appDir, 'test-results', 'token-eval.json'), JSON.stringify({ played: lean ? 'lean' : 'main', rows, toolListTokens: defs, context: CONTEXT }, null, 2));
     // Effectiveness is the gate: every journey succeeds.
     for (const r of rows) expect(r.success, r.journey).toBe(true);
     mcp.child.stdin!.end();

@@ -13,6 +13,7 @@
  * downloads) comes with its next result. Loaded only when the first connection
  * arrives.
  */
+import { imageTokens } from '../control/extract';
 import { noteResult, tokensOf } from '../control/phases';
 import {
   ACT_REFUSALS,
@@ -353,9 +354,12 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       const result = { ...answer, content: [...answer.content, ...held()] };
       // What the result costs the agent, by tool (the owner, 2026-11-24: as few tokens as can be): in the log, and kept
       // for the eval journeys (phases.ts).
+      // A picture by its pixels, not its bytes (a model sees the image, never its base64).
       const chars = JSON.stringify(result.content).length;
-      noteResult(tool, chars);
-      deps.log?.('result', tool, `${chars} chars`, `~${tokensOf(chars)} tokens`);
+      const shot = out.image?.width && out.image.height ? out.image : null;
+      const tokens = shot ? imageTokens(shot.width!, shot.height!) + tokensOf(JSON.stringify(result.content.slice(1)).length) : tokensOf(chars);
+      noteResult(tool, chars, tokens);
+      deps.log?.('result', tool, `${chars} chars`, `~${tokens} tokens`);
       reply(m.id, result);
     } finally {
       if (beat) clearInterval(beat);

@@ -31,7 +31,7 @@ The owner asked how agents can control Chord just as well while costing as few t
      - repeated rows collapsed (*row × 300, first 5 shown*, with a cursor for more);
      - terse lines (role, name, ref, state);
      - no page text unless asked, and capped when it is.
-  4. *Screenshots by exception:* an element or region, downscaled, JPEG or WebP. The tool's description says a snapshot is cheaper and usually enough. Measured in tokens per screenshot, before and after.
+  4. *Screenshots by exception:* an element or region, downscaled, JPEG or WebP. The tool's description says a snapshot is cheaper and usually enough. Measured in tokens per screenshot, before and after. *Dropped: it paid off on no journey (below).*
   5. *Fewer calls:* an optional batch of steps in one call (type then Enter, or several fields), returning one diff. Every step keeps every gate (cards, the send hold, the guard), and the batch stops at the first refusal.
   6. *The tool list's cost:* its descriptions go with every request, so they're measured and trimmed to the least that keeps every journey's success.
 
@@ -107,7 +107,12 @@ Where the tokens go:
   - *Tests:* control.test (found; each refusal; two alike); agents.spec's eval (the bot game and the 300-row list by name; an aria-label's name refused, nothing clicked).
 - **The tool list is now the largest fixed cost** (2,468 tokens with every request). Trimming it waits on a model-in-the-loop eval (the owner's call: model usage).
 
-The connection also logs each result's size (`result <tool> <chars> ~<tokens>`), and `agentResultSizes` reads them per tool.
+The connection also logs each result's size (`result <tool> <chars> ~<tokens>`), and `agentResultSizes` reads them per tool. A picture is counted by its pixels (a token for each 750), never its base64.
+
+**Screenshots by exception (point 4): tried, dropped.** Measured on a picture of the view and a picture of one element:
+- *Downscaled to 1,024 wide, as a JPEG:* the eval's window is 1,028 wide, so its picture's tokens didn't change (1,108 on main, 1,100). It would pay only on a wider window, which no journey has.
+- *One element alone (`ref`):* about 100 tokens for the picture, against about 1,050 for the view. But the agent needs a ref first: snapshot, then the picture, 3 calls against 2. The estimate came to 31,871 tokens against 22,164 for the whole view. The `ref` parameter and the longer description would also go with every call of every journey.
+- So neither went in. What stays is the measurement: a picture's result is counted by its pixels (a token for each 750), never its base64.
 
 ## After Neon's design review (2026-11-24, through 7c4e271)
 
@@ -184,6 +189,44 @@ The owner's preview (main plus #117) played a full hand at a bot table. At a liv
 - *The settle change:* the page's quiet is now waited for alongside the 150 ms wait for a navigation to start, not after it: 100 ms off every action.
 - *Still to measure:* the agent's real round trip through Claude Code and Codex (the model's own time, separate from Chord's), `wait_for`'s CPU cost and how fast it wakes, and `tab_screenshot`.
 
+## Is it worth it? Before and after, by what the model reads (2026-11-24)
+
+Result tokens alone mislead. Every call is a model turn that re-sends the whole context: the form's results went from 736 to 997 tokens, but its calls went from 22 to 4. So the eval also estimates what the model reads in a journey.
+
+**The estimate's assumptions:**
+- Each tool call is one model turn.
+- Each turn sends the tool definitions (as the server lists them, at about 4 characters a token) and a fixed 8,000 tokens of system prompt and earlier history.
+- Each turn also sends every result the journey has had so far, including the one just returned. A result is read again on every later turn.
+- So: calls × (tool definitions + 8,000), plus the sum over the turns of the results so far.
+- A picture counts a token for each 750 pixels (Claude's rule), never its base64.
+- No prompt caching is assumed. With caching, the fixed part costs less, which narrows the gap but doesn't reverse it.
+- The model's own output and thinking aren't counted.
+
+**Before:** main at `6177df9`, without #145, played with main's tools: snapshots and refs, and polling for the timed table (a snapshot each second). **After:** #145, played with its tools. The same spec runs both; it plays with whatever tools the build lists. Linux container, X11:
+
+| Journey | Success | Tool calls | Result tokens | Tool definitions | Model input (est.) | Wall (s) |
+|---|---|---|---|---|---|---|
+| Bot game, one hand | yes → yes | 8 → **5** | 790 → **320** | 1,725 → 2,468 | 81,334 → **53,270** (−35%) | 6.7 → 4.2 |
+| Timed table, two turns | yes → yes | 8 → **5** | 808 → **499** | 1,725 → 2,468 | 81,247 → **53,784** (−34%) | 4.2 → 5.4 (3.6 on Wayland) |
+| A 20-field form | yes → yes | 22 → **4** | 1,606 → 997 | 1,725 → 2,468 | 236,381 → **44,398** (−81%) | 6.1 → 4.3 |
+| A page that draws itself | yes → yes | 3 → 3 | 202 → 214 | 1,725 → 2,468 | 29,570 → 31,811 (**+8%**) | 1.0 → 0.9 |
+| A 300-row list | yes → yes | 3 → **2** | 10,290 → **99** | 1,725 → 2,468 | 49,746 → **21,080** (−58%) | 0.4 → 0.3 |
+| A picture of the view | yes → yes | 2 → 2 | 1,108 → 1,108 | 1,725 → 2,468 | 20,602 → 22,088 (**+7%**) | 0.1 → 0.1 |
+
+**The answer:**
+- Every journey still succeeds.
+- Four of the six read 34% to 81% less. Those are the journeys #145 is for.
+- The other two read 7–8% more. #145 doesn't change how they're played, so they pay only for the larger tool list: +743 tokens on every call (wait_for, batch, `find`, role and name). That is M2g-2's tool-list diet.
+- Wall time is Chord's own. A real agent's turn takes seconds of model time, so the calls saved (3, 3 and 18) are most of the time saved.
+- The timed table's wall time is paced by the page (the others play for 1.5 s).
+
+**By change** (each kept only where a journey shows it pays):
+- *`wait_for`:* the timed table, 8 → 5 calls.
+- *`batch`:* the form, 22 → 4 calls.
+- *By role and name, with the diff after each action:* the bot game (8 → 5 calls, no snapshot) and the 300-row list.
+- *Rows collapsed and `find`:* the 300-row list played with a snapshot, 10,291 → 484 result tokens (*after the first cuts*, above). The list played by name needs no snapshot at all.
+- *Screenshots by exception:* paid off on no journey, so dropped (above).
+
 ## Slice (b): wait_for (built, 2026-11-24)
 
 - **The tool:** `wait_for` waits for a text, or an element by its role and exact name, to show in the tab (or, with `gone`, to stop showing), for at most `timeout_ms` (30 s; 10 s by default). It answers `met` and `waited_ms`, and with `snapshot` true, the tab's outline and refs as `snapshot` gives them. It's for outside agents only; the assistant isn't offered it.
@@ -204,10 +247,9 @@ The owner's preview (main plus #117) played a full hand at a bot table. At a liv
 - *Tests:*
   - control.test, *wait_for (S18 M2g-1)*: its arguments; met, with the outline and refs; not met by the timeout; a cut look; one at a time; Stop and the client's cancel; a navigation mid-wait.
   - agents.spec, *a timed table*: polling, then `wait_for` with no sleeps, each move under 3 s of Chord's time; a text that comes and goes.
-- *Still to do* for slice (b):
-  - The bar's *is waiting on this page* wording.
-  - Its CPU cost on a page that changes every frame.
-  - `pushState` against a real navigation (S3).
+- **The bar** says *is waiting on this page* while it waits (never what for: those are the agent's words, in Chord's own bar), and stops when it ends. *Test:* control.test, the pushState case; core control-act.test.
+- **`pushState` (S3):** another document ends the wait (`navigated: true`, not met). The same document going to another address (a single-page app's `pushState`) doesn't: what's waited for often comes with it. The result then says `navigated: true` with a note that refs from before are stale, and `snapshot` gives the whole outline (never a diff across page IDs, B6). *Tests:* control.test, *the page going somewhere else…* and *the same document going to another address…*.
+- **Its cost on a page that renders every frame** (the bot game, `?raf=1`): the page drew 181 frames in 3 s alone and 181 during a wait that was never met (X11; 182 with one CPU; 122 and 120 on Wayland). The looks run in the page's thread, at most one each max(150 ms, 4 × the last look's time), each inside the snapshot's budget (SNAPSHOT_SCAN nodes, SNAPSHOT_SCAN_MS). agents.spec's eval checks the wait never halves the page's frames.
 
 ## #143: what the clients do (looked up 2026-11-24, to check in slice (a))
 
@@ -236,14 +278,14 @@ The owner's preview (main plus #117) played a full hand at a bot table. At a liv
 
 | Checklist item | Test |
 |---|---|
-| Duplicates refuse | |
+| Duplicates refuse | control.test, by role and name: two alike refused |
 | `within` and items | |
 | Swap between resolving and the press | |
 | Step classified from the element | |
-| Sensitive fields never matched | |
+| Sensitive fields never matched | control.test, by role and name: a field with no ref (password, code, card) refused |
 | Resolving walk budget | |
-| `wait_for`: same readability as `read_tab` | |
-| `wait_for`: one at a time, 30 s, Stop and navigation | |
-| `wait_for`: throttled checks on a page mutating every frame | |
+| `wait_for`: same readability as `read_tab` | control.test, *met: says so…* (a never-read page refused); the readability check between chunks, *the same document going to another address…* |
+| `wait_for`: one at a time, 30 s, Stop and navigation | control.test, *one wait at a time…*, *the page going somewhere else…* (another document), *the same document going to another address…* (pushState: waits on, refs said stale, the bar) |
+| `wait_for`: throttled checks on a page mutating every frame | agents.spec, the token eval: the page's frames in 3 s with and without a wait (never halved) |
 | Snapshot with a result: caps, untrusted, refs replaced, none after navigating | |
 | #143: answered before the client's timeout, the retry runs once, nothing twice | Progress while a card waits: agent-chords.test, *a call that asked for progress hears it…* (beats with the token, counting up, saying a card waits; none after the answer; none without a token). One call's cards wait 50 s in all (`CALL_WAIT_MS`): agent-chords.test, *one call waits on its cards 50 s in all…* (a step card after a 40 s connection card answers waiting by 50 s; it waited 85 s before). The short-timeout client and the retry: to come. |

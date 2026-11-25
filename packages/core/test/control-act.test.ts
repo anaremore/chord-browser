@@ -67,6 +67,7 @@ describe('Chord’s words for an action: the site card, the activity line, the b
     [{ tool: 'hover', name: 'Menu', role: 'button' }, 'is pointing at “Menu”'],
     [{ tool: 'navigate', to: 'shop.example/returns' }, 'is going to shop.example/returns'],
     [{ tool: 'back' }, 'is going back'],
+    [{ tool: 'wait_for' }, 'is waiting on this page'],
   ];
   it.each(bar)('%j: %s', (doing, text) => expect(barDoing(doing)).toBe(text));
 
