@@ -272,6 +272,11 @@ The page's own side (the snapshot script in the renderer, its shapes for re-find
 - *A `file://` page's origin is `null`:* the diff's origin check compares `null` with `null`, so two `file://` pages count as one origin. Agents can't open `file://` pages (open_tab and navigate take http and https only).
 - *`find` doesn't show a container's children:* it shows the matching elements and what they're in, not what else is inside. The agent snapshots for that.
 - *The page side's cost on very large pages* (the snapshot script and its shapes): M2g-2's measurement slice.
+- *What an element's page id holds to* (round 2 of #145): its role, its name and the named items it's in, as act.ts checks them.
+  - A change of link (`href`) alone keeps it; act.ts's step shape checks the link before a step.
+  - A name past 120 characters is compared as clipped.
+  - An unnamed row is no item.
+- *A diff too big to show still takes a page-side history slot:* it can push a shown diff's read out of the page's history, so a ref from that diff finds no element and is refused as stale. It fails closed.
 
 ## Slice (b): wait_for (built, 2026-11-24)
 

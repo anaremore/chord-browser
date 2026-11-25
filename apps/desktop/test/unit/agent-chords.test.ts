@@ -805,6 +805,34 @@ describe('open_tab and a Never site (security review)', () => {
     expect(JSON.stringify(await a.reply(2, 'list_tabs'))).not.toMatch(PRIVATE);
   });
 
+  it('the client giving up while open_tab’s page loads answers at once, never at the load’s limit (round 2 of #145)', async () => {
+    const t = setup(['bank.test']);
+    const a = connected(t);
+    a.connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://agent.test/slow' } } });
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBeGreaterThan(0));
+    a.connection.message({ method: 'notifications/cancelled', params: { requestId: 1 } });
+    // Answered within a moment (the load's own limit is 15 s).
+    await vi.waitFor(() => expect(a.sent.find((m) => m.id === 1)).toBeDefined(), { timeout: 1000 });
+    expect(a.sent.find((m) => m.id === 1)!.result!.content[0]!.text).toBe(CONTROL_REFUSALS.stopped);
+    // And its own wait for the page ends too, not at the load's limit: it stops listening for the load.
+    await vi.waitFor(() => expect(a.events.listenerCount('did-stop-loading')).toBe(0), { timeout: 1000 });
+  });
+
+  it('open_tab’s step card names its address as a JSON tuple (round 2 of #145)', async () => {
+    const t = setup();
+    const asked: { subject: string }[] = [];
+    const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, () => undefined, {
+      present: async (card) => ((asked.push(card as never), card.kind === 'step' ? 'deny' : 'once')),
+      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      chords: t.chords,
+      dispatch: (c) => t.store.dispatch(c),
+    });
+    connection.message({ id: 1, method: 'tools/call', params: { name: 'open_tab', arguments: { url: 'https://mail.test/logout' } } });
+    await vi.waitFor(() => expect(asked.some((c) => (c as unknown as { kind: string }).kind === 'step')).toBe(true));
+    const step = asked.find((c) => (c as unknown as { kind: string }).kind === 'step')!;
+    expect(JSON.parse(step.subject)).toEqual(['open', 'https://mail.test/logout']);
+  });
+
   it('a tab that goes to a Never site after open_tab returned (its wait ended while it loaded) closes, and list_tabs and later replies never show it', async () => {
     const t = setup(['bank.test']);
     const a = connected(t, 20);

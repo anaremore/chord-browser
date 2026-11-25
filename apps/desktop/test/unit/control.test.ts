@@ -943,7 +943,8 @@ describe('wait_for (S18 M2g-1)', () => {
   });
 
   it('the client giving up while the page still loads ends it at once (round 1 of #145, SF3)', async () => {
-    const u = setup({ read: page([{ met: true, cut: false }]), actions: true });
+    let looked = false;
+    const u = setup({ read: page([{ met: true, cut: false }], () => void (looked = true)), actions: true });
     u.pages.get('n1')!.at.loading = true;
     const giveUp = new AbortController();
     vi.useFakeTimers();
@@ -954,6 +955,10 @@ describe('wait_for (S18 M2g-1)', () => {
     await vi.advanceTimersByTimeAsync(5);
     expect(settled).toBe(true);
     expect(refusal(await waiting).refused).toBe(CONTROL_REFUSALS.stopped);
+    // Its own wait for the page ended too (the call's signal), and nothing was looked at after (round 2 of #145).
+    await vi.advanceTimersByTimeAsync(20);
+    expect(u.pages.get('n1')!.events.listenerCount('did-stop-loading')).toBe(0);
+    expect(looked).toBe(false);
   });
 
   it('the throttle carries from one second to the next: a slow look isn’t followed at once by another (S-2)', async () => {
@@ -1435,6 +1440,37 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(refusal(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).refused).toBe('That ref is from an earlier snapshot. Call snapshot again, then use its refs.');
   });
 
+  it('Stop while the element is described: nothing after it, not even the pointer’s move (round 2 of #145)', async () => {
+    let fired = false;
+    const t: Awaited<ReturnType<typeof acting>> = await acting({
+      act: { siteAllowed: () => true },
+      onAct: (_events, op) => {
+        if (op === 'describe' && !fired && t) {
+          fired = true;
+          t.agent.stop();
+        }
+      },
+    });
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(CONTROL_REFUSALS.stopped);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.steps).not.toContain('point');
+    expect(t.at.input).toEqual([]);
+  });
+
+  it('the client giving up while read_form waits for the page: stopped, and the form is never read after (round 2 of #145)', async () => {
+    const codes: string[] = [];
+    const u = setup({ read: async (code: string) => (codes.push(code), { title: 'Article', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' }), actions: true });
+    u.pages.get('n1')!.at.loading = true;
+    const giveUp = new AbortController();
+    const reading = u.callUntil('read_form', { tab_id: u.scope.refs.refFor('n1') }, giveUp.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    const before = codes.length;
+    giveUp.abort();
+    expect(refusal(await reading).refused).toBe(CONTROL_REFUSALS.stopped);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(codes.length).toBe(before);
+  });
+
   it('a new page’s ids never give an old ref to its element: they’re numbered above every ref before (round 1 of #145, SF7)', async () => {
     const t = await acting();
     await t.call('snapshot', { tab_id: t.tab });
@@ -1464,6 +1500,47 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting({ twist });
     twist.read = {};
     expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot to see it.' });
+  });
+
+  it('a second diff says only what changed since the first, never the first again (round 2 of #145: rebase)', async () => {
+    const t = await acting();
+    ELEMENTS.push({ role: 'button', name: 'Raise' });
+    try {
+      expect((result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'] as { lines: string[] }).lines).toHaveLength(1);
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toBeUndefined();
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('a call held on a paused tab ends when the client gives up, through the tools too, and never runs after (round 2 of #145)', async () => {
+    const t = await acting({ act: { siteAllowed: () => true } });
+    t.agent.pause('n1', true);
+    const giveUp = new AbortController();
+    const held = t.callUntil('click', { tab_id: t.tab, ref: 'e1' }, giveUp.signal);
+    await new Promise((r) => setTimeout(r, 20));
+    giveUp.abort();
+    expect(refusal(await held).refused).toBe(CONTROL_REFUSALS.stopped);
+    t.agent.pause('n1', false);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.at.input).toEqual([]);
+  });
+
+  it('a snapshot taken while the diff’s read was out wins: the diff gives nothing, and never rebases on top of it (round 2 of #145)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    const pageId = (JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { page_id: string }).page_id;
+    const refs = t.scope.memory.elements!.get('n1')!;
+    ELEMENTS.push({ role: 'button', name: 'Raise' });
+    try {
+      // Meanwhile the agent's own snapshot lands (its outline replaces the one the diff compares with).
+      twist.read = { meanwhile: () => { twist.read = {}; refs.remember({ ...refs.outline(pageId)!, retrievedAt: 1 }); } };
+      const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+      expect(out.data['page_changes']).toBeUndefined();
+      expect(refs.outline(pageId)!.retrievedAt).toBe(1);
+    } finally {
+      ELEMENTS.pop();
+    }
   });
 
   it('a diff too big to show is never committed: the agent’s refs and the next diff’s baseline stay its last snapshot’s (round 1 of #145, B1a)', async () => {
@@ -2408,9 +2485,18 @@ describe('acting through the gate (S18 M2c)', () => {
         [[{ tool: 'click', ref: 'e1' }, { tool: 'type', ref: 'e2', text: 'x', submit: 'yes' }], 'Step 2: submit and replace are true or false.'],
         [[{ tool: 'click', ref: 'e1' }, { tool: 'press_key', ref: 'e2', key: 'F13' }], 'Step 2: press_key takes a key from its list.'],
         [[{ tool: 'click', ref: 'e1' }, { tool: 'select_option', ref: 'e3' }], 'Step 2: select_option takes option, its label (at most 500 characters).'],
+        // Its ref too: one never given (round 2 of #145).
+        [[{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'e99' }], 'Step 2: There’s no element e99 in that tab. Call snapshot for the page’s elements.'],
       ];
       for (const [steps, says] of table) expect((await batch(t, steps)).text, JSON.stringify(steps).slice(0, 60)).toBe(says);
       // None ran: a bad step 2 never leaves step 1 done.
+      expect(clicks(t)).toBe(0);
+    });
+
+    it('a ref from before the page moved on is refused before any step runs (round 2 of #145)', async () => {
+      const t = await acting({ act: { siteAllowed: () => true } });
+      await (t.pages.get('n1')!.contents as unknown as { loadURL(u: string): Promise<void> }).loadURL('https://news.test/c');
+      expect((await batch(t, [{ tool: 'hover', ref: 'e1' }, { tool: 'click', ref: 'e1' }])).text).toBe(`Step 1: ${ELEMENT_REFUSALS.stale}`);
       expect(clicks(t)).toBe(0);
     });
 

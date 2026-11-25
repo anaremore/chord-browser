@@ -1589,15 +1589,15 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const values = (await inPage('/form20', '[...document.querySelectorAll("input")].map((i) => i.value).join(",")')) as string;
       return values === Array.from({ length: 20 }, (_, i) => `v${i + 1}`).join(',');
     });
-    // Not metered (Neon's round 1, B-8): a step refused stops the batch there, and says which went (a ref never given,
-    // in the middle).
+    // Not metered (Neon's round 1, B-8): a step that can't go, found before any step runs.
     if (lean) {
       const tab = await open('/form20?again=1');
       const o = outlineOf((await ask('snapshot', { tab_id: tab })).text);
       const stopped = await act('batch', { tab_id: tab, steps: [{ tool: 'type', ref: refOf(o, 'textbox "Field 1"'), text: 'w1' }, { tool: 'type', ref: 'e999', text: 'x' }, { tool: 'type', ref: refOf(o, 'textbox "Field 3"'), text: 'w3' }] });
+      // A ref never given (or from another page) is refused before step 1 runs (round 2 of #145): nothing typed.
       expect(stopped.error).toBe(true);
-      expect(JSON.parse(stopped.text)).toMatchObject({ trust: 'untrusted', data: { refused: 'Step 2 (type) was refused.', step: 2, done: ['Typed in “Field 1”'] } });
-      expect(await inPage('/form20?again=1', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')).toBe('w1,,');
+      expect(stopped.text).toMatch(/^Step 2: (There’s no element e999 in that tab|That ref is from an earlier snapshot)/);
+      expect(await inPage('/form20?again=1', '[...document.querySelectorAll("input")].slice(0, 3).map((i) => i.value).join(",")')).toBe(',,');
     }
     await journey('a page that draws itself after it loads', async () => {
       const tab = await open('/drawn');

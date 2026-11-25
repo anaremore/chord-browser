@@ -485,6 +485,8 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
   const read = await page.snapshot(call.scope.agent.id, token, false);
   if (!read || call.stopped() || page.id !== kept.pageId) return null;
+  // A snapshot of the agent's landed meanwhile: it wins (round 2 of #145), and this read is no diff of it.
+  if (refs.outline(page.id) !== kept) return null;
   // Read under a read's rules (Neon's round 1 of M2g-1, B-6): never from a page that may not be read, nor of another
   // origin than the snapshot it's compared with. Nothing of it is kept then.
   if (blockedNow(call, nodeId, page, 'That page could not be read.', read.url)) return null;
@@ -870,6 +872,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const phases = phaseClock(tool);
   const element = await actOn({ op: 'describe', refind: true, ...(tool === 'select_option' ? { option: asked } : {}) });
   phases.lap('look');
+  // Stopped while it was described: nothing after it (round 2 of #145).
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   if (!element.ok) return refuse(actRefusal(element));
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
@@ -1740,6 +1744,8 @@ async function formTool(call: Call, tool: 'read_form' | 'propose_fill', args: Re
     const moved = blockedNow(call, node.id, null, 'That page could not be read.');
     if (moved) return refuse(moved);
     const page = await loadedPage(browser, node.id, call.signal);
+    // Stopped, or the client gave up, while it loaded: the form is never read (round 2 of #145).
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     const loaded = page && blockedNow(call, node.id, page, 'That page could not be read.');
     if (loaded) return refuse(loaded);
     const token = randomBytes(12).toString('hex');

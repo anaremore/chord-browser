@@ -289,6 +289,16 @@ describe('the outline, for as few tokens (the owner, 2026-11-24)', () => {
 });
 
 describe('refs that stay, and the diff after an action (M2g-1)', () => {
+  it('a ref given in turn (an id past the cap) never takes a number a later id of the page maps to (round 2 of #145)', () => {
+    const refs = new ElementRefs();
+    const first = refs.issue('p1', 'a', [0], new Map([[0, 2_000_000]]));
+    // The page's next snapshot: another element, with a small id.
+    const second = refs.issue('p1', 'b', [0, 1], new Map([[0, 2_000_000], [1, 1]]));
+    expect(second.get(1)).not.toBe(first.get(0));
+    // The first ref never names the new element: stale (the agent's next snapshot), never key 1.
+    expect(refs.resolve(first.get(0), 'p1')).toEqual({ ok: false, why: 'stale' });
+  });
+
   it('refs stay inside their pattern however large the page’s ids and however many pages (N-4)', () => {
     const refs = new ElementRefs();
     // A page past a million ids (in turn), and a thousand-odd pages at a million each (the numbers start over).

@@ -288,14 +288,24 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
   // Only while it's the same element as the agent knows it (round 1 of #145, B1): its role, its name and the items it's
   // in. A node the page renamed in place, or moved to another row, gets a new id, so its old ref is never it. A change of
   // state alone (checked, filled) keeps it. At most as many owners as snapshots keep (args.owners).
+  // An owner's ids start above every id given in this document (round 2 of #145): one whose map was let go of (the
+  // owners' cap) and comes back never gets an id an earlier element had, so an old ref never names another element.
   const sidsAll = (globalThis.__chordSids = globalThis.__chordSids || new Map());
   let sidsMine = sidsAll.get(args.owner);
-  if (!sidsMine) sidsMine = { ids: new WeakMap(), next: 1 };
+  if (!sidsMine) sidsMine = { ids: new WeakMap(), next: globalThis.__chordSidNext || 1 };
   sidsAll.delete(args.owner);
   sidsAll.set(args.owner, sidsMine);
   while (sidsAll.size > args.owners) sidsAll.delete(sidsAll.keys().next().value);
-  const sidOf = (el, sig) => { let had = sidsMine.ids.get(el); if (!had || had.sig !== sig) { had = { id: sidsMine.next++, sig }; sidsMine.ids.set(el, had); } return had.id; };
-  const sigOf = (role, name, items) => JSON.stringify([role, name, items]);
+  // Compared field by field, no string built per node (round 2 of #145: Neon measured it at 4 to 6.5 ms on 16k nodes).
+  const sidOf = (el, role, name, items) => {
+    let had = sidsMine.ids.get(el);
+    if (!had || had.role !== role || had.name !== name || had.items !== items) {
+      had = { id: sidsMine.next++, role, name, items };
+      sidsMine.ids.set(el, had);
+      if (sidsMine.next > (globalThis.__chordSidNext || 1)) globalThis.__chordSidNext = sidsMine.next;
+    }
+    return had.id;
+  };
   const cut = {};
   let looked = 0;
   const stop = () => {
@@ -332,10 +342,14 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
     for (let c = chain; c && parts.length < 64; c = c.up) parts.push(c.part);
     return JSON.stringify(parts);
   };
+  // Kept on the chain's node (round 2 of #145): its children all ask for the same items.
   const itemsAt = (chain) => {
+    if (chain && chain.itemsKey !== undefined) return chain.itemsKey;
     const parts = [];
     for (let c = chain && chain.items; c && chain.n - c.n < 64; c = c.up) parts.push(c.part);
-    return JSON.stringify(parts);
+    const key = JSON.stringify(parts);
+    if (chain) chain.itemsKey = key;
+    return key;
   };
   const walk = (parent, depth, keyed, named, chain) => {
     for (const child of parent.childNodes) {
@@ -367,7 +381,7 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const name = nameOf(el, role);
-      const node = { depth, role, name, sid: sidOf(el, sigOf(role, name, itemsAt(chain))) };
+      const node = { depth, role, name, sid: sidOf(el, role, name, itemsAt(chain)) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -401,7 +415,7 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
   const start = document.body || document.documentElement;
   if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
     const startName = nameOf(start, 'textbox');
-    const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, sigOf('textbox', startName, itemsOf(start))) };
+    const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, 'textbox', startName, itemsOf(start)) };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);

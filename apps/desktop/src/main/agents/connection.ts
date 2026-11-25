@@ -237,6 +237,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         return { text: toolResult({ tab_id: ref, url: WEB_ADDRESS.test(page.url()) ? page.url() : url, title: contents.getTitle(), page_id: page.id, loading: contents.isLoading() }) };
       },
       refused,
+      // The client giving up ends its wait for the page too (round 2 of #145).
+      callSignal,
     );
   };
 

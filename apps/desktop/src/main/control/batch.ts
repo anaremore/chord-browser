@@ -11,7 +11,9 @@
  * - It stops at the first refusal, or after a step that took the page elsewhere, saying which steps went.
  * - One diff, at the last step (each step's own would repeat what the next changes).
  */
-import { ACT_REFUSALS, BATCH_STEPS_MAX, BATCH_TOOLS, CONTROL_REFUSALS, isPressKey, TYPE_TEXT_MAX, toolResult, type NodeId } from '@chord/core';
+import { ACT_REFUSALS, BATCH_STEPS_MAX, BATCH_TOOLS, CONTROL_REFUSALS, ELEMENT_REFUSALS, isPressKey, TYPE_TEXT_MAX, toolResult, type NodeId } from '@chord/core';
+import { pageOf } from '../view-page';
+import { pageIdOf } from './page';
 import type { ControlScope, ToolOutput } from './scope';
 import { runControlTool, type ControlBrowser } from './tools';
 
@@ -45,6 +47,17 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
   }
   const found = scope.refs.resolve(args['tab_id'], () => true);
   const nodeId: NodeId | null = found.ok ? found.id : null;
+  // Each step's ref, before step 1 runs (round 2 of #145): one never given, or from before the page moved on, is
+  // refused here, never after the steps before it went. A tab not loaded now is checked for a ref never given only.
+  const elements = nodeId !== null ? scope.memory.elements?.get(nodeId) : undefined;
+  const contents = nodeId !== null ? pageOf(browser.tabs.get(nodeId)) : undefined;
+  const pageId = contents && !contents.isDestroyed() ? pageIdOf(contents) : '';
+  for (const [i, { args: a }] of planned.entries()) {
+    const lookup = elements?.resolve(a['ref'], pageId) ?? { ok: false as const, why: 'unknown' as const };
+    if (nodeId !== null && !lookup.ok && (lookup.why === 'unknown' || pageId)) {
+      return { text: `Step ${i + 1}: ${lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(a['ref'])) : ELEMENT_REFUSALS.stale}`, isError: true };
+    }
+  }
   // The tab's cards let go of so far: a change means the user took it over (gate.ts' releases).
   const released = nodeId !== null ? scope.agent.releases(nodeId) : 0;
   const done: string[] = [];

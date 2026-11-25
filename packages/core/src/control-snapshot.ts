@@ -184,7 +184,11 @@ export class ElementRefs {
         // Two keys with one id (never from the page's script): the second gets a ref of its own.
         if (taken.has(ref)) ref = `e${this.next++}`;
         else this.next = Math.max(this.next, this.base.from + sid + 1);
-      } else ref = `e${this.next++}`;
+      } else {
+        // In turn, above every number the page's ids can map to (round 2 of #145): never one a later id of it takes.
+        if (sid !== undefined && this.base && this.base.pageId === pageId) this.next = Math.max(this.next, this.base.from + SID_MAX + 1);
+        ref = `e${this.next++}`;
+      }
       taken.add(ref);
       byKey.set(key, ref);
       keyByRef.set(ref, key);
