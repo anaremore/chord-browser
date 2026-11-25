@@ -649,13 +649,13 @@ jobs:
       - run: pnpm build
       # Outside agents' transport (S18) on every OS: the endpoint, the relay, the gate, and on Windows the pipe's DACL
       # (window-owner.exe, just built), on Linux another user refused; and who's calling (M2a: pipe-clients, ss, lsof),
-      # looked up for real on each OS, and the lookup's budget per OS (agent-peer.perf.test.ts). pnpm test and pnpm test:perf
-      # run them on Linux too. Once per OS: in its first shard.
+      # looked up for real on each OS, and the lookup's budget per OS (agent-peer.perf.test.ts). Once per OS: in its first
+      # shard. Not on Linux x64, where the checks job's pnpm test and pnpm test:perf already run them, on the same OS.
       - name: Agents' transport
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64')
         run: pnpm exec vitest run apps/desktop/test/unit/agents.test.ts apps/desktop/test/unit/agent-peer.test.ts apps/desktop/test/unit/control.test.ts
       - name: Who's calling, timed
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && !(runner.os == 'Linux' && runner.arch == 'X64')
         run: pnpm test:perf apps/desktop/test/unit/agent-peer.perf.test.ts
       # chord-data's perf rows on Windows' disks too, where a sync to disk costs most: a new profile's database (and
       # its migrations committed one by one, as before 2026-11-20, for comparison) and a big import's Undo.
@@ -793,6 +793,19 @@ jobs:
       - name: Flaky tests
         if: always()
         run: node scripts/ci/flaky-summary.mjs apps/desktop/playwright-report/results.json "${{ env.ARTIFACT_SUFFIX }}"
+
+      # Playwright's JSON report and the step times (test/e2e/step-times-reporter.ts: launching the app, its windows,
+      # waits, closing it), from every shard, which `node scripts/ci/e2e-step-times.mjs <run-id>` compares by platform.
+      - name: Upload the E2E report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-report-${{ env.ARTIFACT_SUFFIX }}
+          path: |
+            apps/desktop/playwright-report/results.json
+            apps/desktop/playwright-report/step-times.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload design QA captures
         if: always()
