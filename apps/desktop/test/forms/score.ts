@@ -17,7 +17,7 @@
 import type { PasswordFieldRole } from '@chord/core';
 
 /** A labelled field, as the scan reported it and the detector classified it. */
-export interface ScoredField {
+interface ScoredField {
   /** Its index among the file's labelled fields (`[data-manual-scoring]`, in document order). */
   readonly index: number;
   readonly label: string;
@@ -72,7 +72,7 @@ export function fieldRight(label: string, role: PasswordFieldRole | null, type: 
 const isCredential = (label: string) => label === 'username' || label === 'username OR emailAddress' || label.startsWith('password');
 
 /** A wrong field, as the baseline lists it: `index label field → role`. */
-export const failureLine = (f: { index: number; label: string; field: string; role: PasswordFieldRole | null }) => `${f.index} ${f.label} ${f.field} → ${f.role ?? 'none'}`;
+const failureLine = (f: { index: number; label: string; field: string; role: PasswordFieldRole | null }) => `${f.index} ${f.label} ${f.field} → ${f.role ?? 'none'}`;
 
 export interface CorpusScore {
   /** Files with a credential label. */

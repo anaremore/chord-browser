@@ -20,7 +20,7 @@ import styles from './Settings.module.css';
 import local from './YourData.module.css';
 
 /** "2 chords, 40 pinned tabs, 3 Favorites, Effects for 2 sites": a part that's zero is left out; Effects only when they'd come in. */
-export function countsText(c: MergeCounts, effects: boolean): string {
+function countsText(c: MergeCounts, effects: boolean): string {
   return [
     c.chords ? plural(c.chords, 'chord') : '',
     c.pinnedTabs ? plural(c.pinnedTabs, 'pinned tab') : '',
@@ -38,7 +38,7 @@ export function countsText(c: MergeCounts, effects: boolean): string {
 }
 
 /** "New: 2 chords, 40 pinned tabs. Newer than yours: 5 tabs. Everything else is here already." */
-export function whatComesIn(preview: FileImportPreview, effects: boolean): string {
+function whatComesIn(preview: FileImportPreview, effects: boolean): string {
   const fresh = countsText(preview.counts.new, effects);
   const newer = countsText(preview.counts.newer, effects);
   const parts = [fresh ? `New: ${fresh}.` : '', newer ? `Newer than yours: ${newer}.` : ''].filter(Boolean);
@@ -56,7 +56,7 @@ const andList = (items: readonly string[]) => (items.length > 1 ? `${items.slice
  * and 40 tabs will be left out: one import brings at most 100 new chords,
  * 10,000 tabs and 2,000 folders." Empty when nothing is.
  */
-export function cappedText(capped: MergeCapped): string {
+function cappedText(capped: MergeCapped): string {
   const left = [capped.chords ? plural(capped.chords, 'chord') : '', capped.tabs ? plural(capped.tabs, 'tab') : '', capped.folders ? plural(capped.folders, 'folder') : ''].filter(Boolean);
   const lines: string[] = [];
   if (left.length > 0) {
@@ -68,21 +68,21 @@ export function cappedText(capped: MergeCapped): string {
 }
 
 /** "From this computer, exported Nov 30, 2026." */
-export function fromText(preview: FileImportPreview): string {
+function fromText(preview: FileImportPreview): string {
   const when = preview.created ? new Date(preview.created).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   const from = preview.thisComputer ? 'From this computer' : 'From another computer';
   return `${from}${when ? `, exported ${when}` : ''}${preview.app ? ` by Chord ${preview.app}` : ''}.`;
 }
 
 /** "nytimes.com, github.com and 3 more". */
-export function sitesText(sites: readonly { host: string }[], shown = 8): string {
+function sitesText(sites: readonly { host: string }[], shown = 8): string {
   const hosts = sites.map((s) => s.host);
   if (hosts.length <= shown) return hosts.length > 1 ? `${hosts.slice(0, -1).join(', ')} and ${hosts.at(-1)}` : (hosts[0] ?? '');
   return `${hosts.slice(0, shown).join(', ')} and ${hosts.length - shown} more`;
 }
 
 /** What the line under the bar says. */
-export function importText(p: FileImportProgress): string {
+function importText(p: FileImportProgress): string {
   switch (p.phase) {
     case 'setup':
       return 'Adding your setup…';

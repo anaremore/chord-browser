@@ -16,11 +16,11 @@ import { join, relative, resolve } from 'node:path';
 
 /** duckduckgo-autofill 19.2.1 (2026-10-12), as M0's bake-off. */
 export const CORPUS_COMMIT = '4d5848619462c863d6bb7553cb090fc74b172be2';
-export const CORPUS_TARBALL_SHA256 = '9c3e0f78efd8cce6844242963e8319c978dc7512377a4ec15516747f88fbfe56';
-export const CORPUS_TREE_SHA256 = '5cceaedd7cdf11ec9999565e78bba313fd69e2c1c04bccbafa946acb120630ce';
+const CORPUS_TARBALL_SHA256 = '9c3e0f78efd8cce6844242963e8319c978dc7512377a4ec15516747f88fbfe56';
+const CORPUS_TREE_SHA256 = '5cceaedd7cdf11ec9999565e78bba313fd69e2c1c04bccbafa946acb120630ce';
 
 export const cacheDir = resolve(process.env['CHORD_FORMS_CACHE'] ?? join(import.meta.dirname, '.cache'));
-export const formsDir = join(cacheDir, `ddg-${CORPUS_COMMIT.slice(0, 12)}`, 'test-forms');
+const formsDir = join(cacheDir, `ddg-${CORPUS_COMMIT.slice(0, 12)}`, 'test-forms');
 
 const sha256 = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 
