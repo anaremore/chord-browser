@@ -136,6 +136,18 @@ New decision records (S20 and on) are a small folder each, not one growing file:
   that turns it green. A finding that can't be reproduced is said so, not fixed blind.
 - **The stop rule.** A finding that needs an exotic API, a crash, or a hostile build to show becomes a stated limit
   in the decision record or an issue, not another review round.
+- **One push per review round.** Fix every finding of the round, run the tests locally (E2E in the container), then
+  push once: each push restarts CI and the reviews.
+- **Drafts while reviews go on.** A PR stays a draft through its review rounds, and is marked ready for review when
+  a round comes back clean; then it gets the E2E run that gates merging (the full tier with `ready`).
+- **At most one open PR to main per thread.** The next slice waits on a stacked branch, not a second PR.
+  `node scripts/dev/pr-collisions.mjs` lists files several open PRs touch; `node scripts/dev/verify-merged.mjs <n>`
+  says whether a PR is really in main before its worktree or branch goes.
+- **Risky state lands alone, simulated.** A stateful module where async steps, timers and outside events meet (a
+  lease, a hold, a queue) goes first as its own PR, with a seeded `*.sim.test.ts` (template:
+  `apps/desktop/test/unit/sim-kit.ts`) that checks its invariants after every step.
+- **Five blockers in one module in round 1 means redesign.** Rework the design (with a threat checklist), not the
+  five findings one by one.
 - **Threat checklist first.** A slice that touches agents, passwords, IPC, sessions or anything web content can
   reach starts with a threat checklist and a design review, before code (S18's *M2e: threat checklist* is the
   model).
