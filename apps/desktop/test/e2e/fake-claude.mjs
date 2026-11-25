@@ -225,7 +225,11 @@ async function turn(sent, images = []) {
     return finish(await say(`The PDF has ${result.pages?.total} pages. Triads sound bright. [[${ref}:"${quote}"]]`));
   }
   if (/summar/i.test(text) && ref) {
-    const page = JSON.parse(toolText(await callTool('read_tab', { tab_id: ref })) || '{}');
+    const raw = toolText(await callTool('read_tab', { tab_id: ref }));
+    // What the read returned, kept where the test can print it when the citation is missing (#165).
+    appendFileSync(join(config, 'summarize-read.jsonl'), `${JSON.stringify({ ref, read: String(raw).slice(0, 600) })}
+`);
+    const page = JSON.parse(raw || '{}');
     const quote = String(page.content ?? '').split(/\s+/).slice(0, 4).join(' ');
     return finish(await say(`Here is the gist. [[${ref}:"${quote}"]]`));
   }

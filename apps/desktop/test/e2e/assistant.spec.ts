@@ -307,8 +307,15 @@ test('Assistant: set up, ask about the page with a citation, gate reads, stop, a
     await expect(panel.getByText(/Reading 127\.0\.0\.1/)).toBeVisible();
     await send(panel, 'Summarize this page');
     await expect(panel.getByText('Here is the gist.')).toBeVisible();
-    await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
-    await expect(panel.getByRole('button', { name: /Read “Article”/ })).toBeVisible();
+    try {
+      await expect(panel.getByRole('button', { name: /^Source 1: “/ })).toBeVisible();
+      await expect(panel.getByRole('button', { name: /Read “Article”/ })).toBeVisible();
+    } catch (error) {
+      // What read_tab gave the stand-in (#165: on Windows it once came back with no text, unexplained).
+      const kept = join(setup.config, 'summarize-read.jsonl');
+      console.log(`read_tab returned: ${existsSync(kept) ? readFileSync(kept, 'utf8') : '(nothing kept)'}`);
+      throw error;
+    }
     await expect(shell.getByRole('img', { name: 'Read by the assistant' })).toBeVisible();
     // Browse mode: no built-in tools, the user's settings ignored.
     expect(fakeLog(setup)[0]).toMatchObject({ restricted: true, tools: '', resume: null });
