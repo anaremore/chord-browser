@@ -22,10 +22,8 @@ import local from './YourData.module.css';
 
 const numbers = new Intl.NumberFormat('en-US');
 
-export { exportText, fileSize } from './export-text';
-
 /** "6 chords · 214 pinned tabs in 18 folders · 31 Today tabs · … · your settings." */
-export function whatGoesIn(c: ExportCounts): string {
+function whatGoesIn(c: ExportCounts): string {
   const parts = [
     plural(c.chords, 'chord'),
     c.pinnedTabs ? `${plural(c.pinnedTabs, 'pinned tab')}${c.folders ? ` in ${plural(c.folders, 'folder')}` : ''}` : '',

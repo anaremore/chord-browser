@@ -36,7 +36,7 @@ export interface ProbeField {
   readonly looks: 'password' | 'username' | 'code' | 'search' | 'other';
 }
 
-export interface ProbeForm {
+interface ProbeForm {
   readonly i: number;
   readonly formless: boolean;
   readonly kind: string | null;

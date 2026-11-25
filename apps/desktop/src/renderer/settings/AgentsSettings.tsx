@@ -11,7 +11,7 @@ import { Row, SectionHeader, Switch } from './controls';
 import styles from './Settings.module.css';
 
 /** "today", "yesterday", or the day ("Nov 18"). */
-export function lastUsed(at: number, now = Date.now()): string {
+function lastUsed(at: number, now = Date.now()): string {
   const day = (t: number) => new Date(t).toDateString();
   if (day(at) === day(now)) return 'today';
   if (day(at) === day(now - 86_400_000)) return 'yesterday';

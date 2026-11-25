@@ -13,7 +13,7 @@ export const PLAYER_FAILURES: Record<PlayerFailure, string> = {
   widevine: 'Chord Player couldn’t get Widevine from Google. Check your connection and try again.',
 };
 
-export const PLAYER_PHASES = { downloading: 'Downloading Chord Player', checking: 'Checking the download', unpacking: 'Unpacking Chord Player' } as const;
+const PLAYER_PHASES = { downloading: 'Downloading Chord Player', checking: 'Checking the download', unpacking: 'Unpacking Chord Player' } as const;
 
 /** About this many megabytes, as file sizes are shown (decimal). */
 export const megabytes = (bytes: number): number => Math.max(1, Math.round(bytes / 1_000_000));

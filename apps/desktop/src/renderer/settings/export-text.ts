@@ -8,7 +8,7 @@ const numbers = new Intl.NumberFormat('en-US');
 const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 
 /** "3.8 MB", "640 KB". */
-export function fileSize(bytes: number): string {
+function fileSize(bytes: number): string {
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
   if (bytes >= 1_000) return `${Math.round(bytes / 1_000)} KB`;
   return plural(bytes, 'byte');

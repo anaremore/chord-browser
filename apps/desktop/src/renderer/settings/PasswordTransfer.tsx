@@ -41,7 +41,7 @@ const LINES = 7;
 /* ---------- The words ---------- */
 
 /** "A Chrome, Edge or Brave export, 412 rows, from Chrome Passwords.csv." */
-export function fromText(preview: PasswordImportSummary, name: string): string {
+function fromText(preview: PasswordImportSummary, name: string): string {
   const kind = preview.source ? `A ${PASSWORD_SOURCE_NAMES[preview.source]} export` : 'A CSV file';
   return `${kind}, ${plural(preview.rows, 'row')}, from ${name}.`;
 }
@@ -66,20 +66,20 @@ const WHY: Record<ImportIssue['kind'], string> = {
 };
 
 /** "3 rows without a usable address", or, mixed, "4 rows left out". */
-export function leftOutTitle(issues: readonly ImportIssue[], more: number): string {
+function leftOutTitle(issues: readonly ImportIssue[], more: number): string {
   const n = issues.length + more;
   const address = issues.every((i) => i.kind === 'address' || i.kind === 'app');
   return address ? `${plural(n, 'row')} without a usable address` : `${plural(n, 'row')} left out`;
 }
 
 /** "Row 57: “Home router”, admin (no address)": what the row says, never its password. */
-export function issueText(issue: ImportIssue, why = true): string {
+function issueText(issue: ImportIssue, why = true): string {
   const what = [issue.address || (issue.name ? `“${issue.name}”` : ''), issue.username].filter(Boolean).join(', ');
   return `Row ${numbers.format(issue.row)}${what ? `: ${what}` : ''}${why ? ` (${WHY[issue.kind]})` : ''}`;
 }
 
 /** "Imported 380 passwords, and took the file’s for 4." */
-export function resultText(r: PasswordImportResult): { title: string; more: string } {
+function resultText(r: PasswordImportResult): { title: string; more: string } {
   const title =
     r.added === 0 && r.updated === 0
       ? 'Nothing to import: every password in the file is here already.'
@@ -88,13 +88,13 @@ export function resultText(r: PasswordImportResult): { title: string; more: stri
   return { title, more };
 }
 
-export function undoneText(u: PasswordImportUndone): string {
+function undoneText(u: PasswordImportUndone): string {
   return `Import undone.${u.restored ? ` ${plural(u.restored, 'replaced password')} came back as ${u.restored === 1 ? 'it was' : 'they were'}.` : ''}${u.changed ? ` ${plural(u.changed, 'password')} you changed since stayed as you left ${u.changed === 1 ? 'it' : 'them'}.` : ''}`;
 }
 
 /** Undo stopped part way: the rest is still the import's, and its button stays. */
-export const UNDO_FAILED = 'Chord couldn’t undo all of the import. Try Undo again.';
-export const UNDO_GONE = 'Chord can’t undo this import any more.';
+const UNDO_FAILED = 'Chord couldn’t undo all of the import. Try Undo again.';
+const UNDO_GONE = 'Chord can’t undo this import any more.';
 
 /* ---------- Import ---------- */
 
