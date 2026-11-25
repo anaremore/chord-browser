@@ -421,15 +421,16 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     // couldn't take its name, or never finished (the owner's release check, 2026-11-25).
     const downloadState = () =>
       shell.evaluate(async () => {
-        const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { downloads: Record<string, { filename: string; path: string; state: string; received: number; total: number }> } }> } } }).chord.state.snapshot();
-        return Object.values(state.downloads).map((d) => `${d.filename} ${d.state} ${d.received}/${d.total} ${d.path.split(/[\\/]/).pop()}`);
+        const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { downloads: Record<string, { id: string; filename: string; path: string; state: string; received: number; total: number }> } }> } } }).chord.state.snapshot();
+        return Object.values(state.downloads).map((d) => `${d.id.slice(-6)} ${d.filename} ${d.state} ${d.received}/${d.total} ${d.path.split(/[\\/]/).pop()}`);
       });
     try {
       await expect.poll(() => readdirSync(folder), { timeout: 20_000 }).toEqual(['file.zip']);
     } finally {
       // And whether its card took the Allow: still waiting (the click didn't count) or answered (the release check).
-      const cardsWaiting = await panel.getByRole('group', { name: /^Save file\.zip from / }).count();
-      console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}] cards waiting [${cardsWaiting}]`);
+      // Every acting card in the panel, in order: its kind, whether it's still waiting, its title.
+      const cards = await panel.locator('[data-act]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-act')}${e.hasAttribute('data-pending') ? ' (waiting)' : ''}: ${e.querySelector('p')?.textContent ?? ''}`));
+      console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}] cards [${cards.join(' | ')}]`);
     }
   } finally {
     await app.close();
