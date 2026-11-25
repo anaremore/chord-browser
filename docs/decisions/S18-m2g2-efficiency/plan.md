@@ -40,7 +40,14 @@ These are re-measured on #145 as merged, the first slice's BEFORE.
 - **New journeys:**
   - **Reading one section:** a long article of 50 sections, the answer in section 37.
   - **A broad find:** a page where the words match many elements: a list of 300 orders, each with *View* and *Cancel*; the agent wants order 150's *Cancel*.
-  - Both are honest: the agent looks first.
+  - **An action whose effect must be seen:**
+    - A click opens a dialog (*Confirm: Delete order 12?* with *Delete* and *Keep*); another moves a row to the top of a list.
+    - The agent's next step depends on what the click did: confirming in the dialog, or acting on the row where it now is.
+    - The journey is played two ways:
+      - with the diff after each action (#145's default), which shows the dialog and the moved row;
+      - as an agent with no diff would play it: a snapshot after each such click.
+    - It measures the diff against that extra snapshot: the calls, the model input and the result tokens. This is the measure of #145's diff after an action, which the scripted journeys can't show (the planner, 2026-11-25).
+  - All three are honest: the agent looks first.
 
 ## 1. Cache-friendly output (changed: no code of its own)
 
