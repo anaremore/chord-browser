@@ -522,6 +522,7 @@ function AgentConnectCardView({ card }: { card: AgentConnectCard }) {
   return (
     <div className={styles.card} role="alertdialog" aria-label={`${card.name} wants to use Chord`}>
       <AgentCardBody
+        id={card.id}
         title={`${card.name} wants to use Chord`}
         note={`Started${card.startedBy ? ` by ${card.startedBy}` : ''} in ${card.folder ?? 'an unknown folder'}.${card.noProgram ? ' Chord can’t tell which program started it.' : ''}`}
         list={AGENT_MAY}
@@ -549,6 +550,7 @@ function AgentSiteCardView({ card }: { card: AgentSiteCard }) {
   return (
     <div className={styles.card} role="alertdialog" aria-label={title}>
       <AgentCardBody
+        id={card.id}
         title={title}
         note={
           <>
@@ -587,6 +589,7 @@ function AgentStepCardView({ card }: { card: AgentStepCard }) {
   return (
     <div className={styles.card} role="alertdialog" aria-label={card.title}>
       <AgentCardBody
+        id={card.id}
         title={card.title}
         note={
           <>

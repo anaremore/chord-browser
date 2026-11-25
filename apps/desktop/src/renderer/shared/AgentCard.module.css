@@ -122,3 +122,10 @@
   outline: var(--size-focus-ring) solid var(--color-focus-ring);
   outline-offset: var(--size-hairline);
 }
+
+/* A card's first moment (promptInputDelay): its buttons can't be pressed yet, and look it. */
+.actions [data-waiting],
+.close[data-waiting] {
+  opacity: 0.5;
+  cursor: default;
+}
