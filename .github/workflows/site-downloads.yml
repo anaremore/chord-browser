@@ -2,7 +2,8 @@ name: Site downloads
 
 # chordbrowser.com's download links (/download/<file>) redirect to the newest
 # release's files. When a release is published or deleted, this rewrites those
-# redirects (site/tools/latest.mjs) and commits them to main, and Clank
+# redirects (site/tools/latest.mjs) and commits them to main (with the deploy key
+# SITE_DEPLOY_KEY, which main's ruleset lets past the merge queue), and Clank
 # redeploys the site from main. Run it by hand to refresh the links any time.
 # Publishing a release is a person's step, so nothing here runs for a draft.
 on:
@@ -24,9 +25,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # main's ruleset sends every change through the merge queue; this commit goes straight to main, as the deploy
+      # key SITE_DEPLOY_KEY (write access to this repository, used by nothing else) is allowed to past the ruleset.
+      # Without the secret, the push uses the workflow's token, as before the ruleset.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
