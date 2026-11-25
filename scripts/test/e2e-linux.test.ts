@@ -3,17 +3,19 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ELECTRON_VOLUME, STALE_MS, STORE_VOLUME, containerName, dockerRunArgs, imageTag, parseArgs, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
+import { ELECTRON_VOLUME, RESERVED_CPUS, SLOW_CPUS, STALE_MS, STORE_VOLUME, containerName, cpusetCpus, dockerRunArgs, imageTag, parseArgs, pickCpuset, slowDefaults, staleRuns, tarArchive } from '../e2e-linux/run.mjs';
 
 describe('parseArgs', () => {
   it('runs X11 by default and hands everything else to Playwright, in order', () => {
-    expect(parseArgs([])).toEqual({ display: 'x11', rebuild: false, help: false, cpus: null, share: null, playwright: [] });
+    expect(parseArgs([])).toEqual({ display: 'x11', rebuild: false, help: false, cpus: null, share: null, slow: false, throttle: null, playwright: [] });
     expect(parseArgs(['launch.spec.ts', '-g', 'Peek', '--repeat-each', '3', '--workers=2'])).toEqual({
       display: 'x11',
       rebuild: false,
       help: false,
       cpus: null,
       share: null,
+      slow: false,
+      throttle: null,
       playwright: ['launch.spec.ts', '-g', 'Peek', '--repeat-each', '3', '--workers=2'],
     });
   });
@@ -25,6 +27,10 @@ describe('parseArgs', () => {
     expect(parseArgs(['perf.spec.ts', '--cpus', '4', '-g', 'memory'])).toMatchObject({ cpus: 4, playwright: ['perf.spec.ts', '-g', 'memory'] });
     expect(parseArgs(['--cpus=2'])).toMatchObject({ cpus: 2, playwright: [] });
     expect(parseArgs(['--cpus', 'four']).cpus).toBeNaN();
+    expect(parseArgs(['--cpus', '0.35']).cpus).toBe(0.35);
+    expect(parseArgs(['--cpus=all']).cpus).toBe('all');
+    expect(parseArgs(['--slow', '--throttle', '4', '-g', 'game'])).toMatchObject({ slow: true, throttle: 4, playwright: ['-g', 'game'] });
+    expect(parseArgs(['--throttle=6']).throttle).toBe(6);
     expect(parseArgs(['--share', 'Z:\\Temp\\x', '-c', 'a.ts'])).toMatchObject({ share: 'Z:\\Temp\\x', playwright: ['-c', 'a.ts'] });
     expect(parseArgs(['--share=/tmp/x'])).toMatchObject({ share: '/tmp/x', playwright: [] });
   });
@@ -122,11 +128,20 @@ describe('dockerRunArgs', () => {
     expect(envs).toEqual(['CHORD_E2E_DISPLAY=wayland', 'CHORD_E2E_STARTED=1700000000', 'CHORD_NO_MINIFY=1', 'CHORD_E2E_SCREEN=3200x2000x24']);
   });
 
-  it('runs on every CPU, or with --cpus on the first n only', () => {
+  it('runs on the CPUs it was given (labeled with them, for the next run to see), with a quota when asked', () => {
     expect(args).not.toContain('--cpuset-cpus');
-    const pinned = dockerRunArgs({ ...base, cpus: 4 });
-    expect(pinned[pinned.indexOf('--cpuset-cpus') + 1]).toBe('0-3');
+    const pinned = dockerRunArgs({ ...base, cpuset: '8-11' });
+    expect(pinned[pinned.indexOf('--cpuset-cpus') + 1]).toBe('8-11');
+    expect(pinned).toContain('chord-e2e.cpus=8-11');
+    expect(pinned).not.toContain('--cpus');
     expect(pinned.indexOf('--cpuset-cpus')).toBeLessThan(pinned.indexOf('chord-e2e-runner:abc'));
+    const slow = dockerRunArgs({ ...base, cpuset: '5', quota: 0.35 });
+    expect(slow[slow.indexOf('--cpus') + 1]).toBe('0.35');
+  });
+
+  it('passes CHORD_E2E_CPU_THROTTLE in, for --throttle', () => {
+    const throttled = dockerRunArgs({ ...base, env: { CHORD_E2E_CPU_THROTTLE: '4' } });
+    expect(throttled).toContain('CHORD_E2E_CPU_THROTTLE=4');
   });
 
   it('ends with the image, the container script and Playwright’s arguments, untouched', () => {
@@ -199,5 +214,53 @@ describe('tarArchive', () => {
     expect(result.status).toBe(0);
     for (const file of files) expect(readFileSync(join(out, file.path)).equals(file.body)).toBe(true);
     if (process.platform !== 'win32') expect(statSync(join(out, 'scripts/run.sh')).mode & 0o777).toBe(0o755);
+  });
+});
+
+describe('CPU slots', () => {
+  it('reads a cpuset', () => {
+    expect([...cpusetCpus('4-7,10')]).toEqual([4, 5, 6, 7, 10]);
+    expect([...cpusetCpus('')]).toEqual([]);
+    expect([...cpusetCpus('3')]).toEqual([3]);
+  });
+
+  // 24 CPUs, 0-3 left for you: five slots of 4 (4-7, 8-11, 12-15, 16-19, 20-23).
+  const first = () => 0;
+  it.each([
+    [{ total: 24, size: 4, taken: [] }, { cpuset: '4-7', shared: false }],
+    [{ total: 24, size: 4, taken: ['4-7'] }, { cpuset: '8-11', shared: false }],
+    [{ total: 24, size: 4, taken: ['4-7', '8-11', '', '12-15'] }, { cpuset: '16-19', shared: false }],
+    // One CPU, for --slow's quota: the first that's free.
+    [{ total: 24, size: 1, taken: ['4-7'] }, { cpuset: '8', shared: false }],
+    // Bigger than what's left: all but yours.
+    [{ total: 24, size: 32, taken: [] }, { cpuset: '4-23', shared: false }],
+    // Every slot taken: the least shared, and said so.
+    [{ total: 12, size: 4, taken: ['4-7', '8-11', '8-11'] }, { cpuset: '4-7', shared: true }],
+    // An old run on every CPU (--cpus all) shares with everything.
+    [{ total: 12, size: 4, taken: ['0-11'] }, { cpuset: '4-7', shared: true }],
+    // A small machine: never fewer than one CPU, even if it's one of yours.
+    [{ total: 2, size: 4, taken: [] }, { cpuset: '1', shared: false }],
+  ])('%j', (input, out) => {
+    expect(pickCpuset({ ...input, random: first })).toEqual(out);
+  });
+
+  it('never gives a run the CPUs left for you, and picks among free slots at random', () => {
+    const seen = new Set<string>();
+    for (const random of [0, 0.25, 0.5, 0.75, 0.99]) seen.add(pickCpuset({ total: 24, size: 4, taken: ['8-11'], random: () => random }).cpuset);
+    expect([...seen].sort()).toEqual(['12-15', '16-19', '20-23', '4-7']);
+    for (const cpuset of seen) expect([...cpusetCpus(cpuset)].every((cpu) => cpu >= RESERVED_CPUS)).toBe(true);
+  });
+});
+
+describe('--slow', () => {
+  const parsed = (argv: string[]) => slowDefaults(parseArgs(argv));
+  it('a share of one CPU, every try counted, five times over', () => {
+    expect(parsed(['--slow', 'agents.spec.ts'])).toMatchObject({ cpus: SLOW_CPUS, playwright: ['agents.spec.ts', '--retries', '0', '--repeat-each', '5'] });
+  });
+  it('what you said yourself wins', () => {
+    expect(parsed(['--slow', '--cpus', '0.5', '--repeat-each', '20', '--retries=1'])).toMatchObject({ cpus: 0.5, playwright: ['--repeat-each', '20', '--retries=1'] });
+  });
+  it('nothing without it', () => {
+    expect(parsed(['agents.spec.ts'])).toMatchObject({ cpus: null, playwright: ['agents.spec.ts'] });
   });
 });
