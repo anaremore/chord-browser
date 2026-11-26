@@ -312,9 +312,21 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await clear();
     await privatePage.fill('#u', 'someone@private.example');
     await privatePage.fill('#p', 'Zq9-private-Sekrit');
+    const pressedAt = await app.evaluate(() => Date.now());
     await privatePage.press('#p', 'Enter');
     await privatePage.waitForURL(`${site.origin}/session`);
-    await expect.poll(async () => (await events()).map((e) => e['type']), { timeout: 10_000 }).toContain('submitted');
+    // Failure-only (#253, seen once on macOS arm64): what the detector reported, when (ms after Enter), and from which
+    // contents, against the private page's own; and the page the submit left.
+    await expect
+      .poll(async () => (await events()).map((e) => e['type']), { timeout: 10_000 })
+      .toContain('submitted')
+      .catch(async (error: unknown) => {
+        const seen = (await events()).map((e) => ({ ...e, at: typeof e['at'] === 'number' ? e['at'] - pressedAt : null }));
+        const privateId = await app.evaluate(({ webContents }, origin) => webContents.getAllWebContents().filter((c) => c.getURL().startsWith(origin)).map((c) => ({ id: c.id, url: c.getURL().slice(origin.length) })), site.origin);
+        throw new Error(`${String(error)}
+the detector's events since Enter: ${JSON.stringify(seen)}
+the site's pages: ${JSON.stringify(privateId)}`, { cause: error });
+      });
     await privatePage.waitForTimeout(SETTLE_WAIT_MS);
     expect((await events()).map((e) => e['type'])).not.toContain('signedIn');
     await expect(privatePopover.getByRole('dialog')).toHaveCount(0);

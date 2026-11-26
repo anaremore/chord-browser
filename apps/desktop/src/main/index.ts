@@ -1335,7 +1335,8 @@ if (!app.requestSingleInstanceLock()) {
       for (const type of ['focus', 'blur', 'submitted', 'signedIn', 'failed'] as const) {
         passwordDetector.events.on(type, (event: { contents: Electron.WebContents; frame?: unknown; values?: unknown }) => {
           const { contents, frame: _frame, values, ...rest } = event;
-          passwordEvents.push({ type, contentsId: contents.id, ...rest, ...(type === 'signedIn' ? { hasValues: Boolean(values) } : {}) });
+          // `at`: when main heard it, for a test that misses one (#253).
+          passwordEvents.push({ type, at: Date.now(), contentsId: contents.id, ...rest, ...(type === 'signedIn' ? { hasValues: Boolean(values) } : {}) });
         });
       }
       (globalThis as Record<string, unknown>)['chordTestHooks'] = {
