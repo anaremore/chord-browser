@@ -11,7 +11,7 @@
  * switches one chord per notch.
  */
 import { animate, motionValue, type AnimationPlaybackControls, type MotionValue, type Transition } from 'motion/react';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { api } from './api';
 import { FLING_MOMENTUM_MAX_MS, GestureEnd, MOMENTUM_GAP_MS, VelocityTracker, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
 
@@ -22,7 +22,10 @@ export type PaneMotion = { kind: 'slide'; dir: 1 | -1 } | { kind: 'swipe'; exitT
 const NOTCH_COOLDOWN_MS = 300;
 /** If the switch never arrives (the chord went away), give up on the commit after this long. */
 const COMMIT_TIMEOUT_MS = 800;
-const FADE: Transition = { duration: 0.12 };
+const FADE_MS = 120;
+const FADE: Transition = { duration: FADE_MS / 1000 };
+/** A transition with no animation at all (the slide off: `INSTANT`). */
+const isInstant = (t: Transition) => (t as { duration?: number; type?: string }).duration === 0 && !(t as { type?: string }).type;
 
 interface Options {
   /** The element the wheel events bubble to; swipes count inside its `[data-swipe-area]` children. */
@@ -37,7 +40,10 @@ interface Options {
   panes: boolean;
   /** The release spring (instant when "Slide between chords" is off). */
   release: Transition;
-  /** The OS asks for less motion: releases crossfade instead of springing. */
+  /**
+   * The OS asks for less motion and the slide is on: a commit crossfades (120 ms) instead of springing. False with the
+   * slide off, which is no animation at all (`release` is instant then).
+   */
   reduced: boolean;
   /** "Blend colors between chords" is on: the tint follows the fingers. */
   blend: boolean;
@@ -98,6 +104,12 @@ export function useChordSwipe(options: Options): ChordSwipe {
     blendId: null as string | null,
     running: [] as AnimationPlaybackControls[],
     onSwitched: undefined as undefined | ((currentId: string | undefined) => void),
+    /** The chords changed (one deleted, added or moved). */
+    onChords: undefined as undefined | (() => void),
+    /** The chord on screen as of the last change: the pane leaving when the next one comes. */
+    shownId: undefined as string | undefined,
+    /** A phased gesture the swipe let go of: the rest of it is held off until the OS's end or fling. */
+    heldForEnd: false,
   });
 
   useEffect(() => {
@@ -173,8 +185,17 @@ export function useChordSwipe(options: Options): ChordSwipe {
     const springBack = (velocity: number) => {
       const o = latest.current;
       const c = s.context!;
+      // No spring (reduced motion, or the slide off): every pane where it belongs in this same turn, no animation at
+      // all, so no frame shows them where the fingers left them (DESIGN.md §6.8).
+      if (o.reduced || isInstant(o.release)) {
+        xFor(c.currentId).jump(0);
+        if (c.prevId) xFor(c.prevId).jump(-c.width);
+        if (c.nextId) xFor(c.nextId).jump(c.width);
+        reset();
+        return;
+      }
       s.phase = 'settling';
-      const t: Transition = o.reduced ? { duration: 0 } : { ...o.release, velocity: velocity * 1000 };
+      const t: Transition = { ...o.release, velocity: velocity * 1000 };
       const run = (value: MotionValue<number>, to: number) => s.running.push(animate(value, to, t));
       run(xFor(c.currentId), 0);
       if (c.prevId) run(xFor(c.prevId), -c.width);
@@ -313,6 +334,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
       if (phase === 'begin') {
         // A new gesture, not momentum from the last one; it ends when the OS says (GestureEnd.begin).
         s.flungUntil = 0;
+        s.heldForEnd = false;
         if (s.phase === 'idle' || s.phase === 'settling') s.ignoreUntil = 0;
         if (s.phase !== 'committing') end.begin();
         return;
@@ -320,6 +342,16 @@ export function useChordSwipe(options: Options): ChordSwipe {
       // A fling: the fingers left moving, at their speed as of the last event, however late a busy renderer reads it;
       // its momentum waits for the next begin. An end: they stopped, or lifted slowly; the speed is as of now, so a rest
       // before the lift reads as one.
+      // The end of a gesture the swipe let go of: a fling's momentum still waits for a begin; an end, only as momentum.
+      if (s.heldForEnd) {
+        s.heldForEnd = false;
+        if (phase === 'fling') s.flungUntil = now + FLING_MOMENTUM_MAX_MS;
+        else {
+          s.flungUntil = 0;
+          s.ignoreUntil = now + MOMENTUM_GAP_MS;
+        }
+        return;
+      }
       // Only a swipe's fling: one that ends a vertical scroll, or one outside the swipe area, leaves the next gesture alone.
       if (phase === 'fling') {
         const swiping = s.phase === 'tracking' && s.context !== null;
@@ -340,41 +372,69 @@ export function useChordSwipe(options: Options): ChordSwipe {
 
     // The switch arrived: the committed chord's pane is the current one now, and settles to 0.
     /**
-     * The chord changed under a swipe, not by its commit (a key, the switcher, another window; #250): the swipe lets go.
-     * The new chord's pane, and the neighbors it moved, are in place at once (the new one was a neighbor beside it, a
-     * width away); the old chord's pane leaves with the usual slide (a jump would stop its exit, and it would stay).
-     * Nothing the swipe started keeps running, and the rest of the gesture is ignored as momentum.
+     * The chords changed under a swipe, not by its commit (#250): the chord on screen (a key, the switcher, another
+     * window), or its neighbors (one deleted, added or moved). The swipe lets go. The panes it moved are in place at
+     * once: the chord on screen now (a neighbor beside it a moment ago, a width away) and the ghosts. A pane leaving
+     * (`leaving`, and the swipe's own chord when it isn't the one on screen) leaves with its usual exit: a jump would
+     * stop it, and it would stay. Nothing the swipe started keeps running. The rest of the gesture is ignored: as
+     * momentum, or, when the OS said it began, until the OS says it ended (it never becomes a new swipe).
      */
-    const letGo = (currentId: string | undefined) => {
+    const letGo = (currentId: string | undefined, leaving: string | undefined) => {
       const c = s.context;
+      const now = performance.now();
+      if (end.phased) {
+        s.heldForEnd = true;
+        s.flungUntil = now + FLING_MOMENTUM_MAX_MS;
+      }
       stopAll();
-      const moved = [c?.prevId, c?.nextId, s.target?.id, currentId];
-      for (const id of moved) if (id && id !== c?.currentId) xFor(id).jump(0);
-      s.ignoreUntil = performance.now() + MOMENTUM_GAP_MS;
+      const exiting = new Set([leaving, c?.currentId].filter((id) => id !== undefined && id !== currentId));
+      for (const id of [currentId, c?.currentId, c?.prevId, c?.nextId, s.target?.id]) if (id && !exiting.has(id)) xFor(id).jump(0);
+      s.ignoreUntil = now + MOMENTUM_GAP_MS;
       reset();
     };
 
     s.onSwitched = (currentId: string | undefined) => {
+      const leaving = s.shownId;
+      s.shownId = currentId;
       if (s.phase === 'idle') return;
-      if (s.phase !== 'committing' || !s.target || currentId !== s.target.id) {
-        // Its own commit's chord is the only change a swipe expects; any other lets it go.
-        if (!(s.phase === 'committing' && currentId === s.context?.currentId)) letGo(currentId);
-        return;
-      }
+      // Its own commit's chord is the only change a swipe expects; any other lets it go.
+      if (s.phase !== 'committing' || !s.target || currentId !== s.target.id) return letGo(currentId, leaving);
       clearTimeout(s.commitTimer);
       const { id, transition } = s.target;
       const value = xFor(id);
-      if (latest.current.reduced) value.jump(0);
-      const settling = animate(value, 0, latest.current.reduced ? { duration: 0 } : transition);
-      s.running.push(settling);
-      void settling.finished.then(() => {
+      // The pane is real now; its ghost can go.
+      setGhosts([]);
+      const done = () => {
         if (s.phase === 'committing' && s.target?.id === id) {
           stopAll();
           reset();
         }
-      });
-      // The pane is real now; its ghost can go.
-      setGhosts([]);
+      };
+      if (latest.current.reduced) {
+        // The crossfade plays out (the panes' fade, the tint's) before the swipe lets go of them.
+        value.jump(0);
+        s.commitTimer = setTimeout(done, FADE_MS);
+        return;
+      }
+      if (isInstant(transition)) {
+        // The slide off: in place in this same turn, no animation at all.
+        value.jump(0);
+        return done();
+      }
+      const settling = animate(value, 0, transition);
+      s.running.push(settling);
+      void settling.finished.then(done);
+    };
+
+    s.onChords = () => {
+      const c = s.context;
+      if (!c || s.phase === 'idle' || s.phase === 'deciding' || s.phase === 'vertical') return;
+      const o = latest.current;
+      const index = o.chordIds.indexOf(c.currentId);
+      const prevId = index < 0 ? null : (o.chordIds[index - 1] ?? null);
+      const nextId = index < 0 ? null : (o.chordIds[index + 1] ?? null);
+      const targetGone = s.target !== null && !o.chordIds.includes(s.target.id);
+      if (prevId !== c.prevId || nextId !== c.nextId || targetGone) letGo(o.currentId, undefined);
     };
 
     return () => {
@@ -389,10 +449,16 @@ export function useChordSwipe(options: Options): ChordSwipe {
     // The listeners read `latest`; they're attached once per window.
   }, [blend]);
 
-  // Hand the chord change to the commit, in the render that shows the new chord.
-  useEffect(() => {
+  // Hand the chord change to the commit, in the render that shows the new chord: before it's painted, so a pane the
+  // swipe puts in place is never painted where it was.
+  useLayoutEffect(() => {
     g.current.onSwitched?.(options.currentId);
   }, [options.currentId]);
+  // A chord deleted, added or moved: a swipe whose neighbors changed lets go.
+  const chordList = options.chordIds.join(' ');
+  useEffect(() => {
+    g.current.onChords?.();
+  }, [chordList]);
 
   return { ghosts, xFor, blend, blendId, paneMotion, tintInstant };
 }
