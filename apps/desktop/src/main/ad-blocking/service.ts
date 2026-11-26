@@ -261,12 +261,16 @@ export class AdBlocking {
     this.profiles.delete(profileId);
   }
 
-  /** Profiles no chord uses any more (their sign-ins were deleted): their extension folders go too. */
+  /**
+   * Profiles no chord uses any more (their sign-ins were deleted): their extension folders go too, and their staging
+   * folders (#281), with the one all profiles shared before (`Staging/rules`).
+   */
   async forgetProfiles(inUse: ReadonlySet<string>): Promise<void> {
     await this.ready;
     const keep = new Set([...inUse].map(folderName));
-    const dir = join(this.config.root, 'Extension');
-    for (const folder of await readdir(dir).catch(() => [])) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
+    for (const dir of [join(this.config.root, 'Extension'), join(this.config.root, 'Staging')]) {
+      for (const folder of await readdir(dir).catch(() => [])) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
+    }
     for (const profileId of Object.keys(this.saved.profiles)) if (!inUse.has(profileId)) delete this.saved.profiles[profileId];
     this.save();
   }
@@ -359,10 +363,15 @@ export class AdBlocking {
     const set = this.current!;
     if (set.dir !== this.config.bundledDir) return await blocker.write(set.dir);
     const staging = join(this.config.root, 'Staging', basename(blocker.folder));
-    await mkdir(join(staging, 'rules'), { recursive: true });
-    for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
-    await blocker.write(staging);
-    await rm(staging, { recursive: true, force: true });
+    try {
+      await mkdir(join(staging, 'rules'), { recursive: true });
+      for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
+      await blocker.write(staging);
+    } finally {
+      // Gone whether the write worked or not; one that can't go yet (a scanner holding a handle) never fails the rules
+      // already written (Neon's round 1 of #281). The next write, or forgetProfiles, takes it.
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   /** Once a launch: Chromium has what Chord last applied, or it's applied again. */
