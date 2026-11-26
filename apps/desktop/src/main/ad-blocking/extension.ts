@@ -46,6 +46,11 @@ const MANIFEST = {
 const CONTROL_PAGE = '<!doctype html><meta charset="utf-8"><title>Chord ad blocking</title>';
 
 const LOAD_DELAY_MS = !app.isPackaged ? Number(process.env['CHORD_E2E_AD_BLOCKING_DELAY_MS']) || 0 : 0;
+/**
+ * Development only (#284's E2E): Chromium failing to add it. `once`: the first try a launch fails; `always`: every one.
+ */
+const LOAD_FAILS = !app.isPackaged ? process.env['CHORD_E2E_AD_BLOCKING_FAIL'] : undefined;
+let failedLoads = 0;
 
 function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The blocker didn’t answer')), ms).unref?.())]);
@@ -86,6 +91,7 @@ export class BlockerExtension {
     if (this.loaded) return false;
     // Development only: Chromium slow to add it (CHORD_E2E_AD_BLOCKING_DELAY_MS), as on a slow Windows disk (#189).
     if (LOAD_DELAY_MS) await new Promise((resolve) => setTimeout(resolve, LOAD_DELAY_MS));
+    if (LOAD_FAILS === 'always' || (LOAD_FAILS === 'once' && failedLoads++ === 0)) throw new Error('Chromium couldn’t add the extension (CHORD_E2E_AD_BLOCKING_FAIL)');
     this.extension = await within(this.session.extensions.loadExtension(this.folder, { allowFileAccess: false }), LOAD_TIMEOUT_MS);
     return true;
   }

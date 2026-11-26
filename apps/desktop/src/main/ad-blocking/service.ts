@@ -106,6 +106,15 @@ interface Profile {
   /** Ends that wait (once; later calls do nothing), marking how. */
   release: (status: RulesStatus) => void;
   released: boolean;
+  /**
+   * Its blocking isn't on though the switch is (#284): it failed, or wasn't on by the cap (its pages didn't wait any
+   * longer), or Settings' Try again is under way. Null once its rules are on. Settings → Privacy lists it (status).
+   */
+  notOn: 'failed' | 'retrying' | null;
+  /** Its rules' last apply failed: the next sync applies them again, whatever else is current. */
+  applyFailed: boolean;
+  /** Each bringing in line counts up: only the newest one's failure lists it as failed (Neon's SF2 on #316). */
+  syncSeq: number;
 }
 
 interface Page {
@@ -179,11 +188,15 @@ export class AdBlocking {
       });
   }
 
-  status(): AdBlockingStatus {
+  /** `chords`: the profiles Settings lists (a chord's); others (an agent's) aren't Settings' to show (Neon's SF3 on #316). */
+  status(chords?: ReadonlySet<string>): AdBlockingStatus {
     return {
       active: this.deps.enabled(),
       lists: FILTER_LISTS.map((l) => ({ id: l.id, name: l.name, version: this.current?.info.versions[l.id] ?? null, checkedAt: this.saved.lists[l.id]?.checkedAt ?? null })),
       failing: this.failing,
+      notOn: this.deps.enabled()
+        ? [...this.profiles].filter(([profileId, p]) => p.blocker && p.notOn && (!chords || chords.has(profileId))).map(([profileId, p]) => ({ profileId, state: p.notOn! }))
+        : [],
     };
   }
 
@@ -214,10 +227,14 @@ export class AdBlocking {
     let resolve = () => {};
     const rulesOn = new Promise<void>((done) => (resolve = done));
     // A private window's session has no extension: its handler is in place before its first page, nothing to wait for.
-    const profile: Profile = { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, rulesOn, release: () => {}, released: !blocker };
+    const profile: Profile = { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, rulesOn, release: () => {}, released: !blocker, notOn: null, applyFailed: false, syncSeq: 0 };
     if (!blocker) resolve();
     else {
-      const cap = setTimeout(() => profile.release('timeout'), this.config.rulesWaitMs ?? RULES_WAIT_MS);
+      const cap = setTimeout(() => {
+        // Its pages stop waiting without blocking: Settings says so until its rules come on.
+        profile.release('timeout');
+        profile.notOn ??= 'failed';
+      }, this.config.rulesWaitMs ?? RULES_WAIT_MS);
       cap.unref?.();
       profile.release = (status) => {
         if (profile.released) return;
@@ -251,6 +268,18 @@ export class AdBlocking {
   pending(session: Session): Promise<void> | null {
     for (const p of this.profiles.values()) if (p.session === session && !p.released) return p.rulesOn;
     return null;
+  }
+
+  /**
+   * Settings → Privacy's Try again (#284): a chord whose blocking didn't come on is brought in line again (its rules
+   * written if they need to be, the extension added, its rules applied). Listed as retrying until that ends. Only for
+   * one of `chords`, the profiles Settings lists (Neon's SF3 on #316).
+   */
+  retry(profileId: string, chords: ReadonlySet<string>): void {
+    const profile = this.profiles.get(profileId);
+    if (!chords.has(profileId) || !profile?.blocker || profile.notOn !== 'failed' || !this.deps.enabled() || this.stopping) return;
+    profile.notOn = 'retrying';
+    this.syncProfile(profileId);
   }
 
   /** A private window closed: its session is going, and nothing was kept for it. */
@@ -310,17 +339,30 @@ export class AdBlocking {
     const blocker = profile.blocker;
     // Off (attached off, or turned off mid-wait): no page waits for rules that won't be on, nor for a change still under way.
     if (!on || this.stopping) profile.release('off');
+    // Off: nothing is failing to block, and what failed is tried afresh when it's on again (Neon's SF1 on #316).
+    if (!on) Object.assign(profile, { notOn: null, applyFailed: false });
+    const seq = ++profile.syncSeq;
+    // Closed, off or quitting since: whatever this go was doing is no longer wanted (Neon's SF5).
+    const gone = () => this.stopping || !this.deps.enabled() || this.profiles.get(profileId) !== profile;
+    // Listed as failed only by the newest go, and only while it's still wanted: a newer one (Try again, a settings
+    // change) decides for itself (Neon's SF2).
+    const failed = () => {
+      if (seq === profile.syncSeq && !gone()) profile.notOn = 'failed';
+    };
     profile.chain = profile.chain
       .then(async () => {
         if (this.stopping) return;
         if (!this.deps.enabled()) {
           blocker.unload();
-          profile.ready = false;
+          Object.assign(profile, { ready: false, notOn: null, applyFailed: false });
           return;
         }
         await this.ready;
-        if (!this.current) return profile.release('failed');
-        if (!this.deps.enabled() || this.stopping) return;
+        if (!this.current) {
+          failed();
+          return profile.release('failed');
+        }
+        if (gone()) return;
         const version = setVersion(this.current.info.versions);
         const offSites = [...this.deps.offSites(profileId)];
         const applied = this.saved.profiles[profileId];
@@ -328,18 +370,24 @@ export class AdBlocking {
         if (stale) {
           profile.ready = false;
           await this.writeRules(blocker);
+          if (gone()) return;
         }
         // At launch the rules just load; turned back on, applying again says when they're in.
         const reloaded = (await blocker.load()) && profile.loadedOnce;
         profile.loadedOnce = true;
-        if (stale || reloaded || !sameSites(applied.offSites, offSites)) {
+        if (gone()) return;
+        if (stale || reloaded || profile.applyFailed || !sameSites(applied.offSites, offSites)) {
+          profile.applyFailed = true;
           // A fresh profile's rulesets are off until applied (extension.ts): its pages wait for this, not just the load.
           await blocker.apply(offSites);
           profile.ready = true;
+          if (gone()) return;
           this.saved.profiles[profileId] = { rulesVersion: version, offSites };
           this.save();
         }
         // A warm relaunch: Chromium kept them on, so they're on with the load.
+        profile.applyFailed = false;
+        profile.notOn = null;
         profile.release('in');
         if (!profile.verified) {
           profile.verified = true;
@@ -348,6 +396,7 @@ export class AdBlocking {
       })
       .catch((error: unknown) => {
         console.error(`Ad blocking couldn’t update profile ${profileId}:`, error);
+        failed();
         profile.release('failed');
       })
       // Off or quitting: nothing to wait for either.

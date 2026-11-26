@@ -20,7 +20,8 @@
 import { AD_BLOCKING_NOTICE, blockingSite, DEFAULT_SETTINGS, SAFE_BROWSING_NOTICE, SEARCH_ENGINES } from '@chord/core';
 import type { AdBlockingStatus, SafeBrowsingStatus, SettingsSnapshot } from '@chord/ipc';
 import { Check, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { notBlockingRow } from './ad-blocking-row';
 import { api } from './api';
 import { RadioGroup, Row, SectionHeader, Switch } from './controls';
 import { ProxySection, type ProxyFocus } from './Proxy';
@@ -62,9 +63,48 @@ function AdBlocking({ snapshot }: { snapshot: SettingsSnapshot }) {
   const { enabled, offSites } = snapshot.settings.adBlocking;
   const [status, setStatus] = useState<AdBlockingStatus | null>(null);
   const [site, setSite] = useState('');
+  // The chords whose blocking didn't come on (#284), never with blocking off.
+  const notBlocking = enabled && status ? notBlockingRow(status.notOn, snapshot.chords) : null;
+  const showing = notBlocking !== null;
+  // Try again clicked, main not yet heard from: Trying… from the click's own frame (Carbon's N2 on #316).
+  const [asked, setAsked] = useState(false);
+  const trying = Boolean(notBlocking?.trying) || asked;
+  // The switch, where the focus goes if Try again had it when the row went (Carbon's B1).
+  const group = useRef<HTMLDivElement>(null);
+  const hadFocus = useRef(false);
+  // What a screen reader hears, politely: the warning showing, a try that failed again, blocking on again (Carbon's B2).
+  const [said, setSaid] = useState('');
+  const before = useRef<{ label: string; trying: boolean; names: string } | null>(null);
   useEffect(() => {
-    void api.settings.adBlocking().then(setStatus);
-  }, [enabled]);
+    const refresh = () => {
+      // Not while the page can't be seen; and no new render for the same answer (Carbon's N3).
+      if (document.hidden) return;
+      void api.settings.adBlocking().then((next) => setStatus((now) => (JSON.stringify(now) === JSON.stringify(next) ? now : next)));
+    };
+    refresh();
+    if (!enabled) return;
+    // Main's word on it changes by itself (a try ending, a late success): every second while the row shows, else now and then.
+    const timer = setInterval(refresh, showing ? 1000 : 5000);
+    return () => clearInterval(timer);
+  }, [enabled, showing]);
+  useEffect(() => {
+    const was = before.current;
+    if (notBlocking && !was) setSaid(`${notBlocking.label}.`);
+    else if (notBlocking && was?.trying && !notBlocking.trying && !asked) setSaid(`Still ${notBlocking.label.charAt(0).toLowerCase()}${notBlocking.label.slice(1)}.`);
+    else if (!notBlocking && was && enabled) setSaid(`Blocking ads in ${was.names} again.`);
+    before.current = notBlocking ? { label: notBlocking.label, trying: notBlocking.trying || asked, names: notBlocking.label.replace(/^Not blocking in /, '') } : null;
+    if (!notBlocking && hadFocus.current) {
+      hadFocus.current = false;
+      if (!document.activeElement || document.activeElement === document.body) group.current?.querySelector<HTMLElement>('[role="switch"]')?.focus();
+    }
+  }, [notBlocking, asked, enabled]);
+  const tryAgain = (profiles: readonly string[]) => {
+    if (trying) return;
+    setAsked(true);
+    void Promise.all(profiles.map((profileId) => api.settings.retryAdBlocking(profileId)))
+      .then(() => api.settings.adBlocking().then(setStatus))
+      .finally(() => setAsked(false));
+  };
   const set = (patch: Partial<typeof snapshot.settings.adBlocking>) => void api.settings.set({ adBlocking: patch });
   const added = blockingSite(site.trim());
   const addSite = () => {
@@ -75,7 +115,10 @@ function AdBlocking({ snapshot }: { snapshot: SettingsSnapshot }) {
   return (
     <>
       <h2 className={styles.groupTitle}>Ads and trackers</h2>
-      <div className={styles.group}>
+      <span role="status" className="sr-only">
+        {said}
+      </span>
+      <div className={styles.group} ref={group}>
         <Row
           label="Block ads and trackers"
           description={AD_BLOCKING_NOTICE}
@@ -83,6 +126,29 @@ function AdBlocking({ snapshot }: { snapshot: SettingsSnapshot }) {
           onReset={() => set({ enabled: DEFAULT_SETTINGS.adBlocking.enabled })}
           control={<Switch label="Block ads and trackers" checked={enabled} onChange={(on) => set({ enabled: on })} />}
         />
+        {notBlocking && (
+          <Row
+            tone="warning"
+            label={notBlocking.label}
+            description={notBlocking.description}
+            control={
+              // aria-disabled while it tries, never the native disabled, which would drop the focus (Carbon's B1).
+              <button
+                type="button"
+                className={trying ? `${styles.linkButton} ${styles.trying}` : styles.linkButton}
+                aria-disabled={trying || undefined}
+                onFocus={() => (hadFocus.current = true)}
+                onBlur={(e) => {
+                  // Only where the focus went somewhere: the row going takes it with no relatedTarget, and is handled above.
+                  if (e.relatedTarget) hadFocus.current = false;
+                }}
+                onClick={() => tryAgain(notBlocking.profiles)}
+              >
+                {trying ? 'Trying…' : 'Try again'}
+              </button>
+            }
+          />
+        )}
         {enabled && status && <Row label="The lists" description={blockingListsLine(status)} control={null} />}
         {enabled && (
           <Row

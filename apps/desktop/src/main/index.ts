@@ -392,7 +392,10 @@ function registerIpc(): void {
   });
   handle('download:action', ({ id, action }) => downloads.run(id, action));
   handle('safeBrowsing:status', () => safeBrowsing.status());
-  handle('adBlocking:status', () => adBlocking.status());
+  // Settings lists chords: an agent's or a private window's profile is neither shown nor tried again there (Neon's SF3 on #316).
+  const chordProfiles = () => new Set(sortedChords(browser!.store.state).map((c) => c.profileId));
+  handle('adBlocking:status', () => adBlocking.status(chordProfiles()));
+  handle('adBlocking:retry', ({ profileId }) => adBlocking.retry(profileId, chordProfiles()));
   // First run's step and the one-time offer, each with the notice on screen.
   handle('safeBrowsing:choose', ({ on }) => browser!.store.dispatch({ t: 'settings.set', settings: { safeBrowsing: on, safeBrowsingAsked: true } }));
   handle('safeBrowsing:back', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'back'));

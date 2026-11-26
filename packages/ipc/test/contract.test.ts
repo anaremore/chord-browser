@@ -80,6 +80,15 @@ describe('IPC contract', () => {
     for (const bad of [{ searchEngine: 'evil.example' }, { uiScale: 1.25 }, { checkForUpdates: false }, { onboarded: false }, { reader: { font: 'comic' } }]) expect(ImportedSettings.safeParse(bad).success).toBe(false);
   });
 
+  it('gives ad blocking’s Try again to Settings alone, for one named profile and nothing else (Neon’s SF3 on #316)', () => {
+    const retry = invokeChannels['adBlocking:retry'];
+    expect(retry.roles).toEqual(['internal']);
+    expect(retry.request.safeParse({ profileId: 'default' }).success).toBe(true);
+    expect(retry.request.safeParse({ profileId: '' }).success).toBe(false);
+    expect(retry.request.safeParse({ profileId: 'x'.repeat(201) }).success).toBe(false);
+    expect(retry.request.safeParse({ profileId: 'default', all: true }).success).toBe(false);
+  });
+
   it('lets Settings open only https links', () => {
     const open = invokeChannels['settings:openUrl'].request;
     expect(open.safeParse({ url: 'https://github.com/anaremore/chord-browser' }).success).toBe(true);

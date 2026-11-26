@@ -36,6 +36,7 @@ const api: SettingsApi = {
     openUrl: (url) => invoke('settings:openUrl', { url }),
     safeBrowsing: () => invoke('safeBrowsing:status'),
     adBlocking: () => invoke('adBlocking:status'),
+    retryAdBlocking: (profileId) => invoke('adBlocking:retry', { profileId }),
     player: () => invoke('settings:player'),
     installPlayer: () => invoke('settings:installPlayer'),
     removePlayer: () => invoke('settings:removePlayer'),

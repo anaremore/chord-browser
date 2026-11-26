@@ -213,6 +213,152 @@ test('Settings → Privacy: the switch turns blocking off and on, and lists the 
   }
 });
 
+test('a chord whose blocking didn’t come on (#284): its row in Settings → Privacy, Try again, Trying…, then the row goes', async () => {
+  // Development builds only: the extension's first load fails, each load held 1.5 s (so Trying… shows).
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'once', CHORD_E2E_AD_BLOCKING_DELAY_MS: '1500' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    const row = settings.getByText(/^Not blocking in [^.]+$/);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByText('Ad blocking couldn’t start for this chord, so its pages load without it.')).toBeVisible();
+    // For the owner's preview: light, then dark.
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-failed-light.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'dark'));
+    await settings.waitForTimeout(400);
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-failed-dark.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'system'));
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    const trying = settings.getByRole('button', { name: 'Trying…' });
+    await expect(trying).toBeVisible();
+    await expect(trying).toBeDisabled();
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-trying.png') });
+    // It comes on: the row goes, and the rules are on.
+    await expect(row).toBeHidden({ timeout: 20_000 });
+    await rulesReady(app);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a chord whose blocking still won’t come on (#284): Try again, Trying…, and the row comes back as it was', async () => {
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'always', CHORD_E2E_AD_BLOCKING_DELAY_MS: '1500' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeVisible({ timeout: 20_000 });
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    await expect(settings.getByRole('button', { name: 'Trying…' })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeVisible();
+    // Blocking off: no row (nothing to block).
+    await settings.getByRole('switch', { name: 'Block ads and trackers' }).click();
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeHidden();
+  } finally {
+    await app.close();
+  }
+});
+
+test('Try again from the keyboard (#284, Carbon’s B1, B2): focus stays on it while it tries; a screen reader hears which chord, and each change', async () => {
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'always', CHORD_E2E_AD_BLOCKING_DELAY_MS: '1500' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeVisible({ timeout: 20_000 });
+    const status = settings.getByRole('status').filter({ hasText: /blocking/i });
+    await expect(status).toHaveText(/^Not blocking in \S/);
+    const button = settings.getByRole('button', { name: 'Try again' });
+    // Its description names the chord, then why.
+    await expect(button).toHaveAccessibleDescription(/^Not blocking in .+ Ad blocking couldn’t start/);
+    await button.focus();
+    await settings.keyboard.press('Enter');
+    await expect(settings.getByRole('button', { name: 'Trying…' })).toBeVisible();
+    // Never the native disabled, which would drop the focus to the page.
+    expect(await settings.evaluate(() => document.activeElement?.textContent)).toBe('Trying…');
+    await expect(settings.getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 20_000 });
+    expect(await settings.evaluate(() => document.activeElement?.textContent)).toBe('Try again');
+    await expect(status).toHaveText(/^Still not blocking in \S/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('Try again from the keyboard, and it works (#284, Carbon’s B1): the row goes, focus goes to the switch, and it’s said', async () => {
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'once', CHORD_E2E_AD_BLOCKING_DELAY_MS: '1500' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeVisible({ timeout: 20_000 });
+    await settings.getByRole('button', { name: 'Try again' }).focus();
+    await settings.keyboard.press('Enter');
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeHidden({ timeout: 20_000 });
+    expect(await settings.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName)).toBe('Block ads and trackers');
+    await expect(settings.getByRole('status').filter({ hasText: /blocking/i })).toHaveText(/^Blocking ads in \S.* again\.$/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a chord named with 64 characters and no space (#284, Carbon’s SF2): its name wraps, never under Try again', async () => {
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'always' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    const chordId = await shell.evaluate(async () => {
+      const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { chords: Record<string, { id: string }> } }> } } }).chord.state.snapshot();
+      return Object.keys(state.chords)[0]!;
+    });
+    await shell.evaluate(
+      ({ chordId, name }) => (window as unknown as { chord: { state: { dispatch(c: unknown): Promise<void> } } }).chord.state.dispatch({ t: 'chord.update', chordId, name }),
+      { chordId, name: 'W'.repeat(64) },
+    );
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    const label = settings.getByText(/^Not blocking in W+$/);
+    await expect(label).toBeVisible({ timeout: 20_000 });
+    const button = settings.getByRole('button', { name: 'Try again' });
+    const [text, pill] = [(await label.boundingBox())!, (await button.boundingBox())!];
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-long-name.png') });
+    // The label ends before the button starts, and its text stays inside it: it wraps rather than paint across it.
+    expect(text.x + text.width).toBeLessThanOrEqual(pill.x);
+    expect(await label.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+test('Trying… under Chord’s own reduced motion, and the row in forced colors (#284, Carbon’s SF3, SF4)', async () => {
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'always', CHORD_E2E_AD_BLOCKING_DELAY_MS: '3000' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    await expect(settings.getByText(/^Not blocking in [^.]+$/)).toBeVisible({ timeout: 20_000 });
+    // Settings → Motion's reduced motion, as shared/motion.ts sets it: the ring holds still.
+    await settings.evaluate(() => document.documentElement.setAttribute('data-reduced-motion', ''));
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    const trying = settings.getByRole('button', { name: 'Trying…' });
+    await expect(trying).toBeVisible();
+    expect(await trying.evaluate((el) => getComputedStyle(el, '::before').animationName)).toBe('none');
+    // Forced colors: the dot in a system color, and the pill an edge.
+    await settings.emulateMedia({ forcedColors: 'active' });
+    const label = settings.getByText(/^Not blocking in [^.]+$/);
+    expect(await label.evaluate((el) => getComputedStyle(el, '::before').forcedColorAdjust)).toBe('none');
+    expect(await trying.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe('0px');
+  } finally {
+    await app.close();
+  }
+});
+
 test('a private window is covered: its requests are checked in Chord, its ad slots hidden, and its own exceptions go with it', async () => {
   const app = await launch();
   try {
