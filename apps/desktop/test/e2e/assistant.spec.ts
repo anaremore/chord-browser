@@ -369,7 +369,8 @@ test('Assistant: set up, ask about the page with a citation, gate reads, stop, a
     expect(fakeLog(setup).at(-1)).toMatchObject({ resume: first });
 
     // @chats finds the chat by its words.
-    const overlay = app.windows().find((p) => p.url().startsWith('chord://overlay') || p.url().includes('/overlay/index.html'))!;
+    // The command bar loads after launch (deferred, once the shell paints): waited for, never read once (#311).
+    const overlay = await pageWhere(app, isOverlay);
     await shell.evaluate(() => (window as unknown as { chord: { overlay: { open(m: string): Promise<void> } } }).chord.overlay.open('new'));
     await expect(overlay.getByRole('dialog')).toBeVisible();
     // The space sets the filter itself; Enter on a half-typed one raced the results on a slow machine.
