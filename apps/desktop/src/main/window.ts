@@ -11,6 +11,7 @@
  * At launch, popover, preview and overlay load once the shell has painted (`deferViews`).
  */
 import { join } from 'node:path';
+import { registerWindowShown, shownIn, unregisterWindowShown, type ShownParts } from './window-shown';
 import { AGENT_BAR_HEIGHT, clampPeekCard, DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
@@ -330,6 +331,13 @@ export class AppWindow {
     if (bounds?.maximized) this.window.maximize();
 
     this.shell = createUiView(uiSession, 'shell');
+    // What it shows, for the focus an agent's action gives back (#115, B2: never a page you left, nor the agent's).
+    // As the floating views give the keyboard back (#322's SF1): a page you see (the shell, a pane on screen, the command
+    // bar while open, Peek, a docked DevTools) or a floating view on screen; and the page it would give it to.
+    registerWindowShown(this.window, {
+      seen: (c) => shownIn(c, this.shownParts(), { floating: true }),
+      page: () => this.focusHome(),
+    });
     const load = !deferViews;
     this.popover = createUiView(uiSession, 'popover', undefined, { load });
     this.popover.setVisible(false);
@@ -417,6 +425,7 @@ export class AppWindow {
       this.layout();
     });
     this.window.on('closed', () => {
+      unregisterWindowShown(this.window);
       stopScale();
       clearTimeout(this.floatingTimer);
       this.closeFloating();
@@ -1211,9 +1220,15 @@ export class AppWindow {
     this.noteFloatingFocus('givenBack');
     const was = this.keysWere && this.shownHere(this.keysWere) ? this.keysWere : null;
     // Where it was; else the command bar, Peek, the page you see, the shell.
+    (was ?? this.focusHome())?.focus();
+  }
+
+  /** Where this window's keyboard goes when it has nowhere better: the command bar, Peek, the page you see, the shell. */
+  private focusHome(): WebContents | null {
     const overlay = this.overlayVisible ? pageOf(this.overlay) : undefined;
     const page = this.tabView?.getVisible() ? pageOf(this.tabView) : undefined;
-    (was ?? overlay ?? (this.peekOnScreen ? this.peekContents : undefined) ?? page ?? pageOf(this.shell))?.focus();
+    const home = overlay ?? (this.peekOnScreen ? this.peekContents : undefined) ?? page ?? pageOf(this.shell) ?? null;
+    return home && !home.isDestroyed() ? home : null;
   }
 
   /**
@@ -1221,12 +1236,23 @@ export class AppWindow {
    * on screen, a pane's docked DevTools. Never a floating view, a page parked or hidden here, or another window's.
    */
   private shownHere(contents: WebContents): boolean {
-    if (contents.isDestroyed() || this.isFloating(contents) || this.isParkedOnly(contents)) return false;
-    if (contents === pageOf(this.shell)) return true;
-    if (this.panes.some((v) => pageOf(v) === contents && v.getVisible() && !this.hiddenPanes.has(v))) return true;
-    if (contents === pageOf(this.overlay)) return this.overlayVisible;
-    if (this.peekOnScreen && contents === this.peekContents) return true;
-    return this.devtools.some((tools, i) => Boolean(tools && this.dockedDevtools(i)) && pageOf(tools?.view) === contents);
+    return shownIn(contents, this.shownParts());
+  }
+
+  /** This window's pages as `shownIn` reads them (window-shown.ts). */
+  private shownParts(): ShownParts<WebContents> {
+    const popover = pageOf(this.popover) ?? null;
+    return {
+      shell: pageOf(this.shell) ?? null,
+      panes: this.panes.map((v) => ({ page: pageOf(v) ?? null, visible: v.getVisible(), hidden: this.hiddenPanes.has(v) })),
+      parked: this.parked.map((v) => pageOf(v)).filter((p): p is WebContents => Boolean(p)),
+      overlay: pageOf(this.overlay) ?? null,
+      overlayOpen: this.overlayVisible,
+      peek: this.peekOnScreen ? (this.peekContents ?? null) : null,
+      docked: this.devtools.map((tools, i) => (tools && this.dockedDevtools(i) ? (pageOf(tools.view) ?? null) : null)),
+      floating: [popover, pageOf(this.menuView) ?? null],
+      yours: popover && this.popover.getVisible() && this.cardsOwner === 'you' ? popover : null,
+    };
   }
 
   /**

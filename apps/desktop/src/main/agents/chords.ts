@@ -617,6 +617,17 @@ export class AgentChords {
 
   dispose(): void {
     this.unsubscribe();
+    // Chord quitting: what each agent's tabs hold fails now, while their debuggers are still on (#322's SF3: never left
+    // for a close that may not come in order, or at all, on macOS).
+    for (const chord of this.chords.values()) {
+      for (const tab of this.tabsOf(chord.chordId)) {
+        const page = this.deps.page(tab.id);
+        if (page && !page.isDestroyed()) {
+          endUntil(page);
+          failHeld(page);
+        }
+      }
+    }
     for (const chord of [...this.chords.values()]) this.forget(chord);
   }
 }

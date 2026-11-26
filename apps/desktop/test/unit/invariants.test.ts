@@ -265,7 +265,7 @@ const AUDITED: Record<string, [Site['kind'], string, string][]> = {
   'tabs.ts': [
     ['window-open', 'contents', "a tab's window.open: an agent's tab opens nothing (openFrom, agentPage)"],
     ['window-open', 'contents', 'a popup opened by a tab of yours (agent tabs open none)'],
-    ['fetch', 'contents.session', "a tab's favicon. FINDING (issue #115): runs for an agent's tab too, with its cookies, outside the Fetch hold and isNeverReadable"],
+    ['fetch', 'contents.session', "a tab's favicon: an agent's page (latched) only its own origin's or data:, no credentials, no redirect, never on a Never site (favicon-pick.ts, #115)"],
   ],
   'updates.ts': [['fetch', '(await this.session())', "Chord's update feed, through its own session"]],
 };
@@ -350,6 +350,38 @@ function wallClockBudgets(source: string): number[] {
     return timed ? [lineOf(text, m.index)] : [];
   });
 }
+
+/**
+ * #322 (Opus's S1): Chromium resumes the requests paused for a client when it detaches, so a send held for an agent
+ * would go. So the debugger is never detached while something is held: every detach is of Chord's own attachment
+ * (behind `mine`), and the lease's `turnOff`, which detaches it, runs only after what's held failed (`failHeld`, or
+ * `unholdSends`, which fails it first).
+ */
+describe('a debugger detach never lets a held send go', () => {
+  const sites = files(MAIN, (n) => n.endsWith('.ts')).flatMap((f) => {
+    const text = code(readFileSync(f, 'utf8'));
+    const lines = text.split('\n');
+    return [...text.matchAll(/\b(?:debug|debugger)\.detach\(\)/g)].map((m) => {
+      const line = lineOf(text, m.index);
+      return { file: rel(f), line, before: lines.slice(Math.max(0, line - 3), line).join('\n') };
+    });
+  });
+
+  it('finds them', () => expect(sites.length, 'the scan found no detach at all: has main moved?').toBeGreaterThanOrEqual(4));
+
+  it('every detach is of Chord’s own attachment (behind `mine`)', () => {
+    expect(sites.filter((s) => !/\bmine\b/.test(s.before)).map((s) => `${s.file}:${s.line}`)).toEqual([]);
+  });
+
+  it('the lease’s turnOff (it detaches) runs only after what’s held failed', () => {
+    const text = code(readFileSync(join(MAIN, 'control/user-watch.ts'), 'utf8'));
+    const lines = text.split('\n');
+    const calls = [...text.matchAll(/await turnOff\(/g)].map((m) => lineOf(text, m.index));
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    const late = calls.filter((line) => !/\b(?:failHeld|unholdSends)\(contents\)/.test(lines.slice(Math.max(0, line - 16), line - 1).join('\n')));
+    expect(late.map((line) => `control/user-watch.ts:${line}`)).toEqual([]);
+  });
+});
 
 describe('wall-clock budgets: only in *.perf.test.ts', () => {
   it('finds a stopwatch, and leaves a clock alone', () => {

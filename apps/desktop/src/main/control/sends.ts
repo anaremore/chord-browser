@@ -272,8 +272,17 @@ export function holdSends(contents: WebContents): void {
     holds.delete(contents);
   };
   contents.once('destroyed', gone);
+  // The renderer gone (a crash): what's held fails and its cards come down (#115, SF1). The debugger let go (a detach):
+  // nothing can be failed any more (Chromium resumes what it paused for a detaching client), so the cards come down and
+  // a late answer counts for nothing. Hence the invariant (#322, Opus's S1; invariants.test.ts): Chord never detaches
+  // the debugger while it holds something here; failHeld comes first.
+  const lost = () => failHeld(contents);
+  debug.on('detach', lost);
+  contents.on('render-process-gone', lost);
   hold.stop = () => {
     debug.off('message', onMessage);
+    debug.off('detach', lost);
+    contents.off('render-process-gone', lost);
     contents.off('destroyed', gone);
     gone();
   };

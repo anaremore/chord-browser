@@ -363,6 +363,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   const giveUp = async (): Promise<UserAction> => {
     lease.ended = true;
     debugOff(contents, lease);
+    // What's held fails before the detach (#322: Chromium resumes what a detaching client paused).
+    failHeld(contents);
     await turnOff(contents, lease);
     unholdSends(contents);
     return NOT_ON('no');

@@ -15,7 +15,7 @@ import { FIND_NEAREST_NOTE, FIND_NONE_NOTE, heldStep, ONLY_TEXT, PART_REFUSALS, 
 import { runBatch } from '../../src/main/control/batch';
 import { byDeadline, HandedOver, laterContent, OpenCards, takeLater } from '../../src/main/control/handed-over';
 import { INPUT_REDRAWN } from '../../src/main/control/act-steps';
-import { focusToGiveBack } from '../../src/main/control/page';
+import { focusToGiveBack, shownFor } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer, type SendWatch } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
@@ -232,6 +232,9 @@ function fakePage(url: string, read: Answer) {
     startNavigation?: () => void;
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
+    emitDetach?: () => void;
+    /** The page's renderer gone (render-process-gone, a crash). */
+    crash?: () => void;
     /** The page's requests went (deep.ping, deep.posts): once per page. */
     sent?: boolean;
     /** Every debugger command, with its parameters. */
@@ -251,6 +254,14 @@ function fakePage(url: string, read: Answer) {
     events.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, url: 'https://news.test/next' });
   };
   at.emitDebug = (method, params, sessionId) => void debugEvents.emit('message', {}, method, params, sessionId);
+  // The debugger let go, as Chromium's does: no longer attached, and no command reaches the page after (#322's B3).
+  let detached = false;
+  at.emitDetach = () => {
+    attached = false;
+    detached = true;
+    debugEvents.emit('detach', {}, 'target closed');
+  };
+  at.crash = () => void events.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
   const go = (index: number) => {
     at.active = index;
     at.url = at.history[index]!.url;
@@ -326,6 +337,7 @@ function fakePage(url: string, read: Answer) {
       on: (e: string, f: (...a: unknown[]) => void) => debugEvents.on(e, f),
       off: (e: string, f: (...a: unknown[]) => void) => debugEvents.off(e, f),
       sendCommand: async (method: string, params?: { expression?: string }) => {
+        if (detached) throw new Error('No target with given id found');
         at.debugging.push(method);
         (at.commands ??= []).push([method, params]);
         if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } };
@@ -2193,6 +2205,37 @@ describe('acting through the gate (S18 M2c)', () => {
     for (const [what, before, now, back] of rows) expect(focusToGiveBack(before, now, 'agent'), what).toBe(back);
   });
 
+  it('a page of yours closed during the action is never still shown: the focus goes to the page the window shows (#322’s B1)', () => {
+    const win = {};
+    const page = (destroyed: boolean) => ({ isDestroyed: () => destroyed });
+    const yours = page(true);
+    const shown = page(false);
+    const window = { seen: (p: unknown) => p === yours, page: () => shown };
+    const now = shownFor(yours, window);
+    expect(now).toEqual({ stillShown: false, page: shown });
+    expect(focusToGiveBack({ page: yours, window: win }, { page: null, window: win }, page(false), now)).toBe(shown);
+    // Not closed, still shown: back to it.
+    const open = page(false);
+    expect(shownFor(open, { seen: (p) => p === open, page: () => shown }).stillShown).toBe(true);
+    // A window that isn't a Chord window (nothing registered): as before.
+    expect(shownFor(open, null)).toEqual({ stillShown: true, page: null });
+  });
+
+  it('focus never goes back to a page no longer shown, nor stays on the hidden agent’s tab (#115, B2)', () => {
+    const win = {};
+    // [what, the page that had it still shown, the focus now, where it goes]: the window's shown page is 'shown'.
+    const rows: [string, boolean, string | null, string | null][] = [
+      ['still shown, the agent’s page took it', true, 'agent', 'yours'],
+      ['still shown, no page has it', true, null, 'yours'],
+      ['you switched tabs meanwhile; the agent’s page took it: the page you see, never the agent’s', false, 'agent', 'shown'],
+      ['you switched tabs meanwhile; no page has it: the page you see', false, null, 'shown'],
+      ['you switched tabs, and your new page has it: left there', false, 'another', null],
+    ];
+    for (const [what, stillShown, now, back] of rows) {
+      expect(focusToGiveBack({ page: 'yours', window: win }, { page: now, window: win }, 'agent', { stillShown, page: 'shown' }), what).toBe(back);
+    }
+  });
+
   it('the guard’s own script went with the old document (it never answers): another document, so done', async () => {
     const w = await acting({ twist: { unguard: 'timeout' }, onAct: (events, op) => void (op === 'unguard' && events.emit('did-navigate')) });
     expect(result(await w.call('type', { tab_id: w.tab, ref: 'e2', text: 'wool' })).data).toMatchObject({ done: 'Typed in “Search”', navigated: true });
@@ -2326,6 +2369,62 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.debugging.filter((m) => m === 'Fetch.failRequest').length).toBe(failed + 1);
     paused('u1', 'https://news.test/mine');
     expect(continued()).toBe(before + 3);
+  });
+
+  // #115's SF1, pinned (#322's B3): the card's signal aborts, and a late answer never lets what was held go.
+  async function heldBetweenActions() {
+    const t = await acting();
+    const contents = t.pages.get('n1')!.contents;
+    let signal: AbortSignal | null = null;
+    let answer: (a: SendAnswer) => void = () => undefined;
+    sendHoldDeps(contents, { whose: () => 'agent', ask: (_sites, _why, s) => ((signal = s), new Promise<SendAnswer>((done) => (answer = done))), siteOf: (u) => new URL(u).host });
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'k1', request: { method: 'POST', url: 'https://news.test/keepalive' }, resourceType: 'XHR' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(signal, JSON.stringify(t.at.debugging.slice(-6))).not.toBeNull();
+    const continuedK1 = () => (t.at.commands ?? []).some(([m, p]) => m === 'Fetch.continueRequest' && (p as { requestId?: string }).requestId === 'k1');
+    return { t, signal: () => signal!, answer: (a: SendAnswer) => answer(a), continuedK1 };
+  }
+
+  it('the debugger let go (a detach) with a send held between actions: its card comes down; a late Allow never lets it go (#115, SF1)', async () => {
+    const h = await heldBetweenActions();
+    h.t.at.emitDetach!();
+    expect(h.signal().aborted, 'the card comes down').toBe(true);
+    h.answer('once');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.continuedK1()).toBe(false);
+  });
+
+  it('the page’s renderer gone (a crash) with a send held between actions: what it held is failed, its card comes down; a late Allow never lets it go (#115, SF1)', async () => {
+    const h = await heldBetweenActions();
+    const failed = h.t.at.debugging.filter((m) => m === 'Fetch.failRequest').length;
+    h.t.at.crash!();
+    expect(h.signal().aborted, 'the card comes down').toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.t.at.debugging.filter((m) => m === 'Fetch.failRequest').length).toBe(failed + 1);
+    h.answer('once');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.continuedK1()).toBe(false);
+  });
+
+  it('the page’s renderer gone (a crash) during an action: the action is cancelled, what it held failed; a late Allow and its end let nothing go (#115, SF1)', async () => {
+    const t = await acting();
+    const contents = t.pages.get('n1')!.contents;
+    let asked = 0;
+    sendHoldDeps(contents, { whose: () => 'agent', ask: () => (asked++, new Promise<SendAnswer>(() => undefined)), siteOf: (u) => new URL(u).origin });
+    const watch = (await import('../../src/main/control/sends')).watchSends(contents, null)!;
+    t.at.emitDebug!('Fetch.requestPaused', { requestId: 'k2', request: { method: 'POST', url: 'https://news.test/keepalive' }, resourceType: 'XHR' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(watch.held()).toHaveLength(1);
+    const failed = t.at.debugging.filter((m) => m === 'Fetch.failRequest').length;
+    t.at.crash!();
+    expect(watch.cancelled.aborted).toBe(true);
+    expect(watch.held()).toEqual([]);
+    watch.allow({ origins: new Set(['https://news.test']) });
+    watch.end();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.at.debugging.filter((m) => m === 'Fetch.failRequest').length).toBe(failed + 1);
+    expect((t.at.commands ?? []).some(([m, p]) => m === 'Fetch.continueRequest' && (p as { requestId?: string }).requestId === 'k2')).toBe(false);
+    expect(asked, 'nothing carried over to a card between actions').toBe(0);
   });
 
   it('Allow until done (the owner, 2026-11-23): no more cards for those sites from this tab; a new site, a delete address, your taking the tab, and the agent’s end each ask again', async () => {
