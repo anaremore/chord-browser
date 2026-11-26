@@ -98,7 +98,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
       if (rows === 300) {
         // #166: the snapshot against a plain walk of the same page, timed in turn with it from main. A slow runner slows
         // both, so their ratio holds where milliseconds don't: held on every runner, CI's too (SNAPSHOT_RATIO_MAX; the
-        // per-platform budgets below go in #213). Reported before anything is judged, so a slow run still says it; a
+        // milliseconds below are held off CI only). Reported before anything is judged, so a slow run still says it; a
         // snapshot cut for time did less work, which the line shows (cut), and isn't held to the ratio.
         const walk = sorted(measured.walk);
         const walkMedian = walk[Math.floor(walk.length / 2)]!;
@@ -111,7 +111,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         // Every key, unless a shared runner was slow enough for the scan's own time bound (SNAPSHOT_SCAN_MS) to cut it:
         // that's the bound working, and reported like the times.
         if (TIMES_HELD || !measured.cut?.['time']) expect(measured.keys, seen).toBe(600);
-        const typical = SNAPSHOT_TYPICAL_MS[`${process.platform}/${process.arch}`] ?? SNAPSHOT_TYPICAL_MS['default']!;
+        const typical = SNAPSHOT_TYPICAL_MS;
         within(median, typical.median, seen);
         within(p90, typical.worst, seen);
         // The refs' items, place and shape, taken in the task right after the snapshot answers (the review of #117).
@@ -189,14 +189,10 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
  * and 138 ms at worst, and a page of 2,000,000 text nodes 31 to 34 ms median, 49 ms at worst. The budgets are the plan's,
  * at least 1.5 times the worst seen.
  *
- * CI's runners (2026-11-22, #104), the typical page's median and worst: Windows x64 11.0 and 16.1 ms, Linux x64 X11 11.3
- * and 27.4, Wayland 15.1 and 36.2, macOS arm64 13.5 and 29.9, Windows arm64 19.1 and 23.2, Linux arm64 19.9 and 35.6;
- * the Intel Mac (macos-15-intel) 26.9 and 57.3, then 30.2 and 49.5 on its retry. That runner gets its own budget, about
- * 1.5 times the worst it showed; every other keeps the plan's. The 20,000-element and text-flood pages were 156 ms at
- * worst on any runner.
- *
- * macOS arm64 later (#112 at 7b66028, 2026-11-23): the typical page 24.2 and 60.2 ms, again 14.5 and 43.7, and /noisy
- * 25.9 and 35.8, against 13.5 and 29.9 on #104. That runner gets its own budget too, about 1.5 times the worst seen.
+ * CI's runners only report these milliseconds (#163): a shared runner's speed decides them, 9.7 to 48.9 ms for the same
+ * page (#166). What CI holds is SNAPSHOT_RATIO_MAX. So the per-platform budgets CI's runners once had are gone (#213):
+ * one budget, held off CI and with CHORD_PERF_ENFORCE=1 (`within`). The 20,000-element and text-flood pages were 156 ms
+ * at worst on any runner.
  */
 /**
  * The typical pages' snapshot against a plain walk of the same page (#166, #195): at most this many times as long, on
@@ -206,17 +202,8 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
  */
 const SNAPSHOT_RATIO_MAX = 2;
 
-/** The typical page's snapshot budget by platform: its median, and its slow end (p90 of 20 runs: never one pause). */
-const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = {
-  default: { median: 25, worst: 60 },
-  'darwin/x64': { median: 45, worst: 90 },
-  'darwin/arm64': { median: 40, worst: 90 },
-  // The arm64 runners (#117): main measured 22.6–23.5 ms there (1.5–2.4 ms under 25); keeping each ref's item chain
-  // and its shape's parts in the walk (so a page that redraws can't take re-finding away) adds about 0.6–1.5 ms
-  // (3–6%, timed in one page against main), which put them at 24.4–25.1 ms.
-  'linux/arm64': { median: 28, worst: 60 },
-  'win32/arm64': { median: 28, worst: 60 },
-};
+/** The typical page's snapshot budget: its median, and its slow end (p90 of 20 runs: never one pause). */
+const SNAPSHOT_TYPICAL_MS = { median: 25, worst: 60 };
 
 /** The huge pages' budget, on the median of five runs (a single pause can take one run far past it). */
 const SNAPSHOT_HUGE_MS = 300;
