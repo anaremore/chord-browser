@@ -19,6 +19,8 @@ export interface Change {
 export class Store {
   private current: State;
   private readonly listeners = new Set<(change: Change) => void>();
+  /** Listeners that run before every other (subscribeFirst). */
+  private readonly first = new Set<(change: Change) => void>();
 
   constructor(initial: State) {
     // Frozen, as every state after it is (Immer freezes what it makes): the nodes' index is kept only for a state that can't change (core's nodes.ts).
@@ -35,11 +37,21 @@ export class Store {
     const before = this.current;
     this.current = result.state;
     const change: Change = { ...result, before, command };
+    for (const listener of this.first) listener(change);
     for (const listener of this.listeners) listener(change);
   }
 
   subscribe(listener: (change: Change) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * A listener that runs before every other, whenever it subscribed: for what the effects depend on (#328: sessions
+   * follow the settings, their proxy first, before Browser's effects make a tab's view and load its page).
+   */
+  subscribeFirst(listener: (change: Change) => void): () => void {
+    this.first.add(listener);
+    return () => this.first.delete(listener);
   }
 }
