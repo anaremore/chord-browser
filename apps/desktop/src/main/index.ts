@@ -61,6 +61,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
+import { foldersInUse, migratePartitions, partitionFsFailingFor } from './partitions';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -843,11 +844,14 @@ if (!app.requestSingleInstanceLock()) {
     hardenAllWebContents();
 
     const profiles = new Map<string, Session>();
+    /** Profiles whose sign-ins couldn't be moved to their partition's new folder this launch, and the old partition each runs on (#315). */
+    let partitionFallbacks = new Map<string, string>();
     profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
         // Its proxy (its chord's own, or the one for every chord) is set as it's made.
-        ses = proxies.make(profileId, () => session.fromPartition(profilePartition(profileId)));
+        // Its old partition this launch if its sign-ins couldn't be moved to its new one (#315, partitions.ts).
+        ses = proxies.make(profileId, () => session.fromPartition(partitionFallbacks.get(profileId) ?? profilePartition(profileId)));
         // A private window's session keeps its answers and downloads to itself.
         const priv = isPrivateProfile(profileId);
         permissions.attach(ses, priv ? profileId : null);
@@ -968,11 +972,26 @@ if (!app.requestSingleInstanceLock()) {
     proxies.start({ proxyFor: (owner) => proxyFor(browser?.store.state ?? initial, owner), contents: () => webContents.getAllWebContents() });
     setDictionarySource(initial.settings.googleFree);
     const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
+    // Each listed profile's sign-ins in the folder its partition is named for now (#315), before any of its sessions is
+    // made: of the chords' profiles and the ones extensions are installed in (extensions.start makes theirs). Only
+    // migration 25's list moves (none on a profile made since), so a launch with nothing listed does no work at all.
+    // Each comes off the list as it moves, before the next starts (a launch that dies mid-chain leaves only what hasn't).
+    const partitionMoves = await migratePartitions(
+      app.getPath('userData'),
+      opened.partitionMoves,
+      [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)],
+      // Development and tests only: one profile's move fails (#329's quit probe: a twin on an in-memory fallback).
+      !app.isPackaged && process.env['CHORD_E2E_PARTITION_MOVE_FAIL'] ? partitionFsFailingFor(process.env['CHORD_E2E_PARTITION_MOVE_FAIL']) : undefined,
+      (id) => opened.persistence.partitionMoved([id]),
+    );
+    partitionFallbacks = partitionMoves.fallbacks;
     // Sign-ins a chord kept separately, once no chord uses them, are deleted once launch is over, with their copies of
     // the blocker extension. No session loads them meanwhile; which profiles are in use is read then, so one made since stays.
     afterLaunch.run(() => {
       const inUse = new Set([...Object.values(browser!.store.state.chords).map((c) => c.profileId), ...profiles.keys()]);
-      void removeUnusedPartitions(app.getPath('userData'), inUse);
+      // The folders in use: each session made's own, as Electron named it, and each profile in use's (its old one if
+      // its sign-ins couldn't be moved this launch), never worked out again for a session that has one (#315).
+      void removeUnusedPartitions(app.getPath('userData'), foldersInUse(inUse, partitionFallbacks, [...profiles.values()].map((ses) => ses.storagePath)));
       void adBlocking.forgetProfiles(inUse);
     });
 

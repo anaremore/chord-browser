@@ -7,7 +7,12 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { profilePartition } from '@chord/core';
+import { partitionFolder } from '../../src/main/partitions';
 import { removeUnusedPartitions } from '../../src/main/persistence';
+
+/** The folders of these profiles' partitions, as main passes them (#315: the folders in use, not ids). */
+const of = (...ids: string[]) => ids.map((id) => partitionFolder(profilePartition(id)));
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -29,8 +34,10 @@ const UPPER = '01A2B3C4-D5E6-7F80-9A1B-2C3D4E5F6A7B';
 
 describe('removeUnusedPartitions (#315)', () => {
   it('a profile in use whose id has upper case keeps its sign-ins: Electron named its folder in lower case', async () => {
+    // Before #315's escape it was named `p-${id}` (in lower case); since, its old partition is what it runs on until
+    // its folder has moved (partitions.ts), so main passes that one.
     const data = userData([`p-${UPPER.toLowerCase()}`]);
-    await removeUnusedPartitions(data.root, new Set([UPPER]));
+    await removeUnusedPartitions(data.root, [partitionFolder(`persist:p-${UPPER}`)]);
     expect(data.has(`p-${UPPER.toLowerCase()}`)).toBe(true);
   });
 
@@ -38,8 +45,21 @@ describe('removeUnusedPartitions (#315)', () => {
     // `DEADBEEF` in use has `p-deadbeef` (Electron's lower case); `p-cafef00d` is no profile's, and goes. (Two distinct
     // ids: Argon's SF3 on #315's design.)
     const data = userData(['p-deadbeef', 'p-cafef00d']);
-    await removeUnusedPartitions(data.root, new Set(['DEADBEEF']));
+    await removeUnusedPartitions(data.root, [partitionFolder('persist:p-DEADBEEF')]);
     expect(data.has('p-deadbeef')).toBe(true);
+    expect(data.has('p-cafef00d')).toBe(false);
+  });
+
+  it('a folder on disk in upper case stays while its profile is in use: compared without case (Opus’s nit on #318)', async () => {
+    const data = userData(['p-DEADBEEF']);
+    await removeUnusedPartitions(data.root, [partitionFolder('persist:p-DEADBEEF')]);
+    expect(data.has('p-DEADBEEF')).toBe(true);
+  });
+
+  it('a session’s own folder (its storagePath, as Electron named it) stays, whatever its profile’s id would make of it now', async () => {
+    const data = userData(['p-work', 'p-cafef00d']);
+    await removeUnusedPartitions(data.root, ['p-work']);
+    expect(data.has('p-work')).toBe(true);
     expect(data.has('p-cafef00d')).toBe(false);
   });
 
@@ -47,20 +67,26 @@ describe('removeUnusedPartitions (#315)', () => {
     const live = '01a21619-df80-7e66-9577-09ceec5d0a05';
     const gone = '01a21619-df80-7e66-9577-09ceec5d0a06';
     const data = userData([`p-${live}`, `p-${gone}`]);
-    await removeUnusedPartitions(data.root, new Set([live]));
+    await removeUnusedPartitions(data.root, of(live));
     expect(data.has(`p-${live}`)).toBe(true);
     expect(data.has(`p-${gone}`)).toBe(false);
   });
 
-  it('never touches what isn’t a profile’s own partition: the default one, Chord’s, or anything else', async () => {
-    const data = userData(['default', 'chord-devtools', 'p-', 'p-x', 'p-Work', 'other']);
-    await removeUnusedPartitions(data.root, new Set());
-    for (const folder of ['default', 'chord-devtools', 'p-', 'p-x', 'p-Work', 'other']) expect(data.has(folder)).toBe(true);
+  it('never touches what isn’t a profile’s own partition: the default one, Chord’s, a copy under way, or anything else', async () => {
+    const data = userData(['default', 'chord-devtools', 'p-', '.migrating-p-_work', 'other']);
+    await removeUnusedPartitions(data.root, []);
+    for (const folder of ['default', 'chord-devtools', 'p-', '.migrating-p-_work', 'other']) expect(data.has(folder)).toBe(true);
+  });
+
+  it('any folder an id could have named, before #315’s escape or after, goes once unused (Argon’s SF2)', async () => {
+    const data = userData(['p-x', 'p-work_1', 'p-_work', 'p-__a']);
+    await removeUnusedPartitions(data.root, []);
+    for (const folder of ['p-x', 'p-work_1', 'p-_work', 'p-__a']) expect(data.has(folder)).toBe(false);
   });
 
   it('no Partitions folder at all: nothing to do', async () => {
     const root = mkdtempSync(join(tmpdir(), 'chord-partitions-'));
     dirs.push(root);
-    await expect(removeUnusedPartitions(root, new Set(['x']))).resolves.toBeUndefined();
+    await expect(removeUnusedPartitions(root, of('x'))).resolves.toBeUndefined();
   });
 });

@@ -391,4 +391,21 @@ export const MIGRATIONS: readonly string[] = [
   ) STRICT;
   CREATE TABLE login_never (site_tag BLOB PRIMARY KEY, sealed BLOB NOT NULL, created_at INTEGER NOT NULL) STRICT;
   `,
+  // 25: each profile's partition by its escaped id (#315; core's profilePartition: `_` → `__`, an upper-case letter →
+  // `_` and its lower case), since Electron names a partition's folder in lower case and `Work` and `work` shared one.
+  // In two steps: no row ever holds another's value on the way (`partition` is UNIQUE; `_work`'s old `persist:p-_work`
+  // is `Work`'s new one). replace() is case-sensitive, and the `_` step goes first, so the letters' `_` isn't doubled.
+  // The default profile's row is as it was. Its folders move at launch (main's partitions.ts), for exactly the profiles
+  // in `partition_move`, written here: those whose partition's name changed (an id with upper case or `_`), with a
+  // profile row or installed extensions. Main deletes each row once its folder has moved; a profile that comes later
+  // (sync, import) was never in a folder of the old naming, so it never moves (Opus on #329).
+  `
+  CREATE TABLE partition_move (id TEXT PRIMARY KEY) STRICT;
+  INSERT OR IGNORE INTO partition_move (id)
+    SELECT id FROM profile WHERE is_default = 0 AND substr(id, 1, 8) <> 'private-' AND (id GLOB '*[A-Z]*' OR instr(id, '_') > 0)
+    UNION
+    SELECT profile_id FROM extension WHERE profile_id <> 'default' AND substr(profile_id, 1, 8) <> 'private-' AND (profile_id GLOB '*[A-Z]*' OR instr(profile_id, '_') > 0);
+  UPDATE profile SET partition = 'migrating:' || id WHERE is_default = 0 AND substr(id, 1, 8) <> 'private-';
+  UPDATE profile SET partition = 'persist:p-' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(id, '_', '__'), 'A', '_a'), 'B', '_b'), 'C', '_c'), 'D', '_d'), 'E', '_e'), 'F', '_f'), 'G', '_g'), 'H', '_h'), 'I', '_i'), 'J', '_j'), 'K', '_k'), 'L', '_l'), 'M', '_m'), 'N', '_n'), 'O', '_o'), 'P', '_p'), 'Q', '_q'), 'R', '_r'), 'S', '_s'), 'T', '_t'), 'U', '_u'), 'V', '_v'), 'W', '_w'), 'X', '_x'), 'Y', '_y'), 'Z', '_z') WHERE is_default = 0 AND substr(id, 1, 8) <> 'private-';
+  `,
 ];

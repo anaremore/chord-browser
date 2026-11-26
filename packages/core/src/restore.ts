@@ -33,6 +33,8 @@ import {
   type State,
   type WindowModel,
   cleanAgentsAllowed,
+  isId,
+  isPrivateProfile,
 } from './model';
 import { cleanOffSites } from './ad-blocking';
 import { cleanOverrides } from './bindings';
@@ -130,7 +132,9 @@ const EXTENSION_ID = /^[a-p]{32}$/;
 export function restoreExtensions(saved: readonly InstalledExtension[] | undefined): Record<string, InstalledExtension> {
   const out: Record<string, InstalledExtension> = {};
   for (const e of saved ?? []) {
-    if (!e || !EXTENSION_ID.test(e.id) || typeof e.profileId !== 'string' || !e.profileId) continue;
+    // Its profile: the default, or one kept apart with an id as `isId` allows (a folder is named from it, #315), never a
+    // private window's (Neon's SF1 on #329).
+    if (!e || !EXTENSION_ID.test(e.id) || typeof e.profileId !== 'string' || !(e.profileId === DEFAULT_PROFILE || (isId(e.profileId) && !isPrivateProfile(e.profileId)))) continue;
     if (e.source !== 'store' && e.source !== 'unpacked') continue;
     if (typeof e.path !== 'string' || !e.path || typeof e.version !== 'string' || !e.version) continue;
     out[extensionKey(e.profileId, e.id)] = {
@@ -275,8 +279,11 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
  * chord uses the proxy for every chord.
  */
 export function restoreChord(chord: Chord): Chord {
-  const { proxy, ...rest } = chord;
-  const usable = proxy && chord.profileId !== DEFAULT_PROFILE ? cleanProxy(proxy) : null;
+  // Sign-ins kept apart need an id as `isId` allows (its partition's folder is named from it, #315), and never a private
+  // window's (records.ts' check, the same): any other shares the default sign-ins.
+  const profileId = chord.profileId === DEFAULT_PROFILE || (isId(chord.profileId) && !isPrivateProfile(chord.profileId)) ? chord.profileId : DEFAULT_PROFILE;
+  const { proxy, ...rest } = { ...chord, profileId };
+  const usable = proxy && profileId !== DEFAULT_PROFILE ? cleanProxy(proxy) : null;
   return usable ? { ...rest, proxy: usable } : rest;
 }
 

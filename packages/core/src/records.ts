@@ -33,6 +33,7 @@ import {
   type SitePermissions,
   type SplitNode,
   type TabNode,
+  isId,
 } from './model';
 import { ARCHIVE_URL } from './idle';
 import { cleanProxy, type ProxySettings } from './proxy';
@@ -99,7 +100,6 @@ export function isDataRecord(raw: unknown): raw is DataRecord {
 
 const text = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length <= max ? v : null);
 const time = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
-const isId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
 /**
  * A place in an order the sidebar can put things before and after
  * (fractional-indexing's key): one that isn't would throw the next time

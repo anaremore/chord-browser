@@ -316,6 +316,16 @@ export class ChordDatabase {
     }
   }
 
+  /** #315 (migration 25): the profiles whose partition folder is still to move to its new name. */
+  partitionMoves(): string[] {
+    return (this.sql('SELECT id FROM partition_move ORDER BY id').all() as Row[]).map((r) => str(r['id']));
+  }
+
+  /** #315: these profiles' folders have moved; they never move again. */
+  partitionMoved(ids: readonly string[]): void {
+    for (const id of ids) this.sql('DELETE FROM partition_move WHERE id = ?').run(id);
+  }
+
   /**
    * Profiles no chord uses any more (its sign-ins were shared again, or the
    * chord was deleted): their rows go. Returns their partitions. Main deletes
@@ -325,6 +335,11 @@ export class ChordDatabase {
   pruneProfiles(): string[] {
     const unused = this.sql('SELECT id, partition FROM profile WHERE is_default = 0 AND id NOT IN (SELECT profile_id FROM chord)').all() as Row[];
     for (const r of unused) this.sql('DELETE FROM profile WHERE id = ?').run(str(r['id']));
+    // #315: a profile gone (no chord uses it, no extension names it) comes off the move list too, so a look-alike that
+    // arrives later (sync, import) never takes its sign-ins (Neon's SF1-R2 on #329).
+    this.sql(
+      'DELETE FROM partition_move WHERE id NOT IN (SELECT profile_id FROM chord WHERE deleted_at IS NULL) AND id NOT IN (SELECT profile_id FROM extension)',
+    ).run();
     return unused.map((r) => str(r['partition']));
   }
 

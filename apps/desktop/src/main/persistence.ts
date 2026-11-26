@@ -6,7 +6,7 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { profilePartition, type ArchiveReason, type AssistantThread, type ExportCounts, type PersistedState, type SavedEffects, type State } from '@chord/core';
+import type { ArchiveReason, AssistantThread, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
   opOrigin,
@@ -218,7 +218,7 @@ export class Persistence {
   /** `timing` and `attempts`: how the open went, for the launch timeline. */
   static async open(
     file: string,
-  ): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; effects: SavedEffects[]; timing: OpenTiming | null; attempts: number }> {
+  ): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; effects: SavedEffects[]; partitionMoves: string[]; timing: OpenTiming | null; attempts: number }> {
     const persistence = new Persistence(file);
     persistence.spawn();
     // A disk that's busy for a moment gets two more tries before Chord gives up on the profile.
@@ -228,7 +228,7 @@ export class Persistence {
       return persistence.request({ type: 'open', file, prune: true });
     }, OPEN_RETRY_WAITS_MS);
     if (!response.ok) throw new Error(response.error);
-    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, effects: response.effects ?? [], timing: response.timing ?? null, attempts };
+    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, effects: response.effects ?? [], partitionMoves: response.partitionMoves ?? [], timing: response.timing ?? null, attempts };
   }
 
   private spawn(): void {
@@ -475,6 +475,13 @@ export class Persistence {
     return response.device;
   }
 
+  /** #315: these profiles' partition folders have moved, so they never move again. */
+  async partitionMoved(ids: readonly string[]): Promise<void> {
+    if (!ids.length) return;
+    const response = await this.request({ type: 'partition.moved', ids: [...ids] });
+    if (!response.ok) throw new Error(response.error);
+  }
+
   /** What an export would hold, for Settings' card. Pending writes go first, so what was just added counts. */
   async exportCounts(): Promise<ExportCounts> {
     await this.flush();
@@ -667,25 +674,21 @@ export class Persistence {
 }
 
 /**
- * The folder under `<userData>/Partitions` that Electron keeps a persistent partition in: its name after `persist:`,
- * in lower case, on every platform (`persist:p-Work` → `p-work`; checked on Electron 45.5.0). It also URL-escapes the
- * name, which never applies to a profile's (`isId`: letters, digits, `-` and `_`).
- */
-const partitionFolder = (partition: string): string => partition.replace(/^persist:/, '').toLowerCase();
-
-/**
  * Deletes the sign-ins (cookies, storage, cache) of profiles no chord uses:
- * every `<userData>/Partitions/p-<id>` folder that isn't the folder of a
- * profile in `used`, as Electron names it (in lower case: a profile whose id
- * has upper case is still found in its folder, never deleted, #315). Runs
- * once launch is over. Only Chord's own `p-<id>` folders qualify, so nothing
- * else can be deleted through this.
+ * every `<userData>/Partitions/p-…` folder that isn't one in `inUse`, the
+ * folders sessions use: each session made's own (its `storagePath`), and each
+ * profile in use's, its old one if it runs on that this launch (partitions.ts),
+ * so a live folder is never worked out again from an id. Compared without case:
+ * Electron names them in lower case (#315). Runs once launch is over. Only
+ * Chord's own `p-…` folders qualify (any an id could ever have named, before
+ * #315's escape or after it), so nothing else can be deleted through this;
+ * `.migrating-*` never matches.
  */
-export async function removeUnusedPartitions(userData: string, used: ReadonlySet<string>): Promise<void> {
+export async function removeUnusedPartitions(userData: string, inUse: Iterable<string>): Promise<void> {
   const root = join(userData, 'Partitions');
   const names = await readdir(root).catch(() => [] as string[]);
-  const kept = new Set([...used].map((id) => partitionFolder(profilePartition(id))));
+  const kept = new Set([...inUse].map((folder) => folder.toLowerCase()));
   for (const name of names) {
-    if (/^p-[0-9a-f-]{8,64}$/i.test(name) && !kept.has(name.toLowerCase())) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
+    if (/^p-[0-9a-z_-]{1,128}$/i.test(name) && !kept.has(name.toLowerCase())) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
   }
 }
