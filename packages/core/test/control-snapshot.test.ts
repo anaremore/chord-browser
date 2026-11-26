@@ -314,6 +314,41 @@ describe('the outline without the page’s text: snapshot’s text: false (S18 M
     expect(outline.refs).toBe(full.refs);
   });
 
+  it('ElementRefs keeps an outline without text in its own slot: only for its page, never a baseline, gone with the page or a full snapshot (round 2 of #247, Fable’s S2 d)', () => {
+    const outline = (pageId: string) => ({ pageId, retrievedAt: 1, url: 'https://pages.test/', title: 'Page', text: '- button "Go" [ref=e1]', refs: 1, lines: new Map([['s1', '- button "Go"']]) });
+    const refs = new ElementRefs();
+    refs.issue('p1', 't1', [0], new Map([[0, 1]]));
+    refs.rememberTextless(outline('p1'));
+    // Its page only, and never with lines (no baseline).
+    expect(refs.textlessOutline('p1')).toMatchObject({ text: '- button "Go" [ref=e1]' });
+    expect(refs.textlessOutline('p1')!.lines).toBeUndefined();
+    expect(refs.textlessOutline('p2')).toBeNull();
+    // The current guard: refs of another page now, so the slot isn't this page's latest.
+    refs.issue('p2', 't2', [0], new Map([[0, 1]]));
+    expect(refs.textlessOutline('p1')).toBeNull();
+    // A full snapshot clears it.
+    refs.issue('p2', 't3', [0], new Map([[0, 1]]));
+    refs.rememberTextless(outline('p2'));
+    refs.remember(outline('p2'));
+    expect(refs.textlessOutline('p2')).toBeNull();
+    // forget() clears it.
+    refs.rememberTextless(outline('p2'));
+    refs.forget();
+    // (Its current put back, so the slot's own clearing is what's tested, not the current guard.)
+    (refs as unknown as { current: unknown }).current = { pageId: 'p2', token: 't3', keys: new Map(), pinned: true };
+    expect(refs.textlessOutline('p2')).toBeNull();
+    // The refs reset (numbers run out on a new page) clears it.
+    const full = new ElementRefs();
+    full.issue('p3', 't4', [0], new Map([[0, 1]]));
+    full.rememberTextless(outline('p3'));
+    (full as unknown as { next: number }).next = 999_999_000;
+    full.issue('p4', 't5', [0, 1], new Map([[0, 1], [1, 2]]));
+    (full as unknown as { current: unknown }).current = { pageId: 'p3', token: 't4', keys: new Map(), pinned: true };
+    expect(full.textlessOutline('p3')).toBeNull();
+    // Issues are counted (a diff gives way to any meanwhile).
+    expect(full.issues).toBe(2);
+  });
+
   it('a password field keeps its line and no ref; find looks only at what it shows', () => {
     const [, form] = pages[1]!;
     const refs = new ElementRefs().issue('p1', 't', snapshotKeys(form));

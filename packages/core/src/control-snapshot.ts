@@ -113,8 +113,11 @@ export class ElementRefs {
    * ranges alone, as it was. Never a baseline (no lines): plan rule 1.
    */
   private textless: SnapshotOutline | null = null;
+  private issued = 0;
   /** How many snapshots' refs were issued (round 1 of #247): a diff whose read was out while another landed gives way. */
-  issues = 0;
+  get issues(): number {
+    return this.issued;
+  }
 
   /** Keep the latest FULL snapshot's outline (its refs are this table's latest), and the agent's latest read is it. */
   remember(outline: SnapshotOutline): void {
@@ -167,7 +170,7 @@ export class ElementRefs {
       this.earlier = kept;
     } else this.earlier = [];
     this.current = { pageId, token, keys: keyByRef, pinned };
-    this.issues++;
+    this.issued++;
     return byKey;
   }
 
@@ -176,7 +179,7 @@ export class ElementRefs {
    * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
    */
   preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
-    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issues: this.issues };
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issued: this.issued };
     try {
       return this.refsFor(pageId, keys, sids).byKey;
     } finally {

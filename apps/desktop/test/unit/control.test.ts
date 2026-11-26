@@ -3068,7 +3068,7 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(result(await t.call('click', { tab_id: t.tab, ref: home })).data).toMatchObject({ done: 'Clicked “Home”' });
     });
 
-    it('never the diff’s baseline: an action after it says what changed since the last full snapshot, whose ranges stay', async () => {
+    it('never the diff’s baseline: an action after it says what changed since the last full snapshot', async () => {
       const twist: Twist = {};
       // acting() took a full snapshot: the baseline.
       const t = await acting({ twist });
@@ -3088,7 +3088,7 @@ describe('acting through the gate (S18 M2c)', () => {
       await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
       const outline = snap(await t.call('snapshot', { tab_id: t.tab, text: false }));
       const clicked = result(await t.call('click', { tab_id: t.tab, ref: /link "Home" \[ref=(e\d+)\]/.exec(outline.content)![1]! }));
-      expect(clicked.data['page_changes']).toMatchObject({ note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot to see it.' });
+      expect(clicked.data['page_changes']).toMatchObject({ note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without text: false to see it.' });
       // A full snapshot then: the next action's diff is a diff again.
       await t.call('snapshot', { tab_id: t.tab });
       const again = result(await t.call('click', { tab_id: t.tab, ref: /link "Home" \[ref=(e\d+)\]/.exec(outline.content)![1]! }));
@@ -3111,6 +3111,8 @@ describe('acting through the gate (S18 M2c)', () => {
       // [the page, the call's arguments, the note]
       const table: [string, ReturnType<typeof plain>, Record<string, unknown>, string | undefined][] = [
         ['nothing but text', plain(() => [NEWS]), {}, ONLY_TEXT],
+        // A find on a page of nothing but text: its outline is empty because of the find, not the page (round 2 of #247).
+        ['nothing but text, a find that matches nothing', plain(() => [NEWS]), { find: 'zzz' }, undefined],
         ['controls, a find that matches nothing', plain(() => buttons(3)), { find: 'zzz' }, undefined],
         ['controls and text, a find that matches only the text', plain(() => [...buttons(3), NEWS]), { find: 'Breaking' }, undefined],
         ['text, the read cut before the structure', plain(() => [NEWS], { cut: () => ({ elements: true }) }), {}, 'The page is too big to read whole in one snapshot: this is its start.'],
@@ -3119,6 +3121,27 @@ describe('acting through the gate (S18 M2c)', () => {
         const out = snap(await t.call('snapshot', { tab_id: t.tab, text: false, ...args }));
         expect(out.note, page).toBe(note);
       }
+      // Its later range, from the outline's slot, says it too, with no read (round 2 of #247).
+      const poem = plain(() => [NEWS]);
+      await poem.call('snapshot', { tab_id: poem.tab, text: false });
+      expect(snap(await poem.call('snapshot', { tab_id: poem.tab, text: false, start: 1 })).note).toBe(ONLY_TEXT);
+      expect(poem.reads()).toBe(1);
+    });
+
+    it('a full outline’s range after an outline without text is a new read, never the full one kept; a find’s range is of its kind (round 2 of #247, Fable’s S2 a and b)', async () => {
+      // a. Full, then without text, then a full range: a third read (the full outline kept is another read's offsets).
+      const t = plain(() => [...buttons(3), NEWS]);
+      await t.call('snapshot', { tab_id: t.tab });
+      await t.call('snapshot', { tab_id: t.tab, text: false });
+      await t.call('snapshot', { tab_id: t.tab, start: 1 });
+      expect(t.reads()).toBe(3);
+      // b. A find without text, then a range: the range is the outline without text, never one with the page's text.
+      const u = plain(() => [...buttons(3), NEWS]);
+      await u.call('snapshot', { tab_id: u.tab, text: false, find: 'Button 1' });
+      const range = snap(await u.call('snapshot', { tab_id: u.tab, text: false, start: 1 }));
+      expect(u.reads()).toBe(1);
+      expect(range.content).not.toMatch(/- text:/);
+      expect(range.content).toContain('button "Button 2"');
     });
 
     it('its later ranges are of the outline it gave, one card for it: never the live page again, nor another outline’s offsets (round 1 of #247, Fable’s S1)', async () => {
@@ -3155,7 +3178,7 @@ describe('acting through the gate (S18 M2c)', () => {
       const u = await acting({ twist: cut });
       cut.read = {};
       await u.call('snapshot', { tab_id: u.tab, text: false });
-      expect(result(await u.call('hover', { tab_id: u.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot without text: false to see it.' });
+      expect(result(await u.call('hover', { tab_id: u.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last full snapshot of this page was cut short, so what changed can’t be told: call snapshot without text: false to see it.' });
     });
 
     it('an outline without text landing while a diff’s read is out: the diff gives way, never issued on top of it (round 1 of #247, Neon’s SF2)', async () => {
@@ -3204,8 +3227,21 @@ describe('acting through the gate (S18 M2c)', () => {
           const out = await t.call('snapshot', { tab_id: t.scope.refs.refFor(tab), ...(text === false ? { text } : {}) });
           expect(refusal(out).refused, `${what}, text: ${String(text)}`).toBe(says);
           // Nothing of it kept: no refs issued at all.
-          expect(t.scope.memory.elements?.get('n1')?.issues ?? 0, what).toBe(0);
+          expect(t.scope.memory.elements?.get(tab)?.issues ?? 0, what).toBe(0);
         }
+      }
+      // A later range served from the outline's slot is read under them too (round 2 of #247, Fable's S2 c): the site
+      // made Never, or Settings' Nothing, since the outline was given.
+      const later: [string, (t: ReturnType<typeof plain>) => void, string][] = [
+        ['the site made Never since', (t) => void ((t.scope as { neverSites: () => readonly string[] }).neverSites = () => ['private.test', 'news.test']), NEVER_READ],
+        ['Settings’ Nothing since', (t) => void ((t.scope as { off: () => string | null }).off = () => NOTHING), NOTHING],
+      ];
+      for (const [what, since, says] of later) {
+        const t = plain(() => buttons(4));
+        await t.call('snapshot', { tab_id: t.tab, text: false });
+        since(t);
+        expect(refusal(await t.call('snapshot', { tab_id: t.tab, text: false, start: 1 })).refused, what).toBe(says);
+        expect(t.reads(), what).toBe(1);
       }
     });
   });

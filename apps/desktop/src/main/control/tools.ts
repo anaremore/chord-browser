@@ -537,13 +537,16 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   const kept = refs?.outline(page.id);
   // Its refs are this page's, from an outline without text, with no whole one to compare with (#205): said, never
   // silence, which would read as nothing changed.
-  if (refs && !kept && refs.onPage(page.id)) return { page_changes: { page_id: page.id, url: page.url(), note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot to see it.' } };
+  // (It follows an outline without text alone, so it says how to get a full one: round 2 of #247.)
+  if (refs && !kept && refs.onPage(page.id)) return { page_changes: { page_id: page.id, url: page.url(), note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without text: false to see it.' } };
   if (!refs || !kept?.lines) return null;
   // Where to look: a full snapshot. Said so after an outline without text (round 1 of #247, Fable's S2), which never
   // moves the baseline, so calling it again would loop.
-  const again = refs.textlessOutline(page.id) ? 'call snapshot without text: false' : 'call snapshot';
-  // A snapshot cut short is no baseline: what it didn't reach would show as new (round 1 of #145).
-  if (kept.cut) return { page_changes: { page_id: page.id, url: page.url(), note: `Your last snapshot of this page was cut short, so what changed can’t be told: ${again} to see it.` } };
+  const textless = refs.textlessOutline(page.id) !== null;
+  const again = textless ? 'call snapshot without text: false' : 'call snapshot';
+  // A snapshot cut short is no baseline: what it didn't reach would show as new (round 1 of #145). After an outline
+  // without text (whole, perhaps), the one cut short is the last full one (round 2 of #247).
+  if (kept.cut) return { page_changes: { page_id: page.id, url: page.url(), note: `Your last ${textless ? 'full ' : ''}snapshot of this page was cut short, so what changed can’t be told: ${again} to see it.` } };
   const token = randomBytes(12).toString('hex');
   const issuedBefore = refs.issues;
   // A diff's snapshot: kept a while, never in place of the agent's own (pinned).

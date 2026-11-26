@@ -79,7 +79,6 @@ const NO_AGENTS = 'No agents yet. Copy a line above into your terminal to connec
 /** The connect card in the window's popover, for that agent. */
 const cardOf = (popover: Page, name: string) => popover.getByRole('alertdialog', { name: `${name} wants to use Chord` });
 
-/** Answer the card as you would: once it's shown (its buttons wait a moment before they take a click). */
 /** An agent's calls, each with every card it raises allowed as the user would (round 1 of #247: one helper, not two). */
 async function allowing(app: ElectronApplication, mcp: ReturnType<typeof relay>) {
   const popover = await pageWhere(app, isPopover);
@@ -102,6 +101,7 @@ async function allowing(app: ElectronApplication, mcp: ReturnType<typeof relay>)
   };
 }
 
+/** Answer the card as you would: once it's shown (its buttons wait a moment before they take a click). */
 async function answer(app: ElectronApplication, name: string, button: 'Deny' | 'Allow once' | 'Always allow' | 'Close'): Promise<void> {
   const popover = await pageWhere(app, isPopover);
   const card = cardOf(popover, name);
@@ -1874,7 +1874,7 @@ test('snapshot with text: false: the page’s structure without its text, a frac
     expect(clicked.isError).toBe(false);
     await expect.poll(() => app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/game`)).toContain('Call');
     // No full snapshot of the page to compare with: the action says so.
-    expect((JSON.parse(clicked.text) as { data: { page_changes?: { note?: string } } }).data.page_changes?.note).toBe('You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot to see it.');
+    expect((JSON.parse(clicked.text) as { data: { page_changes?: { note?: string } } }).data.page_changes?.note).toBe('You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without text: false to see it.');
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
