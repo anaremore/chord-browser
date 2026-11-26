@@ -436,8 +436,6 @@ describe('never a look-alike where the rules allow anything else', () => {
     { name: 'three letters and look-alikes, at most 30: 26 long', site: 'allowed: [abc01O]; maxlength: 30;', length: 26, pool: 3, forced: [3] },
     { name: 'a field’s maxlength leaves room to lengthen', field: { maxLength: 50 }, site: 'allowed: [xy];', length: 40, pool: 2, forced: [2] },
     { name: 'lengthened to exactly the maximum', site: 'allowed: [xy]; maxlength: 40;', length: 40, pool: 2, forced: [2] },
-    // Run limits that a longer password still meets easily (review round 1 of #56).
-    { name: 'three letters, lengthened under loose run limits', site: 'allowed: [abc01]; max-repeating: 5; max-sequential: 6;', length: 26, pool: 3, forced: [3] },
   ])('$name', ({ field, site, length, pool, forced }) => {
     const { rules } = passwordRulesFor(field ?? {}, site);
     const random = seeded(21);
@@ -467,8 +465,6 @@ describe('never a look-alike where the rules allow anything else', () => {
     // The review's three (round 2 of #56): the forced places at their own bits, not the pool's.
     { name: 'eight capitals and digits: a capital and a digit forced, about 37.6, not 40', site: 'allowed: upper, digit; maxlength: 8;', length: 8, pool: 32, forced: [24, 8] },
     { name: 'a required [A!]: A or !, one bit, not 5', site: 'allowed: upper, digit, [!]; maxlength: 8; required: [A!];', length: 8, pool: 33, forced: [2, 24, 8] },
-    { name: 'two letters and look-alikes, at most 2 in a row: not lengthened, no look-alikes', site: 'allowed: [ab01lI]; max-consecutive: 2;', length: 20, pool: 2, forced: [2] },
-    { name: 'three letters and look-alikes, at most 2 repeated: not lengthened, no look-alikes', site: 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', length: 20, pool: 3, forced: [3] },
     { name: 'two letters, one short of the length that reaches it: as long as allowed', site: 'allowed: [xy]; maxlength: 39;', length: 39, pool: 2, forced: [2] },
     // The owner's decision (round 3 of #56): one clean character is still clean. No bits, and weak.
     { name: 'one letter and two look-alikes: the letter alone', site: 'allowed: [a0O];', length: 20, pool: 1, forced: [1] },
@@ -521,10 +517,13 @@ describe('never a look-alike where the rules allow anything else', () => {
     }
   });
 
-  it('a required class of look-alikes alone, under run limits the clean pool can’t meet: nothing, not look-alikes', () => {
-    // a and b can't stand side by side (in order) or twice (repeated), and one 0 or 1 can't keep 19 of them apart.
+  it('a required class of look-alikes alone, under run limits the clean pool can’t fill: short, one look-alike (#60)', () => {
+    // a and b can't stand side by side (in order) or twice (repeated): one 0 or 1 between them, as short as that is.
     const { rules } = passwordRulesFor({}, 'allowed: [ab01]; required: [01]; max-consecutive: 1;');
-    expect(generatePassword(rules, seeded(29))).toBeNull();
+    const p = generatePassword(rules, seeded(29))!;
+    expect(passwordSatisfies(p, rules)).toBe(true);
+    expect(p.match(lookAlike)).toHaveLength(1);
+    expect(isStrongPassword(p, rules)).toBe(false);
   });
 
   it('a required class of look-alikes alone gets one of them, for that class only', () => {
@@ -560,17 +559,18 @@ describe('never a look-alike where the rules allow anything else', () => {
   });
 
   /**
-   * Run limits and lengthening (review round 1 of #56): a password is made longer only while the run limits are met
-   * easily, so nearly every focus gets one. Each over N_RUNS draws: at least 99% made, every one meeting its rules.
+   * Run limits and lengthening (review round 1 of #56; #60): a password is built a place at a time, never breaking
+   * them, and made longer by what they leave of each place, so nearly every focus gets one. Each over N_RUNS draws: at
+   * least 99% made, every one meeting its rules. Strength under run limits: password-generator-runs.test.ts.
    */
   const N_RUNS = 1000;
   it.each<[string, string, number]>([
-    ['two letters, at most 2 in a row: not lengthened', 'allowed: [xy]; max-consecutive: 2;', 20],
+    ['two letters, at most 2 in a row: nothing counted a place, so not lengthened', 'allowed: [xy]; max-consecutive: 2;', 20],
     ['two letters and look-alikes, at most 2 in a row: the two letters at 20', 'allowed: [ab01lI]; max-consecutive: 2;', 20],
-    ['three letters, at most 3 repeated: not lengthened', 'allowed: [abc]; max-repeating: 3;', 20],
-    ['three letters and look-alikes, at most 2 repeated: the three letters at 20', 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', 20],
-    ['three letters, loose limits: lengthened to 26', 'allowed: [abc]; max-repeating: 5; max-sequential: 6;', 26],
-    ['two letters, at most 2 repeated, room for 40: not lengthened', 'allowed: [xy]; max-repeating: 2; maxlength: 40;', 20],
+    ['three letters, at most 3 repeated: a bit a place, so 40', 'allowed: [abc]; max-repeating: 3;', 40],
+    ['three letters and look-alikes, at most 2 repeated: the three letters, as long as allowed', 'allowed: [abc01O]; maxlength: 30; max-repeating: 2;', 30],
+    ['three letters, loose limits: a bit a place, so 40', 'allowed: [abc]; max-repeating: 5; max-sequential: 6;', 40],
+    ['two letters, at most 2 repeated, room for 40: nothing counted a place, so not lengthened', 'allowed: [xy]; max-repeating: 2; maxlength: 40;', 20],
   ])('%s', (_name, site, length) => {
     const { rules } = passwordRulesFor({}, site);
     const random = seeded(26);
