@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { ACT_REFUSALS, ACT_SENDS_WAITING, sendsLater } from '@chord/core';
+import { ACT_REFUSALS, ACT_SENDS_WAITING, CONTROL_REFUSALS, sendsLater } from '@chord/core';
 import { failOnMainErrors } from './main-errors';
 import { dispatch, isPopover, isShell, pageWhere, pressReal, where } from './a11y-kit';
 import { CLAUDE, CODEX, agents, agentsSettings, answer, appDir, launch, reached, refOf, relay, siteCardOf, startAgentSite } from './agents-shared';
@@ -536,7 +536,12 @@ test('a Send data card still up at the call’s deadline: the call answers that 
     await mcp.request('initialize', CODEX);
     const opening = mcp.call('open_tab', { url: `${site.origin}/noise` });
     await answer(app, 'Codex', 'Allow once');
-    await opening;
+    // This launch's 4 s call deadline covers this first call too: a busy runner can click the card after it, and the call
+    // answers that it's waiting (as #143 means it to). The Allow still counts, so the agent calls again (#305).
+    let opened = await opening;
+    if (opened.isError && opened.text === CONTROL_REFUSALS.waiting) opened = await mcp.call('open_tab', { url: `${site.origin}/noise` });
+    expect(opened.isError, opened.text).toBeFalsy();
+    expect(JSON.parse(opened.text)).toMatchObject({ data: { tab_id: 'a1' } });
     const popover = await pageWhere(app, isPopover);
     const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
     // The site card, once, so the step's own card is the Send data card.
