@@ -510,6 +510,7 @@ export class AppWindow {
     // A shared tab leaving the screen stays attached, out of sight (park).
     for (const view of this.panes) if (!next.includes(view) && !this.parked.includes(view)) root.removeChildView(view);
     for (const view of next) {
+      this.watchPaneFocus(view);
       view.setVisible(!this.hiddenPanes.has(view));
       // Just above the shell; or, while the shell is raised over the pages, just below it. Panes never overlap.
       if (!this.panes.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
@@ -637,6 +638,17 @@ export class AppWindow {
     if (!now) return void (this.parked.length > 0 && own?.focus());
     const page = this.activeTabContents;
     (own ?? (page && !page.isDestroyed() ? page : this.shell.webContents)).focus();
+  }
+
+  /** Pages whose focus ends what the floating views owned (once each). */
+  private readonly paneFocusWatched = new WeakSet<WebContents>();
+
+  /** A pane's page taking the keyboard (a click in it, find closing back to it) leaves the floating views. */
+  private watchPaneFocus(view: WebContentsView): void {
+    const contents = pageOf(view);
+    if (!contents || this.paneFocusWatched.has(contents)) return;
+    this.paneFocusWatched.add(contents);
+    contents.on('focus', () => this.keysLeftFloating());
   }
 
   /** A page parked here and not shown (an agent's tab working behind your page). */
@@ -977,8 +989,6 @@ export class AppWindow {
 
   private leavePageFullScreen(): void {
     this.pageFullScreen = false;
-    // A card that asked for the keyboard while the page was full screen takes it now.
-    setTimeout(() => this.takePendingKeys(), 0);
     const view = this.tabView;
     if (view && !this.window.isDestroyed()) {
       const root = this.window.contentView;
@@ -1181,10 +1191,14 @@ export class AppWindow {
     this.floatingTimer = setTimeout(() => this.giveFloatingFocusBack(), 0);
   }
 
-  /** Chord sent the keyboard somewhere on purpose: no give-back is pending, and the floating views own nothing. */
-  private keysMovedOnPurpose(): void {
+  /**
+   * Chord sent the keyboard somewhere on purpose: no give-back is pending, and the floating views own nothing. A card's
+   * ask still waiting stays (`keepAsk`: the command bar opening over it; it takes the keyboard as that closes).
+   */
+  private keysMovedOnPurpose(keepAsk = false): void {
     clearTimeout(this.floatingTimer);
-    this.cardsOwner = this.pendingOwner = null;
+    this.cardsOwner = null;
+    if (!keepAsk || this.pendingOwner !== 'ask') this.pendingOwner = null;
     this.menuOwnsKeys = false;
   }
 
@@ -1261,14 +1275,16 @@ export class AppWindow {
     this.cardsOwner = this.pendingOwner = null;
   }
 
-  /** The cards that asked for the keyboard are answered (Browser: none asks any more): what they owned ends. */
+  /**
+   * The cards that asked for the keyboard are answered (Browser: none asks any more): what they owned ends, and the
+   * keyboard goes back unless something else owns it. Also when Browser has already said no card is left (setCards):
+   * the owner is gone then, and the keyboard still has to come back from the last card.
+   */
   popoverDoneAsking(): void {
     if (this.pendingOwner === 'ask') this.pendingOwner = null;
-    if (this.cardsOwner !== 'ask') return;
-    this.cardsOwner = null;
-    this.checkFloatingFocus();
+    if (this.cardsOwner === 'ask') this.cardsOwner = null;
+    if (!this.cardsOwner) this.checkFloatingFocus();
   }
-
 
   /**
    * Show the hover preview beside the sidebar, its top level with the hovered
@@ -1371,7 +1387,7 @@ export class AppWindow {
       return;
     }
     this.showOverlay(true);
-    this.keysMovedOnPurpose();
+    this.keysMovedOnPurpose(true);
     pageOf(this.overlay)?.focus();
     this.keysWere = pageOf(this.overlay) ?? this.keysWere;
     send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? (anchor ?? this.anchor) : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });

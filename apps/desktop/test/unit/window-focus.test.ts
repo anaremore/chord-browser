@@ -537,3 +537,137 @@ describe('who owns the keyboard, and when that ends (#245, round 3)', () => {
     }
   });
 });
+
+/** The last push of #245 (Opus's round 3 at ee90173): the last ask answered, a pane's focus, and the guards' tests. */
+describe('the last push (#245, Opus’s round 3)', () => {
+  it('the last card that asked, answered: the keyboard comes back, though Browser already said no card is left (P1)', () => {
+    const done = fake();
+    const { w, page, popover, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover('ask');
+    focus.contents = popover.page;
+    page.page.focus.mockClear();
+    // Browser's order: the cards are gone, then the ask is answered.
+    w.setCards(false);
+    w.popoverDoneAsking();
+    vi.runOnlyPendingTimers();
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('the page taking the keyboard, with no blur from the cards, ends what they owned (P3: find closing)', () => {
+    const done = fake();
+    const { w, page, popover, comesBack, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover();
+    focus.contents = page.page;
+    page.page.emit('focus');
+    page.page.focus.mockClear();
+    comesBack(popover.page);
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('a card asked for while the keyboard was in the shell gives it back to the shell when answered (noteKeysWere in focusPopover)', () => {
+    const done = fake();
+    const { w, page, popover, shell, cardUp } = newWindow();
+    focus.contents = null;
+    cardUp();
+    focus.contents = shell.page;
+    w.focusPopover('ask');
+    focus.contents = popover.page;
+    w.popoverDoneAsking();
+    vi.runOnlyPendingTimers();
+    expect(shell.page.focus).toHaveBeenCalled();
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('never back to Peek while it isn’t on screen (waiting for the command bar to start)', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    const peek = new FakeView();
+    w.openPeek(peek as unknown as WebContentsView, { url: 'https://peek.test/' } as never, 0);
+    focus.contents = peek.page;
+    cardUp();
+    osFocuses(popover.page);
+    expect(peek.page.focus).not.toHaveBeenCalled();
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('never back to a pane that isn’t shown: the shell instead', () => {
+    const done = fake();
+    const { page, popover, shell, osFocuses, cardUp } = newWindow();
+    page.setVisible(false);
+    focus.contents = page.page;
+    cardUp();
+    osFocuses(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    expect(shell.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('F6 into the cards owns the keyboard: the OS’s next focus there stays', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    cardUp();
+    w.focusRegion('popover');
+    page.page.focus.mockClear();
+    osFocuses(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('another tab, or Peek closing, ends what the cards owned', () => {
+    const done = fake();
+    const tab = newWindow();
+    tab.cardUp();
+    tab.w.focusPopover();
+    const other = new FakeView();
+    other.page.isFocused = () => focus.contents === other.page;
+    tab.w.showTabs([other as unknown as WebContentsView], 0, null, []);
+    other.page.focus.mockClear();
+    tab.osFocuses(tab.popover.page);
+    expect(other.page.focus).toHaveBeenCalled();
+    const peeked = newWindow();
+    peeked.w.markOverlayReady();
+    peeked.w.openPeek(new FakeView() as unknown as WebContentsView, { url: 'https://peek.test/' } as never, 0);
+    peeked.cardUp();
+    peeked.w.focusPopover();
+    peeked.w.closePeek();
+    peeked.page.page.focus.mockClear();
+    focus.contents = null;
+    peeked.osFocuses(peeked.popover.page);
+    expect(peeked.page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('the menu’s click ends with it: a new menu doesn’t own the keyboard', () => {
+    const done = fake();
+    const { w, page, osFocuses } = newWindow();
+    const first = w.ensureMenuView() as unknown as FakeContents;
+    first.isFocused = () => focus.contents === first;
+    osFocuses(first, () => first.emit('before-mouse-event', {}, { type: 'mouseDown' }));
+    first.destroy();
+    const next = w.ensureMenuView() as unknown as FakeContents;
+    next.isFocused = () => focus.contents === next;
+    page.page.focus.mockClear();
+    osFocuses(next);
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('an ask waiting for hidden cards still takes the keyboard after the command bar opened and closed over it (P2)', () => {
+    const done = fake();
+    const { w, popover, cardUp } = newWindow();
+    w.focusPopover('ask');
+    w.markOverlayReady();
+    w.openOverlay('new', '');
+    cardUp();
+    expect(popover.page.focus).not.toHaveBeenCalled();
+    w.closeOverlay();
+    expect(popover.page.focus).toHaveBeenCalled();
+    done();
+  });
+});
