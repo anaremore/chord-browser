@@ -621,7 +621,8 @@ export class AdBlocking {
     this.stopWorker();
     await Promise.all([
       compiler?.terminate(),
-      Promise.race([this.settled(), new Promise<void>((resolve) => setTimeout(resolve, 2000).unref?.())]),
+      // The state those changes saved too (a save is queued as each one lands).
+      Promise.race([this.settled().then(() => this.saving), new Promise<void>((resolve) => setTimeout(resolve, 2000).unref?.())]),
     ]);
     // Whatever didn't finish in time: its control page closes before Electron tears down.
     for (const profile of this.profiles.values()) profile.blocker?.closeControls();

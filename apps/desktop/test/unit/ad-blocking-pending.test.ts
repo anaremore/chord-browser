@@ -17,10 +17,18 @@ const { FILTER_LISTS, setVersion } = await import('../../src/main/ad-blocking/li
 const { mark } = await import('../../src/main/launch-timeline');
 
 const dirs: string[] = [];
-afterEach(() => {
+const services: Array<InstanceType<typeof AdBlocking>> = [];
+/** What Chromium still holds when a test ends: answered "no" at teardown, so each service's work can finish. */
+const unanswered: Array<{ reject: (error: Error) => void }> = [];
+afterEach(async () => {
+  // A service still writing (its Staging copy, state.json's save) when its folder goes made rmSync throw ENOTEMPTY,
+  // or brought the folder back after it (#306). Chromium's held calls fail, the service stops, then the folder goes.
+  for (const call of unanswered.splice(0)) call.reject(new Error('test over'));
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  await Promise.all(services.splice(0).map((s) => s.stop()));
   vi.restoreAllMocks();
   vi.mocked(mark).mockClear();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const VERSIONS = Object.fromEntries(FILTER_LISTS.map((l) => [l.id, '202611260000'])) as Record<(typeof FILTER_LISTS)[number]['id'], string>;
@@ -40,7 +48,9 @@ function service(options: { enabled?: () => boolean; saved?: boolean; rulesWaitM
     writeFileSync(join(root, 'Extension', 'default', 'manifest.json'), '{}');
   }
   const enabled = options.enabled ?? (() => true);
-  return new AdBlocking({ bundledDir, root, workerPath: join(root, 'none.js'), listUrl: null, firstRefreshMs: 60_000, rulesWaitMs: options.rulesWaitMs }, { enabled: () => enabled(), offSites: () => [] });
+  const blocking = new AdBlocking({ bundledDir, root, workerPath: join(root, 'none.js'), listUrl: null, firstRefreshMs: 60_000, rulesWaitMs: options.rulesWaitMs }, { enabled: () => enabled(), offSites: () => [] });
+  services.push(blocking);
+  return blocking;
 }
 
 /** A promise Chromium answers when the test says. */
@@ -48,6 +58,7 @@ function held<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
   const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
+  unanswered.push({ reject });
   return { promise, resolve, reject };
 }
 
