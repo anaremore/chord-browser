@@ -156,9 +156,13 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
       .poll(cardFocused, { timeout: 3_000, message: 'the save card kept the keyboard' })
       .toBe(false)
       .catch(async (error: unknown) => {
-        const log = await app.evaluate(() => (globalThis as unknown as { chordTestHooks: { cardFocus(): unknown } }).chordTestHooks.cardFocus());
+        const log = await app.evaluate(({ BaseWindow, webContents }) => ({
+          events: (globalThis as unknown as { chordTestHooks: { cardFocus(): unknown } }).chordTestHooks.cardFocus(),
+          windowFocused: BaseWindow.getFocusedWindow() !== null,
+          focused: webContents.getFocusedWebContents()?.getURL().replace(/^[a-z-]+:\/\/[^/]*/, '') ?? null,
+        }));
         throw new Error(`${String(error)}
-the popover's focus events: ${JSON.stringify(log)}`, { cause: error });
+the popover's focus: ${JSON.stringify(log)}`, { cause: error });
       });
     findings.push(...(await audit(popover, 'the first save card', { appearance: 'light' })));
     await firstSave.screenshot({ path: resolve(capturesDir, 'passwords-save-first-light.png') });
