@@ -1026,7 +1026,12 @@ if (!app.requestSingleInstanceLock()) {
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
       windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),
-      proxyReady: (ses) => proxies.ready(ses),
+      // What a page's first load waits for: its proxy being set, and its chord's ad-blocking extension being added (#189).
+      proxyReady: (ses) => {
+        const proxy = proxies.ready(ses);
+        const blocking = adBlocking.pending(ses);
+        return proxy && blocking ? Promise.all([proxy, blocking]).then(() => undefined) : (proxy ?? blocking);
+      },
       releaseProfile,
       devtoolsSession,
       adBlocking: {

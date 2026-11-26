@@ -24,6 +24,7 @@ import { session as electronSession, type OnBeforeRequestListenerDetails, type S
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { mark } from '../launch-timeline';
 import { proxies } from '../proxy';
 import { requestDispatcher } from '../requests';
 import { BlockerExtension } from './extension';
@@ -89,6 +90,8 @@ interface Profile {
   /** Resolves once the extension's first load has been tried (pages wait for it at launch). */
   firstLoad: Promise<void>;
   loadTried: () => void;
+  /** Its first load tried (loaded, failed, or off): nothing for a page to wait on (#189). */
+  firstLoaded: boolean;
 }
 
 interface Page {
@@ -194,9 +197,15 @@ export class AdBlocking {
   attach(profileId: string, session: Session, isPrivate: boolean): void {
     if (this.profiles.has(profileId)) return;
     const blocker = isPrivate ? null : new BlockerExtension(session, join(this.config.root, 'Extension', folderName(profileId)));
-    let loadTried = () => {};
-    const firstLoad = new Promise<void>((resolve) => (loadTried = resolve));
-    this.profiles.set(profileId, { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, firstLoad, loadTried });
+    let resolveLoad = () => {};
+    const firstLoad = new Promise<void>((resolve) => (resolveLoad = resolve));
+    const profile: Profile = { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, firstLoad, loadTried: () => {}, firstLoaded: false };
+    profile.loadTried = () => {
+      if (!profile.firstLoaded && blocker) mark(`ad blocking extension in (${profileId})`);
+      profile.firstLoaded = true;
+      resolveLoad();
+    };
+    this.profiles.set(profileId, profile);
     this.syncProfile(profileId);
   }
 
@@ -209,6 +218,18 @@ export class AdBlocking {
   async loaded(capMs = 3000): Promise<void> {
     const loads = [...this.profiles.values()].filter((p) => p.blocker).map((p) => p.firstLoad);
     await Promise.race([Promise.all(loads), new Promise<void>((resolve) => setTimeout(resolve, capMs).unref?.())]);
+  }
+
+  /**
+   * #189: what a page in this session waits for before it loads: its chord's blocker extension still being added (its
+   * first load not yet tried), or null. Launch waits for every extension for at most 3 s (loaded); a page that starts
+   * loading while the extension is still being added (on a slow disk, a fresh profile's rules written first) has been
+   * seen to stall on Windows, never asking the network. Windows still open at the cap; each page waits for its own
+   * session (tabs.ts' whenProxied, beside the proxy's wait).
+   */
+  pending(session: Session): Promise<void> | null {
+    for (const p of this.profiles.values()) if (p.session === session && p.blocker && !p.firstLoaded) return p.firstLoad;
+    return null;
   }
 
   /** A private window closed: its session is going, and nothing was kept for it. */
