@@ -19,7 +19,17 @@
 import { randomBytes } from 'node:crypto';
 import { sortedChords, type AgentAllowance, type Command, type Grant, type ProfileId, type State, type WindowId } from '@chord/core';
 import type { AgentConnectCard } from '@chord/ipc';
-import type { ProcessInfo } from './parent';
+import { sameProgram, type ProcessInfo } from './parent';
+
+/**
+ * A program an allowance can be kept by: not Chord itself (anything that starts `Chord.exe mcp` would be it), nor a
+ * path the lookup couldn't read right (U+FFFD; on Windows also `?`, which no Windows path holds: a profile folder like
+ * José's read in another code page, #264), which could be anyone's.
+ */
+export function keepable(path: string | null | undefined, platform: NodeJS.Platform = process.platform): path is string {
+  if (!path || path.includes('\uFFFD') || (platform === 'win32' && path.includes('?'))) return false;
+  return !sameProgram(path, process.execPath);
+}
 
 /** Who's asking: what its connection says, and the lookup of who started it (running while the card shows). */
 export interface ConnectingAgent {
@@ -174,10 +184,11 @@ export class ConnectCards {
   async ask(who: ConnectingAgent, signal: AbortSignal): Promise<ConnectAnswer> {
     const known = this.deps.store.state.settings.agentsAllowed.some((a) => a.name === who.name);
     const looked = firstOf(who.parent);
-    // An agent you've let in for good by that name: who started it decides, so Chord looks first (about 1 s on Windows).
+    // An agent you've let in for good by that name: who started it decides, so Chord looks first (a few ms on Windows,
+    // window-owner.exe's process snapshot; ps and lsof, or /proc, elsewhere).
     if (known) {
       const path = (await looked)?.path;
-      const allowed = path ? this.allowance(who.name, path) : null;
+      const allowed = keepable(path) ? this.allowance(who.name, path) : null;
       if (allowed) {
         this.touch(allowed);
         return { grant: 'always', profileId: allowed.profileId, allowedParent: allowed.parent };
@@ -205,7 +216,7 @@ export class ConnectCards {
             // by, nothing is kept and it's let in this once (the card stops offering Always allow once it knows).
             void (async () => {
               const parent = entry.parent ?? (await entry.looked);
-              const kept = parent?.path ? this.keep(who.name, parent.path, profileId) : null;
+              const kept = keepable(parent?.path) ? this.keep(who.name, parent.path, profileId) : null;
               resolve(kept ? { grant: 'always', profileId, allowedParent: kept } : { grant: 'once', profileId });
             })();
             return;
@@ -223,7 +234,7 @@ export class ConnectCards {
         entry.parent = parent;
         const name = parent?.name ? plain(parent.name).slice(0, 100) : '';
         // No program it can be kept by: the card says Chord can't tell, and offers no Always allow.
-        entry.card = parent?.path && name ? { ...entry.card, startedBy: name } : { ...entry.card, startedBy: null, noProgram: true };
+        entry.card = keepable(parent?.path) && name ? { ...entry.card, startedBy: name } : { ...entry.card, startedBy: null, noProgram: true };
         this.deps.changed();
       });
     });

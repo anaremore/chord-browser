@@ -140,6 +140,7 @@ CI has already installed and smoke-tested each file. Before publishing, a person
 
 - [ ] Download the draft's files and check them: `sha256sum -c SHA256SUMS.txt` (macOS: `shasum -a 256 -c`).
 - [ ] **Windows** (your machine): install the `.exe` **over the previous version**, as users will. Chord starts, your tabs are there, and Settings → About shows Electron X and Chromium Y.
+- [ ] **Windows, agents** (the packaged build's own `window-owner.exe`, beside the archive; #264): with Settings → Agents on, connect an agent (Claude Code's `claude mcp add`, as Settings shows). The card says *Started by* that agent's program (never Chord.exe, never *Chord can't tell*), and Chord's log has no *couldn't tighten the agent pipe's access*.
 - [ ] **macOS** (Apple Silicon MacBook): open the `.dmg`, replace the app, and start it (Gatekeeper's *Open Anyway* the first time). Same About check. Allow *Chord Safe Storage* if asked.
 - [ ] **Linux** (VM): `sudo apt install ./Chord-*-linux-amd64.deb` over the old one; same About check.
 - [ ] Browse a few real sites, sign in to one, and play a video. Anything wrong goes in the P0 issue.

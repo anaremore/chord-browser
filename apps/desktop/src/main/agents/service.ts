@@ -284,7 +284,7 @@ export class AgentService {
    */
   private async whoStarted(held: HeldConnection): Promise<ProcessInfo[]> {
     // A packaged build before AGENT_ACTIONS_RELEASED: M1's lookup, from the bridge's word.
-    if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid));
+    if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid, 3, this.deps.helper));
     // Its claim, contested (another live connection claims that PID too): it can't tell, before the lookup or after.
     const contested = () => (this.claims.get(held.hello.bridgePid)?.size ?? 0) > 1;
     const unknown = () => {
@@ -308,8 +308,9 @@ export class AgentService {
     held.peerPid = pid;
     if (pid === null) return [];
     const { ancestry, sameProgram } = await import('./parent');
-    // Windows' helper gives the chain with the peer (one process, no PowerShell); elsewhere it's looked up now.
-    const chain = given ?? (await ancestry(pid, 4));
+    // Windows' helper gives the chain with the peer (one process, no PowerShell); elsewhere it's looked up now (on
+    // Windows by the same helper's `chain`, #107).
+    const chain = given ?? (await ancestry(pid, 4, this.deps.helper));
     return chain[0] && sameProgram(chain[0].path, process.execPath) ? chain.slice(1) : chain.slice(0, 3);
   }
 

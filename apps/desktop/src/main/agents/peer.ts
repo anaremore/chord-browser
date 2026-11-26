@@ -21,7 +21,7 @@
 import { execFile } from 'node:child_process';
 import { readlinkSync } from 'node:fs';
 import type { Socket } from 'node:net';
-import type { ProcessInfo } from './parent';
+import { isPid, text, type ProcessInfo } from './parent';
 
 /** What a lookup needs from the OS, so the units can stand in for it. */
 export interface PeerDeps {
@@ -68,8 +68,6 @@ export interface PipeClients {
   timings: Record<string, number>;
 }
 
-const isPid = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0;
-const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 
 /** pipe-clients' line of JSON, kept to what it can be; null when it isn't that. */
 export function parsePipeClients(stdout: string): PipeClients | null {
@@ -91,8 +89,10 @@ export function parsePipeClients(stdout: string): PipeClients | null {
       if (!p || !isPid(p['pid'])) break;
       infos.push({ pid: p['pid'], name: text(p['name']), path: text(p['path']), cwd: null, ppid: isPid(p['ppid']) ? p['ppid'] : null });
     }
-    // A chain is the client's: one that doesn't start with it isn't used.
-    if (infos[0]?.pid === pid) chains.set(pid, infos);
+    // A chain is the client's: one that doesn't start with it isn't used. An empty one is the helper's answer (the client
+    // gone, or its start unknown), kept as given: no second lookup of a PID that may be another process's by then (#264).
+    if (chain.length === 0) chains.set(pid, []);
+    else if (infos[0]?.pid === pid) chains.set(pid, infos);
   }
   const timings: Record<string, number> = {};
   for (const [k, v] of Object.entries({ files: raw.files, stuck: raw.stuck, truncated: raw.truncated, skipped: raw.skipped, handles: raw.handles, ...(raw.ms && typeof raw.ms === 'object' ? raw.ms : {}) })) if (typeof v === 'number') timings[k] = v;
@@ -209,7 +209,7 @@ export async function peerOf(socket: Socket, pipe: string, claimed: number, held
       if (!answer) return { pid: null };
       const pid = choosePeer(answer.clients, claimed, held, answer.complete);
       const chain = pid === null ? undefined : answer.chains.get(pid);
-      return { pid, ...(chain ? { chain } : {}), timings: answer.timings };
+      return { pid, ...(chain !== undefined ? { chain } : {}), timings: answer.timings };
     }
     const fd = socketFd(socket);
     if (fd === null) return { pid: null };
