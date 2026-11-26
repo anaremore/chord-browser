@@ -178,6 +178,24 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     await swipe(app, shell, steps(32, -6), 16, { phases: false });
     await selected('Personal');
     await expect.poll(() => paneCount(shell)).toBe(1);
+
+    // The chord changes under a swipe (the switcher, a key, another window): the swipe lets go, and the new chord's pane
+    // is in place, never left where the swipe had the old one's neighbors (#250).
+    const paneX = () =>
+      shell.evaluate(() => {
+        const pane = document.querySelector('[aria-label="Sidebar"] [aria-label="Unpinned tabs"]')!.closest('[class*="chordPane"]')!;
+        return new DOMMatrix(getComputedStyle(pane).transform).m41;
+      });
+    // The fingers rest a second mid-swipe, while the switcher goes to Play, then go on past half the width.
+    const underIt = swipe(app, shell, [...steps(10, 6), pause(1_000), ...steps(22, 6)], 16);
+    await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
+    await chords.getByRole('tab', { name: 'Play' }).click();
+    await underIt;
+    // Long enough for a commit the swipe would have made of its own to land: it makes none, and Play stays.
+    await shell.waitForTimeout(800);
+    await selected('Play');
+    await expect.poll(() => paneCount(shell)).toBe(1);
+    await expect.poll(paneX).toBe(0);
   } finally {
     await app.close();
   }

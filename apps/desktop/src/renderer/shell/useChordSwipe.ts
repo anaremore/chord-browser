@@ -339,8 +339,28 @@ export function useChordSwipe(options: Options): ChordSwipe {
     });
 
     // The switch arrived: the committed chord's pane is the current one now, and settles to 0.
+    /**
+     * The chord changed under a swipe, not by its commit (a key, the switcher, another window; #250): the swipe lets go.
+     * The new chord's pane, and the neighbors it moved, are in place at once (the new one was a neighbor beside it, a
+     * width away); the old chord's pane leaves with the usual slide (a jump would stop its exit, and it would stay).
+     * Nothing the swipe started keeps running, and the rest of the gesture is ignored as momentum.
+     */
+    const letGo = (currentId: string | undefined) => {
+      const c = s.context;
+      stopAll();
+      const moved = [c?.prevId, c?.nextId, s.target?.id, currentId];
+      for (const id of moved) if (id && id !== c?.currentId) xFor(id).jump(0);
+      s.ignoreUntil = performance.now() + MOMENTUM_GAP_MS;
+      reset();
+    };
+
     s.onSwitched = (currentId: string | undefined) => {
-      if (s.phase !== 'committing' || !s.target || currentId !== s.target.id) return;
+      if (s.phase === 'idle') return;
+      if (s.phase !== 'committing' || !s.target || currentId !== s.target.id) {
+        // Its own commit's chord is the only change a swipe expects; any other lets it go.
+        if (!(s.phase === 'committing' && currentId === s.context?.currentId)) letGo(currentId);
+        return;
+      }
       clearTimeout(s.commitTimer);
       const { id, transition } = s.target;
       const value = xFor(id);
