@@ -34,8 +34,19 @@ const { SyncService } = await import('../../src/main/sync');
 
 class FakeWorker extends EventEmitter {
   readonly posted: ToWorker[] = [];
+  private readonly waiting: { match: (m: ToWorker) => boolean; done: () => void }[] = [];
   postMessage(message: ToWorker): void {
     this.posted.push(message);
+    for (const w of [...this.waiting]) {
+      if (!w.match(message)) continue;
+      this.waiting.splice(this.waiting.indexOf(w), 1);
+      w.done();
+    }
+  }
+  /** When the controller has posted a message like that (or already had): by what it posts, never by how long it took (#265). */
+  posts(match: (m: ToWorker) => boolean): Promise<void> {
+    if (this.posted.some(match)) return Promise.resolve();
+    return new Promise((done) => this.waiting.push({ match, done }));
   }
   unref(): this {
     return this;
@@ -162,16 +173,30 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
 const cursor = (offset: number): SegmentCursor => ({ head: 'h', offset, frame: 2, snapshot: true });
 let batch = 0;
 /** One pass of the stand-in worker: a step of \`device\`'s records, merged and answered, then the pass's end. */
-async function read(worker: FakeWorker, device: string, records: DataRecord[]): Promise<void> {
+/**
+ * The worker reads `records` from `device`, then says its pass is done. `acked`: as the tests have it, the controller's
+ * ack polled for (up to vi.waitFor's second); or `'posted'`, as soon as it's posted, however long the merge takes on a
+ * busy machine (#265: 200 folders took longer than that second). (Some tests here depend on the poll's gap before
+ * pass-done: #276.)
+ */
+async function read(worker: FakeWorker, device: string, records: DataRecord[], acked: 'polled' | 'posted' = 'polled'): Promise<void> {
   const id = ++batch;
   worker.say({ t: 'busy', op: 'pass' });
   worker.say({ t: 'records', id, device, segment: 1, records, cursor: cursor(100 + id), refused: 0 });
-  await vi.waitFor(() => expect(worker.posted.some((m) => m.t === 'ack' && m.id === id)).toBe(true));
+  if (acked === 'posted') await worker.posts((m) => m.t === 'ack' && m.id === id);
+  else await vi.waitFor(() => expect(worker.posted.some((m) => m.t === 'ack' && m.id === id)).toBe(true));
   worker.say({ t: 'pass-done', look: { state: 'ok' }, seen: {}, wrote: {}, tooMany: false, cluttered: false, unfinished: false, blocked: [] });
   worker.say({ t: 'idle' });
 }
 /** Long enough for what's pushed to be applied, and for a reconcile a write made due to run. */
 const quiet = (ms = 2_800) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Until `done`, a `step` at a time: by what's happened, never a deadline (bounded, so a test that never gets there fails). */
+async function until(done: () => boolean, step: () => Promise<unknown>, steps = 5_000): Promise<void> {
+  for (let i = 0; !done(); i++) {
+    if (i >= steps) throw new Error(`still waiting after ${steps} steps`);
+    await step();
+  }
+}
 
 const chordRecord = (id: string, name: string, extra: Record<string, unknown> = {}): DataRecord => ({
   type: 'chord',
@@ -357,18 +382,35 @@ describe('turned off while chord-data refuses writes', { timeout: 20_000 }, () =
 });
 
 describe('reconciling stays cheap', { timeout: 20_000 }, () => {
+  // By counts, on a clock the test moves (#265): never how long a busy machine takes to apply 200 folders, nor whether
+  // RECONCILE_SOON_MS's timer fired within a fixed wait.
   it('a push of 200 folders, applied a part at a time, reconciles once after it, not once a part', async () => {
     const first = await launch();
+    const controller = first.controller as unknown as { reconciling: boolean };
+    // The launch's own reconcile done, before the clock is the test's.
     await quiet(300);
-    const looks = vi.spyOn(db.sync, 'unappliedPages');
-    await read(
-      first.worker,
-      A,
-      Array.from({ length: 200 }, (_, i) => folderRecord(`folder-${i}`, home())),
-    );
-    await vi.waitFor(() => expect(nodeList(state).filter((n) => n.kind === 'folder')).toHaveLength(200), { timeout: 6_000 });
-    await quiet();
-    expect(looks).toHaveBeenCalledTimes(1);
+    await until(() => !controller.reconciling, () => quiet(20));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const step = () => vi.advanceTimersByTimeAsync(20);
+      const looks = vi.spyOn(db.sync, 'unappliedPages');
+      await read(
+        first.worker,
+        A,
+        Array.from({ length: 200 }, (_, i) => folderRecord(`folder-${i}`, home())),
+        'posted',
+      );
+      await until(() => nodeList(state).filter((n) => n.kind === 'folder').length === 200, step);
+      expect(looks).not.toHaveBeenCalled();
+      // RECONCILE_SOON_MS (2 s) after the last write that brought folders: one look, done.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await until(() => looks.mock.calls.length > 0 && !controller.reconciling, step);
+      // And never again for this push, however long after (up to the idle look, IDLE_RECONCILE_MS).
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(looks).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('kept otherwise for good (colors this Chord tidies): pushed again at each launch, and applied as nothing, with nothing written', async () => {
