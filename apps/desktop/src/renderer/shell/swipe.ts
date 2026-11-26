@@ -13,10 +13,111 @@ const AXIS_RATIO = 1.5;
 const COMMIT_PROGRESS = 0.5;
 /** …or moving toward the neighbor faster than this (px/ms). */
 export const COMMIT_SPEED = 0.5;
-/** No wheel events for this long ends a gesture where the OS sends no end phase. */
+/** No wheel events for this long ends a gesture where the OS sends no end phase… */
 export const IDLE_END_MS = 80;
+/**
+ * …and as many frames drawn without one. A frame hands the renderer the input that waited for it before anything
+ * else, so a busy renderer (whose frames come late) never ends a swipe while its next events are still on their way:
+ * 80 ms with no event read is not a lift when no frame came to read one. At 60 frames a second, 80 ms is 5 frames.
+ */
+export const IDLE_END_FRAMES = 3;
+/** A window that draws no frames (hidden) ends a gesture after this long anyway, at rest (GestureEnd's timer). */
+export const IDLE_END_MAX_MS = 1000;
+/**
+ * A gesture the OS said began (a trackpad's phases, macOS): it ends on the OS's end, never on a pause, however busy
+ * the renderer; after this long with no event and no end, it ends anyway (an end that never came).
+ */
+export const PHASED_END_MAX_MS = 3000;
+
+/**
+ * Whether a gesture with no end phase from the OS has ended: `sinceLastMs` since its last event, `frames` drawn since.
+ * (No frames at all is GestureEnd's: after IDLE_END_MAX_MS, at rest.)
+ */
+export function gestureIdle(sinceLastMs: number, frames: number): boolean {
+  return sinceLastMs >= IDLE_END_MS && frames >= IDLE_END_FRAMES;
+}
 /** Momentum keeps arriving after a release: a gesture after a gap this long is a new one. */
 export const MOMENTUM_GAP_MS = 120;
+/**
+ * After a fling (the fingers left moving; macOS's phases), its momentum is ignored until the OS says a new gesture
+ * began, however long a stalled frame leaves between two of its events, or until this long has gone by.
+ */
+export const FLING_MOMENTUM_MAX_MS = 3000;
+
+/** The clock, frames and timers a gesture's end is waited with (the renderer's; a test's fakes). */
+export interface EndClock {
+  now(): number;
+  frame(callback: () => void): number;
+  cancelFrame(id: number): void;
+  timer(callback: () => void, ms: number): ReturnType<typeof setTimeout>;
+  clearTimer(id: ReturnType<typeof setTimeout> | undefined): void;
+}
+
+/**
+ * When a gesture ends. Where the OS says (`begin`: a trackpad's phases, macOS), on its end, never on a pause, however
+ * busy the renderer; after PHASED_END_MAX_MS with no event and no end, at rest. Elsewhere, when the events stop
+ * (gestureIdle: IDLE_END_MS and IDLE_END_FRAMES frames with none), at the speed as of the last event (`last`); a window
+ * drawing no frames (hidden) ends after IDLE_END_MAX_MS, at rest (`rest`). `ended` is told when, and with which speed.
+ */
+export class GestureEnd {
+  /** The OS said this gesture began: it ends on the OS's end. */
+  phased = false;
+  private lastAt = 0;
+  private frames = 0;
+  private frameId = 0;
+  private timerId: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(
+    private readonly clock: EndClock,
+    private readonly ended: (at: number, speed: 'last' | 'rest') => void,
+  ) {}
+
+  /** The gesture's latest event, at `at`: its end is waited for from here. */
+  event(at: number): void {
+    this.lastAt = at;
+    this.wait();
+  }
+
+  /**
+   * The OS's begin. A busy renderer can read it after the gesture's first events: it's still this gesture's. With no
+   * event after it, the wait still ends (it never sticks to the next gesture, a mouse's).
+   */
+  begin(): void {
+    this.phased = true;
+    this.wait();
+  }
+
+  /** Not waiting any more (it ended, or was let go): the next gesture starts unphased. */
+  stop(): void {
+    this.clock.clearTimer(this.timerId);
+    this.timerId = undefined;
+    this.clock.cancelFrame(this.frameId);
+    this.frameId = 0;
+    this.phased = false;
+  }
+
+  private end(speed: 'last' | 'rest'): void {
+    this.stop();
+    this.ended(this.clock.now(), speed);
+  }
+
+  private wait(): void {
+    this.clock.clearTimer(this.timerId);
+    this.clock.cancelFrame(this.frameId);
+    if (this.phased) {
+      this.timerId = this.clock.timer(() => this.end('rest'), PHASED_END_MAX_MS);
+      return;
+    }
+    this.frames = 0;
+    const tick = () => {
+      this.frames += 1;
+      if (gestureIdle(this.clock.now() - this.lastAt, this.frames)) this.end('last');
+      else this.frameId = this.clock.frame(tick);
+    };
+    this.frameId = this.clock.frame(tick);
+    this.timerId = this.clock.timer(() => this.end('rest'), IDLE_END_MAX_MS);
+  }
+}
 
 export type Axis = 'undecided' | 'horizontal' | 'vertical';
 

@@ -1,7 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   COMMIT_SPEED,
+  GestureEnd,
+  IDLE_END_FRAMES,
+  IDLE_END_MAX_MS,
+  IDLE_END_MS,
+  PHASED_END_MAX_MS,
   VelocityTracker,
+  gestureIdle,
   isWheelNotch,
   lockAxis,
   rawOffset,
@@ -113,5 +119,129 @@ describe('isWheelNotch', () => {
     expect(isWheelNotch(0, 6, true)).toBe(false);
     // A trackpad's later, larger deltas are still the trackpad.
     expect(isWheelNotch(0, 120, false)).toBe(false);
+  });
+});
+
+describe('gestureIdle: a gesture with no end phase from the OS ends when its events stop', () => {
+  it('on a machine keeping up: 80 ms with no event (about five frames at 60 a second)', () => {
+    expect(gestureIdle(IDLE_END_MS - 1, 5)).toBe(false);
+    expect(gestureIdle(IDLE_END_MS, 5)).toBe(true);
+  });
+
+  it('on a busy one, never before a few frames have come with no event: late frames are late input, not a lift (#198)', () => {
+    // 80 ms passed but only one frame came to hand over the input waiting for it: the fingers may still be moving.
+    expect(gestureIdle(IDLE_END_MS + 3, 1)).toBe(false);
+    expect(gestureIdle(500, IDLE_END_FRAMES - 1)).toBe(false);
+    expect(gestureIdle(IDLE_END_MS + 3, IDLE_END_FRAMES)).toBe(true);
+  });
+
+  it('never with no frames at all, however long (a hidden window is GestureEnd’s timer, at rest)', () => {
+    expect(gestureIdle(IDLE_END_MAX_MS * 5, 0)).toBe(false);
+  });
+});
+
+/**
+ * A fake renderer for GestureEnd: a clock that only moves when told, frames drawn when told, timers that fire as the
+ * clock passes them (vi's fake timers, with the clock read from them).
+ */
+function renderer() {
+  vi.useFakeTimers();
+  const frames = new Map<number, () => void>();
+  let nextFrame = 1;
+  const ended: { at: number; speed: 'last' | 'rest' }[] = [];
+  const end = new GestureEnd(
+    {
+      now: () => Date.now(),
+      frame: (callback) => {
+        frames.set(nextFrame, callback);
+        return nextFrame++;
+      },
+      cancelFrame: (id) => void frames.delete(id),
+      timer: (callback, ms) => setTimeout(callback, ms),
+      clearTimer: (id) => clearTimeout(id),
+    },
+    (at, speed) => ended.push({ at, speed }),
+  );
+  /** `ms` pass, a frame drawn every `frameMs` of them (none when 0). */
+  const pass = (ms: number, frameMs = 16) => {
+    for (let t = 0; t < ms; ) {
+      const step = frameMs > 0 ? Math.min(frameMs, ms - t) : ms - t;
+      vi.advanceTimersByTime(step);
+      t += step;
+      if (frameMs > 0 && step === frameMs) {
+        const due = [...frames.values()];
+        frames.clear();
+        for (const callback of due) callback();
+      }
+    }
+  };
+  return { end, ended, pass, start: Date.now() };
+}
+
+describe('GestureEnd: when a swipe ends (#198, and #242’s review)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('with no phases: when the events stop, IDLE_END_MS and IDLE_END_FRAMES frames with none, at the last event’s speed', () => {
+    const { end, ended, pass, start } = renderer();
+    end.event(Date.now());
+    pass(IDLE_END_MS - 16);
+    expect(ended).toEqual([]);
+    pass(32);
+    // Read on the first frame past IDLE_END_MS (80 ms is the fifth frame at 16 ms): at that time, the last event's speed.
+    expect(ended).toEqual([{ at: start + 80, speed: 'last' }]);
+  });
+
+  it('with no phases on a busy renderer: 80 ms with no event is no end while fewer than IDLE_END_FRAMES frames came', () => {
+    const { end, ended, pass } = renderer();
+    end.event(Date.now());
+    // One frame every 60 ms: after 120 ms, two frames.
+    pass(120, 60);
+    expect(ended).toEqual([]);
+    pass(60, 60);
+    expect(ended).toEqual([expect.objectContaining({ speed: 'last' })]);
+  });
+
+  it('with no phases in a window drawing no frames: after IDLE_END_MAX_MS, at rest (SF1: no old speed)', () => {
+    const { end, ended, pass, start } = renderer();
+    end.event(Date.now());
+    pass(IDLE_END_MAX_MS - 1, 0);
+    expect(ended).toEqual([]);
+    pass(1, 0);
+    // At the time it's read, not the last event's: momentum is ignored from then.
+    expect(ended).toEqual([{ at: start + IDLE_END_MAX_MS, speed: 'rest' }]);
+  });
+
+  it('phased: never on a pause, however long, until the OS’s end; an end that never comes, after PHASED_END_MAX_MS at rest', () => {
+    const { end, ended, pass, start } = renderer();
+    end.begin();
+    end.event(Date.now());
+    pass(500);
+    end.event(Date.now());
+    pass(PHASED_END_MAX_MS - 1);
+    expect(ended).toEqual([]);
+    pass(1);
+    expect(ended).toEqual([{ at: start + 500 + PHASED_END_MAX_MS, speed: 'rest' }]);
+    expect(end.phased).toBe(false);
+  });
+
+  it('a begin with no event after it never sticks to the next gesture (SF2): it ends anyway, and the next is unphased', () => {
+    const { end, ended, pass } = renderer();
+    end.begin();
+    pass(PHASED_END_MAX_MS);
+    expect(ended).toHaveLength(1);
+    expect(end.phased).toBe(false);
+    end.event(Date.now());
+    pass(IDLE_END_MS + 32);
+    expect(ended).toHaveLength(2);
+  });
+
+  it('stopped (released, a notch, reset): nothing more ends, and the next gesture starts unphased', () => {
+    const { end, ended, pass } = renderer();
+    end.begin();
+    end.event(Date.now());
+    end.stop();
+    pass(PHASED_END_MAX_MS * 2);
+    expect(ended).toEqual([]);
+    expect(end.phased).toBe(false);
   });
 });

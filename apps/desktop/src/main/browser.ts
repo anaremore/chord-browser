@@ -61,6 +61,7 @@ import {
   type WindowId,
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
+import { GesturePhases } from './gesture-phases';
 import type { AgentConnectCard, AgentSiteCard, AgentStepCard, ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
 import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
 import { createChordTheme, durations, hexToRgb, rgbToOklch, size } from '@chord/tokens';
@@ -222,11 +223,6 @@ export interface BrowserOptions {
 }
 
 /** Trackpad scroll phases forwarded to the shell, for the chord swipe. */
-const GESTURE_PHASES: Partial<Record<string, GesturePhase>> = {
-  gestureScrollBegin: 'begin',
-  gestureScrollEnd: 'end',
-  gestureFlingStart: 'fling',
-};
 
 export class Browser {
   readonly store: Store;
@@ -1043,6 +1039,16 @@ export class Browser {
     return this.windows.size;
   }
 
+  /**
+   * A trackpad's gesture phase, for tests (chordTestHooks.gesturePhase): what macOS sends with a two-finger swipe, which
+   * a test's own wheel events don't have, on any platform. To the last focused window's shell, as its input-event
+   * handler would.
+   */
+  gesturePhaseForTests(phase: GesturePhase): void {
+    const w = this.windows.get(this.lastWindowId ?? ('' as WindowId));
+    if (w && !w.shell.webContents.isDestroyed()) send(w.shell.webContents, 'gesture:phase', phase);
+  }
+
   /** Each window's last snapshot fallback, for tests (chordTestHooks). */
   snapshotFallbacks(): AppWindow['snapshotFallback'][] {
     return [...this.windows.values()].map((w) => w.snapshotFallback);
@@ -1132,11 +1138,16 @@ export class Browser {
       // A shell that loaded again asks for the card's media itself, and hears every change from now on.
       this.mediaSent.delete(windowId);
     });
-    // The chord swipe's phases (DESIGN.md §6.4): the renderer sees only wheel events, which
-    // don't say when the fingers lift. Where the OS sends none, the shell ends on idle.
+    // The chord swipe's phases (DESIGN.md §6.4): macOS's alone (gesture-phases.ts); elsewhere the shell ends a swipe
+    // when its events stop. A window that loses focus mid-gesture never hears its end: it's sent one.
+    const phases = new GesturePhases(process.platform);
     w.shell.webContents.on('input-event', (_event, input) => {
-      const phase = GESTURE_PHASES[input.type];
+      const phase = phases.input(input.type);
       if (phase) send(w.shell.webContents, 'gesture:phase', phase);
+    });
+    w.window.on('blur', () => {
+      const phase = phases.blurred();
+      if (phase && !w.shell.webContents.isDestroyed()) send(w.shell.webContents, 'gesture:phase', phase);
     });
     this.lastWindowId ??= windowId;
     w.window.on('focus', () => {
