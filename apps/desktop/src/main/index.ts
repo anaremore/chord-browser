@@ -76,6 +76,7 @@ import { PasswordService } from './passwords/service';
 import { PasswordTransfers } from './passwords/transfer';
 import { createPasswordDetector } from './passwords/detector';
 import { proxies } from './proxy';
+import { pageGate } from './page-gate';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
 import { mark, watchLaunch } from './launch-timeline';
@@ -183,6 +184,8 @@ const safeBrowsing = new SafeBrowsing(
  * they never need the network, and otherwise keep the lists they were built with.
  */
 const adBlockingServer = app.isPackaged ? undefined : process.env['CHORD_AD_BLOCKING_URL']?.replace(/\/+$/, '') || undefined;
+/** What a page's first load waits for in its session: its proxy being set, and its chord's ad-blocking rules being on (#189). */
+const pageReady = pageGate<Session>([(ses) => proxies.ready(ses), (ses) => adBlocking.pending(ses)]);
 const adBlocking = new AdBlocking(
   {
     bundledDir: join(import.meta.dirname, 'ad-blocking'),
@@ -1026,12 +1029,7 @@ if (!app.requestSingleInstanceLock()) {
       windowFocused: () => syncService?.focused(),
       // Behind: once no Chord window has the focus a moment later (it went to another app, not to another of Chord's).
       windowBlurred: () => setTimeout(() => (BaseWindow.getFocusedWindow() ? undefined : syncService?.blurred()), 250),
-      // What a page's first load waits for: its proxy being set, and its chord's ad-blocking extension being added (#189).
-      proxyReady: (ses) => {
-        const proxy = proxies.ready(ses);
-        const blocking = adBlocking.pending(ses);
-        return proxy && blocking ? Promise.all([proxy, blocking]).then(() => undefined) : (proxy ?? blocking);
-      },
+      proxyReady: pageReady,
       releaseProfile,
       devtoolsSession,
       adBlocking: {

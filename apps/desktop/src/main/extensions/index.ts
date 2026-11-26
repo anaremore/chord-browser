@@ -49,6 +49,8 @@ export interface ExtensionsDeps {
   state(): State;
   dispatch(command: Command): void;
   profileSession(profileId: string): Session;
+  /** What a page's first load waits for in its session (its proxy, its chord's ad-blocking rules; tabs.ts' whenProxied). */
+  proxyReady?(session: Session): Promise<void> | null;
   /** Where Web Store extensions are unpacked: <userData>/Extensions. */
   root: string;
   /** The library's preload, as built (out/preload/extensions.cjs). */
@@ -267,7 +269,11 @@ export class Extensions {
       if (w && /^(https?|chrome-extension):/i.test(link)) this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: link });
       return { action: 'deny' };
     });
-    void win.loadURL(url).catch(() => {});
+    const load = () => void (win.isDestroyed() ? undefined : win.loadURL(url).catch(() => {}));
+    // Its session's pages wait until it's ready (#189); so does this one.
+    const pending = this.deps.proxyReady?.(win.webContents.session);
+    if (pending) void pending.then(load);
+    else load();
     return win;
   }
 

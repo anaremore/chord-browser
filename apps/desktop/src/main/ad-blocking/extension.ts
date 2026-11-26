@@ -21,7 +21,7 @@
  * on instead fails: Chromium checks the new files against the old checksums.
  * docs/decisions/S11-ad-blocking.md.)
  */
-import { WebContentsView, type Session } from 'electron';
+import { app, WebContentsView, type Session } from 'electron';
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FILTER_LISTS } from './lists';
@@ -31,6 +31,8 @@ import { pageOf } from '../view-page';
 /** The dynamic rule that holds every site blocking is off for. */
 const SITES_RULE_ID = 1;
 const CONTROL_TIMEOUT_MS = 20_000;
+/** Chromium adding the extension: a page waits for it (#189), so never for good. */
+const LOAD_TIMEOUT_MS = 15_000;
 const RULESETS = FILTER_LISTS.map((l) => l.id);
 
 const MANIFEST = {
@@ -42,6 +44,8 @@ const MANIFEST = {
   declarative_net_request: { rule_resources: FILTER_LISTS.map((l) => ({ id: l.id, enabled: true, path: `rules/${l.id}.json` })) },
 };
 const CONTROL_PAGE = '<!doctype html><meta charset="utf-8"><title>Chord ad blocking</title>';
+
+const LOAD_DELAY_MS = !app.isPackaged ? Number(process.env['CHORD_E2E_AD_BLOCKING_DELAY_MS']) || 0 : 0;
 
 function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('The blocker didn’t answer')), ms).unref?.())]);
@@ -75,7 +79,9 @@ export class BlockerExtension {
   /** Load the extension; true if it wasn't loaded. Its rules load a moment later, on Chromium's own threads. */
   async load(): Promise<boolean> {
     if (this.loaded) return false;
-    this.extension = await this.session.extensions.loadExtension(this.folder, { allowFileAccess: false });
+    // Development only: Chromium slow to add it (CHORD_E2E_AD_BLOCKING_DELAY_MS), as on a slow Windows disk (#189).
+    if (LOAD_DELAY_MS) await new Promise((resolve) => setTimeout(resolve, LOAD_DELAY_MS));
+    this.extension = await within(this.session.extensions.loadExtension(this.folder, { allowFileAccess: false }), LOAD_TIMEOUT_MS);
     return true;
   }
 
