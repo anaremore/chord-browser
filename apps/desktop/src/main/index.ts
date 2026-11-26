@@ -372,7 +372,8 @@ function registerIpc(): void {
       history.goForward();
     } else if (action === 'reload') {
       browser!.userNavigates?.(contents);
-      contents.reload();
+      // A page stopped before it ever loaded: its tab's address (round 1 of #282).
+      browser!.tabs.reload(contents);
     }
     else if (action === 'stop') {
       // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).

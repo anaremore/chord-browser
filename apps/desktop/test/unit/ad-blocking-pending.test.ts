@@ -178,6 +178,9 @@ describe('ad blocking: what a page waits for (#189)', () => {
   it('Chromium never answering: released at the 15 s cap, not a moment before, marked timeout', async () => {
     // The cap's timer on a clock the test moves (#277: 50 ms on real timers flaked under load); the files are real.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // The extension's own load gives up at 15 s too (extension.ts' LOAD_TIMEOUT_MS, started a moment later on this
+    // clock): that failure is logged, as it is in Chord, after the cap. Kept off the test's output.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const blocking = service();
       const { session, loads } = chromium();
@@ -206,7 +209,6 @@ describe('ad blocking: what a page waits for (#189)', () => {
         () => (outcome = 'gave up'),
       );
       vi.advanceTimersByTime(14_999);
-      await settled(null);
       for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
       expect(outcome).toBe('pending');
       vi.advanceTimersByTime(1);

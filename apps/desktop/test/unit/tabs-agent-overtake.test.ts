@@ -1,19 +1,49 @@
 /**
- * #277 (from #272's round 2): a load asked for over an agent tab's first page while that page is still being primed (a
- * blank page loaded, its service workers being bypassed) is the page from then on. The priming never lands the first
- * address over it, and the tab's hold is failed (nothing acts there): a page loaded without the bypass.
+ * #277 (from #272's round 2; round 1 of #282): a load asked for over an agent tab's first page before it came (you, in
+ * the address bar), or your Stop while it waits or is being primed (a blank page loaded, its service workers being
+ * bypassed), fails the tab's hold for good: nothing acts there, and a hold failed is never armed again behind your back
+ * (Neon's B1). The overtaking page is the tab's, its address and title reported (Neon's SF2). With the REAL hold
+ * (agents/pickers.ts) on a fake debugger: a mocked one hid B1.
  */
 import { EventEmitter } from 'node:events';
 import { nodesFrom, type Command, type NodeId, type SidebarNode, type State } from '@chord/core';
 import type { Session, WebContentsView } from 'electron';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeView, type FakeContents } from './fake-view';
-import type * as PickersModule from '../../src/main/agents/pickers';
 
-type Pickers = typeof PickersModule;
+/** Debugger commands held until the test lets them answer (by method). */
+const holding = new Map<string, { promise: Promise<void>; release: () => void }>();
+const hold = (method: string) => {
+  let release = () => {};
+  const promise = new Promise<void>((r) => (release = r));
+  holding.set(method, { promise, release });
+  return () => (holding.delete(method), release());
+};
+
+/** A page with a debugger that answers every command (after any hold on it), and its address as last loaded. */
+class AgentView extends FakeView {
+  constructor() {
+    super();
+    const page = this.page as FakeContents & Record<string, unknown>;
+    const events = new EventEmitter();
+    let attached = false;
+    let url = '';
+    page['getURL'] = () => url;
+    page.loadURL.mockImplementation(async (to: string) => void (url = to));
+    page['debugger'] = {
+      isAttached: () => attached,
+      attach: () => void (attached = true),
+      on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
+      sendCommand: async (method: string) => {
+        await holding.get(method)?.promise;
+        return method === 'Runtime.evaluate' ? { result: { value: true } } : undefined;
+      },
+    };
+  }
+}
 
 vi.mock('electron', async () => ({
-  WebContentsView: (await import('./fake-view')).FakeView,
+  WebContentsView: AgentView,
   BaseWindow: class extends EventEmitter {},
   nativeTheme: { on: vi.fn(), off: vi.fn(), shouldUseDarkColors: false },
   screen: {},
@@ -26,31 +56,29 @@ vi.mock('../../src/main/window', async () => {
 });
 vi.mock('../../src/main/app-icon', () => ({ windowIcon: () => undefined }));
 vi.mock('../../src/main/platform', () => ({ platform: 'linux', applyMaterial: vi.fn(), onUiScale: () => () => undefined, systemInfo: () => ({}), titleBarOverlay: () => ({}), trafficLightPosition: () => ({ x: 0, y: 0 }), windowChromeOptions: () => ({}) }));
-/** The hold armed at once; the bypass answered when the test says. */
-const bypass = { answer: (_ok: boolean) => {} };
-vi.mock('../../src/main/agents/pickers', async (actual) => ({
-  ...(await actual<Pickers>()),
-  holdFilePickers: () => Promise.resolve(),
-  bypassServiceWorkers: () => new Promise<boolean>((resolve) => (bypass.answer = resolve)),
-  holdFailed: vi.fn(),
-}));
 const { TabManager } = await import('../../src/main/tabs');
 const pickers = await import('../../src/main/agents/pickers');
 const NODE = 'a1' as NodeId;
 const FIRST = 'https://first.test/';
 const SECOND = 'https://second.test/';
 
-const tick = async () => {
-  for (let i = 0; i < 10; i++) await Promise.resolve();
-};
+afterEach(() => {
+  for (const { release } of holding.values()) release();
+  holding.clear();
+  vi.useRealTimers();
+});
 
-function setup() {
+/** An agent's tab, its session waiting on `gate` (null: ready). */
+function setup(gate: Promise<void> | null = null) {
   const state = { nodes: nodesFrom([{ kind: 'tab', id: NODE, url: FIRST, title: '', section: 'today', chordId: 'ag' } as SidebarNode]), live: {}, windows: {}, chords: { ag: { id: 'ag' } }, settings: { tabCounts: {} } } as unknown as State;
+  let waiting = gate;
+  void gate?.then(() => (waiting = null));
+  const commands: Command[] = [];
   const manager = new TabManager({
     state: () => state,
-    dispatch: (_c: Command) => undefined,
+    dispatch: (c: Command) => void commands.push(c),
     sessionFor: () => ({}) as Session,
-    proxyReady: () => null,
+    proxyReady: () => waiting,
     agentTab: () => true,
     createInternalView: () => new FakeView() as unknown as WebContentsView,
     windowFor: () => 'w1',
@@ -62,36 +90,92 @@ function setup() {
   } as never);
   const page = (manager.ensure(NODE) as unknown as FakeView).page as FakeContents;
   const loaded = () => page.loadURL.mock.calls.map(([url]) => url as string);
-  return { manager, page, loaded };
+  return { manager, page, loaded, commands };
 }
 
-describe('an agent tab’s first page overtaken while it’s primed (#277)', () => {
-  it('your load is the page; the priming never lands the first address over it; the hold is failed', async () => {
-    vi.mocked(pickers.holdFailed).mockClear();
+/** The hold's arming and the tab's priming as far as they go (real timers: a few event-loop turns). */
+const settle = async () => {
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+};
+
+describe('an agent tab’s first page overtaken, or stopped (#277, round 1 of #282)', () => {
+  it('overtaken while primed: your load is the page, reported as the tab’s; the priming never lands over it; the hold failed for good', async () => {
+    // The bypass (its last command) answers when the test says.
+    const bypass = hold('Page.addScriptToEvaluateOnNewDocument');
     const t = setup();
-    await tick();
-    // Primed so far: the blank page, the bypass asked for.
+    await settle();
     expect(t.loaded()).toEqual(['about:blank']);
-    expect(pickers.firstLoadPending(t.page)).toBe(true);
     t.manager.navigate(NODE, SECOND);
     expect(t.loaded()).toEqual(['about:blank', SECOND]);
-    expect(pickers.holdFailed).toHaveBeenCalledWith(t.page);
+    expect(pickers.pickersLost(t.page)).toBe(true);
     expect(pickers.firstLoadPending(t.page)).toBe(false);
-    bypass.answer(true);
-    await tick();
+    // SF2: the overtaking page commits before the bypass answers: it's the tab's, not swallowed as the blank page.
+    t.page.emit('did-navigate', {}, SECOND, 200);
+    expect(t.commands).toContainEqual(expect.objectContaining({ t: 'tab.updated', nodeId: NODE, url: SECOND }));
+    bypass();
+    await settle();
     expect(t.loaded()).toEqual(['about:blank', SECOND]);
   });
 
-  it('its first page come: a later load is only a load (the hold stays)', async () => {
-    vi.mocked(pickers.holdFailed).mockClear();
+  it('its first page come: a later load is only a load (the hold stays on)', async () => {
     const t = setup();
-    await tick();
-    bypass.answer(true);
-    await tick();
+    await settle();
     expect(t.loaded()).toEqual(['about:blank', FIRST]);
-    t.page.emit('did-navigate', {}, FIRST);
+    t.page.emit('did-navigate', {}, FIRST, 200);
     t.manager.navigate(NODE, SECOND);
     expect(t.loaded()).toEqual(['about:blank', FIRST, SECOND]);
-    expect(pickers.holdFailed).not.toHaveBeenCalled();
+    expect(pickers.pickersLost(t.page)).toBe(false);
+  });
+
+  it('Stop while it waits for its session (SF1): nothing loads, the hold is failed, and never armed again behind your back (B1)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // The first arming in flight when Stop comes: its interception answers only later.
+    const interception = hold('Page.setInterceptFileChooserDialog');
+    let open = () => {};
+    const gate = new Promise<void>((r) => (open = r));
+    const t = setup(gate);
+    await settle();
+    expect(t.manager.stopWaiting(t.page as never)).toBe(true);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    expect(pickers.pickersUnsecured(t.page)).toBe(true);
+    expect(pickers.firstLoadPending(t.page)).toBe(false);
+    interception();
+    open();
+    await settle();
+    // Every re-arm the hold would try (250 ms, doubling, 8 times) has had its time: still failed.
+    for (let i = 0; i < 10; i++) {
+      vi.advanceTimersByTime(5000);
+      await settle();
+    }
+    expect(t.loaded()).toEqual([]);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    // A page that loads later (you, in the address bar) doesn't arm it again either.
+    t.page.emit('did-finish-load');
+    await settle();
+    vi.advanceTimersByTime(5000);
+    await settle();
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    expect(await pickers.retryPickers(t.page)).toBe(false);
+  });
+
+  it('Stop while it’s primed (Opus N1): the same, and the priming never loads the first address', async () => {
+    const bypass = hold('Page.addScriptToEvaluateOnNewDocument');
+    const t = setup();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank']);
+    expect(t.manager.stopWaiting(t.page as never)).toBe(true);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    expect(pickers.firstLoadPending(t.page)).toBe(false);
+    bypass();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank']);
+  });
+
+  it('Stop once its first page has started loading: only the page’s own Stop, the hold stays on', async () => {
+    const t = setup();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    expect(t.manager.stopWaiting(t.page as never)).toBe(false);
+    expect(pickers.pickersLost(t.page)).toBe(false);
   });
 });

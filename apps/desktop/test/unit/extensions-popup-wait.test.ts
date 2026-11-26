@@ -40,9 +40,14 @@ const tick = async () => {
 /** A pop-out opened while its session waits on `waits`, in order: proxyReady answers the first not over, else null. */
 function popOut(waits: Array<ReturnType<typeof held>>) {
   FakeWindow.made.length = 0;
-  const extensions = new Extensions({ profileSession: () => ({}), proxyReady: () => waits.find((w) => !w.over)?.promise ?? null } as never);
+  const asked: object[] = [];
+  const extensions = new Extensions({ profileSession: () => ({}), proxyReady: (session: object) => (asked.push(session), waits.find((w) => !w.over)?.promise ?? null) } as never);
   (extensions as unknown as { openPopupWindow(p: string, u: string, d: object): unknown }).openPopupWindow('default', 'chrome-extension://x/popup.html', {});
-  return FakeWindow.made[0]!;
+  const win = FakeWindow.made[0]!;
+  // Asked about the window's own session, every time (round 1 of #282).
+  expect(asked.length).toBeGreaterThan(0);
+  for (const session of asked) expect(session).toBe(win.webContents.session);
+  return win;
 }
 
 describe('an extension’s pop-out waits for its session (#277)', () => {

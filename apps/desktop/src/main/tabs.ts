@@ -153,12 +153,13 @@ export class TabManager {
   }
 
   /**
-   * Your Stop on a page whose load is still waiting for its session (#277): that load is dropped (as one asked for over
-   * it is; an agent tab's first page is overtaken, its hold failed), and the tab stops showing loading. False when no
-   * load was waiting: the page's own Stop is all there is.
+   * Your Stop on a page whose load is still waiting for its session (#277), or on an agent tab still being primed for
+   * its first page (round 1 of #282): that load is dropped (as one asked for over it is; an agent tab's first page is
+   * overtaken, its hold failed), and the tab stops showing loading. False when no load was waiting and none is being
+   * primed: the page's own Stop is all there is, and a first page already loading keeps its hold.
    */
   stopWaiting(contents: WebContents): boolean {
-    if (!this.waiting.has(contents)) return false;
+    if (!this.waiting.has(contents) && !this.priming.has(contents)) return false;
     this.waiting.delete(contents);
     this.loadTurns.get(contents)?.overtaken?.();
     this.loadTurns.set(contents, {});
@@ -166,6 +167,17 @@ export class TabManager {
     const nodeId = this.nodeFor(contents);
     if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
     return true;
+  }
+
+  /**
+   * Your Reload (round 1 of #282): a page that never loaded (stopped while it waited for its session) has nothing to
+   * reload, so its tab's address loads, as a navigation; any other page reloads.
+   */
+  reload(contents: WebContents): void {
+    const nodeId = this.nodeFor(contents);
+    const node = nodeId ? nodeOf(this.deps.state(), nodeId) : undefined;
+    if (nodeId && node?.kind === 'tab' && contents.navigationHistory.length() === 0) return this.navigate(nodeId, node.url);
+    contents.reload();
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
@@ -309,6 +321,8 @@ export class TabManager {
       if (overtaken) return;
       this.priming.add(contents);
       await contents.loadURL('about:blank').catch(() => undefined);
+      // Overtaken while the blank page loaded: no bypass asked for a page that isn't this one's (round 1 of #282).
+      if (overtaken) return;
       const bypassed = await bypassServiceWorkers(contents);
       this.priming.delete(contents);
       // Another load came first (whenProxied): it's the page now, never this one over it.
@@ -335,6 +349,9 @@ export class TabManager {
     const overtake = () => {
       if (!firstLoadPending(contents)) return;
       overtaken = true;
+      // The overtaking page is the tab's: its address, title and history reported, never swallowed as the blank page's
+      // (Neon's SF2 on #282).
+      this.priming.delete(contents);
       holdFailed(contents);
       setFirstLoadPending(contents, false);
     };

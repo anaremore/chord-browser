@@ -14,17 +14,24 @@ vi.mock('electron', () => {
 const { Browser } = await import('../../src/main/browser');
 
 describe('an image search’s upload waits with the tab’s first load (#277)', () => {
-  it.each(['front', 'background'] as const)('a new tab (%s): the upload goes through whenProxied, and loads only when it says', (where) => {
+  // A new tab in front or behind (openTabFor), or the tab on screen (its address was being edited: it moves, so an agent's
+  // tab is yours from there, userNavigates).
+  it.each(['front', 'background', 'current'] as const)('%s: the upload goes through whenProxied, and loads only when it says', (where) => {
     const contents = { isDestroyed: () => false, loadURL: vi.fn(async (_url: string, _options?: object) => undefined) };
     const whenProxied = vi.fn();
+    const openTabFor = vi.fn(() => contents);
+    const userNavigates = vi.fn();
     const self = {
       store: { state: { settings: { googleFree: false } } },
-      openTabFor: () => contents,
+      openTabFor,
+      userNavigates,
       tabs: { whenProxied },
       options: { proxyReady: () => null },
     };
     const image = { bytes: new Uint8Array([1, 2, 3]), width: 1, height: 1, originalWidth: 1, originalHeight: 1 };
-    Browser.prototype.searchByImage.call(self as never, {} as never, 'bing', image, where);
+    Browser.prototype.searchByImage.call(self as never, { activeTabContents: contents } as never, 'bing', image, where);
+    expect(openTabFor).toHaveBeenCalledTimes(where === 'current' ? 0 : 1);
+    expect(userNavigates).toHaveBeenCalledTimes(where === 'current' ? 1 : 0);
     expect(whenProxied).toHaveBeenCalledOnce();
     expect(whenProxied.mock.calls[0]![0]).toBe(contents);
     // Nothing loads until the tab's wait lets it.
