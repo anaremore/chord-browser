@@ -225,6 +225,10 @@ function fakePage(url: string, read: Answer) {
     navigate?: (url: string) => void;
     /** #143: the page goes (its tab closed). */
     destroy?: () => void;
+    /** #143: a load that commits and never stops (its did-stop-loading never comes). */
+    stallLoad?: boolean;
+    /** #143: the page starts a navigation of its own (a step's after-load wait then waits for it). */
+    startNavigation?: () => void;
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
     /** The page's requests went (deep.ping, deep.posts): once per page. */
@@ -241,12 +245,17 @@ function fakePage(url: string, read: Answer) {
     events.emit('did-navigate');
   };
   at.destroy = () => void events.emit('destroyed');
+  at.startNavigation = () => {
+    at.loading = true;
+    events.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, url: 'https://news.test/next' });
+  };
   at.emitDebug = (method, params, sessionId) => void debugEvents.emit('message', {}, method, params, sessionId);
   const go = (index: number) => {
     at.active = index;
     at.url = at.history[index]!.url;
     events.emit('did-navigate');
-    events.emit('did-stop-loading');
+    if (at.stallLoad) at.loading = true;
+    else events.emit('did-stop-loading');
   };
   const contents = {
     // Acting (S18 M2c): what an action sends, recorded.
@@ -280,7 +289,16 @@ function fakePage(url: string, read: Answer) {
       canGoBack: () => at.active > 0,
       getActiveIndex: () => at.active,
       getEntryAtIndex: (i: number) => at.history[i],
-      goToIndex: (i: number) => go(i),
+      goToIndex: (i: number) => {
+        // A page that sends as it's left (deep.postsOnLoad), going back too (#143's back card).
+        if (!at.sent && at.deep.postsOnLoad) {
+          at.sent = true;
+          setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r2', request: { method: 'POST', url: 'https://news.test/beacon' }, resourceType: 'Fetch' }), 0);
+          setTimeout(() => go(i), 5);
+          return;
+        }
+        go(i);
+      },
       // Chromium's: past the entries the page added without a gesture.
       goBack: () => {
         let i = at.active - 1;
@@ -2609,10 +2627,10 @@ describe('acting through the gate (S18 M2c)', () => {
       // Round 2 of #266 (Neon, Opus). Each fails at 86d013b, or with its fix taken out.
       describe('round 2', () => {
         /** A step whose page posts, its card held, called on fake timers. `ms`: how long to let it run. */
-        async function stepPast(o: { tool?: 'click' | 'navigate'; deadline?: number; ms?: number; onCard?: (t: Awaited<ReturnType<typeof acting>>) => void; twist?: Twist; mayAct?: () => string | null; postsTo?: string[]; stopAt?: number } = {}) {
+        async function stepPast(o: { tool?: 'click' | 'navigate' | 'back'; deadline?: number; ms?: number; onCard?: (t: Awaited<ReturnType<typeof acting>>) => void; twist?: Twist; mayAct?: () => string | null; postsTo?: string[]; stopAt?: number; before?: (t: Awaited<ReturnType<typeof acting>>) => void; posts?: boolean; at?: { ms: number; run: (t: Awaited<ReturnType<typeof acting>>) => void } } = {}) {
           const box: { t?: Awaited<ReturnType<typeof acting>> } = {};
           const t = await acting({
-            deep: o.tool === 'navigate' ? { postsOnLoad: true } : o.postsTo ? { postsTo: o.postsTo } : { posts: true },
+            deep: o.posts === false ? {} : o.tool === 'navigate' || o.tool === 'back' ? { postsOnLoad: true } : o.postsTo ? { postsTo: o.postsTo } : { posts: true },
             answer: 'hold',
             cardWaitMs: 50_000,
             sendWaitMs: 90_000,
@@ -2622,29 +2640,48 @@ describe('acting through the gate (S18 M2c)', () => {
             act: { siteAllowed: () => true, ...(o.mayAct ? { mayAct: o.mayAct } : {}) },
           });
           box.t = t;
+          o.before?.(t);
           const codesAtCall = o.twist?.codes?.length ?? 0;
           vi.useFakeTimers();
           let out: { text?: string; isError?: boolean } | undefined;
-          const args = o.tool === 'navigate' ? { tab_id: t.tab, url: 'https://news.test/b' } : { tab_id: t.tab, ref: 'e1' };
+          const args = o.tool === 'navigate' ? { tab_id: t.tab, url: 'https://news.test/b' } : o.tool === 'back' ? { tab_id: t.tab } : { tab_id: t.tab, ref: 'e1' };
           const stop = new AbortController();
           // Stop (the user's: the agent's Stop) at `stopAt`, on the fake clock.
           if (o.stopAt !== undefined) setTimeout(() => t.agent.stop(), o.stopAt);
+          // Something that happens during the call, on the fake clock.
+          if (o.at) setTimeout(() => o.at!.run(t), o.at.ms);
           void t.callUntil(o.tool ?? 'click', args, stop.signal).then((x) => void (out = x));
           await vi.advanceTimersByTimeAsync(o.ms ?? 60_000);
           const later = () => (t.scope.memory.later ?? []).map((l) => l.entry);
           return { t, out: () => out, later, codesSince: () => (o.twist?.codes ?? []).slice(codesAtCall) };
         }
 
-        it('blocker 1: past the deadline with no card up, nothing keeps looking for one once the call answered (no poller left)', async () => {
-          const t = await acting({ callDeadlineMs: 1, act: { siteAllowed: () => true } });
+        it('blocker 1: past the deadline with something held and no card up, byDeadline waits for the card without a timer, wakes when it opens, and leaves nothing behind', async () => {
           vi.useFakeTimers();
-          let answered = false;
-          void t.call('click', { tab_id: t.tab, ref: 'e1' }).then(() => void (answered = true));
-          await vi.advanceTimersByTimeAsync(20_000);
-          expect(answered).toBe(true);
-          const set = vi.spyOn(globalThis, 'setTimeout');
-          await vi.advanceTimersByTimeAsync(2_000);
-          expect(set, 'a timer set again and again after the answer').not.toHaveBeenCalled();
+          const agent = new ControlAgent('t', () => new Promise<Grant>(() => undefined));
+          const cards = new OpenCards(agent, 'n1');
+          let settled: unknown;
+          void byDeadline(new Promise(() => undefined), Date.now() + 1_000, cards, Promise.resolve(), () => 1).then((r) => void (settled = r));
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(settled).toBeUndefined();
+          // Waiting for the card: no timer (a poller would keep one).
+          expect(vi.getTimerCount(), 'a timer left waiting for the card').toBe(0);
+          void cards.ask(() => agent.ask(card({ kind: 'step', subject: 'sends' }), new AbortController().signal))();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).toEqual({ later: true });
+          expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it('opened() with a stop already aborted waits for nothing and leaves nothing listening', async () => {
+          const agent = new ControlAgent('t', async () => 'once');
+          const cards = new OpenCards(agent, 'n1');
+          const stop = new AbortController();
+          stop.abort();
+          let woke = false;
+          void cards.opened(stop.signal).then(() => void (woke = true));
+          void cards.ask(() => agent.ask(card({ kind: 'step', subject: 'sends' }), new AbortController().signal))();
+          await new Promise((r) => setTimeout(r, 0));
+          expect(woke).toBe(false);
         });
 
         it('blocker 2: navigate’s card allowed after the page moved on sends nothing, and says none went (never “some”)', async () => {
@@ -2673,12 +2710,20 @@ describe('acting through the gate (S18 M2c)', () => {
         });
 
         for (const tool of ['click', 'navigate'] as const) {
-          it(`Stop at the deadline, for ${tool}: never a hand-over, the card down, nothing later`, async () => {
-            const { t, out, later } = await stepPast({ tool, stopAt: 50_000 });
-            expect(out()?.text ?? '').not.toContain('sending');
+          it(`Stop right as ${tool} hands over (its own deadline moment): its cards down, nothing waits, and the answer and the outcome agree`, async () => {
+            const at = { start: 0 };
+            const { t, out, later } = await stepPast({
+              tool,
+              before: () => void (at.start = Date.now()),
+              // Armed when the card opens: after byDeadline's own timer, so the hand-over comes first and Stop right after.
+              onCard: (t) => void setTimeout(() => t.agent.stop(), at.start + 50_000 - Date.now()),
+            });
             expect(t.agent.state('n1').cards).toEqual([]);
             expect(t.scope.memory.sendsWaiting?.size).toBe(0);
-            expect(later()).toEqual([]);
+            // Said to wait: its outcome is Stop. Refused: nothing later.
+            const said = JSON.parse(out()!.text!) as { data: { sending?: string } };
+            if (said.data.sending) expect(later().map((e) => e.why)).toEqual(['The step ran; what it sent didn’t go: the user pressed Stop.']);
+            else expect(later()).toEqual([]);
           });
         }
 
@@ -2691,7 +2736,7 @@ describe('acting through the gate (S18 M2c)', () => {
 
         it('after a hand-over, no diff of the page and no wait for its load: answered at the deadline though the page never stops loading', async () => {
           const twist: Twist = { codes: [] };
-          const { out, codesSince } = await stepPast({ twist, deadline: 2_000, ms: 2_500, onCard: (t) => void (t.at.loading = true) });
+          const { out, codesSince } = await stepPast({ twist, deadline: 2_000, ms: 2_500, onCard: (t) => t.at.startNavigation!() });
           expect(out(), 'answered by the deadline, not after the 10 s load').toBeDefined();
           expect(JSON.parse(out()!.text!).data).toMatchObject({ sending: ACT_SENDS_WAITING, loading: true });
           // No pageChanges: no snapshot read since the call began.
@@ -2721,12 +2766,16 @@ describe('acting through the gate (S18 M2c)', () => {
           expect(settled).toEqual({ later: true });
         });
 
-        it('the page moving on after an Allow, with nothing held and no card up: the outcome stays “went”, never “moved on”', async () => {
-          const { t, later } = await stepPast();
+        it('the page moving on after an Allow (nothing held, no card up), the step still loading: never “moved on”; “went” once it’s done', async () => {
+          const { t, later } = await stepPast({ deadline: 2_000, ms: 2_500, onCard: (t) => t.at.startNavigation!() });
           t.holds.at(-1)!('once');
           await vi.advanceTimersByTimeAsync(0);
+          // The step's still under way (its load): the hand-over hasn't settled, and still listens.
+          expect(later()).toEqual([]);
           t.at.navigate!('https://news.test/after');
           await vi.advanceTimersByTimeAsync(0);
+          expect(later(), 'settled as moved on with nothing held').toEqual([]);
+          await vi.advanceTimersByTimeAsync(15_000);
           expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'allowed', true)]);
         });
 
@@ -2767,6 +2816,12 @@ describe('acting through the gate (S18 M2c)', () => {
           t.agent.stop();
           await vi.advanceTimersByTimeAsync(0);
           expect(entries()).toBe(1);
+          // settle itself, twice: one entry.
+          const once = new HandedOver({ nodeId: 'n3', tab: 't3', tool: 'click', step: 'y', w: { held: () => [], deny: () => undefined, end: () => undefined, cancelled: new AbortController().signal } as unknown as SendWatch, allowed: () => 0, cards: new OpenCards(t.agent, 'n3'), cardsEnd: new AbortController(), memory, from: undefined, live: () => null, onLeave: () => () => undefined });
+          once.settle('no');
+          once.settle('stopped');
+          expect(later().filter((e) => e.tab_id === 't3').map((e) => e.why)).toEqual(['The step ran; what it sent didn’t go: the user said no.']);
+          memory.later = memory.later!.filter((l) => l.entry.tab_id !== 't3');
           // A HandedOver settled, then withdrawn: no entry left for a call that answered an error.
           const w = { held: () => [], deny: () => undefined, end: () => undefined, cancelled: new AbortController().signal } as unknown as SendWatch;
           const handed = new HandedOver({ nodeId: 'n2', tab: 't2', tool: 'click', step: 'x', w, allowed: () => 0, cards: new OpenCards(t.agent, 'n2'), cardsEnd: new AbortController(), memory, from: undefined, live: () => null, onLeave: () => () => undefined });
@@ -2789,6 +2844,54 @@ describe('acting through the gate (S18 M2c)', () => {
           const { t, out } = await stepPast({ tool: 'navigate' });
           expect(JSON.parse(out()!.text!).data).toEqual(expect.objectContaining({ page_id: expect.any(String), url: expect.any(String), title: expect.any(String) }));
           expect(t.cards.find((c) => c.step?.why === 'send')!.description).toBe('is going to news.test/b');
+        });
+
+        it('nit: back’s card reads as a sentence', async () => {
+          const { t } = await stepPast({ tool: 'back', before: (t) => void (t.at.history = [{ url: 'https://news.test/before' }, { url: t.at.url }], t.at.active = 1) });
+          expect(t.cards.find((c) => c.step?.why === 'send')!.description).toBe('is going back');
+        });
+
+        // The blocker of round 3: navigate's `past` (nothing held at the deadline, the page still loading) checks first.
+        for (const [what, setUp, why] of [
+          ['a redirect to a Never site', (t: Awaited<ReturnType<typeof acting>>) => void (t.at.redirects = { 'https://news.test/b': 'https://private.test/x' }), 'This page can never be read'],
+          ['a paused tab', (t: Awaited<ReturnType<typeof acting>>) => t.agent.pause('n1', true), CONTROL_REFUSALS.paused],
+          ['a lost hold', (t: Awaited<ReturnType<typeof acting>>) => void pickers.lost.add(t.pages.get('n1')!.contents), 'Chord couldn’t check that page right now'],
+        ] as const) {
+          it(`navigate past its deadline, still loading, on ${what}: refused, never “Going to…” with the page`, async () => {
+            // A redirect is there before the call; a pause or a lost hold comes during it (the fake clock, at 1 s).
+            const during = what !== 'a redirect to a Never site';
+            const { t, out } = await stepPast({ tool: 'navigate', posts: false, deadline: 2_000, ms: 3_000, before: (t) => ((t.at.stallLoad = true), during ? undefined : setUp(t)), ...(during ? { at: { ms: 1_000, run: setUp } } : {}) });
+            expect(out(), 'answered by the deadline').toBeDefined();
+            expect(out()!.isError).toBe(true);
+            expect(out()!.text).toContain(why.slice(0, 30));
+            expect(out()!.text).not.toContain('private.test');
+            pickers.lost.delete(t.pages.get('n1')!.contents);
+          });
+        }
+
+        it('navigate past its deadline, still loading, readable: answered then, `loading`, never `sending`', async () => {
+          const { out } = await stepPast({ tool: 'navigate', posts: false, deadline: 2_000, ms: 3_000, before: (t) => void (t.at.stallLoad = true) });
+          expect(out()!.isError).toBeFalsy();
+          expect(JSON.parse(out()!.text!).data).toMatchObject({ done: 'Going to news.test/b', loading: true });
+          expect(JSON.parse(out()!.text!).data).not.toHaveProperty('sending');
+        });
+
+        it('click past its deadline (nothing held), the page it set off gone where it can’t be read: refused, never its page', async () => {
+          const box: { t?: Awaited<ReturnType<typeof acting>> } = {};
+          // The click sets off a navigation (afterActing waits for its load) to a Never site, still loading at the deadline.
+          const t = await acting({ callDeadlineMs: 2_000, act: { siteAllowed: () => true }, onAct: (_e, op) => {
+            if (op !== 'hit' || !box.t || box.t.at.loading) return;
+            box.t.at.startNavigation!();
+            box.t.go('n1', 'https://private.test/x', true);
+          } });
+          box.t = t;
+          vi.useFakeTimers();
+          let out: { text?: string; isError?: boolean } | undefined;
+          void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((x) => void (out = x));
+          await vi.advanceTimersByTimeAsync(3_000);
+          expect(out, 'answered by the deadline').toBeDefined();
+          expect(out!.isError).toBe(true);
+          expect(out!.text).not.toContain('private.test');
         });
 
         it('the next reply carries `later` inside the untrusted envelope; the hand-over reply never does (laterContent)', () => {

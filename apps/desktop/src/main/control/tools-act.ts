@@ -361,8 +361,13 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
             w.deny();
             sent = no;
           } else handed = handOver(w, counted.allowed, cards, cardsEnd, stepWords, sending);
-        } else if ('past' in settled) past = true;
-        else {
+        } else if ('past' in settled) {
+          // Past the deadline with nothing held: the same checks first (Neon's round 3): never a page that can't be read
+          // (a redirect to a Never site still loading), nor Stop, your hand or a lost hold, answered as *Going to…*.
+          const no = halt() ?? blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
+          if (no) sent = no;
+          else past = true;
+        } else {
           sent = settled.sent;
           went = await going;
         }

@@ -60,6 +60,8 @@ export class OpenCards {
   /** Resolves when one is up (at once if one is); stops waiting, unresolved, when `stop` aborts. */
   opened(stop: AbortSignal): Promise<void> {
     if (this.isUp()) return Promise.resolve();
+    // Already stopped: nothing to wait for, and nothing left listening.
+    if (stop.aborted) return new Promise(() => undefined);
     return new Promise((done) => {
       const forget = () => this.waiting.delete(wake);
       const wake = () => {
