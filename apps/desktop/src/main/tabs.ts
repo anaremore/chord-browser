@@ -204,11 +204,19 @@ export class TabManager {
    */
   go(contents: WebContents, way: 'back' | 'forward'): void {
     if (contents.isDestroyed()) return;
-    // Once its session is ready (Neon's B2, round 1 of #292), and only if there's still somewhere to go then.
+    const can = () => (way === 'back' ? contents.navigationHistory.canGoBack() : contents.navigationHistory.canGoForward());
+    // Nowhere to go: nothing, and a load waiting isn't dropped for it (round 2 of #292).
+    if (!can()) return;
+    // Once its session is ready (Neon's B2, round 1 of #292), and only if there's still somewhere to go then; if not,
+    // the tab stops showing loading, put on while it waited (round 2 of #292).
     this.whenProxied(contents, () => {
-      const history = contents.navigationHistory;
-      if (way === 'back' && history.canGoBack()) history.goBack();
-      else if (way === 'forward' && history.canGoForward()) history.goForward();
+      if (!can()) {
+        const nodeId = this.nodeFor(contents);
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+        return;
+      }
+      if (way === 'back') contents.navigationHistory.goBack();
+      else contents.navigationHistory.goForward();
     });
   }
 

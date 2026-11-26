@@ -204,7 +204,18 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(done()).toHaveBeenCalledOnce();
   });
 
-  it('Back once its session is ready, but nothing left to go back to by then: nothing', async () => {
+  it('Back or Forward with nowhere to go: nothing, and a load waiting isn’t dropped for it (round 2 of #292)', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    Object.assign(t.page.navigationHistory, { canGoBack: () => false, canGoForward: () => false, goBack: vi.fn(), goForward: vi.fn() });
+    t.manager.go(t.page as never, 'back');
+    rules.resolve();
+    await tick();
+    // The tab's first load, which was waiting, still came.
+    expect(t.loaded()).toEqual([FIRST]);
+  });
+
+  it('Back once its session is ready, but nothing left to go back to by then: nothing, and the tab stops showing loading', async () => {
     const rules = held();
     const t = setup([]);
     let can = true;
@@ -216,6 +227,8 @@ describe('a page’s load waiting for its session (#189)', () => {
     rules.resolve();
     await tick();
     expect(goBack).not.toHaveBeenCalled();
+    // Its spinner, put on while it waited, comes off (round 2 of #292).
+    expect(t.commands.filter((c) => c.t === 'tab.live').at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
   });
 
   it('closed while a load waits (Neon’s SF2): the close takes a moment, and no load starts in it', async () => {
@@ -229,12 +242,28 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.loaded()).toEqual([]);
   });
 
+  it('a floating page (Peek, a mini window) closed while its load waits (round 2 of #292): no load starts in its close', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    const view = t.manager.createFloating('f1' as NodeId, { session: {} as Session, url: SECOND, private: false }) as unknown as FakeView;
+    const page = view.page as FakeContents;
+    page.close.mockImplementation(() => undefined);
+    t.manager.closeFloating('f1' as NodeId);
+    rules.resolve();
+    await tick();
+    expect(page.loadURL).not.toHaveBeenCalled();
+  });
+
   it('Reload, Back or Forward on a page already gone (Neon’s SF3: its menu outlived it): nothing', () => {
     const t = setup([]);
     t.page.loadURL.mockClear();
     t.page.destroyed = true;
     const goBack = vi.fn();
-    Object.assign(t.page.navigationHistory, { goBack, canGoBack: () => true });
+    // As Electron's does: a page gone throws on its history (round 2 of #292).
+    const gone = () => {
+      throw new Error('Object has been destroyed');
+    };
+    Object.assign(t.page.navigationHistory, { goBack, canGoBack: gone, canGoForward: gone, length: gone, getEntryAtIndex: gone });
     expect(() => t.manager.reload(t.page as never)).not.toThrow();
     expect(() => t.manager.go(t.page as never, 'back')).not.toThrow();
     expect(t.page.reload).not.toHaveBeenCalled();
