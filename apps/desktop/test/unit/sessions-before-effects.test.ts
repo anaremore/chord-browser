@@ -15,6 +15,7 @@ import { emptyState, proxyFor, setNode, IDLE_LIVE, type Chord, type Command, typ
 import type { Session, WebContentsView } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeView } from './fake-view';
+import { code } from './source-code';
 
 /** Each page's loads, with the proxy its session had in place at the time. */
 const loads: Array<{ url: string; proxy: string }> = [];
@@ -118,7 +119,7 @@ function app() {
     }
   });
   // index.ts': sessions follow the settings before any effect runs.
-  store.subscribeFirst((change) => followSessions(change, { proxies, adBlocking: { sync: vi.fn() } }));
+  store.setBeforeEffects((change) => followSessions(change, { proxies, adBlocking: { sync: vi.fn() } }));
   return { store, tabs, proxies, sessionFor };
 }
 
@@ -171,14 +172,37 @@ describe('a tab never loads before its session’s proxy is set (#328)', () => {
 });
 
 describe('the store’s listeners (#328)', () => {
-  it('one subscribed first runs before every other, whenever each subscribed', () => {
+  it('the before-effects listener runs before every other, whenever it was set', () => {
     const store = new Store(initial());
     const order: string[] = [];
     store.subscribe(() => order.push('effects'));
-    store.subscribeFirst(() => order.push('sessions'));
+    store.setBeforeEffects(() => order.push('sessions'));
     store.subscribe(() => order.push('later'));
     store.dispatch({ t: 'chord.update', chordId: 'lab', name: 'Lab 2' });
     expect(order).toEqual(['sessions', 'effects', 'later']);
+  });
+
+  it('only one runs before the effects (Opus’s SF1, round 1 of #332): a second throws, and the first stays', () => {
+    const store = new Store(initial());
+    const order: string[] = [];
+    store.setBeforeEffects(() => order.push('sessions'));
+    expect(() => store.setBeforeEffects(() => order.push('another'))).toThrow();
+    store.dispatch({ t: 'chord.update', chordId: 'lab', name: 'Lab 2' });
+    expect(order).toEqual(['sessions']);
+  });
+
+  it('its disposer takes it away (Neon’s round 1 of #332): it runs no more, and another can be set', () => {
+    const store = new Store(initial());
+    const order: string[] = [];
+    const off = store.setBeforeEffects(() => order.push('sessions'));
+    off();
+    store.dispatch({ t: 'chord.update', chordId: 'lab', name: 'Lab 2' });
+    expect(order).toEqual([]);
+    store.setBeforeEffects(() => order.push('again'));
+    // A disposer used late leaves the newer one alone.
+    off();
+    store.dispatch({ t: 'chord.update', chordId: 'lab', name: 'Lab 3' });
+    expect(order).toEqual(['again']);
   });
 });
 
@@ -205,14 +229,18 @@ describe('what sessions follow (#328)', () => {
 
 describe('the order, as main wires it (#328)', () => {
   const main = join(import.meta.dirname, '../../src/main');
-  it('index.ts has sessions follow the settings from a listener subscribed first', () => {
-    expect(readFileSync(join(main, 'index.ts'), 'utf8')).toMatch(/store\.subscribeFirst\(\(change\) => followSessions\(change, \{ proxies, adBlocking \}\)\)/);
+  /** A file's code, comments blanked out (a comment that mentions a call neither makes nor breaks the rule). */
+  const source = (file: string) => code(readFileSync(join(main, file), 'utf8'));
+
+  it('index.ts has sessions follow the settings as the store’s before-effects listener', () => {
+    const wired = /\.setBeforeEffects\(\s*\(?\s*\w+\s*\)?\s*=>\s*followSessions\(/;
+    expect(wired.test(source('index.ts')), 'index.ts: store.setBeforeEffects((change) => followSessions(change, …))').toBe(true);
   });
 
-  it('nothing else in main syncs proxies on a change (a listener that could run after the effects)', () => {
+  it('nothing else in main syncs proxies (a listener that could run after the effects)', () => {
     const calls = readdirSync(main, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.ts'))
-      .filter((f) => /\bproxies\.sync\(/.test(readFileSync(join(main, f), 'utf8')))
+      .filter((f) => /\bproxies\??\.sync\s*\(/.test(source(f)))
       .map((f) => f.replaceAll('\\', '/'));
     expect(calls).toEqual(['sessions-follow.ts']);
   });

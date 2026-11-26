@@ -1123,7 +1123,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // Proxies and ad blocking follow the settings before Browser's effects run (a tab made again in a session waits for
     // its proxy: Undo of a change of sign-ins, a chord restored, #328).
-    browser.store.subscribeFirst((change) => followSessions(change, { proxies, adBlocking }));
+    browser.store.setBeforeEffects((change) => followSessions(change, { proxies, adBlocking }));
     safeBrowsing.sync();
     adBlocking.sync();
     // Every chord's session, made now, so each one's blocker extension has loaded before any of its pages loads (below).

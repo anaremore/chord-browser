@@ -14,6 +14,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { code } from './source-code';
 
 const repo = resolve(import.meta.dirname, '../../../..');
 const MAIN = join(repo, 'apps/desktop/src/main');
@@ -28,31 +29,6 @@ function files(dir: string, test: (name: string) => boolean): string[] {
 
 const rel = (file: string, from = MAIN) => relative(from, file).replaceAll('\\', '/');
 const lineOf = (text: string, at: number) => text.slice(0, at).split('\n').length;
-
-/** The text with comments blanked out (lengths and lines kept), and strings left as they are. */
-function code(text: string): string {
-  let out = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (ch === '/' && text[i + 1] === '/') {
-      const end = text.indexOf('\n', i);
-      const stop = end === -1 ? text.length : end;
-      out += ' '.repeat(stop - i);
-      i = stop - 1;
-    } else if (ch === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      const stop = end === -1 ? text.length : end + 2;
-      out += text.slice(i, stop).replace(/[^\n]/g, ' ');
-      i = stop - 1;
-    } else if (ch === "'" || ch === '"' || ch === '`') {
-      let j = i + 1;
-      for (; j < text.length && text[j] !== ch; j++) if (text[j] === '\\') j++;
-      out += text.slice(i, j + 1);
-      i = j;
-    } else out += ch;
-  }
-  return out;
-}
 
 /** The text between the `(` at `open` and its matching `)`, past strings. */
 function balanced(text: string, open: number, [o, c] = ['(', ')']): string {
