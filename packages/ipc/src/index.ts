@@ -1113,6 +1113,11 @@ export interface AdBlockingStatus {
   lists: { id: string; name: string; version: string | null; checkedAt: number | null }[];
   /** The last refresh failed; Chord tries again later and keeps blocking with the lists it has. */
   failing: boolean;
+  /**
+   * Chords' profiles whose blocking isn't on though the switch is (#284): adding it failed, or it wasn't on by the time
+   * their pages stopped waiting, so their pages load without it. Each failed, or being tried again (`adBlocking:retry`).
+   */
+  notOn: { profileId: string; state: 'failed' | 'retrying' }[];
 }
 
 /** The permissions a site can be asked for, in Settings' order. */
@@ -1851,6 +1856,8 @@ export const invokeChannels = {
   'safeBrowsing:proceed': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** Ad and tracker blocking's lists (ARCHITECTURE.md §9), for Settings → Privacy. */
   'adBlocking:status': { roles: ['internal'], request: z.void(), response: z.custom<AdBlockingStatus>() },
+  // Settings → Privacy's Try again, for a chord whose blocking didn't come on (#284).
+  'adBlocking:retry': { roles: ['internal'], request: z.object({ profileId: z.string().max(200) }), response: z.void() },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   // Taking a screenshot (DESIGN.md §7.12), from the overlay's capture mode: the element under the pointer (UI units),
   // its parent or child, what to take, and the wheel passed on to the page.
@@ -2384,6 +2391,7 @@ export interface SettingsApi {
     safeBrowsing(): Promise<SafeBrowsingStatus>;
     /** Settings → Privacy → Block ads and trackers: the lists on this computer. */
     adBlocking(): Promise<AdBlockingStatus>;
+    retryAdBlocking(profileId: string): Promise<void>;
     /** Settings → General → Chord Player. */
     player(): Promise<PlayerStatus>;
     /** Installs Chord Player, and opens nothing; resolves once it's installed or failed. */

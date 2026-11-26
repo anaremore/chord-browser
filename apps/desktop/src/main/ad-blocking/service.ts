@@ -106,6 +106,13 @@ interface Profile {
   /** Ends that wait (once; later calls do nothing), marking how. */
   release: (status: RulesStatus) => void;
   released: boolean;
+  /**
+   * Its blocking isn't on though the switch is (#284): it failed, or wasn't on by the cap (its pages didn't wait any
+   * longer), or Settings' Try again is under way. Null once its rules are on. Settings → Privacy lists it (status).
+   */
+  notOn: 'failed' | 'retrying' | null;
+  /** Its rules' last apply failed: the next sync applies them again, whatever else is current. */
+  applyFailed: boolean;
 }
 
 interface Page {
@@ -184,6 +191,7 @@ export class AdBlocking {
       active: this.deps.enabled(),
       lists: FILTER_LISTS.map((l) => ({ id: l.id, name: l.name, version: this.current?.info.versions[l.id] ?? null, checkedAt: this.saved.lists[l.id]?.checkedAt ?? null })),
       failing: this.failing,
+      notOn: this.deps.enabled() ? [...this.profiles].filter(([, p]) => p.blocker && p.notOn).map(([profileId, p]) => ({ profileId, state: p.notOn! })) : [],
     };
   }
 
@@ -214,10 +222,14 @@ export class AdBlocking {
     let resolve = () => {};
     const rulesOn = new Promise<void>((done) => (resolve = done));
     // A private window's session has no extension: its handler is in place before its first page, nothing to wait for.
-    const profile: Profile = { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, rulesOn, release: () => {}, released: !blocker };
+    const profile: Profile = { session, blocker, removeHandler: null, chain: Promise.resolve(), loadedOnce: false, ready: false, verified: false, rulesOn, release: () => {}, released: !blocker, notOn: null, applyFailed: false };
     if (!blocker) resolve();
     else {
-      const cap = setTimeout(() => profile.release('timeout'), this.config.rulesWaitMs ?? RULES_WAIT_MS);
+      const cap = setTimeout(() => {
+        // Its pages stop waiting without blocking: Settings says so until its rules come on.
+        profile.release('timeout');
+        profile.notOn ??= 'failed';
+      }, this.config.rulesWaitMs ?? RULES_WAIT_MS);
       cap.unref?.();
       profile.release = (status) => {
         if (profile.released) return;
@@ -254,6 +266,17 @@ export class AdBlocking {
   }
 
   /** A private window closed: its session is going, and nothing was kept for it. */
+  /**
+   * Settings → Privacy's Try again (#284): a chord whose blocking didn't come on is brought in line again (its rules
+   * written if they need to be, the extension added, its rules applied). Listed as retrying until that ends.
+   */
+  retry(profileId: string): void {
+    const profile = this.profiles.get(profileId);
+    if (!profile?.blocker || profile.notOn !== 'failed' || !this.deps.enabled() || this.stopping) return;
+    profile.notOn = 'retrying';
+    this.syncProfile(profileId);
+  }
+
   detach(profileId: string): void {
     const profile = this.profiles.get(profileId);
     profile?.removeHandler?.();
@@ -319,7 +342,10 @@ export class AdBlocking {
           return;
         }
         await this.ready;
-        if (!this.current) return profile.release('failed');
+        if (!this.current) {
+          profile.notOn = 'failed';
+          return profile.release('failed');
+        }
         if (!this.deps.enabled() || this.stopping) return;
         const version = setVersion(this.current.info.versions);
         const offSites = [...this.deps.offSites(profileId)];
@@ -332,7 +358,8 @@ export class AdBlocking {
         // At launch the rules just load; turned back on, applying again says when they're in.
         const reloaded = (await blocker.load()) && profile.loadedOnce;
         profile.loadedOnce = true;
-        if (stale || reloaded || !sameSites(applied.offSites, offSites)) {
+        if (stale || reloaded || profile.applyFailed || !sameSites(applied.offSites, offSites)) {
+          profile.applyFailed = true;
           // A fresh profile's rulesets are off until applied (extension.ts): its pages wait for this, not just the load.
           await blocker.apply(offSites);
           profile.ready = true;
@@ -340,6 +367,8 @@ export class AdBlocking {
           this.save();
         }
         // A warm relaunch: Chromium kept them on, so they're on with the load.
+        profile.applyFailed = false;
+        profile.notOn = null;
         profile.release('in');
         if (!profile.verified) {
           profile.verified = true;
@@ -348,6 +377,7 @@ export class AdBlocking {
       })
       .catch((error: unknown) => {
         console.error(`Ad blocking couldn’t update profile ${profileId}:`, error);
+        profile.notOn = 'failed';
         profile.release('failed');
       })
       // Off or quitting: nothing to wait for either.
