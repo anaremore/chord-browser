@@ -59,6 +59,12 @@ export const KEY_SEEN_MS = 500;
 /** The element gone or replaced by the page, or a look-alike in its place now (#211's review): the same for a key's checks. */
 export const redrawn = (refusal: string | null): boolean => refusal === ACT_REFUSALS.changed || refusal === ACT_REFUSALS.ambiguous;
 
+/**
+ * A look-alike in the element's place once input had reached the page (a key, a press, text, a value, a choice): what
+ * went in may have worked, so never "nothing was done" (#211's round 2: a comment box that sends on Enter and redraws).
+ */
+export const INPUT_REDRAWN = 'The page redrew that element after the input went in, and it has a look-alike now, so it may or may not have worked. Call snapshot and check before doing it again.';
+
 /** A key whose element the page redrew between its keydown and the rest: maybe nothing happened. */
 export const KEY_REDRAWN = 'The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.';
 

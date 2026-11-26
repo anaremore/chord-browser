@@ -28,6 +28,7 @@ What this adds: **that refusal says what it is and how to choose.** It was *That
   - Redrawn, and looked for (the first look, the pointer's move): never acted on. The page is scanned for them: one or more still there gives *ambiguous*; none gives *changed* (no look-alike left).
   - Redrawn at a later check (the hit test, the debugger's hit test and its look, a key's or a field's check): *ambiguous* at once, never looked for again.
 - **More than one alike** when a unique ref is found again (the page drew another just like it): *ambiguous*.
+- **After input went in** (a key's keydown, a press, a value set): a look-alike's refusal becomes `INPUT_REDRAWN`, *it may or may not have worked; call snapshot and check before doing it again*. It never says "nothing was done": a comment box that sends on Enter and then redraws must not be sent to twice.
 - **A key:** a look-alike in the element's place after its keydown is *the page redrew that element while the key went in* (`KEY_REDRAWN`), as a node gone is: never said done. Before anything went in, it's tried again as a node gone is, and its check finds it again or refuses. Both decide on the reason (`redrawn()`), not one refusal's words.
 
 ### The words
@@ -54,6 +55,8 @@ Unnamed rows are told apart by nothing but their place, so these are #268's, not
     - twins redrawn as the pointer arrives (refused, nothing clicked);
     - a Delete of two (one left: ambiguous); both gone (changed).
   - *Tests:* control.test: the words with and without the flat find; nothing pressed; the debugger's look says so; a batch stops there.
+- **Input that went in, then a look-alike:** never "nothing was done".
+  - *Test:* control.test: Enter in a field, then a look-alike at its check; typed text, then a look-alike where it went; a value set, the same: each `INPUT_REDRAWN`.
 - **A key on a look-alike redrawn after its keydown:** never said done.
   - *Test:* control.test: Enter, the element gone or a look-alike in its place after the keydown: `KEY_REDRAWN`, its keydown and keyup once.
 - **A decoy beside a button** (the page draws a twin to make the agent refuse): it only stops the agent, as a covering element does (#117's line). The refusal tells it to stop after a second try.

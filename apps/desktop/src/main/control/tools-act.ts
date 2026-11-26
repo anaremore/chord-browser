@@ -8,7 +8,7 @@ import { normalUrl, type SendWatch } from './sends';
 import type { AgentInputEvent } from './input';
 import type { ToolOutput } from './scope';
 import { PART_REFUSALS } from './tools-read';
-import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, redrawn, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
+import { INPUT_REDRAWN, KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, redrawn, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
 import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
 
@@ -541,6 +541,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
      * on a timer, on a slow machine). Then it's tried again, the element focused again (guardedTries).
      */
     let nothingWent = false;
+    /** Input reached the page (a key, a press: typing's click comes first, a value): a look-alike's refusal after it says it may have worked. */
+    let inputWent = false;
     /**
      * A keydown sent that the page's guard hadn't seen by KEY_SEEN_MS: late, maybe still coming. Then nothing is ever
      * tried again, as it could land twice (Claude's review 5 of #117).
@@ -702,6 +704,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (!typesInto(pressed)) {
         // No character at all (Tab, an arrow): in at once.
         if (!rest.some((e) => e.type === 'char')) {
+          inputWent = true;
           page.keys([down!, ...rest]);
           return null;
         }
@@ -709,6 +712,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // the focus is no longer the element's or a closed root came in (Neon's review 7 of #110), no character, only
         // the key let go of. The keydown did what it does (a link went, a menu opened): that's done.
         const documentAtKey = page.mark.document;
+        inputWent = true;
         page.keys([down!]);
         // Its keydown handled first (its handlers have run), then the check: never the check before it.
         if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
@@ -729,6 +733,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         return null;
       }
       enterOneLine = pressed === 'Enter' && element.risk?.multiline === false;
+      inputWent = true;
       page.keys([down!]);
       // Its keydown handled first (its handlers have run), then the check: never the check before it.
       if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
@@ -820,6 +825,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         if ((refused = halt())) return;
         if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         const set = await actOn({ op: 'setValue', value: value as string });
+        if (set.ok) inputWent = true;
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;
         if (args['submit'] !== true) return;
@@ -896,6 +902,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
       phases.lap('checks');
+      inputWent = true;
       page.press(at.x!, at.y!);
       if (tool !== 'type') return;
       // Typing waits for the page to have seen its click (the caret goes where the click put it): only then the select
@@ -954,6 +961,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     const { navigated, loading } = await acting;
     phases.lap('settle');
     if (deep) await (deep as DeepSession).close();
+    // A look-alike's refusal once input had gone in: it may have worked, never "nothing was done" (#211's round 2).
+    if (refused === ACT_REFUSALS.ambiguous && inputWent) refused = INPUT_REDRAWN;
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus);

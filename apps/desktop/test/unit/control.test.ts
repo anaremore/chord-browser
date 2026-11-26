@@ -13,6 +13,7 @@ import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { FIND_NEAREST_NOTE, FIND_NONE_NOTE, heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
+import { INPUT_REDRAWN } from '../../src/main/control/act-steps';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
@@ -1262,7 +1263,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { ambiguous?: boolean; ambiguousAt?: Record<string, number>; goneWhy?: 'changed' | 'ambiguous'; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
+  type Twist = { ambiguous?: boolean; ambiguousAt?: Record<string, number>; ambiguousCompare?: boolean; goneWhy?: 'changed' | 'ambiguous'; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1315,6 +1316,8 @@ describe('acting through the gate (S18 M2c)', () => {
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
       // Look-alikes the page redrew (#211): which one can't be told.
       if (twist.ambiguous) return { ok: false, why: 'ambiguous' };
+      // Where the text went, checked after it went in (#211's round 2: Fable's probe).
+      if (args.op === 'values' && args.mode === 'compare' && twist.ambiguousCompare) return { ok: false, why: 'ambiguous' };
       if (twist.ambiguousAt?.[args.op]) {
         twist.ambiguousAt[args.op]!--;
         return { ok: false, why: 'ambiguous' };
@@ -1808,6 +1811,7 @@ describe('acting through the gate (S18 M2c)', () => {
     ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['click', 'a closed shadow root in the element (#112)', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
+    ['click', 'a look-alike in its place under the point (#211)', { hit: { ok: false, why: 'ambiguous' } }, ACT_REFUSALS.ambiguousPlain],
     ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
   ];
   it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
@@ -1953,6 +1957,31 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused, goneWhy).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
       // Its keydown, then only the key let go of; once.
       expect((t.at.input as { type: string }[]).map((e) => e.type), goneWhy).toEqual(['keyDown', 'keyUp']);
+    }
+  });
+
+  it('a look-alike in its place after input went in: never “nothing was done”, said it may not have worked (#211’s round 2)', async () => {
+    // Enter in a field (a comment box that sends on Enter, then redraws): its keydown went in.
+    const twist: Twist = { goneAfterKey: true, goneWhy: 'ambiguous' };
+    const t = await acting({ twist });
+    twist.sent = () => t.at.input as { type: string }[];
+    const keyed = refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Enter' })).refused;
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toContain('keyDown');
+    expect(keyed).toBe(INPUT_REDRAWN);
+    // Typed text, then where it went answered by a look-alike: the text went in.
+    const u = await acting({ twist: { ambiguousCompare: true } });
+    const typed = refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).refused;
+    expect(u.at.text).toEqual(['wool']);
+    expect(typed).toBe(INPUT_REDRAWN);
+    // A value set (a time field: never clicked), then where it went answered by a look-alike: the value went in.
+    ELEMENTS.push({ role: 'textbox', name: 'Delivery time', editable: true, field: field({ type: 'time' }), risk: { tag: 'input', type: 'time' } });
+    try {
+      const v = await acting({ twist: { ambiguousCompare: true } });
+      expect(refusal(await v.call('type', { tab_id: v.tab, ref: `e${ELEMENTS.length}`, text: '18:30' })).refused).toBe(INPUT_REDRAWN);
+      expect(v.steps).toContain('setValue');
+      expect((v.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toEqual([]);
+    } finally {
+      ELEMENTS.pop();
     }
   });
 
