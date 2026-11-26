@@ -77,6 +77,7 @@ import { PasswordTransfers } from './passwords/transfer';
 import { createPasswordDetector } from './passwords/detector';
 import { proxies } from './proxy';
 import { pageGate } from './page-gate';
+import { followSessions } from './sessions-follow';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
 import { mark, watchLaunch } from './launch-timeline';
@@ -1119,13 +1120,10 @@ if (!app.requestSingleInstanceLock()) {
       if (change.state.settings.googleFree && change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'googleFree')) void browser!.player.close();
       // Counts on tabs follow their switch and the sites they're hidden for.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'tabCounts')) browser!.tabs.refreshCounts();
-      // Proxies follow the proxy for every chord, chords' own, and which sign-ins each chord has.
-      if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'proxy') || (p.path[0] === 'chords' && (p.path.length <= 2 || p.path[2] === 'proxy' || p.path[2] === 'profileId')))) {
-        proxies.sync();
-      }
-      // Ad blocking follows its switch and the sites it's off for (a private window's own list lives on its chord).
-      if (change.patches.some((p) => (p.path[0] === 'settings' && p.path[1] === 'adBlocking') || (p.path[0] === 'chords' && p.path[2] === 'blockingOff'))) adBlocking.sync();
     });
+    // Proxies and ad blocking follow the settings before Browser's effects run (a tab made again in a session waits for
+    // its proxy: Undo of a change of sign-ins, a chord restored, #328).
+    browser.store.setBeforeEffects((change) => followSessions(change, { proxies, adBlocking }));
     safeBrowsing.sync();
     adBlocking.sync();
     // Every chord's session, made now, so each one's blocker extension has loaded before any of its pages loads (below).

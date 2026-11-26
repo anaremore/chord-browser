@@ -19,6 +19,8 @@ export interface Change {
 export class Store {
   private current: State;
   private readonly listeners = new Set<(change: Change) => void>();
+  /** The one listener that runs before every other (setBeforeEffects). */
+  private beforeEffects: ((change: Change) => void) | null = null;
 
   constructor(initial: State) {
     // Frozen, as every state after it is (Immer freezes what it makes): the nodes' index is kept only for a state that can't change (core's nodes.ts).
@@ -35,11 +37,28 @@ export class Store {
     const before = this.current;
     this.current = result.state;
     const change: Change = { ...result, before, command };
+    this.beforeEffects?.(change);
     for (const listener of this.listeners) listener(change);
   }
 
   subscribe(listener: (change: Change) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * The one listener that runs before every other, whenever it was set: what the effects depend on (#328: sessions
+   * follow the settings, their proxy first, before Browser's effects make a tab's view and load its page). Only one,
+   * so nothing else can come before it (Opus's SF1, round 1 of #332): setting a second throws.
+   *
+   * It runs inside dispatch, before the rest: if it throws, the change has already been made but reaches no other
+   * listener (no effects run, nothing is sent or saved), and the throw goes to whoever dispatched.
+   */
+  setBeforeEffects(listener: (change: Change) => void): () => void {
+    if (this.beforeEffects) throw new Error('The store’s before-effects listener is set already');
+    this.beforeEffects = listener;
+    return () => {
+      if (this.beforeEffects === listener) this.beforeEffects = null;
+    };
   }
 }
