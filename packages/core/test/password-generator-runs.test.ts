@@ -116,9 +116,10 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
    * 1/n over its draws. A password's chance given that the try made one is P(it) / P(any); the strength shown for it
    * must be at most the min-entropy of that, −log2 of the likeliest.
    */
-  function outcomes(rules: PasswordRuleSet): { made: number; chances: Map<string, number> } {
+  function outcomes(rules: PasswordRuleSet): { made: number; chances: Map<string, number>; total: number } {
     const chances = new Map<string, number>();
     let made = 0;
+    let total = 0;
     const choices: number[] = [];
     for (;;) {
       const ranges: number[] = [];
@@ -129,6 +130,7 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
       };
       const p = drawOnce(rules, scripted);
       const chance = ranges.reduce((c, n) => c / n, 1);
+      total += chance;
       if (p !== null) {
         made += chance;
         chances.set(p, (chances.get(p) ?? 0) + chance);
@@ -141,7 +143,7 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
       choices[k]!++;
       choices.length = k + 1;
     }
-    return { made, chances };
+    return { made, chances, total };
   }
 
   /** Every string of `pool` of `length` that meets the rules: whether a password exists at all. */
@@ -165,6 +167,9 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
     'allowed: [abcde]; required: [b]; maxlength: 4; max-sequential: 1;',
     'allowed: [abcd]; required: [b]; required: [c]; maxlength: 4; max-sequential: 1;',
     'allowed: [ab01]; required: [01]; max-consecutive: 1;',
+    // Neon's B1 on #286: a small forced class's chance of being left with nothing between 0 and 1.
+    'allowed: [abcde]; required: [b]; maxlength: 3; max-repeating: 1;',
+    'allowed: [abcdef]; required: [b]; maxlength: 3; max-sequential: 1;',
   ];
 
   /**
@@ -184,7 +189,9 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
 
   it.each(cases)('%s', (site) => {
     const rules = rulesOf(site);
-    const { made, chances } = outcomes(rules);
+    const { made, chances, total } = outcomes(rules);
+    // Every way a try can go, counted once (Neon's N1 on #286).
+    expect(total).toBeCloseTo(1, 12);
     const allowed = rules.allowed.replace(/ /g, '');
     const anyAtMax = exists(rules, allowed, Math.min(rules.maxLength, 4));
     if (made === 0) {
@@ -201,6 +208,96 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
     for (const p of chances.keys()) {
       expect(passwordSatisfies(p, rules), p).toBe(true);
       expect(passwordBits(p, rules), p).toBeLessThanOrEqual(minEntropy + 1e-9);
+    }
+  });
+});
+
+describe('the chance a small forced class is left with nothing, pinned (round 1 of #286: Neon’s B1, Opus’s SF2)', () => {
+  /**
+   * The strength shown, worked out by hand: each place's bits (its class less what the run limits rule out there),
+   * less log2(1/(1 − q)), q the chance a try leaves the small class with nothing: for it, the characters that could
+   * empty it as the one before it (B), over the other places the shuffle puts before it, each |B ∩ C| / (|C| − out).
+   * And the exhaustive check above holds it under the true min-entropy; here it's also not far under.
+   */
+  it.each<[string, number, number]>([
+    // out 1 (repeats); b's place 0 bits, two of [abcde] at log2 4. B = {b}: 1/4 a pool place, so q = (1/4 + 1/4)/2.
+    ['allowed: [abcde]; required: [b]; maxlength: 3; max-repeating: 1;', 4 + Math.log2(1 - 0.25), 4],
+    // out 2 (a, c next to b in order); two of [abcdef] at log2 4. B = {a, c}: 2/4 a pool place, so q = (1/2 + 1/2)/2.
+    ['allowed: [abcdef]; required: [b]; maxlength: 3; max-sequential: 1;', 4 + Math.log2(1 - 0.5), 4],
+    // Argon's first counterexample: three of [abcde] at log2 3; B = {a, c}: 2/3 a place, q = (3 · 2/3)/3.
+    ['allowed: [abcde]; required: [b]; maxlength: 4; max-sequential: 1;', 3 * Math.log2(3) + Math.log2(1 - 2 / 3), 3 * Math.log2(3)],
+  ])('%s', (site, expected, raw) => {
+    const rules = rulesOf(site);
+    const p = generatePassword(rules, seeded(2))!;
+    expect(passwordBits(p, rules)).toBeCloseTo(expected, 9);
+    expect(passwordBits(p, rules)).toBeGreaterThan(0);
+    expect(passwordBits(p, rules)).toBeLessThan(raw);
+  });
+});
+
+describe('strong where it is: a small forced class among wide ones (round 1 of #286: Opus’s SF1, Neon’s SF1 and N1)', () => {
+  it.each([
+    // Opus's scenario 1: main showed 99.3 bits, b7e41bfe 0, true about 99.
+    'required: lower; required: upper; required: digit; required: [!]; required: [#]; max-consecutive: 2;',
+    // Opus's scenario 2: main 70.3, b7e41bfe 0, true about 69.
+    'allowed: digit, [abcdef]; required: [!]; max-consecutive: 1;',
+    // Neon's: b7e41bfe stopped at 20, weak at 0 bits; it's strong made longer.
+    'allowed: [abcdefghijk]; required: [!]; required: [@]; required: [#]; max-repeating: 1;',
+  ])('%s', (site) => {
+    const rules = rulesOf(site);
+    const { rate, passwords } = focuses(rules, 100);
+    expect(rate).toBe(1);
+    for (const p of passwords) {
+      expect(passwordSatisfies(p, rules)).toBe(true);
+      expect(isStrongPassword(p, rules), `${p}: ${passwordBits(p, rules)}`).toBe(true);
+    }
+  });
+});
+
+describe('max-sequential: 1 rules out only the neighbours in order a character has (Opus’s N1 on #286)', () => {
+  it('none in order (_, 2, c, x): the same bits as no limit at all', () => {
+    const limited = rulesOf('allowed: [_2cx]; maxlength: 20; max-sequential: 1;');
+    const free = rulesOf('allowed: [_2cx]; maxlength: 20;');
+    const p = generatePassword(limited, seeded(4))!;
+    expect(passwordBits(p, limited)).toBeCloseTo(passwordBits(p, free), 9);
+  });
+
+  it('[_y-2cx] (read as 2, _, c, x, y), max-repeating 2: one neighbour (x, y), so 3 of 5 a place, about 28 bits (17 before)', () => {
+    const rules = rulesOf('allowed: [_y-2cx]; maxlength: 20; max-repeating: 2; max-sequential: 1;');
+    const p = generatePassword(rules, seeded(4))!;
+    expect(rules.allowed).toBe('2_cxy');
+    expect(passwordBits(p, rules)).toBeGreaterThan(27.5);
+    expect(passwordBits(p, rules)).toBeLessThanOrEqual(20 * Math.log2(3) + 1e-9);
+  });
+});
+
+describe('a password where one exists (round 1 of #286: Neon’s B2, Opus’s N2)', () => {
+  it.each<[string, RegExp]>([
+    // B2a: a separator beside only one of the pool's two characters.
+    ['allowed: [231]; required: [1]; max-consecutive: 1; minlength: 3;', /^313$/],
+    ['allowed: [231]; required: [1]; max-consecutive: 1; minlength: 2;', /^(31|13|313)$/],
+    ['allowed: [jk]; required: [l]; max-consecutive: 1; minlength: 3;', /^jlj$/],
+    ['allowed: [mn]; required: [o]; max-consecutive: 1; minlength: 3;', /^mom$/],
+    ['allowed: [GH]; required: [I]; max-consecutive: 1; minlength: 3;', /^GIG$/],
+    ['allowed: [MN]; required: [O]; max-consecutive: 1; minlength: 3;', /^MOM$/],
+    // B2b: the clean pool can't reach the minimum: what the rules allow, look-alikes and all, as short as they let.
+    ['allowed: [a0O]; max-repeating: 2; minlength: 5;', /^[a0O]{5}$/],
+    ['allowed: [ab01]; max-consecutive: 1; minlength: 3;', /^[ab01]{3}$/],
+    // B2c and Opus's N2: a required class that can't stand beside the pool's other characters: it alone.
+    ['allowed: [kl]; required: [l]; max-repeating: 2; max-sequential: 1;', /^ll?$/],
+    ['allowed: [kl]; required: [l]; max-sequential: 1; maxlength: 2;', /^ll?$/],
+    ['allowed: [12]; required: [1]; max-repeating: 2; max-sequential: 1;', /^11?$/],
+    ['allowed: [klm]; required: [l]; max-sequential: 1;', /^l+$/],
+    // Opus's N2: four required look-alikes between a's (one try in 126 before; 91% of focuses).
+    ['allowed: [a01lIOo|]; required: [0]; required: [1]; required: [l]; required: [I]; max-repeating: 1;', /^[a01lIOo|]+$/],
+  ])('%s', (site, shape) => {
+    const rules = rulesOf(site);
+    const { rate, passwords } = focuses(rules, 300);
+    expect(rate).toBeGreaterThanOrEqual(0.99);
+    for (const p of passwords) {
+      expect(p).toMatch(shape);
+      expect(passwordSatisfies(p, rules)).toBe(true);
+      expect(isStrongPassword(p, rules)).toBe(false);
     }
   });
 });
@@ -235,7 +332,54 @@ describe('a pool the run limits leave a single character a place (Argon’s B3)'
   });
 });
 
+/** main's runs() before #286 (b0c2b4e8), kept as the reference the new fold is checked against (Opus's N3). */
+function referenceRuns(password: string): { repeating: number; sequential: number } {
+  const ranges = ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789'];
+  const step = (a: string, b: string): number => {
+    for (const r of ranges) {
+      const i = r.indexOf(a);
+      const j = r.indexOf(b);
+      if (i >= 0 && j >= 0) return j - i;
+    }
+    return 0;
+  };
+  let repeating = password.length ? 1 : 0;
+  let sequential = password.length ? 1 : 0;
+  let rep = 1;
+  let seq = 1;
+  let dir = 0;
+  for (let i = 1; i < password.length; i++) {
+    rep = password[i] === password[i - 1] ? rep + 1 : 1;
+    const d = step(password[i - 1]!, password[i]!);
+    if ((d === 1 || d === -1) && (seq === 1 || d === dir)) {
+      seq++;
+      dir = d;
+    } else if (d === 1 || d === -1) {
+      seq = 2;
+      dir = d;
+    } else {
+      seq = 1;
+      dir = 0;
+    }
+    repeating = Math.max(repeating, rep);
+    sequential = Math.max(sequential, seq);
+  }
+  return { repeating, sequential };
+}
+
 describe('the run check as a password is built: the same as checking it whole (Argon’s N1)', () => {
+  it('random strings, random limits: the same as main’s old runs()', () => {
+    const r = seeded(32);
+    const chars = 'abcxyzABC0123-';
+    for (let i = 0; i < 5000; i++) {
+      const password = Array.from({ length: 1 + r(12) }, () => chars[r(chars.length)]).join('');
+      const rules = { ...rulesOf(''), allowed: chars, maxRepeating: r(3) ? 1 + r(4) : null, maxSequential: r(3) ? 1 + r(4) : null };
+      const { repeating, sequential } = referenceRuns(password);
+      const expected = (rules.maxRepeating === null || repeating <= rules.maxRepeating) && (rules.maxSequential === null || sequential <= rules.maxSequential);
+      expect(runsAllow(password, rules), `${password} ${rules.maxRepeating} ${rules.maxSequential}`).toBe(expected);
+    }
+  });
+
   it('random strings, random limits', () => {
     const r = seeded(31);
     const chars = 'abcxyzABC0123-';

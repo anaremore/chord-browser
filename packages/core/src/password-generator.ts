@@ -200,6 +200,11 @@ interface Plan {
   readonly forced: readonly string[];
   /** The longest the pool can fill under the run limits, with the required classes between its runs (`maxFillable`). */
   readonly fill: number;
+  /**
+   * Its length is all the rules leave it, never made longer (round 1 of #286): a required class that can't stand beside
+   * the pool's other characters, or look-alikes taken only to reach the rules' minimum.
+   */
+  readonly fixed?: boolean;
 }
 
 /** Whether the rules limit runs: then a password is built a place at a time (`buildWith`), never breaking them. */
@@ -207,13 +212,20 @@ const limitsRuns = (rules: PasswordRuleSet) => rules.maxRepeating !== null || ru
 
 /**
  * The most characters the run limits can rule out at one place of a password of `chars` (#60): the one that would
- * repeat a run too long, and the one that would carry a run in order too far, or with `max-sequential: 1` both of the
- * last character's neighbours. A limit on runs in order longer than `chars` can make rules out nothing.
+ * repeat a run too long, and the one that would carry a run in order too far, or with `max-sequential: 1` the last
+ * character's neighbours in order, as many as any character of `chars` has there (0, 1 or 2: Opus's N1 on #286). A
+ * limit on runs in order longer than `chars` can make rules out nothing.
  */
 function ruledOut(rules: PasswordRuleSet, chars: string): number {
   const s = rules.maxSequential;
-  const sequential = s !== null && s < runs(longestInOrder(chars)).sequential;
-  return (rules.maxRepeating === null ? 0 : 1) + (!sequential ? 0 : s <= 1 ? 2 : 1);
+  const set = [...new Set(chars)];
+  const sequential = s === null ? 0 : s <= 1 ? Math.max(0, ...set.map((c) => set.filter((d) => Math.abs(stepOf(c, d)) === 1).length)) : s < runs(longestInOrder(chars)).sequential ? 1 : 0;
+  return (rules.maxRepeating === null ? 0 : 1) + Math.min(2, sequential);
+}
+
+/** Whether `c` placed right after `p` could break the rules' run limits (a repeat, or a step in order). */
+function couldBreak(p: string, c: string, rules: PasswordRuleSet): boolean {
+  return (rules.maxRepeating !== null && p === c) || (rules.maxSequential !== null && Math.abs(stepOf(p, c)) === 1);
 }
 
 /** The longest run in order (a-z, A-Z, 0-9) that `chars` can make: `abcx` makes `abc`. */
@@ -248,24 +260,40 @@ function planBits(plan: Pick<Plan, 'pool' | 'forced'>, length: number, rules: Pa
   const free = Math.max(0, length - plan.forced.length);
   bits += free * placeBits(plan.pool.length);
   if (!out) return bits;
-  const stuck = stuckChance(plan, length, out);
+  const stuck = stuckChance(plan, length, out, rules);
   return stuck >= 1 ? 0 : Math.max(0, bits + Math.log2(1 - stuck));
 }
 
 /**
- * A bound on how likely one try is to leave a place with no character (#60), under run limits that rule out at most
- * `out` at a place. Only a forced class of `out` characters or fewer can be left with none, and only by the character
- * before it: its own, or one next to it in order (three at most can do it). That one came from a class of at least
- * `wide` characters, drawn from `wide − out` of them or more, unless it was another small forced class, whose places
- * are anywhere in the password (the forced places are shuffled in): a chance of (small − 1)/(length − 1).
+ * A bound on how likely one try is to leave a place with no character (#60; round 1 of #286), under run limits that
+ * rule out at most `out` at a place. Only a forced class of `out` characters or fewer can be left with none, and only by
+ * the character just before it: one of B, those that could rule out every character of the class (its own, by a
+ * repeat; one next to it in order). The forced places are shuffled in, so the place before it is any other, each with
+ * chance 1/(length − 1); a class C there gives one of B with chance |B ∩ C| / (|C| − out) at most (drawn from |C| − out
+ * or more), or up to 1 for a small class. Summed over the small classes: a union bound.
  */
-function stuckChance(plan: Pick<Plan, 'pool' | 'forced'>, length: number, out: number): number {
-  const sizes = plan.forced.slice(0, length).map((cls) => new Set(cls).size);
-  const small = sizes.filter((size) => size <= out).length;
-  if (!small) return 0;
-  const wide = Math.min(plan.pool.length, ...sizes.filter((size) => size > out));
-  const byOther = length > 1 ? (small - 1) / (length - 1) : 0;
-  return small * (3 / (wide - out) + byOther);
+function stuckChance(plan: Pick<Plan, 'pool' | 'forced'>, length: number, out: number, rules: PasswordRuleSet): number {
+  if (length < 2) return 0;
+  const forced = plan.forced.slice(0, length).map((cls) => [...new Set(cls)].join(''));
+  const chars = [...new Set(plan.pool + forced.join(''))];
+  const chance = (blockers: readonly string[], cls: string) => {
+    const hit = blockers.filter((b) => cls.includes(b)).length;
+    if (!hit) return 0;
+    return cls.length <= out ? 1 : Math.min(1, hit / (cls.length - out));
+  };
+  const free = Math.max(0, length - forced.length);
+  let q = 0;
+  forced.forEach((cls, j) => {
+    if (cls.length > out) return;
+    const blockers = chars.filter((p) => [...cls].every((c) => couldBreak(p, c, rules)));
+    if (!blockers.length) return;
+    let before = free * chance(blockers, plan.pool);
+    forced.forEach((other, k) => {
+      if (k !== j) before += chance(blockers, other);
+    });
+    q += before / (length - 1);
+  });
+  return q;
 }
 
 /**
@@ -284,7 +312,8 @@ function maxFillable(pool: string, separators: readonly string[], rules: Passwor
   const inOrder = (a: string, b: string) => Math.abs(stepOf(a, b)) === 1;
   const pair = chars.length === 2 && inOrder(chars[0]!, chars[1]!) && s !== null && s <= 1;
   if (chars.length !== 1 && !pair) return Infinity;
-  const between = (c: string) => !chars.includes(c) && (s === null || s > 1 || chars.every((p) => !inOrder(p, c)));
+  // Beside one of the pool's characters is enough: the runs are all of that one (Neon's B2a on #286: `313`).
+  const between = (c: string) => !chars.includes(c) && (s === null || s > 1 || chars.some((p) => !inOrder(p, c)));
   const k = separators.filter((cls) => [...cls].some(between)).length;
   return (k + 1) * r + k;
 }
@@ -357,17 +386,22 @@ function planFor(rules: PasswordRuleSet): Plan | null {
   const owns = rules.required.map((cls) => intersect(cls, allowed)).filter((own) => own);
   // Look-alikes in the free places only when the rules allow nothing else (review round 3 of #56).
   const onlyLookAlikes = !clean;
-  const planOf = (pool: string, full: boolean): Plan | null => {
+  const planOf = (pool: string, full: boolean, shortest = false): Plan | null => {
     // Drawn from more than the default's alphabet (preferred ⊆ clean ⊆ allowed): the default's classes take their own whole.
     const wide = pool.length !== preferred.length;
     // Each class from the default's alphabet where it can be, else without look-alikes where it can be: only a class of
     // look-alikes alone (`required: [0O]`) gets one of them, and only for that class.
     const forced = owns.map((own) => (full ? own : (!wide && intersect(own, DEFAULT_ALPHABET)) || withoutLookAlikes(own) || own));
+    // A required class none of whose characters can stand beside the pool's others (`[kl]`, `required: [l]`,
+    // `max-sequential: 1`): the pool can't fill around it, so the password is as short as the rules let it be, the
+    // class's own (Neon's B2c, Opus's N2 on #286: `l`).
+    const lonely = limitsRuns(rules) && forced.some((cls) => [...cls].every((c) => [...pool].every((p) => p === c || couldBreak(p, c, rules) || couldBreak(c, p, rules))));
     // As long as the run limits let the pool fill, with the required classes between its runs (#60): never under the
     // minimum, nor too short for the required classes.
     const fill = maxFillable(pool, forced, rules);
-    const capped = Math.min(length, fill);
-    if (capped < Math.max(minLength, forced.length)) return null;
+    const fixed = lonely || shortest;
+    const capped = fixed ? Math.max(minLength, forced.length) : Math.min(length, fill);
+    if (capped > Math.min(maxLength, fill === Infinity || lonely ? maxLength : fill) || capped < Math.max(minLength, forced.length)) return null;
     // Then the default's classes, as far as the rules allow them and the length leaves room: a site that only bounds
     // the length gets the default's style.
     const classes = wide ? [NAMED['lower']!, NAMED['upper']!, NAMED['digit']!, GENERATOR_CLASSES.symbol] : Object.values(GENERATOR_CLASSES);
@@ -375,15 +409,18 @@ function planFor(rules: PasswordRuleSet): Plan | null {
       const own = intersect(cls, pool);
       if (own && forced.length < capped && !forced.some((r) => [...r].every((c) => own.includes(c)))) forced.push(own);
     }
-    return { pool, length: capped, forced, fill };
+    return { pool, length: capped, forced, fill, ...(fixed ? { fixed } : {}) };
   };
+  /** Each place adds a bit or more (the pool has two characters or more the run limits leave at any place). */
+  const grows = (plan: Plan) => !plan.fixed && plan.pool.length - (limitsRuns(rules) ? ruledOut(rules, plan.pool + plan.forced.join('')) : 0) >= 2;
   const reaching = (pool: string, full: boolean, lengthen: boolean): Plan | null => {
     if (!pool) return null;
     const plan = planOf(pool, full);
     if (!plan) return null;
     if (planBits(plan, plan.length, rules) >= floor) return plan;
-    // Made longer only where each place adds something (Argon's B3: a pool the run limits leave one character a place).
-    if (!lengthen || planBits(plan, plan.length + 1, rules) <= planBits(plan, plan.length, rules)) return null;
+    // Made longer only where each place adds a bit or more, by the pool's own room (Argon's B3; Neon's SF1 on #286: not
+    // by the bits shown at one more place, which a small class's chance of being left empty can keep at 0).
+    if (!lengthen || !grows(plan)) return null;
     // The shortest length that reaches the floor, a place at a time (each adds what the run limits leave of the pool).
     const longest = Math.min(maxLength, plan.fill);
     for (let needed = plan.length + 1; needed <= longest; needed++) if (planBits(plan, needed, rules) >= floor) return { ...plan, length: needed };
@@ -394,10 +431,12 @@ function planFor(rules: PasswordRuleSet): Plan | null {
   // Under the floor whatever's done: the clean pool (or only look-alikes, when that's all the rules allow), as long as
   // it can be. A pool of one character is no stronger for being longer.
   const pool = onlyLookAlikes ? allowed : clean;
-  const plan = planOf(pool, onlyLookAlikes);
+  // The clean pool can't reach the rules' minimum under their run limits (`[a0O]`, `max-repeating: 2`, `minlength: 5`):
+  // what they allow, look-alikes and all, as short as they let it be, never longer for strength (Neon's B2b on #286).
+  const plan = planOf(pool, onlyLookAlikes) ?? (!onlyLookAlikes && limitsRuns(rules) ? planOf(allowed, true, true) : null);
   if (!plan) return null;
   // A pool of one character (or one the run limits leave one of at a place) is no stronger for being longer.
-  return planBits(plan, plan.length + 1, rules) > planBits(plan, plan.length, rules) ? { ...plan, length: Math.min(maxLength, plan.fill) } : plan;
+  return grows(plan) ? { ...plan, length: Math.min(maxLength, plan.fill) } : plan;
 }
 
 /**
@@ -524,11 +563,31 @@ function drawWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): str
  */
 function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): string | null {
   const { pool, length, forced } = plan;
-  const places = [...forced];
-  while (places.length < length) places.push(pool);
-  for (let i = places.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1);
-    [places[i], places[j]] = [places[j]!, places[i]!];
+  const shuffle = (list: string[]) => {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = randomInt(i + 1);
+      [list[i], list[j]] = [list[j]!, list[i]!];
+    }
+    return list;
+  };
+  let places: string[];
+  if (plan.fill === Infinity || rules.maxRepeating === null) {
+    places = [...forced];
+    while (places.length < length) places.push(pool);
+    shuffle(places);
+  } else {
+    // A pool the run limits can't fill on its own (maxFillable): r of its characters a run, a required class with a
+    // character from outside it between runs, so a try isn't left with nothing for want of a gap (Opus's N2 on #286:
+    // four look-alikes between a's came one try in 126). It counts no bits, so the order costs nothing.
+    const separators = shuffle(forced.filter((cls) => [...cls].some((c) => !pool.includes(c))));
+    const others = shuffle([...forced.filter((cls) => [...cls].every((c) => pool.includes(c)))]);
+    while (others.length + separators.length < length) others.push(pool);
+    places = [];
+    for (const separator of separators) {
+      for (let n = 0; n < rules.maxRepeating && others.length; n++) places.push(others.shift()!);
+      places.push(separator);
+    }
+    places.push(...others);
   }
   let password = '';
   let tail = NO_TAIL;
