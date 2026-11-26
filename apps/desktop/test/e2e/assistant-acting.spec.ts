@@ -29,6 +29,8 @@ test.beforeAll(async () => {
     // A sign-up form: filled from its card, then reset by the assistant (the owner's preview, 2026-11-24).
     // No <title>, and a label with its colon (the owner's test of the 0.15 preview).
     '/plain': '<form><label>Customer name: <input name=customer></label></form>',
+    // #210 (F8): a same-origin frame in a tab of yours: read, never a ref inside.
+    '/framed': '<title>Framed</title><h1>Framed</h1><iframe title="Inner form" srcdoc="<button>Inner button</button>"></iframe><button>Top button</button>',
     '/form': '<title>Sign up</title><form><label>Full name <input name=name></label> <label>Email <input name=email></label> <button type=button onclick="this.form.reset()">Reset</button></form>',
     // M2e-2b: what a click can set off. Each button's outcome goes in the page's log (and the passkey's time, for the
     // pending-request check: one asked with a 20 s timeout while Chord holds WebAuthn).
@@ -435,6 +437,31 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
       const cards = await panel.locator('[data-act]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-act')}${e.hasAttribute('data-pending') ? ' (waiting)' : ''}: ${e.querySelector('p')?.textContent ?? ''}`));
       console.log(`download: folder [${readdirSync(folder).join(', ')}] store [${(await downloadState()).join(' | ')}] cards [${cards.join(' | ')}]`);
     }
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('a same-origin frame in your tab: the assistant reads it, with no ref inside, and never acts there (#210, F8)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/framed` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/framed`))).toBe(true);
+    await shell.waitForTimeout(800);
+    const before = actingTurns(config);
+    await send(panel, act([{ tool: 'snapshot' }]));
+    await expect.poll(() => actingTurns(config), { timeout: 20_000 }).toBe(before + 1);
+    const outline = lastActing(config)[0]!.result;
+    expect(outline).toContain('Inner button');
+    expect(outline).toMatch(/button \\"Top button\\" \[ref=e\d+\]/);
+    expect(outline).not.toMatch(/Inner button\\" \[ref=/);
   } finally {
     await app.close();
     rmSync(profile, { recursive: true, force: true });

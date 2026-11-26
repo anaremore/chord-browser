@@ -48,22 +48,25 @@ const FORM_MS = 5000;
 /** What describes a field, shared by the read and the fill (which checks a field is still as it was read). */
 export const FORM_LIB = String.raw`
   const SKIP_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file']);
-  const NO_WORDS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
+  // A frame's children are its fallback, never rendered (#320's NSF2): no words, inside a button, a label or a labelledby.
+  const NO_WORDS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'BUTTON', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'IFRAME', 'FRAME']);
   // Whose own text is a value, options or code, never words: what words() gives nothing for when it starts at one. A
   // button's text is its name, so it isn't here (a label skips a button inside it: NO_WORDS).
-  const VALUE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
+  const VALUE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'OPTION', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'IFRAME', 'FRAME']);
   const byId = (el, id) => { const root = el.getRootNode(); return typeof root.getElementById === 'function' ? root.getElementById(id) : null; };
   // Control characters as spaces, format characters and stray combining marks gone, before the cut (Neon's review 2 of
   // #112: padding that pushes a word past the cut, or splits it, never hides it).
   const clip = (s, n) => { s = String(s || '').normalize('NFKC').replace(/\p{Cc}/gu, ' ').replace(/[\p{Cf}\p{Mn}]/gu, '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
   // On screen: not hidden by CSS, at least a few pixels, and not put off the page's top or left (scrolled past is fine).
+  // Against the element's own window (a frame's, #210's B4), never the top's.
   const shown = (el) => {
     if (el.hidden || el.closest('[inert]')) return false;
     if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return false;
-    if (getComputedStyle(el).position === 'fixed') return r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
-    return r.right + scrollX > 0 && r.bottom + scrollY > 0;
+    const win = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    if (win.getComputedStyle(el).position === 'fixed') return r.right > 0 && r.bottom > 0 && r.left < win.innerWidth && r.top < win.innerHeight;
+    return r.right + win.scrollX > 0 && r.bottom + win.scrollY > 0;
   };
   // A field's labels, as el.labels finds them (label[for] its id, or a label it's the first field in), from one map of
   // each tree's label[for]s. el.labels walks the whole document the first time each field asks: 46 ms for 300 fields

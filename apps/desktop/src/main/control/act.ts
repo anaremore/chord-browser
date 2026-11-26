@@ -73,7 +73,7 @@ interface ActRisk {
 
 export type ActAnswer =
   | { ok: true; role: string; name: string; items?: string; row?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'row' | 'row-empty' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'row' | 'row-empty' | 'in-frame' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -95,6 +95,25 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   if (read.finish) read.finish();
   const entry = read.keep[args.key];
   let el = entry && entry.ref.deref();
+  // A ref inside a same-origin frame (#210, read only for now): its frames first, each still where it was, holding the
+  // document it held (B5: never one gone, gone elsewhere, or moved into another document), and the element in the last
+  // of them; then not yet.
+  if (entry && entry.frames) {
+    let doc = document;
+    for (const f of entry.frames.chain) {
+      const frame = f.frame.deref();
+      const held = f.doc.deref();
+      if (!frame || !held || !frame.isConnected || frame.ownerDocument !== doc || frame.contentDocument !== held) return { ok: false, why: 'stale' };
+      // The same frame as the snapshot named it, in the same items (#320's SF3: retitled, or moved with moveBefore).
+      if (nameOf(frame, 'iframe') !== f.name || itemsOf(frame) !== f.items) return { ok: false, why: 'changed' };
+      doc = held;
+    }
+    if (!el || !el.isConnected) return { ok: false, why: 'changed' };
+    if (el.ownerDocument !== doc) return { ok: false, why: 'stale' };
+    return { ok: false, why: 'in-frame' };
+  }
+  // A top element moved (adopted) into a frame's document (#210's B5): another element now.
+  if (el && el.isConnected && el.ownerDocument !== document) return { ok: false, why: 'changed' };
   // A node the page replaced (a table that redraws, the owner's bug #2): looked for again, once, in this document, by
   // its role, name, place and shape (snapshot.ts' refPath and refShape), shown. Exactly one: the ref is it from now on,
   // and every check below is on it. None, or more than one (two named alike in one place: bug #5), or past the budget:

@@ -475,6 +475,16 @@ describe('find, flat: up to 20 matches with their items, the nearest names when 
     expect(out.refs).toBe(FIND_MAX);
   });
 
+  it('a frame is where a find stops looking for the item: a button in a frame is “in iframe”, never the region outside it (#320’s NN2)', () => {
+    const read = { url: 'https://shop.test/', title: 'Shop', nodes: [
+      { depth: 0, role: 'region', name: 'Account' },
+      { depth: 1, role: 'iframe', name: 'Payment' },
+      { depth: 2, role: 'button', name: 'Pay now', key: 0 },
+    ] } as unknown as Parameters<typeof snapshotOutline>[0];
+    const out = snapshotOutline(read, keyed(read), { find: 'Pay now', flat: true });
+    expect(out.text).toMatch(/^- button "Pay now" \[ref=e\d+\] \(in iframe "Payment"\)$/);
+  });
+
   it('an item’s words narrow it: every word in the name or its item’s', () => {
     const read = orders();
     const out = snapshotOutline(read, keyed(read), { find: 'Cancel 150', flat: true });

@@ -3,7 +3,7 @@
  * world (4400), as forms and the extractor do, only when an agent asks, so page scripts can neither see nor tamper with
  * it, and nothing runs in a page no agent snapshots.
  *
- * It walks the main frame (open shadow roots too; a frame is listed by its title, never entered) and gives back the
+ * It walks the main frame (open shadow roots too, and same-origin frames: #210) and gives back the
  * outline as nodes: a role, a name, a depth (only nodes with a role nest), states, and a key on each element an agent
  * can act on. Each keyed element is kept by a WeakRef under the read's token, here in the page's renderer, for M2c's
  * actions to find and check again (with the role and name it had): the latest snapshot of each owner (an agent's gate: an outside agent, a chat), so
@@ -256,6 +256,32 @@ export const SNAPSHOT_LIB = String.raw`
   };
   // Climbing, out through open shadow roots to their hosts, at most 64 ancestors (as refPath): act.ts' checks. The
   // snapshot builds the same from its walk (itemsAt).
+  // A frame whose contents are read (#210): of the top's own origin, by origins (never only a readable document:
+  // document.domain, an opaque top), the top's origin not opaque. Its document, or null.
+  const FRAME_DEPTH = 3;
+  const frameDoc = (el) => {
+    if (window.origin === 'null') return null;
+    try {
+      const win = el.contentWindow;
+      const doc = el.contentDocument;
+      return win && doc && win.origin === window.origin ? doc : null;
+    } catch { return null; }
+  };
+  // A frame is a frame by its tag (#320's NSF2), whatever role the page gives it: never walked into (its children are
+  // fallback, never rendered), never a ref of its own.
+  const isFrameEl = (el) => el.localName === 'iframe' || el.localName === 'frame';
+  // A document hidden at its root (#320's NSF3): its html or its body hidden, aria-hidden, inert, or not shown by CSS
+  // (display, visibility, opacity). Nothing in it is read. At the top (top true), aria-hidden doesn't count (round 2,
+  // Fable's S3): it hides nothing on screen, sites set it there by mistake, and WebKit and Firefox ignore it there.
+  const docHidden = (doc, top = false) => {
+    for (const n of [doc.documentElement, doc.body]) {
+      if (!n) continue;
+      if (n.hidden || n.hasAttribute('inert') || (!top && String(n.getAttribute('aria-hidden')).toLowerCase() === 'true') || !visible(n)) return true;
+    }
+    return false;
+  };
+  // A document that is an editor (its body or root editable, or designMode on): one typed field, never walked.
+  const editorDoc = (doc) => doc.designMode === 'on' || Boolean(doc.body && doc.body.isContentEditable) || Boolean(doc.documentElement && doc.documentElement.isContentEditable);
   const itemsOf = (el) => {
     const parts = [];
     let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
@@ -302,7 +328,8 @@ export const SNAPSHOT_LIB = String.raw`
   // computed isContentEditable, which can make the page work out its styles); contenteditable="false" isn't one.
   // outer: an item above the row's nearest, which never reads into a row nested in it (N4: li, tr, role=row or listitem).
   const rowRole = (c, tag, outer) => {
-    if (SKIP.has(tag) || ROW_CONTROLS.has(tag)) return null;
+    // A frame's children are its fallback, never rendered (#320's NSF2): no part of a row's words.
+    if (SKIP.has(tag) || ROW_CONTROLS.has(tag) || tag === 'iframe' || tag === 'frame') return null;
     if (!c.attributes.length) return outer && ROW_ITEM_TAGS.has(tag) ? null : '';
     const editable = c.getAttribute('contenteditable');
     if (c.hidden || c.hasAttribute('inert') || (editable !== null && editable.toLowerCase() !== 'false') || String(c.getAttribute('aria-hidden')).toLowerCase() === 'true') return null;
@@ -441,8 +468,8 @@ export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => {
  */
 export type SnapshotProbe = Partial<Record<'shape' | 'near' | 'items' | 'eagerPart' | 'row', true>>;
 
-function snapshotScript(owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}): string {
-  const args = { owner, token, pinned, boxes, probe, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
+function snapshotScript(owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}, frameRefs = false): string {
+  const args = { owner, token, pinned, boxes, probe, frameRefs, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   ${boxes ? TEXT_LIB : ''}
@@ -466,11 +493,12 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   while (sidsAll.size > args.owners) sidsAll.delete(sidsAll.keys().next().value);
   // Compared field by field, no string built per node (round 2 of #145: Neon measured it at 4 to 6.5 ms on 16k nodes).
   // A kept ref's row too (#268's review): a node patched in place into another unnamed row gets a new id, so a later
-  // snapshot (an action's diff, a find) never gives the old ref to the other row's control.
-  const sidOf = (el, role, name, items, row) => {
+  // snapshot (an action's diff, a find) never gives the old ref to the other row's control. And the frames it's in
+  // (#210's B6): one moved into another frame gets a new id.
+  const sidOf = (el, role, name, items, row = '', frame = '') => {
     let had = sidsMine.ids.get(el);
-    if (!had || had.role !== role || had.name !== name || had.items !== items || had.row !== row) {
-      had = { id: sidsMine.next++, role, name, items, row };
+    if (!had || had.role !== role || had.name !== name || had.items !== items || had.row !== row || had.frame !== frame) {
+      had = { id: sidsMine.next++, role, name, items, row, frame };
       sidsMine.ids.set(el, had);
       if (sidsMine.next > (globalThis.__chordSidNext || 1)) globalThis.__chordSidNext = sidsMine.next;
     }
@@ -552,6 +580,42 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     if (chain) chain.itemsKey = key;
     return key;
   };
+  // The same-origin frames the walk is in (#210): each one's element, its document then, and its id. Every ref kept in
+  // there gets the same list (its frame chain, WeakRefs: checked at every step), and the frames' ids are its frame key.
+  const frames = [];
+  let frameHere = null;
+  const enterFrame = (el, doc, depth, frameSid) => {
+    // Its name and the items it's in, too (#320's SF3): a frame retitled, or moved into another item, is another frame.
+    frames.push({ el, doc, sid: frameSid, name: nameOf(el, 'iframe'), items: itemsOf(el) });
+    const before = frameHere;
+    frameHere = { chain: frames.map((f) => ({ frame: new WeakRef(f.el), doc: new WeakRef(f.doc), name: f.name, items: f.items })), key: frames.map((f) => f.sid).join('/') };
+    const start = doc.body || doc.documentElement;
+    if (start && editorDoc(doc)) {
+      // An editor frame (#210's B2): one typed field, named as its frame is, never walked (what's typed never read).
+      const name = nameOf(el, 'iframe');
+      const node = { depth, role: 'textbox', name, sid: sidOf(start, 'textbox', name, '[]', '', frameHere.key) };
+      const states = statesOf(start, 'textbox');
+      if (states.length) node.states = states;
+      // Labelled by its frame's name, as the snapshot names it (#320's SF2), and by its own label too (round 2, Fable's S1):
+      // a "Card number" or "Password" editor frame, or a "Notes" frame whose body is a "Card number" field, is that
+      // sensitive field, as at the top.
+      const own = fieldOf(start);
+      node.field = { ...own, label: [name, own.label].filter(Boolean).join(' ') };
+      looked++;
+      if (args.frameRefs && shown(start) && keep.length >= args.maxRefs) cut.refs = true;
+      else if (args.frameRefs && shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name, items: '[]', path: refPath(start), shape: refShape(start), frames: frameHere }); }
+      nodes.push(node);
+    } else if (start) {
+      // Its own document's ancestors (#210's B6): a place and items within it, as refPath and itemsOf climb there.
+      let inner = null;
+      const above = [];
+      for (let n = start; n; n = n.parentElement) above.push(n);
+      for (const n of above.reverse()) inner = link(n, inner, roleNow(n));
+      walk(start, depth, false, false, inner);
+    }
+    frames.pop();
+    frameHere = before;
+  };
   const walk = (parent, depth, keyed, named, chain) => {
     for (const child of parent.childNodes) {
       if (stopped) return;
@@ -569,7 +633,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
       if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
       // Editability first, whatever the tag or role (a td, an li, an h1, role=none): an editor is a typed field, named by
       // its labels alone, described as a field for sensitiveField, and never walked into (its inside is what's typed).
-      let role = roleNow(el);
+      let role = isFrameEl(el) ? 'iframe' : roleNow(el);
       // A site's clickable element: a pointer cursor, with nothing keyed around it, and not just inheriting one.
       if (!role && !keyed && pointerGeneric(el)) role = 'generic';
       if (!role) {
@@ -583,30 +647,40 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const name = nameOf(el, role);
       const row = actable ? rowAt(chain) : '';
-      const node = { depth, role, name, sid: sidOf(el, role, name, itemsAt(chain), row) };
+      const node = { depth, role, name, sid: sidOf(el, role, name, itemsAt(chain), row, frameHere ? frameHere.key : '') };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
-      // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
+      // A frame of another origin: its contents can't be read from here (#112: said so, never an empty node). One of the
+      // top's own origin is read (#210), if it's shown and at most FRAME_DEPTH deep; else listed, empty.
+      let inFrame = null;
       if (role === 'iframe') {
-        let other = false;
-        try { other = !el.contentDocument; } catch { other = true; }
-        if (other) states.push('other-site');
+        inFrame = frameDoc(el);
+        if (!inFrame) states.push('other-site');
+        // Of the top's origin but not read: said why (#320's N5), never left to look empty.
+        else if (!shown(el) || docHidden(inFrame)) { states.push('not-shown'); inFrame = null; }
+        else if (frames.length >= FRAME_DEPTH) { states.push('too-deep'); inFrame = null; }
       }
       if (states.length) node.states = states;
       if (el.localName === 'select' && !el.multiple) { const o = el.options[el.selectedIndex]; if (o) node.choice = clip(o.label || o.text, args.nameMax); }
       // Described as a field, for core's sensitiveField: inputs, text areas, selects (a card's expiry month), and any
       // other text field (a contenteditable, a role=textbox), whose type is text.
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
-      if (actable) {
+      // Inside a frame, a ref only in an agent's own tab (#210's B3: never in a tab of yours, or one shared).
+      if (actable && (!frameHere || args.frameRefs)) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, row, parts: args.probe.shape ? null : shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, row, parts: args.probe.shape ? null : shapeParts(el, chain ? chain.near : NO_NEAR), chain, ...(frameHere ? { frames: frameHere } : {}) }); }
       }
-      // A part's ref only where its read would go (round 2 of #260, N1: never one always refused as changed).
-      if (args.boxes && CONTAINERS.has(role) && boxes.length < args.maxRefs && !partBlocked(el)) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
+      // A part's ref only where its read would go (round 2 of #260, N1: never one always refused as changed); never in
+      // a frame (#210: not in this slice).
+      if (args.boxes && !frameHere && CONTAINERS.has(role) && boxes.length < args.maxRefs && !partBlocked(el)) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
       nodes.push(node);
-      // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
-      // element's words are its name.
-      if (role === 'iframe' || isField(el) || TYPED.has(role)) continue;
+      // A same-origin frame shown and not too deep is entered (#210); any other is listed; a field's inside is what's
+      // typed in it (or its options); an acted-on element's words are its name.
+      if (role === 'iframe') {
+        if (inFrame) enterFrame(el, inFrame, depth + 1, node.sid);
+        continue;
+      }
+      if (isField(el) || TYPED.has(role)) continue;
       const inside = named || acted || role === 'heading';
       // (A pointer-cursor element's role, for its items, as itemsOf reads it: none.)
       const inner = link(el, chain, role === 'generic' ? null : role);
@@ -617,7 +691,9 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   // The walk's start, checked as every element is: a page that's all editor (<body contenteditable>, <html
   // contenteditable>, designMode, the data: notepad) is one typed field, named by its labels alone, never walked.
   const start = document.body || document.documentElement;
-  if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
+  if (docHidden(document, true)) {
+    // Hidden at its root (#320's NSF3): nothing to read.
+  } else if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
     const startName = nameOf(start, 'textbox');
     const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, 'textbox', startName, itemsOf(start), shown(start) ? rowOf(start) : '') };
     const states = statesOf(start, 'textbox');
@@ -661,7 +737,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     // snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin). Its items stay
     // either way: every step checks them (act.ts).
     const counts = new Map();
-    for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.row, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
+    for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.row, k.path, k.shape, k.frames ? k.frames.key : '']); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
     for (const k of keep) {
       // Twins (#211): two or more alike among the snapshot's own, cut short or not. Their place and shape stay, so a
       // look finds whether any is still there (none: changed); an action on one is never taken, and says why.
@@ -732,6 +808,8 @@ function waitScript(want: WaitFor, ms: number): string {
   // typed, so its text is never looked at, or a wait would be an oracle on it. Only an element by role and name.
   const editorPage = document.designMode === 'on' || Boolean(document.body && document.body.isContentEditable) || Boolean(document.documentElement && document.documentElement.isContentEditable);
   if (editorPage && args.text !== undefined) return done({ met: false, cut: false, editor: true });
+  // A page hidden at its root (#320's NSF3): nothing in it is ever met.
+  const pageHidden = () => docHidden(document, true);
   const look = () => {
     const began = performance.now();
     let looked = 0;
@@ -742,6 +820,7 @@ function waitScript(want: WaitFor, ms: number): string {
       if (looked % 100 === 0 && performance.now() - began > args.scanMs) { cut = true; return true; }
       return false;
     };
+    let depthNow = 0;
     const walk = (parent, keyed) => {
       for (const child of parent.childNodes) {
         if (found || cut) return;
@@ -756,19 +835,35 @@ function waitScript(want: WaitFor, ms: number): string {
         const el = child;
         if (over()) return;
         if (SKIP.has(el.localName) || String(el.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(el)) continue;
-        let role = roleNow(el);
+        let role = isFrameEl(el) ? 'iframe' : roleNow(el);
         if (!role && !keyed && pointerGeneric(el)) role = 'generic';
         // One that can be acted on counts only when it's on screen, as the snapshot gives it a ref (S-5).
         // Shown as the snapshot judges it: a field by visibleField (a styled checkbox: its box unseen, its label shown).
         if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name && (!(ACTED.has(role) || role === 'generic') || (isField(el) ? visibleField(el, typeOf(el)) : shown(el)))) { found = true; return; }
-        // A field's inside is what's typed in it: never looked at. A frame's is its fallback, never shown (S-5).
-        if (isField(el) || TYPED.has(role) || el.localName === 'iframe' || el.localName === 'frame') continue;
+        // A same-origin frame (#210): looked in, as the snapshot reads it (shown, at most FRAME_DEPTH deep), and watched
+        // (SF1); an editor frame's text never (what's typed). Any other frame's inside is its fallback, never shown (S-5).
+        if (role === 'iframe') {
+          const doc = depthNow < FRAME_DEPTH && shown(el) ? frameDoc(el) : null;
+          if (!doc || docHidden(doc) || !(doc.body || doc.documentElement)) continue;
+          // An editor frame (#320's NSF1), as the snapshot gives it: one textbox named as its frame, matched by that line
+          // alone; never walked or watched (what's typed, and what's pasted in an island, is never read).
+          if (editorDoc(doc)) {
+            if (args.role === 'textbox' && nameOf(el, 'iframe') === args.name && shown(doc.body || doc.documentElement)) { found = true; return; }
+            continue;
+          }
+          roots.add(doc);
+          depthNow++;
+          walk(doc.body || doc.documentElement, false);
+          depthNow--;
+          continue;
+        }
+        if (isField(el) || TYPED.has(role)) continue;
         const inner = keyed || ACTED.has(role) || role === 'generic';
         if (el.shadowRoot) { roots.add(el.shadowRoot); walk(el.shadowRoot, inner); }
         walk(el, inner);
       }
     };
-    walk(document.body || document.documentElement, false);
+    if (!pageHidden()) walk(document.body || document.documentElement, false);
     const ended = performance.now();
     return { found, cut, ms: ended - began, ended };
   };
@@ -839,9 +934,9 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}, frameRefs = false): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
-  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned, boxes, probe) }]), null, SNAPSHOT_MS));
+  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned, boxes, probe, frameRefs) }]), null, SNAPSHOT_MS));
 }
 
 /** One part's shown text by its container ref (#207), or why not: changed since the snapshot, or the page an editor. */

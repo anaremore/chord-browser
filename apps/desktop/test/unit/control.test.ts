@@ -1309,7 +1309,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { ambiguous?: boolean; ambiguousAt?: Record<string, number>; ambiguousCompare?: boolean; goneWhy?: 'changed' | 'ambiguous' | 'row-empty'; compareWhy?: string; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string; row?: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
+  type Twist = { inFrame?: boolean; ambiguous?: boolean; ambiguousAt?: Record<string, number>; ambiguousCompare?: boolean; goneWhy?: 'changed' | 'ambiguous' | 'row-empty'; compareWhy?: string; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string; row?: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1362,6 +1362,8 @@ describe('acting through the gate (S18 M2c)', () => {
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
       // Look-alikes the page redrew (#211): which one can't be told.
       if (twist.ambiguous) return { ok: false, why: 'ambiguous' };
+      // A ref inside a same-origin frame (#210, PR 1): read, never acted on yet.
+      if (twist.inFrame) return { ok: false, why: 'in-frame' };
       // Where the text went, checked after it went in (#211's round 2: Fable's probe).
       if (args.op === 'values' && args.mode === 'compare' && twist.ambiguousCompare) return { ok: false, why: 'ambiguous' };
       if (args.op === 'values' && args.mode === 'compare' && twist.compareWhy) return { ok: false, why: twist.compareWhy };
@@ -4326,6 +4328,46 @@ describe('acting through the gate (S18 M2c)', () => {
       const clicked = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
       expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Saved"']);
     });
+  });
+
+  it('refs inside frames only in an agent’s own tab: the snapshot asks for them there, never in a tab of yours; a frame ref there is refused (#210, B3 and F8)', async () => {
+    const twist: Twist = { codes: [] };
+    const t = await acting({ twist });
+    await t.call('snapshot', { tab_id: t.tab });
+    expect(twist.codes!.filter((c) => c.includes('__chordSnapshots')).some((c) => c.includes('"frameRefs":true'))).toBe(true);
+    const yours: Twist = { codes: [], inFrame: true };
+    const lease = { begin: async () => null, end: () => undefined, going: () => undefined };
+    const u = await acting({ twist: yours, act: { mayAct: () => null, lease } });
+    await u.call('snapshot', { tab_id: u.tab });
+    const asked = yours.codes!.filter((c) => c.includes('__chordSnapshots'));
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.some((c) => c.includes('"frameRefs":true'))).toBe(false);
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.inFrame);
+    expect(u.at.input).toEqual([]);
+    // A tab shared with an outside agent, read only (#320's SF1): no refs inside its frames either.
+    const shared: Twist = { codes: [] };
+    const v = await acting({ twist: shared, act: { mayAct: () => 'sharedReadOnly' } });
+    await v.call('snapshot', { tab_id: v.tab });
+    const sharedAsked = shared.codes!.filter((c) => c.includes('__chordSnapshots'));
+    expect(sharedAsked.length).toBeGreaterThan(0);
+    expect(sharedAsked.some((c) => c.includes('"frameRefs":true'))).toBe(false);
+  });
+
+  it('a ref inside a same-origin frame: refused for now, at its first look, nothing pressed or typed (#210, PR 1)', async () => {
+    for (const [tool, args] of [
+      ['click', { ref: 'e1' }],
+      ['hover', { ref: 'e1' }],
+      ['type', { ref: 'e2', text: 'Ada' }],
+      ['press_key', { ref: 'e2', key: 'Enter' }],
+      ['select_option', { ref: 'e3', option: 'Express' }],
+    ] as [string, Record<string, unknown>][]) {
+      const t = await acting({ twist: { inFrame: true } });
+      expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused, tool).toBe(ACT_REFUSALS.inFrame);
+      expect(t.steps, tool).toEqual(['describe']);
+      expect(t.at.text, tool).toEqual([]);
+      expect(t.at.input, tool).toEqual([]);
+      expect(t.cards, tool).toEqual([]);
+    }
   });
 
   it('look-alikes the page redrew: refused, saying how to choose, and nothing pressed (#211)', async () => {
