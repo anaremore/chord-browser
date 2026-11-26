@@ -69,7 +69,8 @@ test('a single-page app: controlled fields, nodes replaced under a ref, a portal
 
     const home = await snap();
     // The app's own tree: the sticky header's links, every section's controls, a field's state never its value.
-    expect(home).toContain('- banner\n  - navigation "Shop"');
+    // Containers carry their c refs for an outside agent (#207: read-only, read_tab reads one).
+    expect(home).toMatch(/- banner \[ref=c\d+\]\n {2}- navigation "Shop" \[ref=c\d+\]/);
     expect(home).toContain('textbox "Name" [ref=');
     expect(home).toContain('button "More actions" [ref=');
 
