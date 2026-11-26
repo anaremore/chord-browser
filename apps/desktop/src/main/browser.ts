@@ -1885,7 +1885,10 @@ export class Browser {
         : popover.passwordsUnlock
           ? `passwords:${popover.passwordsUnlock.id}`
           : '';
-    if (asking && this.authFocused.get(w.id) !== asking) w.focusPopover();
+    const asked = this.authFocused.get(w.id);
+    if (asking && asked !== asking) w.focusPopover();
+    // It's answered: the cards left don't own the keyboard it was given (#200).
+    else if (!asking && asked) w.popoverDoneAsking();
     this.authFocused.set(w.id, asking);
   }
 

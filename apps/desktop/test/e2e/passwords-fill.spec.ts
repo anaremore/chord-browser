@@ -147,13 +147,13 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await expect(firstSave).toBeVisible({ timeout: 15_000 });
     await expect(firstSave.getByLabel('Username')).toHaveValue(USER);
     await expect(firstSave.getByText('Choose a passphrase to lock your passwords. Chord can’t get it back for you.')).toBeVisible();
-    // The card never takes focus: the page keeps it.
+    // The card never takes focus, nor the menu under the field (its own view, `#menu`): the page keeps it (#200).
     // (Asked of main: Playwright emulates focus in each page it drives, so `document.hasFocus()` there says nothing.)
-    // Polled: focus the OS gave the card on its own goes back on main's next turn, which a check can run ahead of. The
-    // popover's focus events, if it keeps it (#200).
-    const cardFocused = () => app.evaluate(({ webContents }) => webContents.getAllWebContents().find((w) => w.getURL().includes('popover'))!.isFocused());
+    // Polled: focus the OS gave one of them on its own goes back on main's next turn, which a check can run ahead of.
+    // Their focus log, if one keeps it.
+    const floatingFocused = () => app.evaluate(({ webContents }) => /^chord:\/\/popover|\/popover\/index\.html/.test(webContents.getFocusedWebContents()?.getURL() ?? ''));
     await expect
-      .poll(cardFocused, { timeout: 3_000, message: 'the save card kept the keyboard' })
+      .poll(floatingFocused, { timeout: 3_000, message: 'the save card or the menu kept the keyboard' })
       .toBe(false)
       .catch(async (error: unknown) => {
         const log = await app.evaluate(({ BaseWindow, webContents }) => ({
@@ -161,8 +161,7 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
           windowFocused: BaseWindow.getFocusedWindow() !== null,
           focused: webContents.getFocusedWebContents()?.getURL().replace(/^[a-z-]+:\/\/[^/]*/, '') ?? null,
         }));
-        throw new Error(`${String(error)}
-the popover's focus: ${JSON.stringify(log)}`, { cause: error });
+        throw new Error(`${String(error)}\nthe floating views' focus: ${JSON.stringify(log)}`, { cause: error });
       });
     findings.push(...(await audit(popover, 'the first save card', { appearance: 'light' })));
     await firstSave.screenshot({ path: resolve(capturesDir, 'passwords-save-first-light.png') });
