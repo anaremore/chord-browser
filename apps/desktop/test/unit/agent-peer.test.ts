@@ -29,6 +29,9 @@ describe('Windows: which of the pipe’s clients is this connection’s', () => 
     for (const counts of ['"stuck":0,"truncated":2,"skipped":0', '"stuck":0,"truncated":0,"skipped":1', '"stuck":0,"truncated":0']) expect(parsePipeClients(`{"clients":[],${counts}}`)!.complete, counts).toBe(false);
     // A chain stops at an entry that isn't one; one that doesn't start with its client isn't used.
     expect(answer!.chains.get(12)).toEqual([claude, parent]);
+    // An empty chain is the helper's answer (the client gone, or its start unknown): kept as given, so no second lookup
+    // of a PID that may be another process's by then (#264, Carbon's SF3).
+    expect(parsePipeClients('{"clients":[56],"chains":{"56":[]},"stuck":0,"truncated":0,"skipped":0}')!.chains.get(56)).toEqual([]);
     expect(answer!.chains.has(34)).toBe(false);
     expect(answer!.timings).toEqual({ files: 24, stuck: 1, truncated: 0, skipped: 0, handles: 9, table: 31, total: 57 });
     for (const bad of ['', '12 34', '{}', '{"clients":5}', 'null']) expect(parsePipeClients(bad), bad).toBeNull();

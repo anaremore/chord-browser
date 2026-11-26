@@ -5,8 +5,8 @@
  * with Agents off, the Windows DACL (window-owner.exe's restrict-pipe) and, on
  * Linux, another user refused.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -557,12 +557,19 @@ describe('Zero cost, and off in packaged builds', () => {
     ['a packaged build before M2: the hello’s word, as in M1', null, false, 'hello'],
   ];
   // On Windows the chain comes from window-owner.exe's `chain` (the build's, as Chord runs it), never PowerShell's query
-  // of each process, which took more than its 10 s on CI's busy Windows runners (#107).
+  // of each process, which took more than its 10 s on CI's busy Windows runners (#107). Built here when it isn't yet
+  // (a clean checkout), so these never fall back to PowerShell and pass without the fix.
   const windowsHelper = resolve(import.meta.dirname, '../../out/window-owner/window-owner.exe');
+  const builtHelper = () => {
+    if (process.platform !== 'win32') return null;
+    if (!existsSync(windowsHelper)) execFileSync(process.execPath, [resolve(import.meta.dirname, '../../scripts/build-window-owner.mjs')], { stdio: 'ignore' });
+    expect(existsSync(windowsHelper), 'window-owner.exe built').toBe(true);
+    return windowsHelper;
+  };
   it.each(started)('who started it: %s', async (_name, peerPid, actions, want) => {
     const ud = profile();
     let asked: { claimed: number; endpoint: string } | null = null;
-    const helper = process.platform === 'win32' && existsSync(windowsHelper) ? windowsHelper : null;
+    const helper = builtHelper();
     const service = new AgentService({
       userData: ud,
       browser,
@@ -589,6 +596,39 @@ describe('Zero cost, and off in packaged builds', () => {
     else expect(asked).toBeNull();
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
   }, 20_000);
+
+  // #264, Carbon's B1: .NET wrote the helper's answer in the console's code page (OEM), so a profile folder like José's
+  // came back mangled ("Jos� M�ller ??"), the card named Chord.exe, and Always allow could keep it. UTF-8 now.
+  it.runIf(process.platform === 'win32')('window-owner.exe’s chain: a folder like José’s, as the OS has it', async () => {
+    const helper = builtHelper()!;
+    const dir = mkdtempSync(join(tmpdir(), 'José Müller 太郎 '));
+    const copied = join(dir, 'window-owner.exe');
+    const program = join(dir, 'node.exe');
+    copyFileSync(helper, copied);
+    copyFileSync(process.execPath, program);
+    const child = spawn(program, ['-e', 'setTimeout(() => {}, 30000)'], { windowsHide: true, stdio: 'ignore' });
+    // Gone before its folder is: a running program's file can't be removed (and removing it under one took the test's
+    // worker down).
+    cleanup.push(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise((done) => child.once('exit', done));
+        child.kill();
+        await exited;
+      }
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    // Its answer through a pipe, as Chord reads it (execFile).
+    const answer = await new Promise<string>((done, fail) => {
+      const run = spawn(copied, ['chain', String(child.pid), '1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      let out = '';
+      run.stdout.setEncoding('utf8');
+      run.stdout.on('data', (d: string) => (out += d));
+      run.on('error', fail);
+      run.on('close', () => done(out));
+    });
+    const { parseChain } = await import('../../src/main/agents/parent');
+    expect(parseChain(answer)[0]).toMatchObject({ pid: child.pid, path: realpathSync.native(program) });
+  }, 30_000);
 
   it('who started it, from a chain the lookup gave (Windows’ helper): used as given, no second lookup', async () => {
     const ud = profile();

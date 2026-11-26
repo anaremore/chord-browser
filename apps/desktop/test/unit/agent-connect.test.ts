@@ -68,6 +68,11 @@ describe('The connect card', () => {
     ['nobody, Always pressed first', [], true],
     ['a process with no path', [{ ...claude, path: null }], false],
     ['a process with no path, Always pressed first', [{ ...claude, path: null }], true],
+    // #264, Carbon's B1: a path the lookup mangled (a profile folder like José's, read in the wrong code page) or Chord
+    // itself is no program to keep an allowance by: anything that starts Chord could claim it.
+    ['a path with U+FFFD in it', [{ ...claude, path: 'C:/Users/Jos\uFFFD/AppData/Local/Programs/Chord/Chord.exe' }], false],
+    ['a path with ? in it, Always pressed first', [{ ...claude, path: 'C:/Users/Jos?/AppData/Local/Programs/Chord/Chord.exe' }], true],
+    ['Chord itself', [{ ...claude, path: process.execPath }], false],
   ];
   it.each(unknown)('can’t tell who started it (%s): no Always allow, nothing kept', async (_what, chain, early) => {
     const t = setup();
@@ -85,6 +90,19 @@ describe('The connect card', () => {
     }
     expect(await asked).toEqual<ConnectAnswer>({ grant: 'once', profileId: 'default' });
     expect(t.store.state.settings.agentsAllowed).toEqual([]);
+  });
+
+  it('an allowance kept by a mangled path (before #264) never lets an agent in without a card', async () => {
+    const t = setup();
+    const mangled = 'C:/Users/Jos?/AppData/Local/Programs/Chord/Chord.exe';
+    t.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [{ name: 'Claude Code', parent: mangled, profileId: 'default', allowedAt: 0, lastUsedAt: 0 }] } });
+    const asked = t.cards.ask(t.who(Promise.resolve([{ ...claude, path: mangled }])), new AbortController().signal);
+    await tick();
+    await tick();
+    const card = t.cards.cardFor('w1');
+    expect(card, 'a card, not let in for good').not.toBeNull();
+    t.cards.answer(card!.id, 'deny', 'w1');
+    expect(await asked).toEqual<ConnectAnswer>({ grant: 'deny', profileId: null });
   });
 
   it('Deny (and ×, which answers the same) lets nothing in; another window’s popover can’t answer', async () => {

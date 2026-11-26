@@ -65,17 +65,22 @@ export function sameProgram(a: string | null, b: string): boolean {
   return fold(real(a)) === fold(real(b));
 }
 
-/** window-owner.exe's `chain` answer: its processes as given (each `ProcessInfo`'s fields), or nothing. */
+/** A process id as the helpers give one: a whole number above 0. */
+export const isPid = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0;
+/** A name or path as the helpers give one: a string with something in it. */
+export const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+/**
+ * window-owner.exe's `chain` answer: its processes as given (each `ProcessInfo`'s fields, read as pipe-clients' chains
+ * are, peer.ts), up to the first that isn't one; or nothing.
+ */
 export function parseChain(stdout: string): ProcessInfo[] {
   const parsed = attempt(() => JSON.parse(stdout.trim() || '[]') as unknown);
   if (!Array.isArray(parsed)) return [];
-  const text = (v: unknown) => (typeof v === 'string' ? v : null);
-  const id = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
   const chain: ProcessInfo[] = [];
-  for (const o of parsed as Record<string, unknown>[]) {
-    const pid = id(o?.['pid']);
-    if (pid === null) break;
-    chain.push({ pid, name: text(o['name']), path: text(o['path']), cwd: null, ppid: id(o['ppid']) });
+  for (const p of parsed as Record<string, unknown>[]) {
+    if (!p || !isPid(p['pid'])) break;
+    chain.push({ pid: p['pid'], name: text(p['name']), path: text(p['path']), cwd: null, ppid: isPid(p['ppid']) ? p['ppid'] : null });
   }
   return chain;
 }
@@ -85,9 +90,11 @@ export function parseChain(stdout: string): ProcessInfo[] {
  * process snapshot; PowerShell only where there's none.
  */
 export async function ancestry(pid: number, depth = 3, helper: string | null = null): Promise<ProcessInfo[]> {
-  if (!Number.isInteger(pid) || pid <= 1) return [];
+  if (!Number.isInteger(pid) || pid <= 1 || depth < 1) return [];
+  // Windows' own processes (System Idle, System) are no one's parent to name.
+  if (process.platform === 'win32' && pid <= 4) return [];
   if (process.platform === 'win32' && helper) {
-    const { stdout } = await run(helper, ['chain', String(pid), String(Math.min(Math.max(depth, 1), 4))], { windowsHide: true, timeout: 10_000 }).catch(() => ({ stdout: '[]' }));
+    const { stdout } = await run(helper, ['chain', String(pid), String(Math.min(depth, 4))], { windowsHide: true, timeout: 10_000 }).catch(() => ({ stdout: '[]' }));
     const chain = parseChain(stdout);
     // The helper's chain starts with the process asked about, or it's no answer.
     return chain[0]?.pid === pid ? chain : [];

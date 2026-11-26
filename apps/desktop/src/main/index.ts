@@ -1146,9 +1146,8 @@ if (!app.requestSingleInstanceLock()) {
       make: async () => {
         const [{ AgentService }, { ConnectCards }, { SiteCards }] = await Promise.all([import('./agents/service'), import('./agents/connect'), import('./agents/site-cards')]);
         // window-owner.exe: beside the app's archive in a packaged build (electron-builder's extraResources: a program
-        // can't run from inside the archive), in out/ in a development one; none where it wasn't built (#107).
-        const helperPath = process.platform !== 'win32' ? null : app.isPackaged ? join(process.resourcesPath, 'window-owner.exe') : join(app.getAppPath(), 'out/window-owner/window-owner.exe');
-        const helper = helperPath && existsSync(helperPath) ? helperPath : null;
+        // can't run from inside the archive), in out/ in a development one (#107).
+        const helper = process.platform !== 'win32' ? null : app.isPackaged ? join(process.resourcesPath, 'window-owner.exe') : join(app.getAppPath(), 'out/window-owner/window-owner.exe');
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
         // The window used last (never a private one): where the connect card and an agent's toasts go.
         const lastWindow = () => {

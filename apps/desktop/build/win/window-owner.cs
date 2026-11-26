@@ -343,20 +343,22 @@ static class WindowOwner
     /**
      * The client and its ancestors as JSON ({pid, name, path, ppid}, as parent.ts's ProcessInfo), from one process
      * snapshot. Windows never reparents, so an exited parent's PID can be another process's: an ancestor that started
-     * after its child (a reused PID) ends the chain, as does one Chord can't see when it started.
+     * after its child (a reused PID) ends the chain, as does any process Chord can't see when it started (its parent
+     * couldn't be checked against it, #264), and one met twice (a cycle of reused PIDs).
      */
     static string Chain(uint pid, Dictionary<uint, ProcessEntry> processes, int depth = CHAIN_MAX)
     {
         var items = new List<string>();
+        var seen = new HashSet<uint>();
         long childCreated = long.MaxValue;
-        for (int i = 0; i < depth && pid > 4; i++)
+        for (int i = 0; i < depth && pid > 4 && seen.Add(pid); i++)
         {
             ProcessEntry entry;
             if (!processes.TryGetValue(pid, out entry)) break;
             long created;
             string path = ImagePath(pid, out created);
-            if (i > 0 && (created == 0 || created > childCreated)) break;
-            childCreated = created == 0 ? long.MaxValue : created;
+            if (created == 0 || created > childCreated) break;
+            childCreated = created;
             items.Add("{\"pid\":" + pid + ",\"name\":" + Json(entry.szExeFile) + ",\"path\":" + Json(path) + ",\"cwd\":null,\"ppid\":" + entry.th32ParentProcessID + "}");
             pid = entry.th32ParentProcessID;
         }
@@ -539,6 +541,9 @@ static class WindowOwner
 
     static int Main(string[] args)
     {
+        // UTF-8 (no BOM), never the console's code page: a path in a profile folder like José's must reach Chord as it
+        // is, whatever started this (GUI Chord.exe gives it no console of its own; #264).
+        Console.OutputEncoding = new System.Text.UTF8Encoding(false);
         IntPtr window, owner;
         if (args.Length == 2 && (args[0] == "restrict-pipe" || args[0] == "pipe-dacl"))
         {
