@@ -1262,7 +1262,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
+  type Twist = { ambiguous?: boolean; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1313,6 +1313,8 @@ describe('acting through the gate (S18 M2c)', () => {
       const f = twist.field ?? el.field;
       const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}), ...(twist.place ? twist.place(args.op) : {}) };
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
+      // Look-alikes the page redrew (#211): which one can't be told.
+      if (twist.ambiguous) return { ok: false, why: 'ambiguous' };
       if (twist.replaced?.[args.op] && !(args as { refind?: boolean }).refind) {
         twist.replaced[args.op]!--;
         return { ok: false, why: 'replaced' };
@@ -3665,6 +3667,15 @@ describe('acting through the gate (S18 M2c)', () => {
       const clicked = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
       expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Saved"']);
     });
+  });
+
+  it('look-alikes the page redrew: refused, saying how to choose, and nothing pressed (#211)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    twist.ambiguous = true;
+    t.steps.length = 0;
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguous);
+    expect(t.steps.filter((s) => s !== 'describe' && s !== 'point')).toEqual([]);
   });
 
   it('navigate and back: its own tabs, http and https, never a site kept private; the site card once, as any action', async () => {

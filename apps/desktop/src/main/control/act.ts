@@ -73,7 +73,7 @@ interface ActRisk {
 
 export type ActAnswer =
   | { ok: true; role: string; name: string; items?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -105,7 +105,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     // Never once the element is checked and pointed at (the hit test, the step again, the focus, the text, a choice):
     // there a node replaced since is said so (replaced, when it could be found again), and the action starts over from
     // its pointer's move, which looks again (tools.ts; the owner's retest of #117).
-    if (entry.path === undefined) return { ok: false, why: 'changed' };
+    // Twins in the snapshot (#211): which one can't be told once the page replaced it.
+    if (entry.path === undefined) return { ok: false, why: entry.twins ? 'ambiguous' : 'changed' };
     if (!(args.refind || args.op === 'point')) return { ok: false, why: 'replaced' };
     const started = performance.now();
     let looked = 0;
@@ -128,6 +129,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       }
     };
     visit(document.body || document.documentElement, 0);
+    // More than one alike now (#211): never a guess, and said so.
+    if (!over && found.length > 1) return { ok: false, why: 'ambiguous' };
     if (over || found.length !== 1) return { ok: false, why: 'changed' };
     el = found[0];
     refound = true;

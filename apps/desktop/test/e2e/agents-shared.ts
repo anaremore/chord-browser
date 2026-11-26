@@ -148,6 +148,10 @@ export async function agentsSettings(app: ElectronApplication, shell: Page): Pro
 /** What reached the test site that changes something (S18 M2d): each form posted, each delete address asked for. */
 export const reached: string[] = [];
 
+/** Each slot's Delete button, replaced by a new node every 100 ms (a redraw): a ref's node is gone soon after the snapshot. */
+const TWIN_SCRIPT =
+  '<script>const draw = () => { for (const slot of document.querySelectorAll(".slot")) { const b = document.createElement("button"); b.textContent = "Delete"; b.onclick = () => { document.getElementById("log").textContent += " deleted " + slot.dataset.n; }; slot.replaceChildren(b); } }; draw(); setInterval(draw, 100);</script>';
+
 export async function startAgentSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
     '/notes': '<title>Release notes</title><h1>Notes</h1><p>Electron 46 brings a faster start.</p>',
@@ -416,6 +420,22 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Orders</title><main><table><tbody>' +
       Array.from({ length: 300 }, (_, i) => `<tr><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
       '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
+    // #211: a control drawn late (1.5 s after the page loads), and look-alikes the page redraws every 100 ms: two Delete
+    // buttons in named sections (told apart by their item), and in unnamed list items (they can't be).
+    '/late':
+      '<title>Lobby</title><main><h1>Lobby</h1><p>Waiting for a seat.</p><p id=log></p></main>' +
+      '<script>setTimeout(() => { const b = document.createElement("button"); b.textContent = "Join table"; b.onclick = () => { document.getElementById("log").textContent += " joined"; }; document.querySelector("main").append(b); }, 1500);</script>',
+    '/twins':
+      '<title>Drafts</title><main><section aria-label="Draft A"><h2>Draft A</h2><span class=slot data-n=A></span></section><section aria-label="Draft B"><h2>Draft B</h2><span class=slot data-n=B></span></section><p id=log></p></main>' +
+      TWIN_SCRIPT,
+    '/twins-plain':
+      '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li><li>Draft B <span class=slot data-n=B></span></li></ul><p id=log></p></main>' +
+      TWIN_SCRIPT,
+    // One alike at the first look; 400 ms later the page draws a second just like it (the same name, in the same place).
+    '/twin-later':
+      '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li></ul><p id=log></p></main>' +
+      '<script>setTimeout(() => { const li = document.createElement("li"); li.innerHTML = "Draft A <span class=slot data-n=A2></span>"; document.querySelector("ul").append(li); }, 400);</script>' +
+      TWIN_SCRIPT,
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',

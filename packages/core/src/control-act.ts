@@ -194,6 +194,8 @@ export const ACT_REFUSALS = {
   // S18 M2e-1: a card let go of because the user took the tab over (a card's no that wasn't theirs).
   takenOver: 'The user took that tab over while you waited, so nothing was done there. Call snapshot again if you still need to act there.',
   changed: 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.',
+  // Two or more alike (the same role, name, item and place: #211), and the page redrew them: never a guess.
+  ambiguous: 'The page redrew that element, and it has a look-alike (the same name, in the same place), so which one you meant can’t be told and nothing was done. Call snapshot, or find with the words of the row or item it’s in, and use the ref of the one you mean.',
   covered: (what: string) => `Something is covering that element: ${what}. Deal with it first, or call snapshot again.`,
   disabled: 'That element is disabled.',
   notEditable: 'That element doesn’t take text.',

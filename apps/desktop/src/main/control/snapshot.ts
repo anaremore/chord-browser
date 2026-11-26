@@ -469,6 +469,8 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
     for (const k of keep) {
       if (!whole || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
+      // Twins (#211): found again, either could be it; an action on one says so, never guesses.
+      if (whole && counts.get(k.sig) > 1) k.twins = true;
       delete k.sig;
     }
     // (Its cost, for the budgets journey.)

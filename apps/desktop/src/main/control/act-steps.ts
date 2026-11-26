@@ -184,6 +184,8 @@ export function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'stale') return ELEMENT_REFUSALS.stale;
   // Replaced again and again (the press's tries ran out): changed, as it always was.
   if (answer.why === 'replaced') return ACT_REFUSALS.changed;
+  // Two or more alike, redrawn (#211): how to choose, never a guess.
+  if (answer.why === 'ambiguous') return ACT_REFUSALS.ambiguous;
   if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';
