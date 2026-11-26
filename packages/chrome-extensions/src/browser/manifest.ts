@@ -1,7 +1,7 @@
 import { getExtensionUrl, validateExtensionResource } from './api/common'
 import { ExtensionContext } from './context'
 
-export async function readUrlOverrides(ctx: ExtensionContext, extension: Electron.Extension) {
+async function readUrlOverrides(ctx: ExtensionContext, extension: Electron.Extension) {
   const manifest = extension.manifest as chrome.runtime.Manifest
   const urlOverrides = ctx.store.urlOverrides
   let updated = false

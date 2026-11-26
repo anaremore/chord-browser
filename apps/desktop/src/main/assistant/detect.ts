@@ -39,13 +39,11 @@ export interface Detected {
 export const notInstalled = (provider: AssistantProvider): ProviderStatus => ({ provider, installed: false, path: null, version: null, signedIn: null, billing: null, tooOld: false, wsl: null });
 
 /** research §11: the flags the assistant uses arrived by these versions. */
-export const MIN_VERSION: Record<AssistantProvider, string> = { claude: '2.1.268', codex: '0.160.0' };
-/** The newest versions the assistant was checked against (docs/decisions/S10-claude-headless.md, S5-codex-restriction.md). */
-export const TESTED_VERSION: Record<AssistantProvider, string> = { claude: '2.1.309', codex: '0.160.1' };
+const MIN_VERSION: Record<AssistantProvider, string> = { claude: '2.1.268', codex: '0.160.0' };
 
 const exe = (name: string) => (process.platform === 'win32' ? `${name}.exe` : name);
 
-export function compareVersions(a: string, b: string): number {
+function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) {
@@ -55,7 +53,7 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-export const parseVersion = (text: string): string | null => /(\d+\.\d+\.\d+)/.exec(text)?.[1] ?? null;
+const parseVersion = (text: string): string | null => /(\d+\.\d+\.\d+)/.exec(text)?.[1] ?? null;
 
 let shellPath: Promise<string> | null = null;
 /** GUI apps don't inherit the login shell's PATH on macOS and Linux (research §4.3, lesson 2). */
@@ -140,7 +138,7 @@ export function mayBeInWsl(provider: AssistantProvider): boolean {
   return process.platform === 'win32' && (devWslArgv(provider) !== null || devOverride(provider) === null);
 }
 
-export async function findBinary(provider: AssistantProvider): Promise<string | null> {
+async function findBinary(provider: AssistantProvider): Promise<string | null> {
   if (devWslArgv(provider)) return null;
   const override = devOverride(provider);
   if (override) return existsSync(override) ? override : null;
@@ -160,7 +158,7 @@ export async function findBinary(provider: AssistantProvider): Promise<string | 
 }
 
 /** How to start a binary: directly, or a development .mjs fake through Electron's own Node. */
-export function launchFor(path: string, env: NodeJS.ProcessEnv = process.env): Launch {
+function launchFor(path: string, env: NodeJS.ProcessEnv = process.env): Launch {
   if (/\.m?js$/.test(path)) return { command: process.execPath, prefix: [path], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
   return { command: path, prefix: [], env: { ...env } };
 }

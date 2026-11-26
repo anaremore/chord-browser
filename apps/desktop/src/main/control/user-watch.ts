@@ -84,7 +84,7 @@ export interface UserTabDeps extends Omit<SendHoldDeps, 'whose'> {
 }
 
 /** Whether a lease could be had: on (or joined), another chat's (E8), or not (the debugger can't be had, Fetch failed). */
-export type UserLeaseBegin = 'on' | 'busy' | 'no';
+type UserLeaseBegin = 'on' | 'busy' | 'no';
 
 /**
  * One action's hold on the lease: `end` once it's done (its tail starts after the last one). It belongs to the lease it
@@ -200,7 +200,7 @@ export function onUserLeaseEnd(listener: (contents: WebContents, owner: string) 
 }
 
 /** A command within COMMAND_MS, or a rejection (fail closed). */
-export function command(debug: Electron.Debugger, method: string, params: object = {}, sessionId?: string): Promise<unknown> {
+function command(debug: Electron.Debugger, method: string, params: object = {}, sessionId?: string): Promise<unknown> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const limit = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(new Error(`${method} took too long`)), COMMAND_MS);

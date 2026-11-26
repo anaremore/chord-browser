@@ -15,7 +15,7 @@ debug.formatters.r = (value: any) => {
 
 export type IpcEvent = Electron.IpcMainEvent | Electron.IpcMainServiceWorkerEvent
 export type IpcInvokeEvent = Electron.IpcMainInvokeEvent | Electron.IpcMainServiceWorkerInvokeEvent
-export type IpcAnyEvent = IpcEvent | IpcInvokeEvent
+type IpcAnyEvent = IpcEvent | IpcInvokeEvent
 
 const getSessionFromEvent = (event: IpcAnyEvent): Electron.Session => {
   if (event.type === 'service-worker') {

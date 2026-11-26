@@ -72,7 +72,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
 
 // What tools.ts exported before the split (#213): its importers are unchanged.
 export { stepSubmits } from './act-steps';
-export { type ControlBrowser, heldStep, pageLoaded, safeHost } from './tool-call';
+export { type ControlBrowser, heldStep, pageLoaded } from './tool-call';
 export { STILL_LOADING, withOutline } from './tools-act';
 export { ONLY_TEXT } from './tools-outline';
 export { PART_REFUSALS } from './tools-read';

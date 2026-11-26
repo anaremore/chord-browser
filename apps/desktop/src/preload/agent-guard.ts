@@ -25,7 +25,7 @@ type GuardWindow = {
 export const GUARDED_EVENTS = ['keydown', 'keypress', 'keyup', 'beforeinput', 'compositionstart', 'compositionupdate', 'compositionend'] as const;
 
 /** The name main arms the guard with (page.ts makes it): random, so no page listens for it or fires it. */
-export const GUARD_MARK = /^chord-guard-[0-9a-f]{32}$/;
+const GUARD_MARK = /^chord-guard-[0-9a-f]{32}$/;
 
 export function installAgentGuard(win: GuardWindow): void {
   let armed: {

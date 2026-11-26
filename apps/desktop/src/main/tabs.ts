@@ -679,7 +679,7 @@ export class TabManager {
  * A committed page's title as Chromium's entry shows it: its own, or (none set yet, or ever) its address, which is no
  * title: empty, so the host shows.
  */
-export function committedTitle(shown: string, url: string): string {
+function committedTitle(shown: string, url: string): string {
   const title = shown.trim();
   const bare = (s: string) => s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/$/, '');
   // Its address as Chromium shows it: whole, or cut (it may elide a long one), never a word that only appears in it.

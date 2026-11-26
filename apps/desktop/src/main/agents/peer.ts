@@ -48,7 +48,7 @@ export const peerDeps = (helper: string | null): PeerDeps => ({
 });
 
 /** The file descriptor under a socket (Linux and macOS; -1 on Windows), or null. */
-export function socketFd(socket: Socket): number | null {
+function socketFd(socket: Socket): number | null {
   const fd = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd;
   return typeof fd === 'number' && fd >= 0 ? fd : null;
 }

@@ -107,7 +107,7 @@ export function wslSignInArgs(target: WslTarget, loginArgs: readonly string[]): 
 /* ---------- Finding a CLI inside WSL ---------- */
 
 /** WSL can take several seconds to start; past this, the check gives up (and Setup shows nothing more). */
-export const WSL_PROBE_MS = 25_000;
+const WSL_PROBE_MS = 25_000;
 
 const LXSS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss';
 
@@ -139,7 +139,7 @@ export function defaultWslDistro(): Promise<string | null> {
  * Windows CLI seen through interop doesn't count; then each CLI's path. Only
  * tagged lines are read back: a login banner or anything else is ignored.
  */
-export const WSL_PROBE = [
+const WSL_PROBE = [
   `r=$(wslpath -u 'C:\\' 2>/dev/null); r=\${r%c/}`,
   's=${SHELL:-/bin/sh}',
   `o=$("$s" -ilc 'printf "\\n@chord-path=%s\\n@chord-ccd=%s\\n" "$PATH" "$CLAUDE_CONFIG_DIR"' </dev/null 2>/dev/null)`,

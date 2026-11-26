@@ -282,7 +282,7 @@ export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => {
 
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
 /** `boxes`: the parts it may read by their container refs (#207), kept as its keyed elements are, in their own list. */
-export function snapshotScript(owner: string, token: string, pinned = true, boxes = false): string {
+function snapshotScript(owner: string, token: string, pinned = true, boxes = false): string {
   const args = { owner, token, pinned, boxes, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}

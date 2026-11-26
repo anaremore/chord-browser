@@ -17,7 +17,7 @@ export interface ToolOutput {
 }
 
 /** A PDF read for an agent: later ranges reuse it, and the assistant's citations find their page in it. */
-export interface PdfRead {
+interface PdfRead {
   url: string;
   pages: string[];
   totalPages: number;

@@ -146,9 +146,9 @@ export function pageIdOf(contents: WebContents): string {
 }
 
 /** Where the page's documents are: how many it committed, and how many it started to go to (since Chord followed it). */
-export type DocumentMark = { document: number; starts: number };
+type DocumentMark = { document: number; starts: number };
 
-export function documentMark(contents: WebContents): DocumentMark {
+function documentMark(contents: WebContents): DocumentMark {
   pageIdOf(contents);
   const { document, starts } = followed.get(contents)!;
   return { document, starts };
@@ -159,7 +159,7 @@ export function documentMark(contents: WebContents): DocumentMark {
  * download, one stopped, doesn't count: Neon's and Claude's review 7 of #110). One started since and not committed
  * yet is waited for, at most `ms`.
  */
-export function committedSince(contents: WebContents, mark: DocumentMark, ms: number): Promise<boolean> {
+function committedSince(contents: WebContents, mark: DocumentMark, ms: number): Promise<boolean> {
   if (contents.isDestroyed()) return Promise.resolve(true);
   const now = documentMark(contents);
   if (now.document !== mark.document) return Promise.resolve(true);

@@ -28,9 +28,9 @@ import { PAGE_CALL_MS, pageCall, pageOutcome } from '../page-call';
 import { ASSISTANT_WORLD } from './extract';
 
 /** How long the page may take to answer: a hung page is a refusal, not a turn that never ends. */
-export const DIAGNOSTICS_READ_MS = 5000;
+const DIAGNOSTICS_READ_MS = 5000;
 /** Events kept while asking, each already cut to size (shrinkEvent): a ceiling, not the bound the model sees. */
-export const DIAGNOSTICS_MAX_EVENTS = 2500;
+const DIAGNOSTICS_MAX_EVENTS = 2500;
 
 /** Each resource's `initiatorType`, by its full address, from the page's own Resource Timing (read in Chord's isolated world). */
 const TYPES_SCRIPT = `(() => { const out = {}; for (const e of performance.getEntriesByType('resource').slice(-500)) out[e.name.slice(0, 2048)] = e.initiatorType; return out; })()`;
