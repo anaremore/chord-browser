@@ -7,7 +7,10 @@
   "weights": {
     "a11y.spec.ts": 189.8,
     "ad-blocking.spec.ts": 11.9,
-    "agents.spec.ts": 365,
+    "agents-acting.spec.ts": 153,
+    "agents-refind.spec.ts": 154,
+    "agents-snapshot.spec.ts": 2,
+    "agents.spec.ts": 56,
     "assistant.spec.ts": 57.4,
     "chords.spec.ts": 10.8,
     "devtools.spec.ts": 17.2,
