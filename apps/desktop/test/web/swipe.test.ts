@@ -135,9 +135,8 @@ describe('gestureIdle: a gesture with no end phase from the OS ends when its eve
     expect(gestureIdle(IDLE_END_MS + 3, IDLE_END_FRAMES)).toBe(true);
   });
 
-  it('in a window drawing no frames (hidden), after a second anyway', () => {
-    expect(gestureIdle(IDLE_END_MAX_MS - 1, 0)).toBe(false);
-    expect(gestureIdle(IDLE_END_MAX_MS, 0)).toBe(true);
+  it('never with no frames at all, however long (a hidden window is GestureEnd’s timer, at rest)', () => {
+    expect(gestureIdle(IDLE_END_MAX_MS * 5, 0)).toBe(false);
   });
 });
 
@@ -183,12 +182,13 @@ describe('GestureEnd: when a swipe ends (#198, and #242’s review)', () => {
   afterEach(() => vi.useRealTimers());
 
   it('with no phases: when the events stop, IDLE_END_MS and IDLE_END_FRAMES frames with none, at the last event’s speed', () => {
-    const { end, ended, pass } = renderer();
+    const { end, ended, pass, start } = renderer();
     end.event(Date.now());
     pass(IDLE_END_MS - 16);
     expect(ended).toEqual([]);
     pass(32);
-    expect(ended).toEqual([expect.objectContaining({ speed: 'last' })]);
+    // Read on the first frame past IDLE_END_MS (80 ms is the fifth frame at 16 ms): at that time, the last event's speed.
+    expect(ended).toEqual([{ at: start + 80, speed: 'last' }]);
   });
 
   it('with no phases on a busy renderer: 80 ms with no event is no end while fewer than IDLE_END_FRAMES frames came', () => {
@@ -202,16 +202,17 @@ describe('GestureEnd: when a swipe ends (#198, and #242’s review)', () => {
   });
 
   it('with no phases in a window drawing no frames: after IDLE_END_MAX_MS, at rest (SF1: no old speed)', () => {
-    const { end, ended, pass } = renderer();
+    const { end, ended, pass, start } = renderer();
     end.event(Date.now());
     pass(IDLE_END_MAX_MS - 1, 0);
     expect(ended).toEqual([]);
     pass(1, 0);
-    expect(ended).toEqual([expect.objectContaining({ speed: 'rest' })]);
+    // At the time it's read, not the last event's: momentum is ignored from then.
+    expect(ended).toEqual([{ at: start + IDLE_END_MAX_MS, speed: 'rest' }]);
   });
 
   it('phased: never on a pause, however long, until the OS’s end; an end that never comes, after PHASED_END_MAX_MS at rest', () => {
-    const { end, ended, pass } = renderer();
+    const { end, ended, pass, start } = renderer();
     end.begin();
     end.event(Date.now());
     pass(500);
@@ -219,7 +220,7 @@ describe('GestureEnd: when a swipe ends (#198, and #242’s review)', () => {
     pass(PHASED_END_MAX_MS - 1);
     expect(ended).toEqual([]);
     pass(1);
-    expect(ended).toEqual([expect.objectContaining({ speed: 'rest' })]);
+    expect(ended).toEqual([{ at: start + 500 + PHASED_END_MAX_MS, speed: 'rest' }]);
     expect(end.phased).toBe(false);
   });
 

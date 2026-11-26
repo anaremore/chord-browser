@@ -137,7 +137,16 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
 
     // A quick flick commits however short: the fingers leave moving (the OS's fling), here read 150 ms after its last
     // event, as a busy renderer reads it; its speed is the one the fingers had.
-    await swipe(app, shell, steps(5, 18), 4, { end: 'fling', endAfterMs: 150 });
+    // (A burst 1 ms apart: a busy machine's late events are still a flick's.)
+    await swipe(app, shell, steps(5, 18), 1, { end: 'fling', endAfterMs: 150 });
+    // While it commits, a sideways event is ignored but never cancelled: a quick new touch's first event must start its
+    // scroll for macOS to send its begin (Carbon's SF-R2-2 on #242).
+    expect(
+      await shell.evaluate(() =>
+        document.querySelector('[aria-label="Sidebar"] [aria-label="Unpinned tabs"]')!.dispatchEvent(new WheelEvent('wheel', { deltaX: 6, deltaMode: 0, bubbles: true, cancelable: true })),
+      ),
+      'not cancelled',
+    ).toBe(true);
     await selected('Work');
     await expect.poll(() => paneCount(shell)).toBe(1);
 
@@ -186,6 +195,12 @@ test("a mouse's tilt wheel steps one chord per notch, and the minimal bar swipes
     await swipe(app, shell, steps(4, 120), 20, { phases: false });
     await shell.waitForTimeout(400);
     await selected('Work');
+
+    // A fling that ends a scroll up or down (the list's, not a swipe) leaves the next notch alone (Carbon's SF-R2-1 on
+    // #242: only a swipe's fling holds its momentum off).
+    await swipe(app, shell, steps(10, 0, 14), 12, { end: 'fling' });
+    await swipe(app, shell, steps(1, 120), 20, { phases: false });
+    await selected('Play');
 
     // With the sidebar collapsed, the bar takes the swipe.
     await runAction(shell, 'view.toggleSidebar');

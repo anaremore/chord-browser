@@ -21,7 +21,7 @@ export const IDLE_END_MS = 80;
  * 80 ms with no event read is not a lift when no frame came to read one. At 60 frames a second, 80 ms is 5 frames.
  */
 export const IDLE_END_FRAMES = 3;
-/** A window that draws no frames (hidden) ends a gesture after this long anyway. */
+/** A window that draws no frames (hidden) ends a gesture after this long anyway, at rest (GestureEnd's timer). */
 export const IDLE_END_MAX_MS = 1000;
 /**
  * A gesture the OS said began (a trackpad's phases, macOS): it ends on the OS's end, never on a pause, however busy
@@ -29,9 +29,12 @@ export const IDLE_END_MAX_MS = 1000;
  */
 export const PHASED_END_MAX_MS = 3000;
 
-/** Whether a gesture with no end phase from the OS has ended: `sinceLastMs` since its last event, `frames` drawn since. */
+/**
+ * Whether a gesture with no end phase from the OS has ended: `sinceLastMs` since its last event, `frames` drawn since.
+ * (No frames at all is GestureEnd's: after IDLE_END_MAX_MS, at rest.)
+ */
 export function gestureIdle(sinceLastMs: number, frames: number): boolean {
-  return sinceLastMs >= IDLE_END_MAX_MS || (sinceLastMs >= IDLE_END_MS && frames >= IDLE_END_FRAMES);
+  return sinceLastMs >= IDLE_END_MS && frames >= IDLE_END_FRAMES;
 }
 /** Momentum keeps arriving after a release: a gesture after a gap this long is a new one. */
 export const MOMENTUM_GAP_MS = 120;

@@ -237,6 +237,10 @@ export function useChordSwipe(options: Options): ChordSwipe {
       if (id) void api.state.dispatch({ t: 'chord.activate', windowId: o.windowId, chordId: id });
     };
 
+    /** The page's own handling of a wheel event the swipe takes, stopped (where it can be: a latched one can't). */
+    const cancel = (event: WheelEvent) => {
+      if (event.cancelable) event.preventDefault();
+    };
     const onWheel = (event: WheelEvent) => {
       const target = event.target as Element | null;
       if (!target?.closest('[data-swipe-area]') || target.closest('input, textarea, [contenteditable="true"]')) return;
@@ -247,20 +251,16 @@ export function useChordSwipe(options: Options): ChordSwipe {
       const sideways = Math.abs(event.deltaX) > Math.abs(event.deltaY);
       // Momentum from the last release (or a notch's cooldown) is ignored until it pauses, unless the OS says a new
       // gesture began; after a fling, until it does (a stalled frame can leave a pause in the momentum). While a commit
-      // plays out, everything waits. Waiting for a begin, nothing is cancelled: the next gesture's first event must
-      // start its scroll for macOS to send that begin.
+      // plays out, everything waits. Nothing ignored is cancelled: a quick new touch's first event must start its scroll
+      // for macOS to send its begin (a catch of a pane springing back), and nothing here scrolls sideways anyway.
       const resting = s.phase === 'idle' || s.phase === 'settling';
-      const flung = resting && now < s.flungUntil;
-      if (s.phase === 'committing' || (resting && now < s.ignoreUntil) || flung) {
-        if (sideways) {
-          s.ignoreUntil = Math.max(s.ignoreUntil, now + MOMENTUM_GAP_MS);
-          if (!flung) event.preventDefault();
-        }
+      if (s.phase === 'committing' || (resting && (now < s.ignoreUntil || now < s.flungUntil))) {
+        if (sideways) s.ignoreUntil = Math.max(s.ignoreUntil, now + MOMENTUM_GAP_MS);
         return;
       }
       if (s.phase === 'idle') {
         if (sideways && isWheelNotch(event.deltaMode, event.deltaX, true)) {
-          event.preventDefault();
+          cancel(event);
           step(event.deltaX > 0 ? 1 : -1, now);
           return;
         }
@@ -284,7 +284,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
         if (axis === 'horizontal') {
           // Not the first: macOS begins a scroll (and its phases) only on a first event that wasn't cancelled. The
           // sidebar's lists don't scroll sideways (overflow-x hidden), so it moves nothing.
-          if (!first) event.preventDefault();
+          if (!first) cancel(event);
           engage(now, s.phase === 'catching');
         } else if (axis === 'vertical') {
           // Up and down is the list's; a pane that was settling just finishes.
@@ -298,7 +298,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
         return;
       }
       if (s.phase === 'tracking') {
-        event.preventDefault();
+        cancel(event);
         s.raw -= event.deltaX;
         place();
         s.tracker.add(now, s.shown);
@@ -320,9 +320,11 @@ export function useChordSwipe(options: Options): ChordSwipe {
       // A fling: the fingers left moving, at their speed as of the last event, however late a busy renderer reads it;
       // its momentum waits for the next begin. An end: they stopped, or lifted slowly; the speed is as of now, so a rest
       // before the lift reads as one.
+      // Only a swipe's fling: one that ends a vertical scroll, or one outside the swipe area, leaves the next gesture alone.
       if (phase === 'fling') {
+        const swiping = s.phase === 'tracking' && s.context !== null;
         release(now, s.tracker.velocity(s.lastAt));
-        s.flungUntil = now + FLING_MOMENTUM_MAX_MS;
+        if (swiping) s.flungUntil = now + FLING_MOMENTUM_MAX_MS;
       } else release(now);
     });
     // Ended at once, at rest, where the fingers can't be followed any more: the window hidden, the command bar over it
