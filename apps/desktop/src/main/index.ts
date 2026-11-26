@@ -377,6 +377,8 @@ function registerIpc(): void {
     else if (action === 'stop') {
       // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
       assistant?.userMovedPage(contents, 'Stop');
+      // A page still waiting for its session (its proxy, its rules, #277): that load is dropped too.
+      browser!.tabs.stopWaiting(contents);
       contents.stop();
     }
   });

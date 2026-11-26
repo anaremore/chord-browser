@@ -112,6 +112,8 @@ export class TabManager {
   private readonly loadTurns = new WeakMap<WebContents, { overtaken?: () => void }>();
   /** Pages whose wait for their session marked their first load pending (whenProxied): unmarked as it loads. */
   private readonly waitMarked = new WeakSet<WebContents>();
+  /** Pages with a load waiting for their session now (whenProxied): what Stop drops (stopWaiting). */
+  private readonly waiting = new WeakSet<WebContents>();
 
   constructor(private readonly deps: TabManagerDeps) {
     this.tabIcons = new TabIconIndex(() => deps.state());
@@ -133,6 +135,7 @@ export class TabManager {
       if (this.loadTurns.get(contents) !== turn) return;
       const pending = this.deps.proxyReady(contents.session);
       if (pending) {
+        this.waiting.add(contents);
         if (!firstLoadPending(contents)) {
           this.waitMarked.add(contents);
           setFirstLoadPending(contents, true);
@@ -142,10 +145,27 @@ export class TabManager {
         void pending.then(go);
         return;
       }
+      this.waiting.delete(contents);
       if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
       load();
     };
     go();
+  }
+
+  /**
+   * Your Stop on a page whose load is still waiting for its session (#277): that load is dropped (as one asked for over
+   * it is; an agent tab's first page is overtaken, its hold failed), and the tab stops showing loading. False when no
+   * load was waiting: the page's own Stop is all there is.
+   */
+  stopWaiting(contents: WebContents): boolean {
+    if (!this.waiting.has(contents)) return false;
+    this.waiting.delete(contents);
+    this.loadTurns.get(contents)?.overtaken?.();
+    this.loadTurns.set(contents, {});
+    if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
+    const nodeId = this.nodeFor(contents);
+    if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+    return true;
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
