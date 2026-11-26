@@ -975,7 +975,7 @@ test('a place is what the snapshot saw: a role the page changes before the task 
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
-    const url = `${site.origin}/twins`;
+    const url = `${site.origin}/role-twins`;
     const opening = mcp.call('open_tab', { url });
     await answer(app, 'Codex', 'Allow once');
     expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
