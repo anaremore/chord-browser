@@ -20,41 +20,35 @@
  * tab's, asked between actions as before), clears sendsWaiting, and records one entry (sendsLater) for the agent's
  * next result: never the answer of the call that handed over, which says it waits.
  */
-import { ACT_REFUSALS, CONTROL_REFUSALS, ELEMENT_REFUSALS, sendsLater, type NodeId, type SendsLater, type SendsWhy } from '@chord/core';
+import { ACT_REFUSALS, CONTROL_REFUSALS, ELEMENT_REFUSALS, sendsLater, toolResult, type NodeId, type SendsLater, type SendsWhy } from '@chord/core';
 import type { ControlAgent } from './gate';
 import type { ToolMemory } from './scope';
 import type { SendWatch } from './sends';
 
-/** How often a wait for a card to open looks again (byDeadline, after the deadline). */
-const OPEN_POLL_MS = 100;
-
 /**
  * A step's Send data cards, as askHeld asks them: one is up only once the gate really shows it (the tab's cards list
- * it), never while its ask is merely pending (a call already stopped answers at once, with no card: Neon's B5). Each
- * Allow is counted, for a partial outcome.
+ * it), never while its ask is merely pending (a call already stopped answers at once, with no card: Neon's B5). The
+ * gate opens a card synchronously as it's asked, so an ask that opened one says so at once (opened): nothing polls
+ * (round 2 of #266, blocker 1).
  */
 export class OpenCards {
   private pending = 0;
-  /** The ids of the cards its asks opened (the gate opens one synchronously, listing it on the tab). */
+  /** The ids of the cards its asks opened (the gate lists one on the tab as it opens it). */
   private readonly mine = new Set<string>();
-  allowed = 0;
+  private readonly waiting = new Set<() => void>();
   constructor(
     private readonly agent: ControlAgent,
     private readonly nodeId: NodeId,
   ) {}
-  /** A card's ask, counted while it's pending; its Allow counted. */
+  /** A card's ask, counted while it's pending; a card it opened, told to whoever waits for one. */
   ask<A extends unknown[], R>(ask: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
     return (...args) => {
       this.pending++;
       const before = new Set(this.agent.state(this.nodeId).cards);
       const asked = ask(...args);
       for (const id of this.agent.state(this.nodeId).cards) if (!before.has(id)) this.mine.add(id);
-      return asked
-        .then((answer) => {
-          if (answer === 'once' || answer === 'always') this.allowed++;
-          return answer;
-        })
-        .finally(() => this.pending--);
+      if (this.isUp()) for (const wake of [...this.waiting]) wake();
+      return asked.finally(() => this.pending--);
     };
   }
   /** A Send data card of this step's is up now: shown by the gate, its ask still waiting. */
@@ -63,49 +57,83 @@ export class OpenCards {
     const up = this.agent.state(this.nodeId).cards;
     return [...this.mine].some((id) => up.includes(id));
   }
-  /** Resolves when one is up (looked at every OPEN_POLL_MS: the gate has no event for it). */
-  opened(): Promise<void> {
+  /** Resolves when one is up (at once if one is); stops waiting, unresolved, when `stop` aborts. */
+  opened(stop: AbortSignal): Promise<void> {
+    if (this.isUp()) return Promise.resolve();
     return new Promise((done) => {
-      const look = () => (this.isUp() ? done() : void setTimeout(look, OPEN_POLL_MS).unref?.());
-      look();
+      const forget = () => this.waiting.delete(wake);
+      const wake = () => {
+        forget();
+        stop.removeEventListener('abort', forget);
+        done();
+      };
+      this.waiting.add(wake);
+      stop.addEventListener('abort', forget, { once: true });
     });
   }
 }
 
 /**
- * The step's cards (askHeld's `sending`), by the call's deadline. Answered by then, or no card up when it comes and none
- * since: their outcome, as before (`sent`: null, or the refusal). A card up at the deadline or after it: `{ later: true }`
- * once the step's input is done (`inputDone`: never a hand-over mid-input, whose own refusal could follow), and the
- * caller hands over (HandedOver) or, with a refusal of its own after all, takes the cards down. Never a hand-over with
- * no card up.
+ * The watch, with its Allows counted where they let requests go (`w.allow`, which askHeld calls only once its `halt`
+ * passed): never a card's yes that `halt` then refused (the page moved on, the hold lost, Stop), which sends nothing
+ * (round 2 of #266, blocker 2).
  */
-export async function byDeadline(sending: Promise<string | null>, deadline: number | null, cards: OpenCards, inputDone: Promise<unknown>): Promise<{ later: false; sent: string | null } | { later: true }> {
+export function countAllows(w: SendWatch): { watch: SendWatch; allowed: () => number } {
+  let allowed = 0;
+  const watch: SendWatch = {
+    held: () => w.held(),
+    sitesOf: (urls) => w.sitesOf(urls),
+    nextHeld: () => w.nextHeld(),
+    cancelled: w.cancelled,
+    allow: (grant) => {
+      const before = w.held().length;
+      w.allow(grant);
+      if (w.held().length < before) allowed++;
+    },
+    deny: () => w.deny(),
+    end: () => w.end(),
+  };
+  return { watch, allowed: () => allowed };
+}
+
+/**
+ * The step's cards (askHeld's `sending`), by the call's deadline. Answered by then: their outcome, as before (`sent`:
+ * null, or the refusal). A card up at the deadline or after it: `{ later: true }` once the step's input is done
+ * (`inputDone`: never a hand-over mid-input, whose own refusal could follow), and the caller hands over (HandedOver)
+ * or, with a refusal of its own after all, takes the cards down. Past the deadline with the input done, no card up and
+ * nothing held (`held`): `{ past: true }`, and the caller answers now, never after the page's load (round 2 of #266,
+ * should-fix 6); it ends the watch, so what the page sends after is the tab's, asked between actions. Never a hand-over
+ * with no card up, and nothing left waiting or looking once it returns.
+ */
+export async function byDeadline(sending: Promise<string | null>, deadline: number | null, cards: OpenCards, inputDone: Promise<unknown>, held: () => number): Promise<{ later: false; sent: string | null } | { later: true } | { past: true }> {
   if (deadline === null) return { later: false, sent: await sending };
   const answered = sending.then((sent) => ({ sent }));
+  const input = inputDone.then(
+    () => 'input' as const,
+    () => 'input' as const,
+  );
+  const over = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const due = new Promise<'due'>((done) => {
       timer = setTimeout(() => done('due'), Math.max(0, deadline - Date.now()));
       timer.unref?.();
     });
-    let first: { sent: string | null } | 'due' = await Promise.race([answered, due]);
-    while (first === 'due') {
-      if (!cards.isUp()) {
-        first = await Promise.race([answered, cards.opened().then(() => 'due' as const)]);
-        continue;
-      }
-      // A card's up: the input first (its own refusal comes before any hand-over), then hand over if it still is.
-      const after = await Promise.race([answered, inputDone.then(() => 'input' as const, () => 'input' as const)]);
-      if (after !== 'input') {
-        first = after;
-        break;
-      }
+    const first = await Promise.race([answered, due]);
+    if (first !== 'due') return { later: false, sent: first.sent };
+    // Past the deadline: the input first (its own refusal comes before any hand-over).
+    const after = await Promise.race([answered, input]);
+    if (after !== 'input') return { later: false, sent: after.sent };
+    for (;;) {
       if (cards.isUp()) return { later: true };
-      first = await Promise.race([answered, cards.opened().then(() => 'due' as const)]);
+      if (held() === 0) return { past: true };
+      // Something held, its card not up yet: until it opens, or the cards end.
+      const next = await Promise.race([answered, cards.opened(over.signal).then(() => 'up' as const)]);
+      if (next !== 'up') return { later: false, sent: next.sent };
     }
-    return { later: false, sent: first.sent };
   } finally {
     clearTimeout(timer);
+    over.abort();
   }
 }
 
@@ -119,6 +147,8 @@ export interface HandOverOf {
   step: string;
   w: SendWatch;
   cards: OpenCards;
+  /** How many of its cards' Allows let requests go (countAllows): a partial outcome only with one. */
+  allowed(): number;
   /** Aborted by settle: the step's cards still up come down (askSendCard's signal). */
   cardsEnd: AbortController;
   memory: ToolMemory;
@@ -133,6 +163,8 @@ export interface HandOverOf {
 /** A step's sends, handed over past its call's deadline: waiting until `settle`, its one exit. */
 export class HandedOver {
   private settled = false;
+  /** What settle recorded, for withdraw to take back. */
+  private recorded: { from: object | undefined; entry: SendsLater } | null = null;
   private readonly stopListening: () => void;
 
   constructor(private readonly o: HandOverOf) {
@@ -159,7 +191,8 @@ export class HandedOver {
     o.cardsEnd.abort();
     o.w.end();
     o.memory.sendsWaiting?.delete(o.nodeId);
-    o.memory.later?.push({ from: o.from, entry: sendsLater(o.tab, o.tool, o.step, why, o.cards.allowed > 0) });
+    this.recorded = { from: o.from, entry: sendsLater(o.tab, o.tool, o.step, why, o.allowed() > 0) };
+    o.memory.later?.push(this.recorded);
   }
 
   /**
@@ -167,7 +200,13 @@ export class HandedOver {
    * down, what it sent is dropped, and nothing's recorded (its answer is the refusal, never *waits*).
    */
   withdraw(): void {
-    if (this.settled) return;
+    // Settled already (the page moved on while the answer was made): its entry goes, for a call that answered an error
+    // (round 2 of #266, should-fix 5).
+    if (this.settled) {
+      const recorded = this.recorded;
+      if (recorded && this.o.memory.later) this.o.memory.later = this.o.memory.later.filter((l) => l !== recorded);
+      return;
+    }
     this.settled = true;
     this.stopListening();
     this.o.w.deny();
@@ -200,4 +239,10 @@ export function takeLater(memory: ToolMemory, from: object | undefined): SendsLa
   const mine = all.filter((l) => l.from !== from || from === undefined);
   memory.later = all.filter((l) => !mine.includes(l));
   return mine.map((l) => l.entry);
+}
+
+/** The next reply's content for those outcomes: inside the untrusted envelope (each step is the page's words). */
+export function laterContent(memory: ToolMemory, from: object | undefined): { type: 'text'; text: string }[] {
+  const settled = takeLater(memory, from);
+  return settled.length ? [{ type: 'text', text: toolResult({ later: settled }) }] : [];
 }

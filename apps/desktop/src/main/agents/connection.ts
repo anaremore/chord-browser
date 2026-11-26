@@ -42,7 +42,7 @@ import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
 import { siteOfUrl, type AgentShares } from './shares';
 import { allowFirstLoad, forgetFirstLoad } from '../control/sends';
-import { takeLater } from '../control/handed-over';
+import { laterContent } from '../control/handed-over';
 import { firstLoadPending, pickersUnsecured } from './pickers';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
@@ -73,7 +73,7 @@ export interface ConnectionDeps {
   sites?: { allowed(site: string): boolean; keep(site: string): void };
   /** How often a call that asked for progress hears it (PROGRESS_MS; tests shorten it). */
   progressMs?: number;
-  /** How long one call waits on cards in all (CALL_WAIT_MS; tests shorten it). */
+  /** How long one call takes in all, its cards' waits included (CALL_WAIT_MS; tests shorten it). */
   callWaitMs?: number;
 }
 
@@ -290,11 +290,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** #143: what became of sends whose step's call answered before their card did, since its last result: Chord's words. */
-  const later = (from: object): { type: 'text'; text: string }[] => {
-    const settled = takeLater(scope.memory, from);
-    // Inside the untrusted envelope: each step is in the page's words (Neon's B6, Opus's S3).
-    return settled.length ? [{ type: 'text', text: toolResult({ later: settled }) }] : [];
-  };
+  // Inside the untrusted envelope: each step is in the page's words (Neon's B6, Opus's S3).
+  const later = (from: object): { type: 'text'; text: string }[] => laterContent(scope.memory, from);
 
   /** What its tabs held since its last result, as untrusted data after it. */
   const held = (): Record<string, unknown>[] => {

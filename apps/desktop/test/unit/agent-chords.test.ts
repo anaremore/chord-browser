@@ -20,7 +20,7 @@ import { DownloadManager } from '../../src/main/downloads';
 import { PasswordService } from '../../src/main/passwords/service';
 import { Store } from '../../src/main/store';
 import { holdForAgent } from '../../src/preload/agent-hold';
-import { holdSends } from '../../src/main/control/sends';
+import { holdSends, watchSends } from '../../src/main/control/sends';
 import { pageLoaded, STILL_LOADING } from '../../src/main/control/tools';
 
 afterEach(() => vi.useRealTimers());
@@ -180,6 +180,18 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     const events = contents as unknown as EventEmitter;
     return { contents, send, how, events };
   }
+
+  it('the agent done (its session over, Keep to come): what its tabs held for it fails, so a step’s sends handed over past its call’s deadline settle as ended, never allowed (#143, round 2 of #266)', async () => {
+    const t = setup([], unanswered);
+    const tab = held(t, 'a1');
+    const w = watchSends(tab.contents, null)!;
+    const sent = tab.send();
+    await tick();
+    expect(w.held()).toHaveLength(1);
+    t.chords.done(t.agent);
+    expect(w.cancelled.aborted).toBe(true);
+    expect(tab.how(sent)).not.toBe('Fetch.continueRequest');
+  });
 
   const show = (t: ReturnType<typeof setup>, nodeId: string) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId });
 

@@ -8,7 +8,7 @@ import { normalUrl, type SendWatch } from './sends';
 import type { AgentInputEvent } from './input';
 import type { ToolOutput } from './scope';
 import { PART_REFUSALS } from './tools-read';
-import { byDeadline, HandedOver, OpenCards } from './handed-over';
+import { byDeadline, countAllows, HandedOver, OpenCards } from './handed-over';
 import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
 import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
@@ -111,18 +111,27 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
    * #143: this step's Send data cards, past the call's deadline (byDeadline): handed over (handed-over.ts), its outcome
    * from the cards' own end or what's live (the tab in the live store, Stop, your taking the tab, the page leaving).
    */
-  const handOver = (w: SendWatch, cards: OpenCards, cardsEnd: AbortController, step: string, sending: Promise<string | null>): HandedOver => {
+  const handOver = (w: SendWatch, allowed: () => number, cards: OpenCards, cardsEnd: AbortController, step: string, sending: Promise<string | null>): HandedOver => {
     const handed = new HandedOver({
       nodeId: node.id,
       tab: ref,
       tool,
       step,
       w,
+      allowed,
       cards,
       cardsEnd,
       memory: scope.memory,
       from: scope.callToken,
-      live: () => (nodeOf(browser.store.state, node.id)?.kind !== 'tab' ? 'closed' : scope.agent.isStopped || call.stopped() ? 'stopped' : scope.agent.state(node.id).paused || takenOver() ? 'took-over' : null),
+      live: () => {
+        // The live node, never the TabNode taken at the start (Neon's B1).
+        const now = nodeOf(browser.store.state, node.id);
+        if (now?.kind !== 'tab') return 'closed';
+        if (scope.agent.isStopped || call.stopped()) return 'stopped';
+        // Yours now: paused, taken, or kept (Keep on one tab: it's no longer the agent's to act on or read).
+        if (scope.agent.state(node.id).paused || takenOver() || host.mayAct(now) || !scope.readable(now)) return 'took-over';
+        return null;
+      },
       onLeave: (fn) => page.onLeave(fn),
     });
     void sending.then(
@@ -131,7 +140,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     );
     return handed;
   };
-  const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false, focusTaken = false, sendsWait = false): Promise<ToolOutput> => {
+  const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false, focusTaken = false, pastDeadline = false, sendsWait = false): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
     if (after) return refuse(after);
     const settledOn = page.id;
@@ -139,8 +148,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     const caught = host.caught?.(node) ?? [];
     // What changed since the agent's last snapshot, after an action on an element of a page that didn't go elsewhere
     // (M2g-1: the default; not between a batch's steps).
-    // Not while its sends wait (#143): the call's deadline holds, and the diff's read can take seconds.
-    let changes = !sendsWait && !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
+    // Not past the call's deadline (#143): it holds, and the diff's read can take seconds.
+    let changes = !pastDeadline && !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
     // The diff's read can take seconds (round 1 of #252, SF-2): Stop meanwhile stops it, a page that went where it may
     // not be read is refused (nothing of where), and one that went to another document is said to have, its refs
     // forgotten and no diff of the page it left. The answer's page, address and title are then all of where it is now.
@@ -292,6 +301,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       let sent: string | null = null;
       /** #143: its Send data cards handed over past the call's deadline: they go on, the outcome comes later. */
       let handed: HandedOver | null = null;
+      /** #143: past the call's deadline with nothing held: it answers now, the page still on its way. */
+      let past = false;
       const stepWords = tool === 'navigate' ? `Going to ${barAddress(target)}` : 'Going back';
       try {
         const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
@@ -308,15 +319,18 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
               : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : allowedNow && opened && page.mark.document !== (opened as typeof page.mark).document ? ACT_REFUSALS.movedOn : null));
         const cards = new OpenCards(scope.agent, node.id);
         const cardsEnd = new AbortController();
+        // Its Allows counted where they let requests go (round 2 of #266, blocker 2).
+        const counted = countAllows(w);
         const sending = askHeld(
-          w,
+          counted.watch,
           going,
           cards.ask(async (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => {
             const answer = await scope.agent.ask(
               {
                 kind: 'step',
                 tool,
-                description: tool === 'navigate' ? `go to ${barAddress(target)}` : 'go back',
+                // A sentence after the agent's name: *Codex is going to …* (round 2 of #266).
+                description: tool === 'navigate' ? `is going to ${barAddress(target)}` : 'is going back',
                 target: [page.url()],
                 tab: node.id,
                 subject: JSON.stringify([node.id, tool, 'sends', randomBytes(4).toString('hex')]),
@@ -337,23 +351,28 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           () => page.mark,
         );
         // No input to wait for: the load's own requests are what's held.
-        const settled = await byDeadline(sending, call.deadline, cards, Promise.resolve());
-        if (settled.later && !call.stopped()) handed = handOver(w, cards, cardsEnd, stepWords, sending);
-        else if (settled.later) {
-          // Stop came as it handed over: nothing waits (Opus's N2).
-          cardsEnd.abort();
-          w.deny();
-          sent = CONTROL_REFUSALS.stopped;
-        } else {
+        const settled = await byDeadline(sending, call.deadline, cards, Promise.resolve(), () => w.held().length);
+        if ('later' in settled && settled.later) {
+          // What an answer would check first (Neon's should-fix 4): Stop, your hand, the hold lost, a page that can't be
+          // read. Any of them: nothing waits, its cards come down, and what it sent is dropped (Opus's N2).
+          const no = halt() ?? blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
+          if (no) {
+            cardsEnd.abort();
+            w.deny();
+            sent = no;
+          } else handed = handOver(w, counted.allowed, cards, cardsEnd, stepWords, sending);
+        } else if ('past' in settled) past = true;
+        else {
           sent = settled.sent;
           went = await going;
         }
+        if (handed || past) void going.catch(() => undefined);
       } finally {
         if (!handed) w.end();
       }
       // The page may not have gone yet (what's held can be its own document): under way, and waiting on the user. Never
       // an outline with it (withOutline: `sending`).
-      if (handed) return { text: toolResult({ tab_id: ref, done: stepWords, loading: true, sending: ACT_SENDS_WAITING }) };
+      if (handed || past) return { text: toolResult({ tab_id: ref, done: stepWords, loading: true, page_id: page.id, url: page.url(), title: page.title(), ...(handed ? { sending: ACT_SENDS_WAITING } : {}) }) };
       if (sent) return refuse(sent);
       // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
       if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
@@ -585,6 +604,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const droppedBefore = page.droppedAfter();
   /** #143: its Send data cards, handed over past the call's deadline (byDeadline, HandedOver). */
   let handed: HandedOver | null = null;
+  /** #143: past the call's deadline with no card up and nothing held: it answers now (byDeadline's `past`). */
+  let past = false;
   try {
     let refused: string | null = null;
     /** The guard's mark while it's up (agent-guard.ts): an event name only main knows. */
@@ -1018,38 +1039,47 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
             : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
       const cards = new OpenCards(scope.agent, node.id);
       const cardsEnd = new AbortController();
+      // Its Allows counted where they let requests go (round 2 of #266, blocker 2).
+      const counted = countAllows(w);
       const sending = askHeld(
-        w,
+        counted.watch,
         acting,
         cards.ask((held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => askSendCard(held, sites, why, w, takeDown, cardsEnd.signal)),
         sendHalt,
         originOf(page.url()),
         () => page.mark,
       );
-      const settled = await byDeadline(sending, call.deadline, cards, inputDone);
-      if (!settled.later) refused ??= settled.sent;
+      const settled = await byDeadline(sending, call.deadline, cards, inputDone, () => w.held().length);
+      if ('past' in settled) past = true;
+      else if (!settled.later) refused ??= settled.sent;
       else if (refused || call.stopped()) {
         // The step's own refusal after its input, or Stop: nothing waits on the user, its cards come down and what it
         // sent is dropped (Neon's B3).
         cardsEnd.abort();
         w.deny();
         refused ??= CONTROL_REFUSALS.stopped;
-      } else handed = handOver(w, cards, cardsEnd, actDone(description), sending);
+      } else handed = handOver(w, counted.allowed, cards, cardsEnd, actDone(description), sending);
     }
     // The hold lost during the action (a detach, the renderer gone): what it sent wasn't asked about, so never done
     // (Neon's B5, round 2 of #147).
     if (!refused && holds && page.lost()) refused = ACT_REFUSALS.noCheck;
-    if (handed) {
-      // The deadline holds (Neon's B3, Opus's S4): never the 10 s wait for the page to load after the step, nor its diff.
+    if (handed || past) {
+      // The deadline holds (Neon's B3, Opus's S4, should-fix 6): never the 10 s wait for the page to load after the step,
+      // nor its diff. Past it with nothing held: the watch ends now (finally), and what the page sends after is the
+      // tab's, asked between actions.
       void acting.catch(() => undefined);
       phases.lap('settle');
       if (refused) {
-        handed.withdraw();
+        handed?.withdraw();
         return refuse(refused);
       }
-      const answer = await done(page.mark.document !== markAtStart.document, true, actDone(description), droppedBefore, refound, enterMovedFocus, true);
+      if (call.stopped()) {
+        handed?.withdraw();
+        return refuse(CONTROL_REFUSALS.stopped);
+      }
+      const answer = await done(page.mark.document !== markAtStart.document, true, actDone(description), droppedBefore, refound, enterMovedFocus, true, handed !== null);
       // Refused after all (the page went where it can't be read): nothing waits, no armed card behind an error.
-      if (answer.isError) handed.withdraw();
+      if (answer.isError) handed?.withdraw();
       return answer;
     }
     const { navigated, loading } = await acting;

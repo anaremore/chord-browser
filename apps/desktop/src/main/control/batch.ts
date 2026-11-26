@@ -106,7 +106,7 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
     // (never dropped behind a later step's answer, and no later step on a tab that waits: Neon's B2, Opus's S1).
     if (typeof data['sending'] === 'string') {
       const rest = i < planned.length - 1 ? { stopped_after: i + 1, why: 'What that step sent waits for the user, so the rest didn’t run.' } : {};
-      return { text: toolResult(withNotes({ tab_id: args['tab_id'], done, sending: data['sending'], ...rest, ...(data['loading'] === true ? { loading: true } : {}), url: last['url'], title: last['title'], page_id: last['page_id'] })) };
+      return { text: toolResult(withNotes({ tab_id: args['tab_id'], done, navigated: data['navigated'] === true, sending: data['sending'], ...rest, ...(data['loading'] === true ? { loading: true } : {}), url: last['url'], title: last['title'], page_id: last['page_id'] })) };
     }
     // A step that took the page elsewhere: the steps after it name refs of the page before.
     if (data['navigated'] === true && i < planned.length - 1) {

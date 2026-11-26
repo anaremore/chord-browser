@@ -6,17 +6,17 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { ACT_REFUSALS, ACT_SENDS_WAITING, sendsLater, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, ACT_SENDS_WAITING, sendsLater, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, toolResult, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
-import { OpenCards, takeLater } from '../../src/main/control/handed-over';
+import { byDeadline, HandedOver, laterContent, OpenCards, takeLater } from '../../src/main/control/handed-over';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
-import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
+import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer, type SendWatch } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
 
@@ -1819,7 +1819,7 @@ describe('acting through the gate (S18 M2c)', () => {
     ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['click', 'a closed shadow root in the element (#112)', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
-    ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
+    ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?). The step may have gone in: call snapshot before you try it again.'],
   ];
   it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
     const t = await acting({ deep });
@@ -2604,6 +2604,201 @@ describe('acting through the gate (S18 M2c)', () => {
         expect(takeLater(memory, mine).map((e) => e.tab_id)).toEqual(['a2']);
         expect(takeLater(memory, {}).map((e) => e.tab_id)).toEqual(['a1']);
         expect(memory.later).toEqual([]);
+      });
+
+      // Round 2 of #266 (Neon, Opus). Each fails at 86d013b, or with its fix taken out.
+      describe('round 2', () => {
+        /** A step whose page posts, its card held, called on fake timers. `ms`: how long to let it run. */
+        async function stepPast(o: { tool?: 'click' | 'navigate'; deadline?: number; ms?: number; onCard?: (t: Awaited<ReturnType<typeof acting>>) => void; twist?: Twist; mayAct?: () => string | null; postsTo?: string[]; stopAt?: number } = {}) {
+          const box: { t?: Awaited<ReturnType<typeof acting>> } = {};
+          const t = await acting({
+            deep: o.tool === 'navigate' ? { postsOnLoad: true } : o.postsTo ? { postsTo: o.postsTo } : { posts: true },
+            answer: 'hold',
+            cardWaitMs: 50_000,
+            sendWaitMs: 90_000,
+            callDeadlineMs: o.deadline ?? 50_000,
+            onCard: () => o.onCard?.(box.t!),
+            ...(o.twist ? { twist: o.twist } : {}),
+            act: { siteAllowed: () => true, ...(o.mayAct ? { mayAct: o.mayAct } : {}) },
+          });
+          box.t = t;
+          const codesAtCall = o.twist?.codes?.length ?? 0;
+          vi.useFakeTimers();
+          let out: { text?: string; isError?: boolean } | undefined;
+          const args = o.tool === 'navigate' ? { tab_id: t.tab, url: 'https://news.test/b' } : { tab_id: t.tab, ref: 'e1' };
+          const stop = new AbortController();
+          // Stop (the user's: the agent's Stop) at `stopAt`, on the fake clock.
+          if (o.stopAt !== undefined) setTimeout(() => t.agent.stop(), o.stopAt);
+          void t.callUntil(o.tool ?? 'click', args, stop.signal).then((x) => void (out = x));
+          await vi.advanceTimersByTimeAsync(o.ms ?? 60_000);
+          const later = () => (t.scope.memory.later ?? []).map((l) => l.entry);
+          return { t, out: () => out, later, codesSince: () => (o.twist?.codes ?? []).slice(codesAtCall) };
+        }
+
+        it('blocker 1: past the deadline with no card up, nothing keeps looking for one once the call answered (no poller left)', async () => {
+          const t = await acting({ callDeadlineMs: 1, act: { siteAllowed: () => true } });
+          vi.useFakeTimers();
+          let answered = false;
+          void t.call('click', { tab_id: t.tab, ref: 'e1' }).then(() => void (answered = true));
+          await vi.advanceTimersByTimeAsync(20_000);
+          expect(answered).toBe(true);
+          const set = vi.spyOn(globalThis, 'setTimeout');
+          await vi.advanceTimersByTimeAsync(2_000);
+          expect(set, 'a timer set again and again after the answer').not.toHaveBeenCalled();
+        });
+
+        it('blocker 2: navigate’s card allowed after the page moved on sends nothing, and says none went (never “some”)', async () => {
+          const { t, later } = await stepPast({ tool: 'navigate' });
+          t.holds.at(-1)!('once');
+          await vi.advanceTimersByTimeAsync(0);
+          expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+          expect(later()).toEqual([sendsLater(t.tab, 'navigate', 'Going to news.test/b', 'moved-on', false)]);
+        });
+
+        it('a refusal of the step’s own after its input (the page never saw the pointer arrive), past the deadline: no hand-over, the card down, nothing later', async () => {
+          const { t, out, later } = await stepPast({ twist: { noMove: true } });
+          expect(out()?.isError).toBe(true);
+          expect(out()!.text).not.toContain('sending');
+          expect(t.agent.state('n1').cards).toEqual([]);
+          expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+          expect(later()).toEqual([]);
+        });
+
+        it('done() refusing after the hand-over (the page went where it can’t be read): withdrawn, no card left up, nothing later', async () => {
+          const { t, out, later } = await stepPast({ onCard: (t) => t.go('n1', 'https://private.test/x', true) });
+          expect(out()?.isError).toBe(true);
+          expect(t.agent.state('n1').cards).toEqual([]);
+          expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+          expect(later()).toEqual([]);
+        });
+
+        for (const tool of ['click', 'navigate'] as const) {
+          it(`Stop at the deadline, for ${tool}: never a hand-over, the card down, nothing later`, async () => {
+            const { t, out, later } = await stepPast({ tool, stopAt: 50_000 });
+            expect(out()?.text ?? '').not.toContain('sending');
+            expect(t.agent.state('n1').cards).toEqual([]);
+            expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+            expect(later()).toEqual([]);
+          });
+        }
+
+        it('should-fix 4: navigate checks the tab before it hands over (the user took it while the card was up): no hand-over', async () => {
+          const { t, out, later } = await stepPast({ tool: 'navigate', onCard: (t) => t.agent.pause('n1', true) });
+          expect(out()?.text ?? '').not.toContain('sending');
+          expect(t.agent.state('n1').cards).toEqual([]);
+          expect(later()).toEqual([]);
+        });
+
+        it('after a hand-over, no diff of the page and no wait for its load: answered at the deadline though the page never stops loading', async () => {
+          const twist: Twist = { codes: [] };
+          const { out, codesSince } = await stepPast({ twist, deadline: 2_000, ms: 2_500, onCard: (t) => void (t.at.loading = true) });
+          expect(out(), 'answered by the deadline, not after the 10 s load').toBeDefined();
+          expect(JSON.parse(out()!.text!).data).toMatchObject({ sending: ACT_SENDS_WAITING, loading: true });
+          // No pageChanges: no snapshot read since the call began.
+          expect(codesSince().filter((c) => c.includes('__chordSids')).length).toBe(0);
+        });
+
+        it('should-fix 6, byDeadline: past the deadline with the input done, no card up and nothing held, it answers now (`past`), never waiting on the step’s load', async () => {
+          vi.useFakeTimers();
+          const cards = { isUp: () => false, opened: () => new Promise<void>(() => undefined) } as unknown as OpenCards;
+          let settled: unknown;
+          void byDeadline(new Promise(() => undefined), Date.now() + 1_000, cards, Promise.resolve(), () => 0).then((r) => void (settled = r));
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(settled).toEqual({ past: true });
+        });
+
+        it('byDeadline: a card up at the deadline waits for the input before it hands over', async () => {
+          vi.useFakeTimers();
+          const cards = { isUp: () => true, opened: () => new Promise<void>(() => undefined) } as unknown as OpenCards;
+          let inputOver: () => void = () => undefined;
+          const input = new Promise<void>((over) => (inputOver = over));
+          let settled: unknown;
+          void byDeadline(new Promise(() => undefined), Date.now() + 1_000, cards, input, () => 0).then((r) => void (settled = r));
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(settled, 'never before the input is done').toBeUndefined();
+          inputOver();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).toEqual({ later: true });
+        });
+
+        it('the page moving on after an Allow, with nothing held and no card up: the outcome stays “went”, never “moved on”', async () => {
+          const { t, later } = await stepPast();
+          t.holds.at(-1)!('once');
+          await vi.advanceTimersByTimeAsync(0);
+          t.at.navigate!('https://news.test/after');
+          await vi.advanceTimersByTimeAsync(0);
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'allowed', true)]);
+        });
+
+        it('the user takes the tab while it waits: “took the tab”', async () => {
+          const { t, later } = await stepPast();
+          t.agent.pause('n1', true);
+          failHeld(t.pages.get('n1')!.contents);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'took-over', false)]);
+        });
+
+        it('nit: Keep on one tab while it waits (the tab no longer the agent’s): “took the tab”, never “ended”', async () => {
+          let kept = false;
+          const { t, later } = await stepPast({ mayAct: () => (kept ? 'That tab is the user’s now.' : null) });
+          kept = true;
+          failHeld(t.pages.get('n1')!.contents);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'took-over', false)]);
+        });
+
+        it('the page sending to too many sites while it waits: some went, then “too many sites”', async () => {
+          const sites = Array.from({ length: 25 }, (_, i) => `https://s${i}.test/x`);
+          const { t, later } = await stepPast({ postsTo: sites });
+          for (let i = 0; i < 3; i++) {
+            t.holds.at(-1)!('once');
+            await vi.advanceTimersByTimeAsync(0);
+          }
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'too-many', true)]);
+        });
+
+        it('settle twice records once; withdraw after a settle (during done()) takes its entry back (should-fix 5)', async () => {
+          const { t, later } = await stepPast();
+          const memory = t.scope.memory;
+          const entries = () => later().length;
+          // The hand-over the call made: settle it twice through its ways out (Don't, then Stop).
+          t.holds.at(-1)!('deny');
+          await vi.advanceTimersByTimeAsync(0);
+          t.agent.stop();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(entries()).toBe(1);
+          // A HandedOver settled, then withdrawn: no entry left for a call that answered an error.
+          const w = { held: () => [], deny: () => undefined, end: () => undefined, cancelled: new AbortController().signal } as unknown as SendWatch;
+          const handed = new HandedOver({ nodeId: 'n2', tab: 't2', tool: 'click', step: 'x', w, allowed: () => 0, cards: new OpenCards(t.agent, 'n2'), cardsEnd: new AbortController(), memory, from: undefined, live: () => null, onLeave: () => () => undefined });
+          handed.settle('moved-on');
+          expect(entries()).toBe(2);
+          handed.withdraw();
+          expect(entries()).toBe(1);
+        });
+
+        it('nit: a batch’s hand-over step keeps `navigated`', async () => {
+          const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+          vi.useFakeTimers();
+          let out: { text?: string } | undefined;
+          void runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }] }, new AbortController().signal).then((o) => void (out = o));
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(JSON.parse(out!.text!).data).toMatchObject({ navigated: false, sending: ACT_SENDS_WAITING });
+        });
+
+        it('nit: navigate’s hand-over answer says its page, address and title; its card reads as a sentence', async () => {
+          const { t, out } = await stepPast({ tool: 'navigate' });
+          expect(JSON.parse(out()!.text!).data).toEqual(expect.objectContaining({ page_id: expect.any(String), url: expect.any(String), title: expect.any(String) }));
+          expect(t.cards.find((c) => c.step?.why === 'send')!.description).toBe('is going to news.test/b');
+        });
+
+        it('the next reply carries `later` inside the untrusted envelope; the hand-over reply never does (laterContent)', () => {
+          const mine = {};
+          const memory = { pdfs: new Map(), form: null, nextField: 1, read: new Set<NodeId>(), later: [{ from: mine, entry: sendsLater('a1', 'click', 'Clicked “x”', 'allowed', true) }] } as ToolMemory;
+          expect(laterContent(memory, mine)).toEqual([]);
+          const next = laterContent(memory, {});
+          expect(next).toEqual([{ type: 'text', text: toolResult({ later: [sendsLater('a1', 'click', 'Clicked “x”', 'allowed', true)] }) }]);
+          expect(JSON.parse(next[0]!.text).trust).toBe('untrusted');
+        });
       });
     });
 

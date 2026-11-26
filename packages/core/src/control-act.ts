@@ -220,7 +220,8 @@ export const ACT_REFUSALS = {
   // #143: an action on a tab whose last step's sends still wait on the user's card (that call answered at its deadline).
   sendsPending: 'What this tab sent after your last step still waits for the user on Chord’s card. Its outcome comes with your next result: wait a moment or do something else, then go on here.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
-  noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
+  // It can follow an input that ran (#143, round 2 of #266): never an invitation to do the step again unseen.
+  noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?). The step may have gone in: call snapshot before you try it again.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',
   noMove: 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.',
   sharedReadOnly: 'That tab is shared with you to read, not to act on. Ask the user if they want you to act in your own tab.',
