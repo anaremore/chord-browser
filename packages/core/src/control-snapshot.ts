@@ -103,12 +103,34 @@ export class ElementRefs {
    * the last SNAPSHOT_KEPT a diff took (the page keeps the same: snapshot.ts).
    */
   private earlier: { pageId: string; token: string; keys: Map<string, number>; pinned: boolean }[] = [];
-  /** The latest snapshot's outline, for its later ranges: served as it was while the page is the same one. */
+  /**
+   * The latest FULL snapshot's outline: its later ranges (served as it was while the page is the same one), and the next
+   * diff's baseline (its lines).
+   */
   private kept: SnapshotOutline | null = null;
+  /**
+   * The latest outline without the page's text, when it's the tab's latest own read (#205, round 1 of #247): its later
+   * ranges alone, as it was. Never a baseline (no lines): plan rule 1.
+   */
+  private textless: SnapshotOutline | null = null;
+  /** How many snapshots' refs were issued (round 1 of #247): a diff whose read was out while another landed gives way. */
+  issues = 0;
 
-  /** Keep the latest snapshot's outline (its refs are this table's latest). */
+  /** Keep the latest FULL snapshot's outline (its refs are this table's latest), and the agent's latest read is it. */
   remember(outline: SnapshotOutline): void {
     this.kept = outline;
+    this.textless = null;
+  }
+
+  /** Keep an outline without the page's text for its later ranges: the agent's latest own read (never a baseline). */
+  rememberTextless(outline: SnapshotOutline): void {
+    const { lines: _lines, ...shown } = outline;
+    this.textless = shown;
+  }
+
+  /** The outline without text kept for this page, if the agent's latest own read of it was one. */
+  textlessOutline(pageId: string): SnapshotOutline | null {
+    return pageId && this.textless?.pageId === pageId && this.current?.pageId === pageId ? this.textless : null;
   }
 
   /**
@@ -119,7 +141,7 @@ export class ElementRefs {
     if (this.kept) this.kept = { ...this.kept, lines };
   }
 
-  /** The latest outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
+  /** The latest FULL outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
   outline(pageId: string): SnapshotOutline | null {
     return pageId && this.kept?.pageId === pageId && this.current?.pageId === pageId ? this.kept : null;
   }
@@ -145,6 +167,7 @@ export class ElementRefs {
       this.earlier = kept;
     } else this.earlier = [];
     this.current = { pageId, token, keys: keyByRef, pinned };
+    this.issues++;
     return byKey;
   }
 
@@ -153,7 +176,7 @@ export class ElementRefs {
    * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
    */
   preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
-    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept };
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issues: this.issues };
     try {
       return this.refsFor(pageId, keys, sids).byKey;
     } finally {
@@ -172,6 +195,7 @@ export class ElementRefs {
       this.current = null;
       this.earlier = [];
       this.kept = null;
+      this.textless = null;
     }
     if (sids && pageId && (!this.base || this.base.pageId !== pageId)) this.base = { pageId, from: this.next - 1 };
     const taken = new Set<string>();
@@ -221,6 +245,7 @@ export class ElementRefs {
     this.current = null;
     this.earlier = [];
     this.kept = null;
+    this.textless = null;
   }
 }
 

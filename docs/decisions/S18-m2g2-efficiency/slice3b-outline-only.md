@@ -22,8 +22,12 @@ The plan's item 3, its second win: an agent can ask for a page's structure (land
   - an action after it says what changed since that whole snapshot, the text it never showed included.
 - **No whole snapshot of the page yet** (the page was only seen without its text):
   - an action's result says so in `page_changes.note`, *call snapshot to see it*, never silence, which would read as *nothing changed*.
-- **Its ranges** (`start`) are of its own read, never the whole outline kept.
-- **A page with nothing but text** gives an empty outline and says where its text is (*read it with read_tab*).
+- **Its ranges** (`start`) are of the outline it gave (round 1 of #247, Fable's S1): kept in a slot of its own, with no lines (never a baseline), and served as it was, one card for the outline.
+  - A full outline's range after it reads the page again: its offsets were another outline's.
+  - The slot is cleared by the next full snapshot, or when the page moves on.
+- **The diff's notes after it** say *call snapshot without text: false* (round 1 of #247, Fable's S2): an outline without text never moves the baseline, so calling it again would loop.
+- **A full or outline-only snapshot landing while a diff's read is out:** the diff gives way (any refs issued meanwhile: round 1 of #247, Neon's SF2).
+- **A page with nothing but text** gives an empty outline and says where its text is (*read it with read_tab*). Decided from the read (round 1 of #247): never a `find` that matched nothing or only text, nor a read cut before it reached the page's structure (that one keeps the usual cut note).
 - **Both lists:** the parameter is on `snapshot`'s one schema, so outside agents and the assistant both have it. It only ever shows less.
 
 ## Threat checklist
@@ -45,6 +49,8 @@ The plan's lines (threat-checklist.md, *For every partial view* and *The outline
 - **No page string in Chord's sentence:** its notes are Chord's words alone.
 
 ## Measured
+
+The saving depends on the page (Fable's measures, round 1 of #247): 75% on the 50-section page, 56% with one sentence a section, 31% on a page of 40 controls. A page of controls has little text to leave out.
 
 The 50-section page (Linux container, X11), the result as sent:
 - the full snapshot: 9,021 characters (~2,256 tokens);

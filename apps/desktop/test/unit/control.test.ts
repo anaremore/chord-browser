@@ -3095,19 +3095,118 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(again.data['page_changes']).toBeUndefined();
     });
 
-    it('its ranges are its own read, never the full outline kept; a page of nothing but text says so', async () => {
+    /** A tab whose snapshot answers `nodes()` each time it's read (cut as `cut()` says); `cards` what it asked. */
+    const plain = (nodes: () => unknown[], opts: { needsCard?: boolean; cut?: () => Record<string, boolean>; onRead?: () => void; url?: string } = {}) => {
+      let reads = 0;
+      const t = setup({
+        read: async (code: string) => (code.includes('__chordSnapshots') ? (reads++, opts.onRead?.(), { url: opts.url ?? 'https://news.test/a', title: 'Page', nodes: nodes(), cut: opts.cut?.() ?? {} }) : { title: 'Page', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' }),
+        actions: true,
+        ...(opts.needsCard ? { needsCard: true } : {}),
+      });
+      return { ...t, tab: t.scope.refs.refFor('n1'), reads: () => reads };
+    };
+    const buttons = (n: number) => Array.from({ length: n }, (_, i) => ({ depth: 0, role: 'button', name: `Button ${i}`, key: i, sid: i + 1 }));
+
+    it('a page of nothing but text says so; never a find that matched nothing, nor one that matched only text, nor a read cut short (round 1 of #247)', async () => {
+      // [the page, the call's arguments, the note]
+      const table: [string, ReturnType<typeof plain>, Record<string, unknown>, string | undefined][] = [
+        ['nothing but text', plain(() => [NEWS]), {}, ONLY_TEXT],
+        ['controls, a find that matches nothing', plain(() => buttons(3)), { find: 'zzz' }, undefined],
+        ['controls and text, a find that matches only the text', plain(() => [...buttons(3), NEWS]), { find: 'Breaking' }, undefined],
+        ['text, the read cut before the structure', plain(() => [NEWS], { cut: () => ({ elements: true }) }), {}, 'The page is too big to read whole in one snapshot: this is its start.'],
+      ];
+      for (const [page, t, args, note] of table) {
+        const out = snap(await t.call('snapshot', { tab_id: t.tab, text: false, ...args }));
+        expect(out.note, page).toBe(note);
+      }
+    });
+
+    it('its later ranges are of the outline it gave, one card for it: never the live page again, nor another outline’s offsets (round 1 of #247, Fable’s S1)', async () => {
+      let many = true;
+      const t = plain(() => buttons(many ? 6 : 2), { needsCard: true });
+      const first = snap(await t.call('snapshot', { tab_id: t.tab, text: false }));
+      const second = first.content.indexOf('\n') + 1;
+      // The page shrinks between ranges: the next range is still the outline it gave, read once, one card asked.
+      many = false;
+      const range = snap(await t.call('snapshot', { tab_id: t.tab, text: false, start: second }));
+      expect(range.content).toBe(first.content.slice(second));
+      expect(t.reads()).toBe(1);
+      expect(t.cards).toHaveLength(1);
+      // A full outline's range now: the agent's latest read was without text, so its offsets are another outline's: the
+      // page is read again (a card with it).
+      snap(await t.call('snapshot', { tab_id: t.tab, start: second }));
+      expect(t.reads()).toBe(2);
+      expect(t.cards).toHaveLength(2);
+      // After a full snapshot, an outline without text's range is never the old one's.
+      snap(await t.call('snapshot', { tab_id: t.tab }));
+      snap(await t.call('snapshot', { tab_id: t.tab, text: false, start: 1 }));
+      expect(t.reads()).toBe(4);
+    });
+
+    it('after an outline without text, a diff’s notes say to call snapshot without text: false, so it never loops (round 1 of #247, Fable’s S2)', async () => {
+      // Much changed since the full snapshot.
       const twist: Twist = {};
       const t = await acting({ twist });
-      twist.read = { extra: [NEWS] };
-      const reads = () => (twist.codes ?? []).filter((c) => c.includes('__chordSnapshots')).length;
-      twist.codes = [];
-      const range = snap(await t.call('snapshot', { tab_id: t.tab, text: false, start: 1 }));
-      expect(reads()).toBe(1);
-      expect(range.content).not.toContain('Breaking');
-      // A page with nothing but text: an empty outline, and where its text is.
-      const only = setup({ read: async (code: string) => (code.includes('__chordSnapshots') ? { url: 'https://news.test/a', title: 'Poem', nodes: [NEWS], cut: {} } : { title: 'Poem', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' }), actions: true });
-      const poem = snap(await only.call('snapshot', { tab_id: only.scope.refs.refFor('n1'), text: false }));
-      expect(poem).toMatchObject({ content: '', refs: 0, note: ONLY_TEXT });
+      await t.call('snapshot', { tab_id: t.tab, text: false });
+      twist.read = { extra: Array.from({ length: 70 }, (_, i) => ({ depth: 0, role: 'button', name: `New ${i}`, key: 100 + i, sid: 200 + i })) };
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Much of the page changed: call snapshot without text: false to see it.' });
+      // The full snapshot it compares with was cut short.
+      const cut: Twist = { read: { cut: { elements: true } } };
+      const u = await acting({ twist: cut });
+      cut.read = {};
+      await u.call('snapshot', { tab_id: u.tab, text: false });
+      expect(result(await u.call('hover', { tab_id: u.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot without text: false to see it.' });
+    });
+
+    it('an outline without text landing while a diff’s read is out: the diff gives way, never issued on top of it (round 1 of #247, Neon’s SF2)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      const pageId = (JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { page_id: string }).page_id;
+      const refs = t.scope.memory.elements!.get('n1')!;
+      ELEMENTS.push({ role: 'button', name: 'Raise' });
+      try {
+        // Meanwhile the agent's outline without text lands (as the #145 round-2 test lands a full one): its refs issued,
+        // its outline kept in its own slot, no baseline.
+        twist.read = {
+          meanwhile: () => {
+            twist.read = {};
+            refs.issue(pageId, 'outline', [0, 1, 2, 3, 4, 5], new Map([0, 1, 2, 3, 4, 5].map((k) => [k, k + 1])));
+            refs.rememberTextless({ ...refs.outline(pageId)!, text: '- link "Home"' });
+          },
+        };
+        const issuedBefore = refs.issues;
+        const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+        expect(out.data['page_changes']).toBeUndefined();
+        // Only the outline's refs were issued, never the diff's on top of them.
+        expect(refs.issues).toBe(issuedBefore + 1);
+      } finally {
+        ELEMENTS.pop();
+      }
+    });
+
+    it('read under every rule snapshot keeps, with text: false as without (round 1 of #247, Neon’s N2, Fable’s S3)', async () => {
+      const NEVER_READ = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+      const NOTHING = 'The user set you to read nothing, in Settings → Assistant.';
+      // [the case, the tab, what it says, the tab's page as it's read (given the scope to change)]
+      type Row = [string, string, string, (scope: { neverSites: () => readonly string[]; off: () => string | null }) => Parameters<typeof plain>[1]];
+      const rows: Row[] = [
+        ['a Never site added as it was read', 'n1', NEVER_READ, (scope) => ({ onRead: () => void (scope.neverSites = () => ['private.test', 'news.test']) })],
+        ['a read from a Never address', 'n1', NEVER_READ, () => ({ url: 'https://private.test/inbox' })],
+        ['Settings’ Nothing as it was read', 'n1', NOTHING, (scope) => ({ onRead: () => void (scope.off = () => NOTHING) })],
+        ['a private window’s tab', 'n2', NEVER_READ, () => ({})],
+      ];
+      for (const text of [undefined, false]) {
+        for (const [what, tab, says, page] of rows) {
+          const holder: { scope?: { neverSites: () => readonly string[]; off: () => string | null } } = {};
+          const opts = page(new Proxy({} as { neverSites: () => readonly string[]; off: () => string | null }, { set: (_o, k, v) => ((holder.scope as Record<string | symbol, unknown>)[k] = v, true) }));
+          const t = plain(() => buttons(2), opts);
+          holder.scope = t.scope as unknown as typeof holder.scope;
+          const out = await t.call('snapshot', { tab_id: t.scope.refs.refFor(tab), ...(text === false ? { text } : {}) });
+          expect(refusal(out).refused, `${what}, text: ${String(text)}`).toBe(says);
+          // Nothing of it kept: no refs issued at all.
+          expect(t.scope.memory.elements?.get('n1')?.issues ?? 0, what).toBe(0);
+        }
+      }
     });
   });
 

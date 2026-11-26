@@ -445,10 +445,12 @@ async function snapshotTool(call: Call, args: Record<string, unknown>, settled =
   const find = typeof args['find'] === 'string' ? args['find'].slice(0, SNAPSHOT_FIND_MAX) : undefined;
   // The structure without the page's text (S18 M2g-2 slice 3b, #205): a view the agent reads, never the diff's baseline.
   const outlineOnly = args['text'] === false;
-  // Reading on: the same page's latest outline, as it was made, while the page is where it may be read.
+  // Reading on: the same page's latest outline, as it was made, while the page is where it may be read. Of the same kind
+  // as the call (round 1 of #247, Fable's S1): an outline without text from its own slot; a full one only while it's the
+  // agent's latest own read (else its offsets are another outline's, and the page is read again).
   const now = currentPage(browser, node.id);
-  // (An outline without text is never kept: its ranges are of a read of its own.)
-  const kept = start > 0 && !find && !outlineOnly && now && !now.gone() ? elements.get(node.id)?.outline(now.id) : null;
+  const tabRefs = elements.get(node.id);
+  const kept = start > 0 && !find && now && !now.gone() ? (outlineOnly ? tabRefs?.textlessOutline(now.id) : tabRefs?.textlessOutline(now.id) ? null : tabRefs?.outline(now.id)) : null;
   if (kept && now) {
     const blocked = blockedNow(call, node.id, now, 'That page could not be read.', kept.url);
     if (blocked) return refuse(blocked);
@@ -492,14 +494,18 @@ async function snapshotTool(call: Call, args: Record<string, unknown>, settled =
   // Refs from the page's own ids (M2g-1): an element still there keeps its ref, for the diff after the agent's actions.
   const issued = refs.issue(samePage ?? '', token, snapshotKeys(read), sidsOf(read));
   const outline = snapshotOutline(read, issued, { ...(find ? { find } : {}), ...(outlineOnly ? { text: false } : {}) });
-  // A page of nothing but text, its outline without text empty: said, with where its text is (#205).
-  const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : outlineOnly && !outline.text ? ONLY_TEXT : snapshotNote(read.cut);
+  // A page of nothing but text: said, with where its text is (#205). Decided from the read, never from an empty outline
+  // (round 1 of #247): a find that matched nothing, or a read cut before it reached the page's structure, isn't one.
+  const onlyText = outlineOnly && !find && !read.cut.elements && !read.cut.time && read.nodes.length > 0 && !read.nodes.some((n) => n.role !== 'text');
+  const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : onlyText ? ONLY_TEXT : snapshotNote(read.cut);
   const retrievedAt = Date.now();
-  // Its later ranges are of the page's whole outline, never a find's (N-3).
-  const whole = find ? snapshotOutline(read, issued) : outline;
+  // Its later ranges are of the page's whole outline (of its kind), never a find's (N-3).
+  const whole = find ? snapshotOutline(read, issued, outlineOnly ? { text: false } : {}) : outline;
   // An outline without the page's text is no baseline for the diff (plan rule 1: a view that shows part of the page
-  // never commits one): its refs are issued, and the outline the next diff compares with stays the last whole one.
-  if (!outlineOnly)
+  // never commits one): its refs are issued, and the outline the next diff compares with stays the last whole one. It's
+  // kept in a slot of its own for its later ranges (round 1 of #247), with no lines.
+  if (outlineOnly) refs.rememberTextless({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, ...(note ? { note } : {}) });
+  else
     refs.remember({ pageId: samePage ?? '', retrievedAt, url: read.url, title: read.title, text: whole.text, refs: whole.refs, lines: snapshotLines(read, issued), ...(note ? { note } : {}), ...(read.cut.elements || read.cut.time || read.cut.refs ? { cut: true } : {}) });
   markRead(scope.memory, node.id, read.url);
   await call.activity('snapshot', `Looked over “${title}”`, `${outline.refs} element${outline.refs === 1 ? '' : 's'} to act on`);
@@ -533,14 +539,19 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   // silence, which would read as nothing changed.
   if (refs && !kept && refs.onPage(page.id)) return { page_changes: { page_id: page.id, url: page.url(), note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot to see it.' } };
   if (!refs || !kept?.lines) return null;
+  // Where to look: a full snapshot. Said so after an outline without text (round 1 of #247, Fable's S2), which never
+  // moves the baseline, so calling it again would loop.
+  const again = refs.textlessOutline(page.id) ? 'call snapshot without text: false' : 'call snapshot';
   // A snapshot cut short is no baseline: what it didn't reach would show as new (round 1 of #145).
-  if (kept.cut) return { page_changes: { page_id: page.id, url: page.url(), note: 'Your last snapshot of this page was cut short, so what changed can’t be told: call snapshot to see it.' } };
+  if (kept.cut) return { page_changes: { page_id: page.id, url: page.url(), note: `Your last snapshot of this page was cut short, so what changed can’t be told: ${again} to see it.` } };
   const token = randomBytes(12).toString('hex');
+  const issuedBefore = refs.issues;
   // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
   const read = await page.snapshot(call.scope.agent.id, token, false);
   if (!read || call.stopped() || page.id !== kept.pageId) return null;
-  // A snapshot of the agent's landed meanwhile: it wins (round 2 of #145), and this read is no diff of it.
-  if (refs.outline(page.id) !== kept) return null;
+  // A snapshot of the agent's landed meanwhile: it wins (round 2 of #145), and this read is no diff of it. An outline
+  // without text too, which keeps no baseline (round 1 of #247, Neon's SF2): any refs issued meanwhile.
+  if (refs.outline(page.id) !== kept || refs.issues !== issuedBefore) return null;
   // Read under a read's rules (Neon's round 1 of M2g-1, B-6): never from a page that may not be read, nor of another
   // origin than the snapshot it's compared with. Nothing of it is kept then.
   if (blockedNow(call, nodeId, page, 'That page could not be read.', read.url)) return null;
@@ -548,14 +559,14 @@ async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<Awaited
   // Its own envelope (S-4): the page and address it's of.
   const of = { page_id: page.id, url: read.url };
   // A read cut short (too big, or too slow) would show what it didn't reach as gone.
-  if (read.cut.elements || read.cut.time || read.cut.refs) return { page_changes: { ...of, note: 'The page is too big to compare all of it: call snapshot to see it.' } };
+  if (read.cut.elements || read.cut.time || read.cut.refs) return { page_changes: { ...of, note: `The page is too big to compare all of it: ${again} to see it.` } };
   // Its refs as they'd be, not yet issued (round 1 of #145, B1): a diff too big to show is never taken as seen, so the
   // agent's refs, and the next diff's baseline, stay its last seen snapshot's.
   const keys = snapshotKeys(read);
   const sids = sidsOf(read);
   const lines = snapshotLines(read, refs.preview(page.id, keys, sids));
   const changes = snapshotDiff(kept.lines, lines);
-  if (changes.length > DIFF_MAX_LINES) return { page_changes: { ...of, changed: changes.length, note: 'Much of the page changed: call snapshot to see it.' } };
+  if (changes.length > DIFF_MAX_LINES) return { page_changes: { ...of, changed: changes.length, note: `Much of the page changed: ${again} to see it.` } };
   refs.issue(page.id, token, keys, sids, false);
   // The next diff compares with what this one showed; later ranges stay the agent's snapshot's (no outline text built).
   refs.rebase(lines);

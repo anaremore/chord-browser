@@ -80,6 +80,28 @@ const NO_AGENTS = 'No agents yet. Copy a line above into your terminal to connec
 const cardOf = (popover: Page, name: string) => popover.getByRole('alertdialog', { name: `${name} wants to use Chord` });
 
 /** Answer the card as you would: once it's shown (its buttons wait a moment before they take a click). */
+/** An agent's calls, each with every card it raises allowed as the user would (round 1 of #247: one helper, not two). */
+async function allowing(app: ElectronApplication, mcp: ReturnType<typeof relay>) {
+  const popover = await pageWhere(app, isPopover);
+  return async (name: string, args: Record<string, unknown>) => {
+    const calling = mcp.call(name, args);
+    for (;;) {
+      const card = popover.getByRole('alertdialog').first();
+      const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+      if (next === 'done') return calling;
+      await popover.waitForTimeout(600);
+      for (const label of ['Allow once', 'Allow for now', 'Allow']) {
+        const button = card.getByRole('button', { name: label, exact: true });
+        if (await button.count()) {
+          await button.click();
+          break;
+        }
+      }
+      await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+    }
+  };
+}
+
 async function answer(app: ElectronApplication, name: string, button: 'Deny' | 'Allow once' | 'Always allow' | 'Close'): Promise<void> {
   const popover = await pageWhere(app, isPopover);
   const card = cardOf(popover, name);
@@ -1778,25 +1800,7 @@ test('open_tab and navigate with snapshot: true: the page as snapshot gives it, 
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
-    const popover = await pageWhere(app, isPopover);
-    /** A call, with every card it raises allowed as the user would. */
-    const allowed = async (name: string, args: Record<string, unknown>) => {
-      const calling = mcp.call(name, args);
-      for (;;) {
-        const card = popover.getByRole('alertdialog').first();
-        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
-        if (next === 'done') return calling;
-        await popover.waitForTimeout(600);
-        for (const label of ['Allow once', 'Allow for now', 'Allow']) {
-          const button = card.getByRole('button', { name: label, exact: true });
-          if (await button.count()) {
-            await button.click();
-            break;
-          }
-        }
-        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
-      }
-    };
+    const allowed = await allowing(app, mcp);
     type Look = { source: string; trust: string; tab_id: string; url: string; content: string; open_tab?: Record<string, unknown>; navigate?: Record<string, unknown> };
 
     // A page that draws itself 600 ms after it loads: open_tab's outline waited for it (#154's first look), and its ref
@@ -1842,25 +1846,7 @@ test('snapshot with text: false: the page’s structure without its text, a frac
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
-    const popover = await pageWhere(app, isPopover);
-    /** A call, with every card it raises allowed as the user would. */
-    const allowed = async (name: string, args: Record<string, unknown>) => {
-      const calling = mcp.call(name, args);
-      for (;;) {
-        const card = popover.getByRole('alertdialog').first();
-        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
-        if (next === 'done') return calling;
-        await popover.waitForTimeout(600);
-        for (const label of ['Allow once', 'Allow for now', 'Allow']) {
-          const button = card.getByRole('button', { name: label, exact: true });
-          if (await button.count()) {
-            await button.click();
-            break;
-          }
-        }
-        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
-      }
-    };
+    const allowed = await allowing(app, mcp);
     const tabOf = (text: string) => (JSON.parse(text) as { data: { tab_id: string } }).data.tab_id;
     type Snap = { trust: string; source: string; content: string; refs: number };
 
