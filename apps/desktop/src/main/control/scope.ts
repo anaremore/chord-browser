@@ -43,6 +43,13 @@ export interface ToolMemory {
   listed?: Set<NodeId>;
   /** Each tab's element refs (snapshot, M2b): only the latest snapshot's are good. Made with a tab's first snapshot. */
   elements?: Map<NodeId, ElementRefs>;
+  /**
+   * #143: tabs whose last step's sends still wait on the user's card after its call answered at its deadline
+   * (callDeadlineMs): no other action there until it's answered. Absent where calls have no deadline (the assistant).
+   */
+  sendsWaiting?: Set<NodeId>;
+  /** #143: what became of those sends once the card was answered (ACT_SENDS_LATER), for the agent's next result. */
+  later?: string[];
 }
 
 /**
@@ -132,6 +139,13 @@ export interface ControlScope {
    * of M2g-1, B2): no answer drops what the page sent, so it always gets its full wait.
    */
   readonly sendWaitMs?: number;
+  /**
+   * #143: how long this call may take, from its start, before it answers (outside agents: what's left of
+   * CALL_WAIT_MS, under every client's own timeout). A Send data card still up then stays up for its own wait
+   * (sendWaitMs, unchanged for the user); the call answers that the step ran and what it sent waits (ACT_SENDS_WAITING),
+   * and the card's outcome comes with the next result (memory.later). Absent: the call waits for its cards.
+   */
+  readonly callDeadlineMs?: number;
   /** wait_for is offered (outside agents alone: Neon's round 1 of M2g-1, B-4); absent, it's refused as no such tool. */
   readonly waits?: boolean;
   /**

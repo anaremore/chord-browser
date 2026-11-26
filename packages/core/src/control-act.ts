@@ -215,6 +215,8 @@ export const ACT_REFUSALS = {
   stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
   sendsDropped: 'The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.',
   sendsTooMany: 'The page kept sending data to more sites, so Chord dropped the rest and stopped. Ask the user what to do.',
+  // #143: an action on a tab whose last step's sends still wait on the user's card (that call answered at its deadline).
+  sendsPending: 'What this tab sent after your last step still waits for the user on Chord’s card. Its outcome comes with your next result: wait a moment or do something else, then go on here.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',
@@ -226,3 +228,16 @@ export const ACT_REFUSALS = {
   text: `type takes text of at most ${TYPE_TEXT_MAX} characters.`,
   noBack: 'That tab has nowhere to go back to.',
 } as const;
+
+/**
+ * #143: a call answers by its deadline (an outside agent's CALL_WAIT_MS, under every client's own timeout) even while
+ * a Send data card for what its step sent is still up. The step ran: the call says so, and that what it sent waits for
+ * the user; the card stays up, and its outcome comes with the agent's next result (ACT_SENDS_LATER).
+ */
+export const ACT_SENDS_WAITING = 'What the page is sending waits for the user on Chord’s card: don’t repeat this step. Its outcome comes with your next result.';
+
+/** #143: what became of a step's sends once the user answered its card (or didn't), with the agent's next result. */
+export const ACT_SENDS_LATER = {
+  sent: (tab: string, step: string) => `In ${tab}, what “${step}” sent went: the user allowed it on Chord’s card.`,
+  notSent: (tab: string, step: string, why: string) => `In ${tab}, what “${step}” sent didn’t go. ${why}`,
+};

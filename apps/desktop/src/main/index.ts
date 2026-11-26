@@ -1147,6 +1147,8 @@ if (!app.requestSingleInstanceLock()) {
         const [{ AgentService }, { ConnectCards }, { SiteCards }] = await Promise.all([import('./agents/service'), import('./agents/connect'), import('./agents/site-cards')]);
         const helper = process.platform === 'win32' ? join(app.getAppPath(), 'out/window-owner/window-owner.exe') : null;
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
+        // #143's journey: a call's whole deadline (CALL_WAIT_MS), shorter (development builds only).
+        const callWaitMs = Number(devEnv('CHORD_AGENT_CALL_WAIT_MS')) || undefined;
         // The window used last (never a private one): where the connect card and an agent's toasts go.
         const lastWindow = () => {
           const w = agentBrowser.lastBrowserWindow();
@@ -1188,6 +1190,7 @@ if (!app.requestSingleInstanceLock()) {
           // E2E only (development builds): the OS can't say who's calling, as in the Flatpak or without ss.
           ...(!app.isPackaged && process.env['CHORD_E2E_NO_PEER'] === '1' ? { peer: async () => ({ pid: null }) } : {}),
           waitMs,
+          ...(callWaitMs ? { callWaitMs } : {}),
           dispatch: (command) => agentBrowser.store.dispatch(command),
           neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
           chords: {

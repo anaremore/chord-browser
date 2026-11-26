@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { ACT_REFUSALS, ACT_SENDS_LATER, ACT_SENDS_WAITING } from '@chord/core';
 import { failOnMainErrors } from './main-errors';
 import { dispatch, isPopover, isShell, pageWhere, pressReal, where } from './a11y-kit';
 import { CLAUDE, CODEX, agents, agentsSettings, answer, appDir, launch, reached, refOf, relay, siteCardOf, startAgentSite } from './agents-shared';
@@ -515,6 +516,53 @@ test('what an action sends asks first: held, one card, Allow sends and Don’t d
     await new Promise((r) => setTimeout(r, 500));
     expect(reached.filter((r) => r.startsWith('POST'))).toEqual(['POST /prefs']);
     void third;
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a Send data card still up at the call’s deadline: the call answers that the step ran and what it sent waits; the card stays; Allow sends it, and the next result says so (#143)', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  // A call's deadline of 4 s (CALL_WAIT_MS, 50 s for real: under Codex's 60), a card's own wait of 20 s.
+  const app = await launch(profile, { CHORD_AGENTS: '1', CHORD_AGENT_CALL_WAIT_MS: '4000', CHORD_AGENT_WAIT_MS: '20000' });
+  reached.length = 0;
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/noise` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    const popover = await pageWhere(app, isPopover);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    // The site card, once, so the step's own card is the Send data card.
+    const first = mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'tab "Details"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    await first;
+    // A toggle that saves: its Send data card, left unanswered past the call's deadline.
+    const started = Date.now();
+    const toggled = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'checkbox "Dark mode"') });
+    expect(Date.now() - started, 'answered by the call’s deadline, not the card’s').toBeLessThan(12_000);
+    expect(toggled.isError, toggled.text).toBeFalsy();
+    expect(JSON.parse(toggled.text)).toMatchObject({ data: { done: 'Clicked “Dark mode”', sending: ACT_SENDS_WAITING } });
+    // The card stays up, for the user's own time; nothing's sent yet.
+    const card = popover.getByRole('alertdialog', { name: /^Send data to / });
+    await expect(card).toBeVisible();
+    expect(reached).not.toContain('POST /prefs');
+    // Another action on that tab meanwhile: refused, saying why.
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'button "Like"') })).text).toBe(ACT_REFUSALS.sendsPending);
+    // The user allows: it's sent, and the agent's next result says so.
+    await card.getByRole('button', { name: 'Allow', exact: true }).click();
+    await expect.poll(() => reached.includes('POST /prefs')).toBe(true);
+    const next = await mcp.call('snapshot', { tab_id: 'a1' });
+    expect(next.held).toContain(ACT_SENDS_LATER.sent('a1', 'Clicked “Dark mode”'));
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

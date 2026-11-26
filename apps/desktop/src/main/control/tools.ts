@@ -33,6 +33,8 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
   const tab = typeof ref === 'string' ? (scope.refs.get(ref) ?? null) : null;
   // The whole call's time, by tool (M2g-1's measurement: phases.ts), from here to its answer.
   const clock = phaseClock(spec.name);
+  // #143: when the call answers by, from its start (the scope's; an outside agent's is under every client's timeout).
+  const deadline = scope.callDeadlineMs === undefined ? null : Date.now() + scope.callDeadlineMs;
   const answered = scope.agent.call(
     tab,
     async (gateSignal) => {
@@ -41,6 +43,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
         scope,
         browser,
         signal,
+        deadline,
         card: async (tool, node, description, target, no) => {
           const needed = scope.needsCard(tool, node);
           if (!needed) return null;

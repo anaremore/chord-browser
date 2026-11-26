@@ -287,6 +287,9 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     );
   };
 
+  /** #143: what became of sends whose step's call answered before their card did, since its last result: Chord's words. */
+  const later = (): { type: 'text'; text: string }[] => (scope.memory.later?.splice(0) ?? []).map((text) => ({ type: 'text', text }));
+
   /** What its tabs held since its last result, as untrusted data after it. */
   const held = (): Record<string, unknown>[] => {
     const notes = deps.chords?.drain(agent) ?? [];
@@ -310,7 +313,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     // What's left of the call's wait on cards, for the next card it asks (CALL_WAIT_MS).
     const started = Date.now();
     const cardWait = () => Math.min(waitMs, Math.max(CARD_WAIT_MIN_MS, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)));
-    const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait } });
+    // #143: the whole call answers by CALL_WAIT_MS, Send data cards included (they go on after it, for the user).
+    const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait }, callDeadlineMs: { get: () => Math.max(0, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)) } });
     // Progress, when the client asked for it (MCP's progressToken, a string or a number, bounded): every PROGRESS_MS
     // until the answer or the client's cancel, saying whether a card this call waits on is up: one for its tab, or the
     // agent-wide one (the connection's) (#143; Neon's review of M2g-1, S4).
@@ -357,7 +361,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       );
       const answer = output(out);
       if (beat) clearInterval(beat);
-      const result = { ...answer, content: [...answer.content, ...held()] };
+      const result = { ...answer, content: [...answer.content, ...held(), ...later()] };
       // What the result costs the agent, by tool (the owner, 2026-11-24: as few tokens as can be): in the log, and kept
       // for the eval journeys (phases.ts).
       // A picture by its pixels, not its bytes (a model sees the image, never its base64).
