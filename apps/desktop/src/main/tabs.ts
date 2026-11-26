@@ -248,7 +248,7 @@ export class TabManager {
         // still this turn's; through the gate again, as the session may have changed meanwhile (Neon's B1, round 1 of
         // #333).
         () => {
-          if (!contents.isDestroyed() && this.loadTurns.get(contents) === turn) this.whenProxied(contents, () => contents.reload());
+          if (!contents.isDestroyed() && this.loadTurns.get(contents) === turn) this.queueLoad(contents, () => contents.reload());
         },
         () => {},
       );
@@ -768,11 +768,13 @@ export class TabManager {
       // and its hold, lost, refuses acting there until it's armed again.
       const attempts = agentPage ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
       if (attempts < MAX_CRASH_RELOADS) {
-        this.crashReloads.set(nodeId, attempts + 1);
         // Through the gate, as your Reload is (#326): never before the session's proxy is set or its rules are on. Not over
         // a load you asked for that's waiting: it starts a renderer anyway, and it's where the tab is going (Opus's SF1,
-        // round 1 of #333).
-        if (!this.waiting.has(contents)) this.reload(contents);
+        // round 1 of #333); and then not counted, as it didn't run (round 2).
+        if (!this.waiting.has(contents)) {
+          this.crashReloads.set(nodeId, attempts + 1);
+          this.reload(contents);
+        }
       } else {
         live({ crashed: true, loading: false });
       }

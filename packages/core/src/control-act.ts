@@ -239,7 +239,7 @@ export const ACT_REFUSALS = {
   text: `type takes text of at most ${TYPE_TEXT_MAX} characters.`,
   noBack: 'That tab has nowhere to go back to.',
   backMoved: 'That tab’s history changed while it waited to go back (it went somewhere else first), so it didn’t go back. Call snapshot to see where it is.',
-  overtaken: 'Another page started loading in that tab before yours could (the user, or Chord), so it didn’t go there. Call snapshot to see where it is.',
+  overtaken: 'That load was dropped before it started (stopped, or another load came first), so the tab didn’t go there. Call snapshot to see where it is.',
 } as const;
 
 /**

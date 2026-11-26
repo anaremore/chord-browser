@@ -574,9 +574,13 @@ describe('a page’s load waiting for its session (#189)', () => {
       t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
       const proxy = held();
       waits.push(proxy);
+      const navigationQueued = vi.fn();
+      (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = navigationQueued;
       load.resolve();
       await tick();
       expect(t.page.reload).not.toHaveBeenCalled();
+      // The reload's own wait: Safe Browsing hears of it (Opus's round 2 of #333).
+      expect(navigationQueued).toHaveBeenCalledWith(t.page);
       proxy.resolve();
       await tick();
       expect(t.page.reload).toHaveBeenCalledOnce();
@@ -596,6 +600,22 @@ describe('a page’s load waiting for its session (#189)', () => {
     await tick();
     expect(t.page.reload).not.toHaveBeenCalled();
     expect(t.loaded()).toEqual([SECOND]);
+  });
+
+  it('a crash reload that didn’t run (your navigation waited) isn’t counted (Opus’s round 2 of #333): two more crashes still reload', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.navigate(NODE, SECOND);
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    proxy.resolve();
+    await tick();
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    expect(t.page.reload).toHaveBeenCalledTimes(2);
+    expect(t.commands).not.toContainEqual(expect.objectContaining({ live: expect.objectContaining({ crashed: true }) }));
   });
 
   it.each([
