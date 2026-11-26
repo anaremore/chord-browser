@@ -136,12 +136,16 @@ export class TabManager {
    */
   whenProxied(contents: WebContents, load: () => boolean | void, overtaken?: () => void): void {
     this.loadTurns.get(contents)?.overtaken?.();
-    const turn: { overtaken?: () => void; shown?: boolean } = overtaken ? { overtaken } : {};
+    const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
     this.loadTurns.set(contents, turn);
     // `failed`: a wait that rejected (#299): it's over. Asked again, a source answering that same wait isn't waited on.
     const go = (failed?: Promise<void>) => {
-      if (contents.isDestroyed()) return void (this.waitMarked.delete(contents) && setFirstLoadPending(contents, false));
       if (this.loadTurns.get(contents) !== turn) return;
+      if (contents.isDestroyed()) {
+        if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
+        // Gone: its load never runs, and whoever waits on it hears so, never left hanging (Neon's NB1, round 2 of #333).
+        return turn.overtaken?.();
+      }
       const asked = this.deps.proxyReady(contents.session);
       const pending = asked === failed ? null : asked;
       if (pending) {
@@ -151,7 +155,6 @@ export class TabManager {
           setFirstLoadPending(contents, true);
           const nodeId = this.nodeFor(contents);
           if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true } });
-          turn.shown = Boolean(nodeId);
         }
         pending.then(
           () => go(),
@@ -160,8 +163,10 @@ export class TabManager {
         return;
       }
       this.waiting.delete(contents);
-      if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
-      if (load() === false && turn.shown) {
+      // A wait put the tab's loading on (this turn's, or one it took over from: Neon's NSF2, round 2 of #333).
+      const marked = this.waitMarked.delete(contents);
+      if (marked) setFirstLoadPending(contents, false);
+      if (load() === false && marked) {
         const nodeId = this.nodeFor(contents);
         if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
       }

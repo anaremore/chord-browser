@@ -1687,7 +1687,7 @@ export class Browser {
     };
     // A tab just made in a session not ready yet (its proxy being set, its rules not on) waits, as its page does, and
     // takes over from the page's own first load (tabs.ts' whenProxied): the upload is what loads.
-    this.tabs.whenProxied(contents, upload);
+    this.tabs.queueLoad(contents, upload);
   }
 
   /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */

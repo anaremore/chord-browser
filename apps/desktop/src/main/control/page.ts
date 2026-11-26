@@ -245,12 +245,30 @@ export interface LoadGate {
  */
 function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => unknown) | null, abandoned?: () => boolean): Promise<{ loading: boolean } | null> {
   return new Promise((done) => {
+    // A page already gone: nothing to wait for (Neon's NB1, round 2 of #333).
+    if (contents.isDestroyed()) return done(null);
     let decided = false;
+    /** It won't start: null now, and nothing after. */
+    const off = (): boolean => {
+      if (decided) return false;
+      decided = true;
+      clearInterval(watch);
+      contents.off('destroyed', gone);
+      return true;
+    };
+    const gone = () => off() && done(null);
+    // Closed while it waits: at once, whatever the gate does (NB1).
+    contents.once('destroyed', gone);
+    // Stop, a pause or your hand while it waits: the step ends then, not when the session is ready, so its hold is let
+    // go and its bar cleared (Neon's NSF1, round 2 of #333). The gate, answering later, finds it decided.
+    const watch = setInterval(() => {
+      if (abandoned?.()) gone();
+    }, ABANDON_CHECK_MS);
+    watch.unref?.();
     gate.queueLoad(
       contents,
       () => {
-        if (decided) return false;
-        decided = true;
+        if (!off()) return false;
         const go = contents.isDestroyed() || abandoned?.() ? null : start();
         if (!go) {
           done(null);
@@ -259,14 +277,13 @@ function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => un
         void loaded(contents, go).then(done);
         return true;
       },
-      () => {
-        if (decided) return;
-        decided = true;
-        done(null);
-      },
+      gone,
     );
   });
 }
+
+/** How often a tool's load waiting for its session looks whether it's still wanted. */
+const ABANDON_CHECK_MS = 100;
 
 /** The adapter for a page Chord holds; its own loads go through `gate` (the tab manager's, #326). */
 export function controlPage(contents: WebContents, gate: LoadGate): ControlPage {

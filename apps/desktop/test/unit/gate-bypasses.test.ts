@@ -102,6 +102,24 @@ describe('the agent’s navigate and back go through the session gate (#326)', (
     expect(page.loadURL).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['before it’s asked', true],
+    ['while it waits (a gate that never answers)', false],
+  ])('navigate on a page closed %s (Neon’s NB1, round 2 of #333): null, never left hanging', async (_, before) => {
+    const page = Object.assign(agentPage(), { destroyed: false as boolean });
+    (page as { isDestroyed: () => boolean }).isDestroyed = () => page.destroyed;
+    const gate = vi.fn();
+    if (before) page.destroyed = true;
+    const going = controlPage(page as never, { queueLoad: gate }).navigate('https://three.test/');
+    await turns();
+    if (!before) {
+      page.destroyed = true;
+      page.emit('destroyed');
+    }
+    expect(await state(going)).toEqual({ settled: true, value: null });
+    expect(page.loadURL).not.toHaveBeenCalled();
+  });
+
   it('back: no history move until the session is ready', async () => {
     const page = agentPage();
     const held = heldGate();

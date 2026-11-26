@@ -373,7 +373,10 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           else past = true;
         } else {
           sent = settled.sent;
-          went = await going;
+          // Refused already (Stop, a pause, your hand): the load, if it ever comes, isn't waited for (Neon's NSF1, round 2
+          // of #333).
+          if (sent) void going.catch(() => undefined);
+          else went = await going;
         }
         if (handed || past) void going.catch(() => undefined);
       } finally {

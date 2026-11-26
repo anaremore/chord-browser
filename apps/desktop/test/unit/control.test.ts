@@ -2268,6 +2268,23 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(t.at.loads).toEqual([]);
   });
 
+  it.each(['Stop', 'a pause'] as const)('%s while navigate waits for the session (Neon’s NSF1, round 2 of #333): the step ends then (its hold let go, the bar cleared), not when the session is ready', async (what) => {
+    const t = await acting();
+    // A gate that doesn't answer while the test runs.
+    let asked = false;
+    (t.browser.tabs as { queueLoad: unknown }).queueLoad = () => void (asked = true);
+    const going = t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+    for (let i = 0; i < 200 && !asked; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(asked).toBe(true);
+    if (what === 'Stop') t.agent.stop();
+    else t.agent.pause('n1', true);
+    // The tool's own end: what it said it was doing is cleared (its finally), within a moment.
+    for (let i = 0; i < 100 && t.doings.at(-1) !== null; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(t.doings.at(-1)).toBeNull();
+    expect(refusal(await going).refused).toBe(what === 'Stop' ? CONTROL_REFUSALS.stopped : CONTROL_REFUSALS.paused);
+    expect(t.at.loads).toEqual([]);
+  });
+
   // ---------- Risky steps (S18 M2d) ----------
 
   it('a risky step asks every time (the step card, never remembered): Don’t sends nothing; Allow goes', async () => {

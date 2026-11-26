@@ -292,10 +292,14 @@ type Move = { method: string; receiver: string; line: number };
 
 const MOVE_NAMES = 'loadURL|loadFile|reload|reloadIgnoringCache|goBack|goForward|goToIndex|goToOffset|restore';
 /**
- * Each place a page is loaded or moved in its history: `.loadURL(`, `?.loadURL(`, `!.loadURL(`, across lines, through
- * `.call` / `.apply` / `.bind`, or `['loadURL']` (Opus's SF5, round 1 of #333).
+ * Each place a page is loaded or moved in its history: `.loadURL(`, `?.loadURL(`, `!.loadURL(`, across lines, called as
+ * `?.(` or `!(`, through `.call` / `.apply` / `.bind` (`?.call` too), or `['loadURL']` / `?.['loadURL']` (Opus's SF5,
+ * round 1 of #333; Neon's NSF3, round 2).
  */
-const MOVE = new RegExp(`(?:[?!]?\\.\\s*(${MOVE_NAMES})\\b|\\[\\s*(['"\`])(${MOVE_NAMES})\\2\\s*\\])(?=\\s*(?:\\(|\\.\\s*(?:call|apply|bind)\\b))`, 'g');
+const MOVE = new RegExp(
+  `(?:[?!]?\\.\\s*(${MOVE_NAMES})\\b|(?:\\?\\.)?\\[\\s*(['"\`])(${MOVE_NAMES})\\2\\s*\\])(?=\\s*(?:(?:!|\\?\\.)?\\s*\\(|[?!]?\\.\\s*(?:call|apply|bind)\\b))`,
+  'g',
+);
 /** The tab manager's own (tabs.reload, tabs.go…): the gate itself, by these names only (Opus's N2). */
 const THE_GATE = new Set(['this.tabs', 'this.deps.tabs', 'this.deps.tabMoves']);
 
@@ -336,9 +340,12 @@ function receiverBefore(text: string, end: number): string {
 
 function moves(source: string): Move[] {
   const text = code(source);
+  // Names a file gives a page's history (`const history = contents.navigationHistory`, the repo's own idiom): a restore
+  // through one is a page's too (Neon's NSF3).
+  const histories = new Set([...text.matchAll(/\b(?:const|let|var)\s+([\w$]+)\s*=\s*[\w$.!?()]*navigationHistory\b/g)].map((m) => m[1]!));
   return [...text.matchAll(MOVE)]
     .map((m) => ({ method: (m[1] ?? m[3])!, receiver: receiverBefore(text, m.index), line: lineOf(text, m.index) }))
-    .filter((m) => !THE_GATE.has(m.receiver) && (m.method !== 'restore' || /(?:^|\.)navigationHistory$/.test(m.receiver)));
+    .filter((m) => !THE_GATE.has(m.receiver) && (m.method !== 'restore' || /(?:^|\.)navigationHistory$/.test(m.receiver) || histories.has(m.receiver)));
 }
 
 /**
@@ -348,7 +355,7 @@ function moves(source: string): Move[] {
  * rules are on, and a load already waiting is dropped for it.
  */
 const LOADS: Record<string, [string, string, string][]> = {
-  'main/browser.ts': [['loadURL', 'contents', "an image search's upload into a tab: inside tabs.whenProxied (the `upload` it's given)"]],
+  'main/browser.ts': [['loadURL', 'contents', "an image search's upload into a tab: started by the gate (tabs.queueLoad, the `upload` it's given)"]],
   'main/context-menu.ts': [['reload', 'deps', "a page's menu's Reload: `deps.reload`, which a page's menu must have (WebMenuDeps): tabs.reload"]],
   'main/index.ts': [
     ['reload', 'browser.tabs', "the page's Reload key: tabs.reload, the gate (Browser's own tab manager, by another name here)"],
@@ -416,6 +423,12 @@ describe('page loads around the session gate (#326): every one is audited', () =
       'tabs.reload(contents);',
       'win.restore();',
       'const reload = () => 1;',
+      'page.reload?.();',
+      'page.goBack!();',
+      'page.loadURL?.call(page, url);',
+      "contents.navigationHistory?.['restore'](state);",
+      'const history = contents.navigationHistory;',
+      'history.restore({ entries, index });',
     ].join('\n');
     expect(moves(src).map((m) => `${m.method} ${m.receiver}`)).toEqual([
       'loadURL contents',
@@ -427,6 +440,11 @@ describe('page loads around the session gate (#326): every one is audited', () =
       'loadURL page',
       'restore contents.navigationHistory',
       'reload tabs',
+      'reload page',
+      'goBack page',
+      'loadURL page',
+      'restore contents.navigationHistory',
+      'restore history',
     ]);
   });
 

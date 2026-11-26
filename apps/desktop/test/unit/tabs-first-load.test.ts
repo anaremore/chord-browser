@@ -626,6 +626,37 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
   });
 
+  it.each([
+    ['before it asks', true],
+    ['while it waits', false],
+  ])('a page closed %s (Neon’s NB1, round 2 of #333): the load never runs, and whoever waits on it hears so', async (_, before) => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    const load = vi.fn();
+    const overtaken = vi.fn();
+    if (before) t.page.destroy();
+    t.manager.queueLoad(t.page as never, load, overtaken);
+    if (!before) t.page.destroy();
+    proxy.resolve();
+    await tick();
+    expect(load).not.toHaveBeenCalled();
+    expect(overtaken).toHaveBeenCalledOnce();
+  });
+
+  it('a second waiting load over the first, which then doesn’t load (Neon’s NSF2, round 2 of #333): the tab stops showing loading', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.queueLoad(t.page as never, () => undefined);
+    t.manager.queueLoad(t.page as never, () => false);
+    proxy.resolve();
+    await tick();
+    expect(t.commands.filter((c) => c.t === 'tab.live').at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);
