@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { ACT_REFUSALS, ACT_SENDS_LATER, ACT_SENDS_WAITING } from '@chord/core';
+import { ACT_REFUSALS, ACT_SENDS_WAITING, sendsLater } from '@chord/core';
 import { failOnMainErrors } from './main-errors';
 import { dispatch, isPopover, isShell, pageWhere, pressReal, where } from './a11y-kit';
 import { CLAUDE, CODEX, agents, agentsSettings, answer, appDir, launch, reached, refOf, relay, siteCardOf, startAgentSite } from './agents-shared';
@@ -551,7 +551,9 @@ test('a Send data card still up at the call’s deadline: the call answers that 
     const toggled = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), 'checkbox "Dark mode"') });
     expect(Date.now() - started, 'answered by the call’s deadline, not the card’s').toBeLessThan(12_000);
     expect(toggled.isError, toggled.text).toBeFalsy();
-    expect(JSON.parse(toggled.text)).toMatchObject({ data: { done: 'Clicked “Dark mode”', sending: ACT_SENDS_WAITING } });
+    expect(JSON.parse(toggled.text)).toMatchObject({ data: { done: 'Clicked “Dark mode”', sending: ACT_SENDS_WAITING, loading: true } });
+    // Never its outcome in the same answer.
+    expect(toggled.held.some((h) => h.includes('"later"'))).toBe(false);
     // The card stays up, for the user's own time; nothing's sent yet.
     const card = popover.getByRole('alertdialog', { name: /^Send data to / });
     await expect(card).toBeVisible();
@@ -562,7 +564,11 @@ test('a Send data card still up at the call’s deadline: the call answers that 
     await card.getByRole('button', { name: 'Allow', exact: true }).click();
     await expect.poll(() => reached.includes('POST /prefs')).toBe(true);
     const next = await mcp.call('snapshot', { tab_id: 'a1' });
-    expect(next.held).toContain(ACT_SENDS_LATER.sent('a1', 'Clicked “Dark mode”'));
+    // Its outcome, inside the untrusted envelope (the step is in the page's words).
+    const settled = next.held.map((h) => JSON.parse(h) as { trust?: string; data?: { later?: unknown } }).find((h) => h.data?.later);
+    expect(settled).toEqual({ trust: 'untrusted', data: { later: [sendsLater('a1', 'click', 'Clicked “Dark mode”', 'allowed', true)] } });
+    // Said once: the result after has none.
+    expect((await mcp.call('snapshot', { tab_id: 'a1' })).held.some((h) => h.includes('"later"'))).toBe(false);
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

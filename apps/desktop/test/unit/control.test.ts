@@ -6,13 +6,14 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { ACT_REFUSALS, ACT_SENDS_LATER, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, ACT_SENDS_WAITING, sendsLater, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
+import { OpenCards, takeLater } from '../../src/main/control/handed-over';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
@@ -218,8 +219,12 @@ function fakePage(url: string, read: Answer) {
     history: { url: string; skippable?: boolean }[];
     active: number;
     /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
-    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean };
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean; postsTo?: string[] };
     debugging: string[];
+    /** #143: the page commits another document (did-navigate), as a GET navigation of its own would. */
+    navigate?: (url: string) => void;
+    /** #143: the page goes (its tab closed). */
+    destroy?: () => void;
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
     /** The page's requests went (deep.ping, deep.posts): once per page. */
@@ -231,6 +236,11 @@ function fakePage(url: string, read: Answer) {
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
   let attached = false;
+  at.navigate = (to) => {
+    at.url = to;
+    events.emit('did-navigate');
+  };
+  at.destroy = () => void events.emit('destroyed');
   at.emitDebug = (method, params, sessionId) => void debugEvents.emit('message', {}, method, params, sessionId);
   const go = (index: number) => {
     at.active = index;
@@ -244,8 +254,10 @@ function fakePage(url: string, read: Answer) {
     sendInputEvent: (e: unknown) => {
       at.input.push(e);
       // A page that sends as the agent acts (S18 M2d): its requests, paused by the tab's send hold, once its first input came.
-      if (!at.sent && (at.deep.ping || at.deep.posts)) {
+      if (!at.sent && (at.deep.ping || at.deep.posts || at.deep.postsTo)) {
         at.sent = true;
+        // #143: posts to several sites at once, each its own Send data card (askHeld asks them one after another).
+        for (const [i, to] of (at.deep.postsTo ?? []).entries()) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: `m${i}`, request: { method: 'POST', url: to }, resourceType: 'Fetch' }), 0);
         if (at.deep.ping) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'b1', request: { method: 'POST', url: 'https://stats.test/collect' }, resourceType: 'Ping' }), 0);
         if (at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Document' }), 0);
       }
@@ -1352,7 +1364,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; callDeadlineMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; callDeadlineMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean; postsTo?: string[] } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -2433,67 +2445,166 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(JSON.parse(u.cards.find((c) => c.step?.why === 'send')!.subject)).toEqual(['n1', 'navigate', 'sends', expect.stringMatching(/^[0-9a-f]{8}$/)]);
     });
 
-    // #143 (the plan on the issue, 2026-11-26), on fake timers in real seconds: a client that gives up at 60 s
-    // (Codex's default), the call's deadline 50 s (CALL_WAIT_MS), a Send data card that waits 90 s. Failed on main,
-    // where the call held its answer for the card's own full wait.
-    it('a Send data card still up at the call’s deadline: the call answers by then, the step done and what it sends waiting on the user; the card stays up, its Allow sends it, and the step ran once (#143)', async () => {
-      const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
-      vi.useFakeTimers();
-      let out: { text?: string; isError?: boolean } | undefined;
-      void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((o) => void (out = o));
-      await vi.advanceTimersByTimeAsync(60_000);
-      // Answered before the client gives up: the step ran, and isn't an error.
-      expect(out, 'the call answered before the client’s 60 s').toBeDefined();
-      expect(out!.isError).toBeFalsy();
-      expect(out!.text).toMatch(/waits for the user/i);
-      // The card stays up: the user decides at their pace.
-      expect(t.cards.filter((c) => c.step?.why === 'send')).toHaveLength(1);
-      expect(t.at.debugging).not.toContain('Fetch.continueRequest');
-      // Another action on that tab meanwhile: refused, saying why (its outcome first), never the step again.
-      expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.sendsPending);
-      // The user allows after the call answered: what the page sent goes, and the agent hears so with its next result.
-      t.holds.at(-1)!('once');
-      await vi.advanceTimersByTimeAsync(0);
-      expect(t.at.debugging).toContain('Fetch.continueRequest');
-      expect(t.scope.memory.later).toEqual([ACT_SENDS_LATER.sent(t.tab, 'Clicked “Home”')]);
-      expect(t.scope.memory.sendsWaiting?.size).toBe(0);
-      // The click went in once.
-      expect((t.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toHaveLength(1);
-      vi.useRealTimers();
-    });
+    // #143, on fake timers in real seconds: a client that gives up at 60 s (Codex's default), the call's deadline 50 s
+    // (CALL_WAIT_MS), a Send data card that waits 90 s (its own sendWaitMs). Each failed on the code before HandedOver.
+    describe('#143: a Send data card past the call’s deadline (HandedOver)', () => {
+      const STEP = 'Clicked “Home”';
+      /** A click whose page posts, its card held, the call answered by the client's 60 s. */
+      async function handedOver(opts: { postsTo?: string[] } = {}) {
+        const t = await acting({ deep: opts.postsTo ? { postsTo: opts.postsTo } : { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+        vi.useFakeTimers();
+        let out: { text?: string; isError?: boolean } | undefined;
+        void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((o) => void (out = o));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(out, 'the call answered before the client’s 60 s').toBeDefined();
+        const sendCards = () => t.cards.filter((c) => c.step?.why === 'send');
+        const dropped = () => t.at.debugging.some((m: string) => m === 'Fetch.failRequest' || m === 'Fetch.fulfillRequest');
+        const later = () => (t.scope.memory.later ?? []).map((l) => l.entry);
+        return { t, out: out!, sendCards, dropped, later };
+      }
+      afterEach(() => void vi.useRealTimers());
 
-    it('a call past its deadline with no Send data card up answers as before: nothing said to wait, and the tab free to act on (#143)', async () => {
-      // A deadline of 1 ms: past before the step ends; the page sends nothing that's held.
-      const t = await acting({ callDeadlineMs: 1, act: { siteAllowed: () => true } });
-      const out = await t.call('click', { tab_id: t.tab, ref: 'e1' });
-      expect(out.isError).toBeFalsy();
-      expect(JSON.parse(out.text!).data).not.toHaveProperty('sending');
-      expect(t.scope.memory.sendsWaiting?.size).toBe(0);
-      // The next action there runs.
-      expect((await t.call('click', { tab_id: t.tab, ref: 'e1' })).isError).toBeFalsy();
-    });
+      it('the call answers by its deadline: the step ran (not an error), what it sent waits; the card stays; another action there is refused; Allow sends it, once, and the next result says so', async () => {
+        const { t, out, sendCards, later } = await handedOver();
+        expect(out.isError).toBeFalsy();
+        expect(JSON.parse(out.text!).data).toMatchObject({ done: STEP, sending: ACT_SENDS_WAITING, loading: true });
+        expect(sendCards()).toHaveLength(1);
+        expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+        expect(t.scope.memory.sendsWaiting?.has('n1')).toBe(true);
+        expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.sendsPending);
+        expect(later()).toEqual([]);
+        t.holds.at(-1)!('once');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.at.debugging).toContain('Fetch.continueRequest');
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'allowed', true)]);
+        expect(later()[0]!.why).toBe('The step ran, and what it sent went: the user allowed it.');
+        expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+        expect((t.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toHaveLength(1);
+      });
 
-    it('a Send data card still up at the call’s deadline, never answered: the call answered on time, and what it held is dropped at the card’s own wait, never before (#143)', async () => {
-      const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
-      vi.useFakeTimers();
-      let out: { text?: string; isError?: boolean } | undefined;
-      void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((o) => void (out = o));
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(out, 'the call answered before the client’s 60 s').toBeDefined();
-      // Still held at 80 s: the card's own wait (90 s) is the user's, not the call's.
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(t.cards.filter((c) => c.step?.why === 'send')).toHaveLength(1);
-      const dropped = () => t.at.debugging.some((m: string) => m === 'Fetch.failRequest' || m === 'Fetch.fulfillRequest');
-      expect(dropped()).toBe(false);
-      // Past it: dropped, and the card comes down.
-      await vi.advanceTimersByTimeAsync(20_000);
-      // A document dropped is answered with an empty 204, anything else failed (sends.ts).
-      expect(dropped()).toBe(true);
-      expect(t.agent.state('n1').cards).toEqual([]);
-      // The agent hears it didn't go, and why, with its next result; the tab's free to act on again.
-      expect(t.scope.memory.later).toEqual([ACT_SENDS_LATER.notSent(t.tab, 'Clicked “Home”', ACT_REFUSALS.sendsDropped)]);
-      expect(t.scope.memory.sendsWaiting?.size).toBe(0);
-      vi.useRealTimers();
+      it('never answered: held until the card’s own wait, never before; then dropped, the card down, and “the user didn’t answer in time”', async () => {
+        const { t, sendCards, dropped, later } = await handedOver();
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(sendCards()).toHaveLength(1);
+        expect(dropped()).toBe(false);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(dropped()).toBe(true);
+        expect(t.agent.state('n1').cards).toEqual([]);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'no-answer', false)]);
+        expect(later()[0]!.why).toBe('The step ran; what it sent didn’t go: the user didn’t answer in time.');
+      });
+
+      it('Don’t: dropped, and “the user said no”', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.holds.at(-1)!('deny');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dropped()).toBe(true);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'no', false)]);
+      });
+
+      it('the tab closed while it waits (the live store, never the TabNode taken before): never “went”, the card down (Neon’s B1)', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.close('n1');
+        t.at.destroy!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'closed', false)]);
+        expect(dropped()).toBe(true);
+        expect(t.agent.state('n1').cards).toEqual([]);
+        // An Allow on the card after that sends nothing.
+        t.holds.at(-1)!('once');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+      });
+
+      it('its session over while it waits (Keep, the agent gone: failHeld): never “went” (Neon’s B1)', async () => {
+        const { t, later } = await handedOver();
+        failHeld(t.pages.get('n1')!.contents);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'ended', false)]);
+        expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+      });
+
+      it('Stop while it waits: dropped, and “the user pressed Stop”', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.agent.stop();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dropped()).toBe(true);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'stopped', false)]);
+      });
+
+      it('the page goes to another document while it waits (a GET navigation of its own): the card comes down at once, dropped, “the page moved on” (Neon’s SF3)', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.at.navigate!('https://news.test/elsewhere');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'moved-on', false)]);
+        expect(dropped()).toBe(true);
+        expect(t.agent.state('n1').cards).toEqual([]);
+      });
+
+      it('three sites in one action: the first card’s Allow, the second’s Don’t: “some went, the rest didn’t” (Neon’s SF2)', async () => {
+        const { t, later } = await handedOver({ postsTo: ['https://a.test/1', 'https://b.test/2', 'https://c.test/3'] });
+        t.holds.at(-1)!('once');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([]);
+        t.holds.at(-1)!('deny');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'no', true)]);
+        expect(later()[0]!.why).toBe('The step ran; some of what it sent went, the rest didn’t: the user said no.');
+      });
+
+      it('a batch whose step hands over stops there: done, sending and stopped_after, never the next step into sendsPending (Neon’s B2, Opus’s S1)', async () => {
+        const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+        vi.useFakeTimers();
+        let out: { text?: string; isError?: boolean } | undefined;
+        void runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'e1' }] }, new AbortController().signal).then((o) => void (out = o));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(out).toBeDefined();
+        expect(out!.isError).toBeFalsy();
+        expect(JSON.parse(out!.text!).data).toMatchObject({ done: [STEP], sending: ACT_SENDS_WAITING, stopped_after: 1 });
+        expect((t.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toHaveLength(1);
+      });
+
+      it('navigate past its deadline: under way (loading), never an outline, its card on; Stop at the hand-over never hands over (Neon’s B4, Opus’s N2)', async () => {
+        const t = await acting({ deep: { postsOnLoad: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+        vi.useFakeTimers();
+        let out: { text?: string; isError?: boolean } | undefined;
+        void t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' }).then((o) => void (out = o));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(out).toBeDefined();
+        expect(JSON.parse(out!.text!).data).toMatchObject({ done: 'Going to news.test/b', loading: true, sending: ACT_SENDS_WAITING });
+        // With snapshot: true, no outline (and no wait for one).
+        let looked = false;
+        const withIt = await withOutline(out!, 'navigate', async () => ((looked = true), { text: '{}' }));
+        expect(looked).toBe(false);
+        expect(withIt).toBe(out);
+      });
+
+      it('no card up at the deadline: answered as before, nothing said to wait, the tab free', async () => {
+        const t = await acting({ callDeadlineMs: 1, act: { siteAllowed: () => true } });
+        const out = await t.call('click', { tab_id: t.tab, ref: 'e1' });
+        expect(out.isError).toBeFalsy();
+        expect(JSON.parse(out.text!).data).not.toHaveProperty('sending');
+        expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+        expect((await t.call('click', { tab_id: t.tab, ref: 'e1' })).isError).toBeFalsy();
+      });
+
+      it('a card answered at once (a call already stopped, a grant) is never “up”: no hand-over with no card (Neon’s B5)', async () => {
+        const agent = new ControlAgent('t', async () => 'once');
+        const cards = new OpenCards(agent, 'n1');
+        const ask = cards.ask(async () => 'deny' as const);
+        const answered = ask();
+        expect(cards.isUp()).toBe(false);
+        await answered;
+        expect(cards.isUp()).toBe(false);
+      });
+
+      it('a call’s own answer never carries its outcome beside its *waits*: takeLater keeps that call’s, takes the rest', () => {
+        const mine = {};
+        const memory = { pdfs: new Map(), form: null, nextField: 1, read: new Set<NodeId>(), later: [{ from: mine, entry: sendsLater('a1', 'click', 'x', 'allowed', true) }, { from: {}, entry: sendsLater('a2', 'click', 'y', 'no', false) }] } as ToolMemory;
+        expect(takeLater(memory, mine).map((e) => e.tab_id)).toEqual(['a2']);
+        expect(takeLater(memory, {}).map((e) => e.tab_id)).toEqual(['a1']);
+        expect(memory.later).toEqual([]);
+      });
     });
 
     it('a send card in an action holds live requests, so it waits CONTROL_WAIT_MS even where site and step cards wait as long as it takes (the assistant: D2, the reviews of #147)', async () => {

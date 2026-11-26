@@ -215,6 +215,8 @@ export const ACT_REFUSALS = {
   stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
   sendsDropped: 'The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.',
   sendsTooMany: 'The page kept sending data to more sites, so Chord dropped the rest and stopped. Ask the user what to do.',
+  // #143 (Neon's B4): navigate's card allowed after the page it held a send for had moved on.
+  movedOn: 'The page moved on to another page while the card was up, so what it was sending was dropped.',
   // #143: an action on a tab whose last step's sends still wait on the user's card (that call answered at its deadline).
   sendsPending: 'What this tab sent after your last step still waits for the user on Chord’s card. Its outcome comes with your next result: wait a moment or do something else, then go on here.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
@@ -232,12 +234,42 @@ export const ACT_REFUSALS = {
 /**
  * #143: a call answers by its deadline (an outside agent's CALL_WAIT_MS, under every client's own timeout) even while
  * a Send data card for what its step sent is still up. The step ran: the call says so, and that what it sent waits for
- * the user; the card stays up, and its outcome comes with the agent's next result (ACT_SENDS_LATER).
+ * the user; the card stays up, and its outcome comes with the agent's next result (sendsLater).
  */
 export const ACT_SENDS_WAITING = 'What the page is sending waits for the user on Chord’s card: don’t repeat this step. Its outcome comes with your next result.';
 
-/** #143: what became of a step's sends once the user answered its card (or didn't), with the agent's next result. */
-export const ACT_SENDS_LATER = {
-  sent: (tab: string, step: string) => `In ${tab}, what “${step}” sent went: the user allowed it on Chord’s card.`,
-  notSent: (tab: string, step: string, why: string) => `In ${tab}, what “${step}” sent didn’t go. ${why}`,
+/** #143: why a step's sends, handed over past its call's deadline, went or didn't (HandedOver's one exit, settle). */
+export type SendsWhy = 'allowed' | 'no' | 'no-answer' | 'took-over' | 'stopped' | 'moved-on' | 'closed' | 'ended' | 'too-many' | 'unchecked';
+
+/** Each reason a step's sends didn't go, in the past tense: what happened, never what to call next. */
+export const SENDS_WHY: Record<Exclude<SendsWhy, 'allowed'>, string> = {
+  no: 'the user said no.',
+  'no-answer': 'the user didn’t answer in time.',
+  'took-over': 'the user took the tab.',
+  stopped: 'the user pressed Stop.',
+  'moved-on': 'the page moved on to another page first.',
+  closed: 'the tab was closed.',
+  ended: 'the agent’s session with Chord ended.',
+  'too-many': 'the page kept sending to more sites, so Chord dropped the rest.',
+  unchecked: 'Chord couldn’t check it.',
 };
+
+/**
+ * #143: one step's sends, settled after its call answered, for the agent's next result. Inside the untrusted envelope
+ * (toolResult): `step` is the page's own words (`Clicked “Dark mode”`). `went`: all of it (the user allowed it), some
+ * (allowed, then a later card wasn't), or none.
+ */
+export interface SendsLater {
+  tab_id: string;
+  tool: string;
+  step: string;
+  went: 'all' | 'some' | 'none';
+  why: string;
+}
+
+/** The entry for a step's settled sends: `allowed` only when every card was allowed. */
+export function sendsLater(tab: string, tool: string, step: string, why: SendsWhy, someAllowed: boolean): SendsLater {
+  if (why === 'allowed') return { tab_id: tab, tool, step, went: 'all', why: 'The step ran, and what it sent went: the user allowed it.' };
+  const went = someAllowed ? 'some' : 'none';
+  return { tab_id: tab, tool, step, went, why: `The step ran; ${went === 'some' ? 'some of what it sent went, the rest didn’t' : 'what it sent didn’t go'}: ${SENDS_WHY[why]}` };
+}

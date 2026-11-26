@@ -5,7 +5,7 @@
  * readNeedsApproval); outside agents' comes in M1's later slices (their Agent
  * chord and the tabs shared with them).
  */
-import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, BarDoing, ElementRefs, NodeId, TabNode, TabRefs } from '@chord/core';
+import type { ApprovalKind, AssistantFillCard, AssistantFormRead, AssistantToolName, BarDoing, ElementRefs, NodeId, SendsLater, TabNode, TabRefs } from '@chord/core';
 import type { ControlAgent } from './gate';
 
 /** A tool's answer to the model. */
@@ -48,8 +48,11 @@ export interface ToolMemory {
    * (callDeadlineMs): no other action there until it's answered. Absent where calls have no deadline (the assistant).
    */
   sendsWaiting?: Set<NodeId>;
-  /** #143: what became of those sends once the card was answered (ACT_SENDS_LATER), for the agent's next result. */
-  later?: string[];
+  /**
+   * #143: what became of those sends (HandedOver's settle), for the agent's next result: each with the token of the call
+   * that handed over (callToken), so that call's own answer never carries its outcome beside its *waits*.
+   */
+  later?: { from: object | undefined; entry: SendsLater }[];
 }
 
 /**
@@ -146,6 +149,8 @@ export interface ControlScope {
    * and the card's outcome comes with the next result (memory.later). Absent: the call waits for its cards.
    */
   readonly callDeadlineMs?: number;
+  /** #143: this call's own token (outside agents: one per tools/call), for memory.later. */
+  readonly callToken?: object;
   /** wait_for is offered (outside agents alone: Neon's round 1 of M2g-1, B-4); absent, it's refused as no such tool. */
   readonly waits?: boolean;
   /**

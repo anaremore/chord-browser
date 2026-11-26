@@ -102,6 +102,12 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
     if (Array.isArray(data['caught'])) for (const c of data['caught']) if (typeof c === 'string') caught.push(c);
     last = data;
     if (data['page_changes'] !== undefined) changes = data['page_changes'];
+    // #143: a step whose Send data card outlived the call's deadline: the batch stops there, saying what it sent waits
+    // (never dropped behind a later step's answer, and no later step on a tab that waits: Neon's B2, Opus's S1).
+    if (typeof data['sending'] === 'string') {
+      const rest = i < planned.length - 1 ? { stopped_after: i + 1, why: 'What that step sent waits for the user, so the rest didn’t run.' } : {};
+      return { text: toolResult(withNotes({ tab_id: args['tab_id'], done, sending: data['sending'], ...rest, ...(data['loading'] === true ? { loading: true } : {}), url: last['url'], title: last['title'], page_id: last['page_id'] })) };
+    }
     // A step that took the page elsewhere: the steps after it name refs of the page before.
     if (data['navigated'] === true && i < planned.length - 1) {
       return { text: toolResult(withNotes({ tab_id: args['tab_id'], done, stopped_after: i + 1, why: 'The page changed: call snapshot before the rest.', url: last['url'], title: last['title'], page_id: last['page_id'] })) };

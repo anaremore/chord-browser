@@ -1,14 +1,15 @@
 /** The control layer's acting tools (split from tools.ts, #213): click, type, press_key, select_option, hover, navigate and back. */
 import { phaseClock } from './phases';
 import { createHash, randomBytes } from 'node:crypto';
-import { ACT_SENDS_LATER, ACT_SENDS_WAITING, addressWhy, BOX_REF, VALUE_TYPES, valueFits, sentLabels, stepFields, type RiskClass, type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, actDone, actPhrase, barAddress, wholeAddress, ELEMENT_REFUSALS, sensitiveField, isPressKey, CONTROL_WAIT_MS, NAVIGATE_URL_MAX, pressKeyEvents, TYPE_TEXT_MAX, type ActDescription, type ActTool, type ElementTool, type PressKey, isNeverReadable, toolResult, type TabNode } from '@chord/core';
+import { ACT_SENDS_WAITING, addressWhy, BOX_REF, VALUE_TYPES, valueFits, sentLabels, stepFields, type RiskClass, type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, actDone, actPhrase, barAddress, wholeAddress, ELEMENT_REFUSALS, sensitiveField, isPressKey, CONTROL_WAIT_MS, NAVIGATE_URL_MAX, pressKeyEvents, TYPE_TEXT_MAX, type ActDescription, type ActTool, type ElementTool, type PressKey, isNeverReadable, toolResult, nodeOf, type TabNode } from '@chord/core';
 import type { ActAnswer, ActOp } from './act';
 import type { DeepSession } from './deep';
 import { normalUrl, type SendWatch } from './sends';
 import type { AgentInputEvent } from './input';
 import type { ToolOutput } from './scope';
 import { PART_REFUSALS } from './tools-read';
-import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, byDeadline, deepRefusal, OpenCards, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
+import { byDeadline, HandedOver, OpenCards } from './handed-over';
+import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
 import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
 
@@ -51,6 +52,8 @@ export async function withOutline(action: ToolOutput, tool: 'open_tab' | 'naviga
   if (action.isError || !action.text) return action;
   const acted = JSON.parse(action.text) as { data: Record<string, unknown> } & Record<string, unknown>;
   const noOutline = (why: string): ToolOutput => ({ text: JSON.stringify({ ...acted, data: { ...acted.data, no_outline: why } }) });
+  // #143: what the step sent waits for the user (its sends handed over): no outline, never a wait for one.
+  if (typeof acted.data['sending'] === 'string') return action;
   if (acted.data['loading'] === true) return noOutline(STILL_LOADING);
   const snap = await look();
   if (snap.isError || !snap.text) return noOutline(refusalOf(snap));
@@ -105,16 +108,28 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const takenOver = () => (scope.agent.releases(node.id) !== releasedAtStart ? ACT_REFUSALS.takenOver : null);
   const ref = scope.refs.refFor(node.id);
   /**
-   * #143: this step's Send data cards, handed over past the call's deadline (byDeadline): the tab waits on them, they go
-   * on as they would, and once they're answered the watch ends and the agent hears the outcome with its next result.
+   * #143: this step's Send data cards, past the call's deadline (byDeadline): handed over (handed-over.ts), its outcome
+   * from the cards' own end or what's live (the tab in the live store, Stop, your taking the tab, the page leaving).
    */
-  const sendsLater = (w: SendWatch, step: string) => () => {
-    scope.memory.sendsWaiting?.add(node.id);
-    return (outcome: string | null) => {
-      w.end();
-      scope.memory.sendsWaiting?.delete(node.id);
-      scope.memory.later?.push(outcome === null ? ACT_SENDS_LATER.sent(ref, step) : ACT_SENDS_LATER.notSent(ref, step, outcome));
-    };
+  const handOver = (w: SendWatch, cards: OpenCards, cardsEnd: AbortController, step: string, sending: Promise<string | null>): HandedOver => {
+    const handed = new HandedOver({
+      nodeId: node.id,
+      tab: ref,
+      tool,
+      step,
+      w,
+      cards,
+      cardsEnd,
+      memory: scope.memory,
+      from: scope.callToken,
+      live: () => (nodeOf(browser.store.state, node.id)?.kind !== 'tab' ? 'closed' : scope.agent.isStopped || call.stopped() ? 'stopped' : scope.agent.state(node.id).paused || takenOver() ? 'took-over' : null),
+      onLeave: (fn) => page.onLeave(fn),
+    });
+    void sending.then(
+      (sent) => handed.ended(sent),
+      () => handed.ended(ACT_REFUSALS.noCheck),
+    );
+    return handed;
   };
   const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false, focusTaken = false, sendsWait = false): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
@@ -124,7 +139,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     const caught = host.caught?.(node) ?? [];
     // What changed since the agent's last snapshot, after an action on an element of a page that didn't go elsewhere
     // (M2g-1: the default; not between a batch's steps).
-    let changes = !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
+    // Not while its sends wait (#143): the call's deadline holds, and the diff's read can take seconds.
+    let changes = !sendsWait && !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
     // The diff's read can take seconds (round 1 of #252, SF-2): Stop meanwhile stops it, a page that went where it may
     // not be read is refused (nothing of where), and one that went to another document is said to have, its refs
     // forgotten and no diff of the page it left. The answer's page, address and title are then all of where it is now.
@@ -274,21 +290,29 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       host.lease?.going(node, goingTo);
       let went: { loading: boolean } | null = null;
       let sent: string | null = null;
-      /** #143: the call's deadline came while its Send data card was up: the card goes on, the outcome comes later. */
-      let later = false;
+      /** #143: its Send data cards handed over past the call's deadline: they go on, the outcome comes later. */
+      let handed: HandedOver | null = null;
       const stepWords = tool === 'navigate' ? `Going to ${barAddress(target)}` : 'Going back';
       try {
         const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
         // The hold lost meanwhile (a detach, the renderer gone) is never a success (Neon's B5, round 2 of #147).
-        // Your own taking over reads as yours, before the hold's loss (Neon's S1, round 3).
-        const halt = () => (call.stopped() ? CONTROL_REFUSALS.stopped : scope.agent.state(node.id).paused ? CONTROL_REFUSALS.paused : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : null)));
-        const cards = new OpenCards();
-        const settled = await byDeadline(
-          askHeld(
+        // Your own taking over reads as yours, before the hold's loss (Neon's S1, round 3). A card's Allow counts only
+        // while the page is the document it was when the card opened (#143, Neon's B4: as an action's, below); a no or
+        // no answer stays the user's, whatever the page did meanwhile.
+        let allowedNow = false;
+        const halt = (opened?: unknown) =>
+          call.stopped()
+            ? CONTROL_REFUSALS.stopped
+            : scope.agent.state(node.id).paused
+              ? CONTROL_REFUSALS.paused
+              : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : allowedNow && opened && page.mark.document !== (opened as typeof page.mark).document ? ACT_REFUSALS.movedOn : null));
+        const cards = new OpenCards(scope.agent, node.id);
+        const cardsEnd = new AbortController();
+        const sending = askHeld(
           w,
           going,
-          cards.ask((held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) =>
-            scope.agent.ask(
+          cards.ask(async (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => {
+            const answer = await scope.agent.ask(
               {
                 kind: 'step',
                 tool,
@@ -297,31 +321,39 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
                 tab: node.id,
                 subject: JSON.stringify([node.id, tool, 'sends', randomBytes(4).toString('hex')]),
                 step: heldStep(held, sites, why, page.url(), barAddress(goingTo)),
-                takeDown,
+                // Its hand-over settled (#143): the card comes down for the user too.
+                takeDown: AbortSignal.any([takeDown, cardsEnd.signal]),
               },
-              AbortSignal.any([call.signal, w.cancelled]),
+              AbortSignal.any([call.signal, w.cancelled, cardsEnd.signal]),
               // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks; an
-              // outside agent's its full wait, never a call's budget for cards (M2g-1, B2; round 1, B-5).
+              // outside agent's its full wait (M2g-1, B2; round 1, B-5), past the call's deadline too (#143).
               scope.sendWaitMs ?? scope.cardWaitMs ?? CONTROL_WAIT_MS,
-            ),
-          ),
+            );
+            allowedNow = answer === 'once' || answer === 'always';
+            return answer;
+          }),
           halt,
           originOf(page.url()),
-          ),
-          call.deadline,
-          cards,
-          sendsLater(w, stepWords),
+          () => page.mark,
         );
-        if (settled.later) later = true;
-        else {
+        // No input to wait for: the load's own requests are what's held.
+        const settled = await byDeadline(sending, call.deadline, cards, Promise.resolve());
+        if (settled.later && !call.stopped()) handed = handOver(w, cards, cardsEnd, stepWords, sending);
+        else if (settled.later) {
+          // Stop came as it handed over: nothing waits (Opus's N2).
+          cardsEnd.abort();
+          w.deny();
+          sent = CONTROL_REFUSALS.stopped;
+        } else {
           sent = settled.sent;
           went = await going;
         }
       } finally {
-        if (!later) w.end();
+        if (!handed) w.end();
       }
-      // The page may not have gone yet (what's held can be its own document): it's under way, and waits on the user.
-      if (later) return { text: toolResult({ tab_id: ref, done: stepWords, sending: ACT_SENDS_WAITING }) };
+      // The page may not have gone yet (what's held can be its own document): under way, and waiting on the user. Never
+      // an outline with it (withOutline: `sending`).
+      if (handed) return { text: toolResult({ tab_id: ref, done: stepWords, loading: true, sending: ACT_SENDS_WAITING }) };
       if (sent) return refuse(sent);
       // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
       if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
@@ -551,8 +583,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   let watch: SendWatch | null = null;
   /** What the page sent after the agent's last action here, dropped: its result says so. */
   const droppedBefore = page.droppedAfter();
-  /** #143: the call's deadline came while a Send data card for what this step sent was up (byDeadline). */
-  let sendsWait = false;
+  /** #143: its Send data cards, handed over past the call's deadline (byDeadline, HandedOver). */
+  let handed: HandedOver | null = null;
   try {
     let refused: string | null = null;
     /** The guard's mark while it's up (agent-guard.ts): an event name only main knows. */
@@ -781,7 +813,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       return null;
     };
     /** The card for what an action's page held: its sites, or the step a document's address is (askHeld). */
-    const askSendCard = (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, w: SendWatch, takeDown: AbortSignal) =>
+    const askSendCard = (held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, w: SendWatch, takeDown: AbortSignal, ended: AbortSignal) =>
       scope.agent.ask(
         {
           kind: 'step',
@@ -796,11 +828,13 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           // Exact origins (the owner, 2026-11-23), each by its host, its scheme too where it isn't https or isn't the page's.
           step: heldStep(held, sites, why, page.url()),
           show: () => void actOn({ op: 'point', highlight: true }),
-          takeDown,
+          // Its hand-over settled (#143): the card comes down for the user too, not only for this ask.
+          takeDown: AbortSignal.any([takeDown, ended]),
         },
-        AbortSignal.any([call.signal, w.cancelled]),
+        // `ended`: its hand-over settled (#143: the page moved on, the tab closed): the card comes down.
+        AbortSignal.any([call.signal, w.cancelled, ended]),
         // It holds the page's live requests: never longer than an outside agent's card (D2), whoever asks; an outside
-        // agent's its full wait, never a call's budget for cards (M2g-1, B2).
+        // agent's its full wait, never a call's budget for cards (M2g-1, B2), past the call's deadline too (#143).
         scope.sendWaitMs ?? scope.cardWaitMs ?? CONTROL_WAIT_MS,
       );
     /** Once the watch is on: what's held from then is asked about (below). */
@@ -808,6 +842,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     const watching = new Promise<void>((done) => (watchOn = done));
     /** The page's document when the action began: a send card's Allow counts only while it's still this one. */
     const markAtStart = page.mark;
+    /** #143: the step's input done (or the step over): never a hand-over before, whose own refusal could follow. */
+    let inputOver: () => void = () => undefined;
+    const inputDone = new Promise<void>((over) => (inputOver = over));
     const acting = page.afterActing(async () => {
       const pointed = await actOn({ op: 'point', highlight: true });
       phases.lap('point');
@@ -960,7 +997,11 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       await guardedTries('keyup', pressKey('Enter'), refocus);
     },
     // Its input done (phases.ts).
-    () => phases.lap('input'));
+    () => {
+      phases.lap('input');
+      inputOver();
+    });
+    void acting.then(inputOver, inputOver);
     // The action sent data after all (an `act` step: a page's own script, a toggle that saves): held, and a card asks
     // for it, naming its sites, before the action is done (it waits on what's held): askHeld.
     if ((await Promise.race([acting.then(() => 'acted' as const), watching.then(() => 'on' as const)])) === 'on' && watch) {
@@ -975,29 +1016,52 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           : scope.agent.state(node.id).paused
             ? CONTROL_REFUSALS.paused
             : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : page.mark.document !== (opened as typeof markAtStart).document ? ELEMENT_REFUSALS.stale : null));
-      const cards = new OpenCards();
-      const settled = await byDeadline(
-        askHeld(w, acting, cards.ask((held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => askSendCard(held, sites, why, w, takeDown)), sendHalt, originOf(page.url()), () => page.mark),
-        call.deadline,
-        cards,
-        sendsLater(w, actDone(description)),
+      const cards = new OpenCards(scope.agent, node.id);
+      const cardsEnd = new AbortController();
+      const sending = askHeld(
+        w,
+        acting,
+        cards.ask((held: { url: string; why: RiskWhy | null }[], sites: string[], why: RiskWhy | null, takeDown: AbortSignal) => askSendCard(held, sites, why, w, takeDown, cardsEnd.signal)),
+        sendHalt,
+        originOf(page.url()),
+        () => page.mark,
       );
-      if (settled.later) sendsWait = true;
-      else refused ??= settled.sent;
+      const settled = await byDeadline(sending, call.deadline, cards, inputDone);
+      if (!settled.later) refused ??= settled.sent;
+      else if (refused || call.stopped()) {
+        // The step's own refusal after its input, or Stop: nothing waits on the user, its cards come down and what it
+        // sent is dropped (Neon's B3).
+        cardsEnd.abort();
+        w.deny();
+        refused ??= CONTROL_REFUSALS.stopped;
+      } else handed = handOver(w, cards, cardsEnd, actDone(description), sending);
     }
     // The hold lost during the action (a detach, the renderer gone): what it sent wasn't asked about, so never done
     // (Neon's B5, round 2 of #147).
     if (!refused && holds && page.lost()) refused = ACT_REFUSALS.noCheck;
+    if (handed) {
+      // The deadline holds (Neon's B3, Opus's S4): never the 10 s wait for the page to load after the step, nor its diff.
+      void acting.catch(() => undefined);
+      phases.lap('settle');
+      if (refused) {
+        handed.withdraw();
+        return refuse(refused);
+      }
+      const answer = await done(page.mark.document !== markAtStart.document, true, actDone(description), droppedBefore, refound, enterMovedFocus, true);
+      // Refused after all (the page went where it can't be read): nothing waits, no armed card behind an error.
+      if (answer.isError) handed.withdraw();
+      return answer;
+    }
     const { navigated, loading } = await acting;
     phases.lap('settle');
     if (deep) await (deep as DeepSession).close();
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus, sendsWait);
+    return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus);
   } finally {
     // What its page still sends from now is the tab's: held, and asked about between actions (sends.ts). Unless its
-    // cards outlived the call (#143): they end the watch themselves (sendsLater).
-    if (!sendsWait) (watch as SendWatch | null)?.end();
+    // cards were handed over (#143): their settle ends the watch.
+    if (!handed) (watch as SendWatch | null)?.end();
     if (deep) await (deep as DeepSession).close();
     host.doing(node.id, null);
   }

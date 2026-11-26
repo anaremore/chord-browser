@@ -68,49 +68,6 @@ export const PRESS_SEEN_MS = 500;
 /** Send cards in one action at most (each for sites the ones before didn't name): a page that keeps finding more is stopped. */
 const SEND_CARDS = 3;
 
-/** #143: the Send data cards a step has up now, for byDeadline: counted as askHeld asks them. */
-export class OpenCards {
-  private up = 0;
-  private waiting: (() => void)[] = [];
-  /** A card's ask, counted while it's up. */
-  ask<A extends unknown[], R>(ask: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
-    return (...args) => {
-      this.up++;
-      for (const wake of this.waiting.splice(0)) wake();
-      return ask(...args).finally(() => this.up--);
-    };
-  }
-  isUp(): boolean {
-    return this.up > 0;
-  }
-  /** Resolves when a card opens. */
-  opened(): Promise<void> {
-    return new Promise((done) => this.waiting.push(done));
-  }
-}
-
-/**
- * #143: a step's Send data cards (askHeld's), by the call's deadline. Answered by then, or none up when it comes and
- * none since: their outcome, as before (`sent`: null, or the refusal). A card up at the deadline, or one opening after
- * it: `{ later: true }` at once, and the cards go on unchanged for the user, each with its own wait; `handOver()` is
- * called then, and what it returns gets their outcome when they're done. The step has run either way: the caller answers that it did and that what it
- * sent waits (ACT_SENDS_WAITING). Never a hand-over with no card up: nothing waits on the user then.
- */
-export async function byDeadline(sending: Promise<string | null>, deadline: number | null, cards: OpenCards, handOver: () => (outcome: string | null) => void): Promise<{ later: false; sent: string | null } | { later: true }> {
-  if (deadline === null) return { later: false, sent: await sending };
-  const answered = sending.then((sent) => ({ sent }));
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const due = new Promise<'due'>((done) => (timer = setTimeout(() => done('due'), Math.max(0, deadline - Date.now()))));
-  let first = await Promise.race([answered, due]);
-  clearTimeout(timer);
-  // Past the deadline: hand over as soon as a card is up (now, or when one opens), else the cards' own outcome.
-  while (first === 'due' && !cards.isUp()) first = await Promise.race([answered, cards.opened().then(() => 'due' as const)]);
-  if (first !== 'due') return { later: false, sent: first.sent };
-  const later = handOver();
-  void sending.then(later, () => later(ACT_REFUSALS.noCheck));
-  return { later: true };
-}
-
 /**
  * What an action's page held (sends.ts), asked about until the action's done: a card for its sites, or the step a
  * document's address is (a script going to a delete address). Allow lets go what goes to the sites the card named,

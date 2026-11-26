@@ -538,7 +538,12 @@ export class AgentChords {
     if (ended) {
       for (const tab of this.tabsOf(ended)) {
         const page = this.deps.page(tab.id);
-        if (page && !page.isDestroyed()) endUntil(page);
+        if (page && !page.isDestroyed()) {
+          endUntil(page);
+          // What its tabs held for it fails, and their cards come down (#143: a step's sends handed over past its call's
+          // deadline settle as ended, never as allowed: Neon's B1).
+          failHeld(page);
+        }
       }
     }
     const chordId = this.chordOf(agent);

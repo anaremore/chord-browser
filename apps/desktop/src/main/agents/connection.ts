@@ -42,6 +42,7 @@ import { pageOf } from '../view-page';
 import type { AgentChords } from './chords';
 import { siteOfUrl, type AgentShares } from './shares';
 import { allowFirstLoad, forgetFirstLoad } from '../control/sends';
+import { takeLater } from '../control/handed-over';
 import { firstLoadPending, pickersUnsecured } from './pickers';
 import type { Send } from './endpoint';
 import { agentScope, NOT_YOURS } from './scope';
@@ -77,11 +78,12 @@ export interface ConnectionDeps {
 }
 
 /**
- * How long one call waits on cards in all (#143): the connection's, a site's and a step's can come one after another,
+ * How long one call takes in all (#143): the connection's, a site's and a step's cards can come one after another,
  * 45 s each, and a client gives up on a call before that (Codex at 60 s by default). Past it, the call answers
  * *waiting* and the card stays up: the user's Allow counts for the agent's retry of that same step (M2d's late Allow).
- * A card asked at the very end still shows, for CARD_WAIT_MIN_MS. Send data cards are never cut (scope.sendWaitMs: no
- * answer drops what the page sent).
+ * A card asked at the very end still shows, for CARD_WAIT_MIN_MS. A step's Send data cards are never cut (sendWaitMs:
+ * no answer drops what the page sent): past it, the call answers that the step ran and what it sent waits, and they
+ * go on, handed over (control/handed-over.ts).
  */
 const CALL_WAIT_MS = 50_000;
 const CARD_WAIT_MIN_MS = 1_000;
@@ -288,7 +290,11 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
   };
 
   /** #143: what became of sends whose step's call answered before their card did, since its last result: Chord's words. */
-  const later = (): { type: 'text'; text: string }[] => (scope.memory.later?.splice(0) ?? []).map((text) => ({ type: 'text', text }));
+  const later = (from: object): { type: 'text'; text: string }[] => {
+    const settled = takeLater(scope.memory, from);
+    // Inside the untrusted envelope: each step is in the page's words (Neon's B6, Opus's S3).
+    return settled.length ? [{ type: 'text', text: toolResult({ later: settled }) }] : [];
+  };
 
   /** What its tabs held since its last result, as untrusted data after it. */
   const held = (): Record<string, unknown>[] => {
@@ -314,7 +320,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const started = Date.now();
     const cardWait = () => Math.min(waitMs, Math.max(CARD_WAIT_MIN_MS, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)));
     // #143: the whole call answers by CALL_WAIT_MS, Send data cards included (they go on after it, for the user).
-    const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait }, callDeadlineMs: { get: () => Math.max(0, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)) } });
+    const callToken = {};
+    const callScope: typeof scope = Object.create(scope, { cardWaitMs: { get: cardWait }, callDeadlineMs: { get: () => Math.max(0, (deps.callWaitMs ?? CALL_WAIT_MS) - (Date.now() - started)) }, callToken: { value: callToken }, sendWaitMs: { value: waitMs } });
     // Progress, when the client asked for it (MCP's progressToken, a string or a number, bounded): every PROGRESS_MS
     // until the answer or the client's cancel, saying whether a card this call waits on is up: one for its tab, or the
     // agent-wide one (the connection's) (#143; Neon's review of M2g-1, S4).
@@ -361,7 +368,8 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
       );
       const answer = output(out);
       if (beat) clearInterval(beat);
-      const result = { ...answer, content: [...answer.content, ...held(), ...later()] };
+      // What settled since the agent's last result: never this call's own hand-over, whose answer says it waits.
+      const result = { ...answer, content: [...answer.content, ...held(), ...later(callToken)] };
       // What the result costs the agent, by tool (the owner, 2026-11-24: as few tokens as can be): in the log, and kept
       // for the eval journeys (phases.ts).
       // A picture by its pixels, not its bytes (a model sees the image, never its base64).
