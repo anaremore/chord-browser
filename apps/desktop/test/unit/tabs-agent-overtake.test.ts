@@ -208,6 +208,26 @@ describe('an agent tab’s first page overtaken, or stopped (#277, round 1 of #2
     expect(pickers.pickersLost(t.page)).toBe(false);
   });
 
+  it('Reload while it waits for its session, or while it’s primed (round 1 of #292, Opus’s N1): its hold stays on, its first page loads', async () => {
+    let open = () => {};
+    const gate = new Promise<void>((r) => (open = r));
+    const t = setup(gate);
+    await settle();
+    t.manager.reload(t.page as never);
+    expect(pickers.pickersLost(t.page)).toBe(false);
+    expect(pickers.firstLoadPending(t.page)).toBe(true);
+    const bypass = hold('Page.addScriptToEvaluateOnNewDocument');
+    open();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank']);
+    // Primed now: Reload again, still left alone.
+    t.manager.reload(t.page as never);
+    bypass();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    expect(pickers.pickersLost(t.page)).toBe(false);
+  });
+
   it('Stop once its first page has started loading: only the page’s own Stop, the hold stays on', async () => {
     const t = setup();
     await settle();

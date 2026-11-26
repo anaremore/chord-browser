@@ -30,6 +30,8 @@ export interface ContextMenuDeps {
   navigates?(going: 'back' | 'forward' | 'reload'): void;
   /** Its Reload, where the page is a tab's (tabs.reload: one stopped before it ever loaded loads its address, #287). */
   reload?(): void;
+  /** Its Back and Forward, where the page is a tab's (tabs.go: a load waiting for its session is dropped first, #292). */
+  go?(way: 'back' | 'forward'): void;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
   extensionItems?(params: ContextMenuParams): MenuItem[];
   /**
@@ -123,7 +125,8 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
         enabled: history.canGoBack(),
         click: () => {
           deps.navigates?.('back');
-          history.goBack();
+          if (deps.go) deps.go('back');
+          else history.goBack();
         },
       },
       {
@@ -131,7 +134,8 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
         enabled: history.canGoForward(),
         click: () => {
           deps.navigates?.('forward');
-          history.goForward();
+          if (deps.go) deps.go('forward');
+          else history.goForward();
         },
       },
       {

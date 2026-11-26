@@ -147,6 +147,46 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.page.reload).toHaveBeenCalledOnce();
   });
 
+  it('Reload while a navigation waits for its session (round 1 of #292, SF3): that load is dropped, then the page reloads', async () => {
+    const rules = held();
+    const t = setup([]);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    rules.over = false;
+    const waits = [rules];
+    // The session waits again (its proxy set anew), and a navigation is queued behind it.
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => waits.find((w) => !w.over)?.promise ?? null;
+    t.manager.navigate(NODE, SECOND);
+    t.manager.reload(t.page as never);
+    expect(t.page.reload).toHaveBeenCalledOnce();
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).not.toContain(SECOND);
+  });
+
+  it('Hard Reload (round 1 of #292, SF2): the same, ignoring the cache; a page that never loaded loads its address', async () => {
+    const t = setup([]);
+    const page = t.page as unknown as { reloadIgnoringCache: ReturnType<typeof vi.fn> };
+    page.reloadIgnoringCache = vi.fn();
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    t.manager.reload(t.page as never, { ignoreCache: true });
+    expect(page.reloadIgnoringCache).toHaveBeenCalledOnce();
+    expect(t.page.reload).not.toHaveBeenCalled();
+    Object.assign(t.page.navigationHistory, { length: () => 0 });
+    t.page.loadURL.mockClear();
+    t.manager.reload(t.page as never, { ignoreCache: true });
+    expect(t.loaded()).toEqual([FIRST]);
+  });
+
+  it('Reload while the tab’s own first load still waits (round 1 of #292, Opus’s N1): left alone, it loads once', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    t.manager.reload(t.page as never);
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([FIRST]);
+    expect(t.page.reload).not.toHaveBeenCalled();
+  });
+
   it('Reload after Stop while it was primed (#287): a history of only the blank page is no history, so its address loads', () => {
     const t = setup([]);
     const history = t.page.navigationHistory as unknown as { length: () => number; getEntryAtIndex: (i: number) => { url: string } | null };

@@ -571,6 +571,7 @@ export class Browser {
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
           navigates: (going) => this.userNavigates?.(contents, going),
           reload: () => this.tabs.reload(contents),
+          go: (way) => this.tabs.go(contents, way),
           adBlocking: this.blockingMenu(contents),
           screenshot: () => {
             const w = this.windowFor(contents);
@@ -1951,8 +1952,7 @@ export class Browser {
         if (page) this.reloadPage(page);
         return true;
       case 'nav.hardReload':
-        if (page) this.userNavigates?.(page);
-        page?.reloadIgnoringCache();
+        if (page) this.reloadPage(page, { ignoreCache: true });
         return true;
       case 'app.quit':
         app.quit();
@@ -2293,9 +2293,18 @@ export class Browser {
    * the page (an agent's tab is yours from here), and a page stopped before it ever loaded loads its tab's address
    * rather than reloading nothing (tabs.reload, #287).
    */
-  private reloadPage(contents: WebContents): void {
+  private reloadPage(contents: WebContents, options: { ignoreCache?: boolean } = {}): void {
     this.userNavigates?.(contents);
-    this.tabs.reload(contents);
+    this.tabs.reload(contents, options);
+  }
+
+  /**
+   * Your Back or Forward, from the keys or the app menu (the toolbar's and the page menu's go the same way): it moves the
+   * page, and a load still waiting for its session is dropped first (tabs.go, round 1 of #292, SF1).
+   */
+  private goPage(contents: WebContents, way: 'back' | 'forward'): void {
+    this.userNavigates?.(contents, way);
+    this.tabs.go(contents, way);
   }
 
   openAppMenu(contents: WebContents, anchor: Rect): void {
@@ -2855,20 +2864,13 @@ export class Browser {
         if (pageContents) this.reloadPage(pageContents);
         return true;
       case 'nav.hardReload':
-        if (pageContents) this.userNavigates?.(pageContents);
-        pageContents?.reloadIgnoringCache();
+        if (pageContents) this.reloadPage(pageContents, { ignoreCache: true });
         return true;
       case 'nav.back':
-        if (pageContents?.navigationHistory.canGoBack()) {
-          this.userNavigates?.(pageContents, 'back');
-          pageContents.navigationHistory.goBack();
-        }
+        if (pageContents?.navigationHistory.canGoBack()) this.goPage(pageContents, 'back');
         return true;
       case 'nav.forward':
-        if (pageContents?.navigationHistory.canGoForward()) {
-          this.userNavigates?.(pageContents, 'forward');
-          pageContents.navigationHistory.goForward();
-        }
+        if (pageContents?.navigationHistory.canGoForward()) this.goPage(pageContents, 'forward');
         return true;
       case 'view.fullscreen':
         w.window.setFullScreen(!w.window.isFullScreen());

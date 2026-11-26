@@ -173,15 +173,22 @@ export class TabManager {
    * Your Reload (round 1 of #282): a page that never loaded (stopped while it waited for its session) has nothing to
    * reload, so its tab's address loads, as a navigation; any other page reloads.
    */
-  reload(contents: WebContents): void {
+  reload(contents: WebContents, options: { ignoreCache?: boolean } = {}): void {
     const nodeId = this.nodeFor(contents);
     const node = nodeId ? nodeOf(this.deps.state(), nodeId) : undefined;
     const history = contents.navigationHistory;
     // An agent tab stopped while primed has only its blank page, which is never the tab's (#287).
     const never = history.length() === 0 || (history.length() === 1 && history.getEntryAtIndex(0)?.url === 'about:blank');
-    if (nodeId && node?.kind === 'tab' && never) return this.navigate(nodeId, node.url);
+    if (nodeId && node?.kind === 'tab' && never) {
+      // Its own first load still on its way (waiting for its session, or an agent tab being primed): left alone, it
+      // loads the tab's address anyway, and an agent tab keeps its hold (Opus's N1, round 1 of #292).
+      if (this.waiting.has(contents) || this.priming.has(contents)) return;
+      return this.navigate(nodeId, node.url);
+    }
     this.stopWaiting(contents);
-    contents.reload();
+    // Hard Reload too (round 1 of #292, SF2).
+    if (options.ignoreCache) contents.reloadIgnoringCache();
+    else contents.reload();
   }
 
   /**
