@@ -27,8 +27,10 @@ describe('chord-data', () => {
   // A new profile's first launch creates chord.db and every table in it. In one transaction since 2026-11-20, not one
   // per migration (db.test.ts counts the commits). Beside it, report only: the migrations alone, both ways, so every
   // runner shows what the change is worth on its disk. On a Windows desk (NTFS, NVMe): the open's median 31 → 26 ms,
-  // the migrations 20 → 17 ms, or 37 → 19 ms with each commit synced (`synchronous = FULL`). The budget is ten times
-  // the desk's, for a runner's disk.
+  // the migrations 20 → 17 ms, or 37 → 19 ms with each commit synced (`synchronous = FULL`). The budget, 250 ms, is
+  // ten times the desk's: held on Linux (the checks job) and on reference hardware (CHORD_PERF_ENFORCE=1). CI's Windows
+  // runners only report it, as they do the big Undo: their disks vary too much for a budget (260 ms on a busy one,
+  // 2026-11-25; #243). A regression shows on Linux and on the desk.
   it('creates a new profile’s database', () => {
     const times = { open: [] as number[], one: [] as number[], each: [] as number[], eachSynced: [] as number[], oneSynced: [] as number[] };
     const migrate = (name: string, each: boolean, sync: 'NORMAL' | 'FULL') => {
@@ -73,7 +75,9 @@ describe('chord-data', () => {
         `  each commit synced: in one ${say(times.oneSynced)}; one each ${say(times.eachSynced)}`,
       ].join('\n'),
     );
-    expect(median(times.open)).toBeLessThan(250);
+    const held = process.platform !== 'win32' || ENFORCE;
+    console.log(`new database's 250 ms budget: ${held ? 'held' : 'reported, not held (Windows without CHORD_PERF_ENFORCE=1)'}`);
+    if (held) expect(median(times.open)).toBeLessThan(250);
   });
 
   // From import.test.ts: 10,000 pages and their 50,000 visits undone in under 5 s (1.3 s on a Windows desk).
