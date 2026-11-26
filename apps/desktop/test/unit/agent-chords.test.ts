@@ -193,6 +193,20 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     expect(tab.how(sent)).not.toBe('Fetch.continueRequest');
   });
 
+  it('Chord quitting (dispose): what its tabs held fails at once, before the pages go; nothing’s left to resume (#322’s SF3)', async () => {
+    for (const between of [true, false]) {
+      const t = setup([], unanswered);
+      const tab = held(t, 'a1');
+      const w = between ? null : watchSends(tab.contents, null)!;
+      const sent = tab.send();
+      await tick();
+      expect(tab.how(sent), String(between)).toBe('held');
+      t.chords.dispose();
+      expect(tab.how(sent), String(between)).toBe('Fetch.failRequest');
+      if (w) expect(w.cancelled.aborted).toBe(true);
+    }
+  });
+
   const show = (t: ReturnType<typeof setup>, nodeId: string) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId });
 
   // [what you did, whether a window shows the tab, where it takes the page]

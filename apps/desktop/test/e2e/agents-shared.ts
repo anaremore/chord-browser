@@ -147,6 +147,10 @@ export async function agentsSettings(app: ElectronApplication, shell: Page): Pro
 
 /** What reached the test site that changes something (S18 M2d): each form posted, each delete address asked for. */
 export const reached: string[] = [];
+/** Every request the test site got, by host and path (#115: what Chord's own fetches ask, a favicon's). */
+export const asked: string[] = [];
+/** #322's N5: the Cookie header each own-origin icon fetch came with ('' for none). */
+export const iconCookies: string[] = [];
 
 /** Each slot's Delete button, replaced by a new node every 100 ms (a redraw): a ref's node is gone soon after the snapshot. */
 const TWIN_SCRIPT =
@@ -483,6 +487,15 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       'if (new URLSearchParams(location.search).get("twins")) document.querySelector("ul").append(document.querySelector("ul li").cloneNode(true));' +
       'setInterval(() => { n--; if (replace) { for (const li of document.querySelectorAll("ul li")) li.innerHTML = "<span>Lot 7 ends in <b>" + n + "</b> s</span> <button>Bid</button>"; return; } document.getElementById("t").textContent = n; document.getElementById("u").textContent = n; }, every);' +
       'document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) document.getElementById("log").textContent += " " + b.textContent; });</script>',
+    // #115 (M1): an agent's page naming another origin's icon first, then its own; one whose own icon redirects away.
+    '/icons-other': '<title>Icons</title><script>const add = (href) => { const l = document.createElement("link"); l.rel = "icon"; l.href = href; document.head.append(l); }; add(location.origin.replace("127.0.0.1", "localhost") + "/fav-other.png"); add("/fav-own.png");</script><p>Icons</p>',
+    '/icons-redirect': '<title>Icons</title><link rel="icon" href="/fav-redirect"><p>Icons</p>',
+    // #322's N5: a page with a cookie of its own origin, then its own icon: fetched with no cookies.
+    '/icons-cookie': '<title>Icons</title><script>document.cookie = "sid=agent-secret; path=/"; const l = document.createElement("link"); l.rel = "icon"; l.href = "/fav-cookie.png"; document.head.append(l);</script><p>Icons</p>',
+    // #115 (M4): a send that goes after the action's answer (a timer), so its card comes between actions.
+    '/later-send': '<title>Later</title><main><button onclick="setTimeout(() => fetch(location.origin.replace(\'127.0.0.1\', \'localhost\') + \'/later-post\', { method: \'POST\', body: \'x\', keepalive: true }).catch(() => {}), 1500)">Save later</button></main>',
+    // #322 (Opus's N1): a page that sends as it's clicked: held by the click's own card, mid-action.
+    '/now-send': '<title>Now</title><main><button onclick="fetch(location.origin.replace(\'127.0.0.1\', \'localhost\') + \'/now-post\', { method: \'POST\', body: \'x\', keepalive: true }).catch(() => {})">Save now</button></main>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
@@ -510,6 +523,13 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
   };
   const server = createServer((req, res) => {
     const thirdOrigin = `http://localhost:${(server.address() as AddressInfo).port}`;
+    asked.push(`${String(req.headers.host).split(':')[0]} ${req.url}`);
+    // #115 (M1): icons. One of the page's own origin that redirects to another origin; the others, plain pictures.
+    if (req.url === '/fav-redirect') return void (res.writeHead(302, { location: `${thirdOrigin}/fav-target.png` }), res.end());
+    if (req.url === '/fav-cookie.png') iconCookies.push(String(req.headers.cookie ?? ''));
+    if (req.url === '/fav-own.png' || req.url === '/fav-other.png' || req.url === '/fav-target.png' || req.url === '/fav-cookie.png') {
+      return void (res.writeHead(200, { 'content-type': 'image/png' }), res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')));
+    }
     // #112 review 2: an allowed POST that a 307 sends on to another site, with its body.
     if (req.method === 'POST' && req.url === '/redir307') {
       reached.push('POST /redir307');

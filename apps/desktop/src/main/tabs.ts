@@ -4,7 +4,7 @@
  * sleep: its page closes, and its back/forward history (scroll position
  * included) comes back when it's shown again.
  */
-import { countShows, isCrossSite, isInternalUrl, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
+import { countShows, isCrossSite, isInternalUrl, isNeverReadable, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
 import { isAgentInput } from './control/input';
 import { noteUserTab, userTabCatching, userTabCopied } from './control/user-watch';
 import type { NavState } from '@chord/data';
@@ -14,6 +14,8 @@ import { windowIcon } from './app-icon';
 import { trimNavState } from './nav';
 import { platform } from './platform';
 import { pageCall } from './page-call';
+import { failHeld } from './control/sends';
+import { pickFavicon } from './favicon-pick';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
 import { holdFilePickers, bypassServiceWorkers, firstLoadPending, holdFailed, setFirstLoadPending } from './agents/pickers';
@@ -578,6 +580,9 @@ export class TabManager {
   destroy(nodeId: NodeId): void {
     const view = this.views.get(nodeId);
     const contents = pageOf(view);
+    // What its hold holds fails first, while the debugger that holds it is still on (#115, SF1: a held send never
+    // resumed by the close; the agent's letGo, later, finds no page).
+    if (contents && !contents.isDestroyed()) failHeld(contents);
     // A page's close takes a moment: a load waiting for its session never starts in it (Neon's SF2, round 1 of #292).
     if (contents) this.stopWaiting(contents);
     this.views.delete(nodeId);
@@ -602,6 +607,8 @@ export class TabManager {
     // A page being closed (a pinned tab unloading) still fires a few events on its way out.
     // Only the tab's current page may report, or a late event would mark it loaded again.
     const current = () => !contents.isDestroyed() && this.views.get(nodeId)?.webContents === contents;
+    // The tab's page, or its floating page's (Peek, a mini window): whose favicon it may still load.
+    const ours = () => current() || (!contents.isDestroyed() && this.floating.get(nodeId)?.view.webContents === contents);
     const dispatch = (command: Command) => {
       if (current()) this.deps.dispatch(command);
     };
@@ -680,7 +687,7 @@ export class TabManager {
       dispatch({ t: 'tab.updated', nodeId, title });
       if (reportsHistory()) this.deps.onTitle(contents.getURL(), title, nodeId);
     });
-    contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons));
+    contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons, agentPage, ours));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
     // An agent's tab (S18): a dialog or file picker its preload held, for the agent's next result. Any frame's.
     contents.ipc.on('page:agentHeld', (event, raw: unknown) => {
@@ -827,18 +834,28 @@ export class TabManager {
    * as data: URLs, and remember each for its site. An icon that can't be had
    * changes nothing: the tab keeps the one it has (its site's, or the monogram).
    */
-  private async loadFavicon(nodeId: NodeId, contents: WebContents, favicons: string[]): Promise<void> {
-    const url = favicons.find((u) => /^(https?|data):/i.test(u));
-    if (!url) return;
+  /**
+   * `agent` is the page's kind as wire() latched it, never the tab's now (#322's B2: a kept or closing tab is no longer
+   * an agent's, but its page's late events are still that page's); `ours` whether the page is still the tab's (or its
+   * floating page's).
+   */
+  private async loadFavicon(nodeId: NodeId, contents: WebContents, favicons: string[], agent: boolean, ours: () => boolean): Promise<void> {
+    if (!ours()) return;
     // The page this icon is for: by the time it's fetched, the tab may be on another site.
     const page = contents.getURL();
+    // An agent's tab (#115, B1): only a data: or own-origin icon, with no credentials and no redirect; none on a Never
+    // site (favicon-pick.ts).
+    const never = (url: string) => isNeverReadable(url, this.deps.state().settings?.assistant?.neverSites ?? []);
+    const picked = pickFavicon(favicons, page, { agent, never });
+    if (!picked) return;
+    const { url } = picked;
     const session = contents.session;
     let icon: string | null = null;
     try {
-      if (url.startsWith('data:')) {
+      if (/^data:/i.test(url)) {
         if (usableDataIcon(url, MAX_FAVICON_BYTES)) icon = url;
       } else {
-        const response = await contents.session.fetch(url, { signal: AbortSignal.timeout(8000) });
+        const response = await contents.session.fetch(url, { ...picked.init, signal: AbortSignal.timeout(8000) });
         const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim();
         const bytes = response.ok && /^image\//.test(type) ? Buffer.from(await response.arrayBuffer()) : null;
         if (bytes && bytes.length > 0 && bytes.length <= MAX_FAVICON_BYTES) icon = `data:${type};base64,${bytes.toString('base64')}`;
@@ -847,8 +864,10 @@ export class TabManager {
       // Unreachable: the tab keeps the icon it has.
     }
     if (!icon) return;
+    // An agent's page closed meanwhile, or gone on to a Never site: never kept (#322's SF2).
+    if (agent && (contents.isDestroyed() || never(contents.getURL()))) return;
     this.rememberIcon(session, page, icon);
-    if (contents.isDestroyed() || siteOf(contents.getURL()) !== siteOf(page)) return;
+    if (!ours() || siteOf(contents.getURL()) !== siteOf(page)) return;
     this.deps.dispatch({ t: 'tab.updated', nodeId, favicon: icon });
   }
 }

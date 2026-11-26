@@ -21,6 +21,7 @@ import { pickersLost, pickersUnsecured, retryPickers } from '../agents/pickers';
 import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './sends';
 import { userLeaseLost } from './user-watch';
 import { pageCall } from '../page-call';
+import { windowShown } from '../window-shown';
 import { sendAgentInput, type AgentInputEvent } from './input';
 import { pageShows, readBoxPage, snapshotPage, waitInPage, type BoxAnswer, type WaitAnswer, type WaitFor } from './snapshot';
 
@@ -416,9 +417,12 @@ async function focusedPage(): Promise<Focus> {
  * page brings its window forward, on macOS too: Claude's reviews 7 and 8 of #110). When it isn't in front, coming
  * back to it gives the focus to the page you see (window.ts' keepFocusOffParked), never the agent's.
  */
-export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P): P | null {
+export function focusToGiveBack<P>(before: { page: P | null; window: object | null }, now: { page: P | null; window: object | null }, agent: P, shown: { stillShown: boolean; page: P | null } = { stillShown: true, page: null }): P | null {
   if (!before.page || before.page === agent || !before.window || now.window !== before.window) return null;
-  return now.page === null || now.page === agent ? before.page : null;
+  if (now.page !== null && now.page !== agent) return null;
+  // The page that had it, only while the window still shows it (#115, B2: you switched tabs meanwhile). Else the page it
+  // shows, never left on the agent's hidden tab, nor on nothing.
+  return shown.stillShown ? before.page : shown.page;
 }
 
 /**
@@ -428,6 +432,18 @@ export function focusToGiveBack<P>(before: { page: P | null; window: object | nu
  * yours you went to meanwhile keeps it.
  */
 async function giveBackFocus(contents: WebContents, yours: Focus): Promise<void> {
-  const back = focusToGiveBack(yours, await focusedPage(), contents);
+  const now = await focusedPage();
+  const back = focusToGiveBack(yours, now, contents, shownFor(yours.page, windowShown(yours.window)));
   if (back && !back.isDestroyed()) back.focus();
+}
+
+/**
+ * Whether the page that had the focus is still shown in its window, and the page that window shows, read together after
+ * the action. A page closed meanwhile is never still shown (#322's B1: you closed it; the focus goes to the page you
+ * see, never left on the agent's hidden tab).
+ */
+export function shownFor<P extends { isDestroyed(): boolean }>(page: P | null, shown: { seen(page: P): boolean; page(): P | null } | null): { stillShown: boolean; page: P | null } {
+  if (page?.isDestroyed()) return { stillShown: false, page: shown?.page() ?? null };
+  const stillShown = !shown || !page || shown.seen(page);
+  return { stillShown, page: shown?.page() ?? null };
 }
