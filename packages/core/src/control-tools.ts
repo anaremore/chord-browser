@@ -350,7 +350,12 @@ export function pageResult(page: {
   const clean = cleanPageText(page.text);
   const start = Math.max(0, Math.min(page.start ?? 0, clean.length));
   const length = Math.max(1, Math.min(page.length ?? ASSISTANT_READ_MAX, ASSISTANT_READ_MAX));
-  const content = clean.slice(start, start + length);
+  // Never half a surrogate pair at the cut (round 1 of #252, N-1): it ends before the pair, or, when that would leave
+  // nothing, after it (reading on never stalls).
+  let end = Math.min(clean.length, start + length);
+  const high = (i: number) => i >= 0 && i < clean.length && clean.charCodeAt(i) >= 0xd800 && clean.charCodeAt(i) <= 0xdbff;
+  if (end < clean.length && high(end - 1)) end = end - 1 > start ? end - 1 : end + 1;
+  const content = clean.slice(start, end);
   let origin: string;
   try {
     origin = new URL(page.url).origin;

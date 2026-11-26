@@ -173,3 +173,16 @@ describe('The tools both front doors offer', () => {
     }
   });
 });
+
+describe('read_tab’s ranges never split a character (round 1 of #252, N-1)', () => {
+  const range = (text: string, start: number, length: number) => JSON.parse(pageResult({ ref: 't1', url: 'https://e.test/', text, start, length, retrievedAt: 0 })) as { content: string; range: { start: number; end: number } };
+  it('a cut that would fall inside a surrogate pair ends before it, and the next range starts with the whole character', () => {
+    const text = `${'a'.repeat(9)}😀${'b'.repeat(5)}`;
+    const first = range(text, 0, 10);
+    expect(first.content).toBe('a'.repeat(9));
+    expect(first.range.end).toBe(9);
+    expect(range(text, first.range.end, 10).content).toBe(`😀${'b'.repeat(5)}`);
+    // A range of one character that is a pair: the whole pair, never nothing (reading on never stalls).
+    expect(range('😀z', 0, 1).content).toBe('😀');
+  });
+});

@@ -24,6 +24,13 @@ afterEach(() => vi.useRealTimers());
 /** Tabs of yours whose lease was lost (control/user-watch.ts: a detach, the renderer gone), as page.lost() and deep.held() ask. */
 const leaseLost = vi.hoisted(() => new WeakSet<object>());
 vi.mock('../../src/main/control/user-watch', async (actual) => ({ ...(await actual<Record<string, unknown>>()), userLeaseLost: (contents: object) => leaseLost.has(contents) }));
+/** A PDF's pages, when a test gives them (round 1 of #252): else the real extraction. */
+const pdfPages = vi.hoisted(() => ({ pages: null as string[] | null }));
+vi.mock('../../src/main/control/pdf', async (actual) => {
+  const real = await actual<{ extractPdf: (...a: unknown[]) => Promise<unknown> }>();
+  return { ...real, extractPdf: (...a: unknown[]) => (pdfPages.pages ? Promise.resolve({ pages: pdfPages.pages, totalPages: pdfPages.pages.length }) : real.extractPdf(...a)) };
+});
+afterEach(() => void (pdfPages.pages = null));
 /** An outside agent's tab whose hold was lost (agents/pickers.ts), and whether trying again gets it back. */
 const pickers = vi.hoisted(() => ({ lost: new WeakSet<object>(), retries: 0 }));
 vi.mock('../../src/main/agents/pickers', async (actual) => ({
@@ -486,9 +493,31 @@ describe('The tools, through the gate', () => {
       ['an outside agent, one character', AGENT_READ_DEFAULT, { length: 1 }, { start: 0, end: 1, total: 50_000 }],
       ['an outside agent, past the end', AGENT_READ_DEFAULT, { start: 60_000 }, { start: 50_000, end: 50_000, total: 50_000 }],
       ['the assistant, no length', undefined, {}, { start: 0, end: 40_000, total: 50_000 }],
+      // Never a way past the default or the minimum (round 1 of #252, SF-1): length 0 is one character; a length that
+      // isn't a number is none asked for; a fraction is its whole part; so is a start.
+      ['an outside agent, length 0', AGENT_READ_DEFAULT, { length: 0 }, { start: 0, end: 1, total: 50_000 }],
+      ['an outside agent, length NaN', AGENT_READ_DEFAULT, { length: Number.NaN }, { start: 0, end: 20_000, total: 50_000 }],
+      ['an outside agent, length Infinity', AGENT_READ_DEFAULT, { length: Number.POSITIVE_INFINITY }, { start: 0, end: 20_000, total: 50_000 }],
+      ['an outside agent, length 2.7', AGENT_READ_DEFAULT, { length: 2.7 }, { start: 0, end: 2, total: 50_000 }],
+      ['an outside agent, start 10.7', AGENT_READ_DEFAULT, { start: 10.7, length: 5 }, { start: 10, end: 15, total: 50_000 }],
+      ['an outside agent, start NaN', AGENT_READ_DEFAULT, { start: Number.NaN, length: 5 }, { start: 0, end: 5, total: 50_000 }],
     ];
     for (const [who, readDefault, args, expected] of table) expect(await range(readDefault, args), who).toEqual(expected);
     expect(AGENT_READ_DEFAULT).toBe(20_000);
+  });
+
+  it('a PDF reads as a page does: an outside agent’s 20000 when it asks for none, the assistant’s 40000, length 0 one character (round 1 of #252, SF-1 and SF-3)', async () => {
+    pdfPages.pages = ['abcdefghij'.repeat(5_000)];
+    const pdf = async () => ({ title: 'Guide', url: 'https://news.test/a', contentType: 'application/pdf', text: '', selection: '' });
+    const range = async (readDefault: number | undefined, args: Record<string, unknown> = {}) => {
+      const t = setup({ read: pdf });
+      if (readDefault !== undefined) (t.scope as { readDefault?: number }).readDefault = readDefault;
+      const out = JSON.parse((await t.call('read_tab', { tab_id: t.scope.refs.refFor('n1'), ...args })).text!) as { range: { start: number; end: number } };
+      return out.range.end - out.range.start;
+    };
+    expect(await range(AGENT_READ_DEFAULT)).toBe(20_000);
+    expect(await range(undefined)).toBe(40_000);
+    expect(await range(AGENT_READ_DEFAULT, { length: 0 })).toBe(1);
   });
 
   it('lists the scope’s tabs with refs that last', async () => {
@@ -1447,6 +1476,40 @@ describe('acting through the gate (S18 M2c)', () => {
       twist.read = {};
       expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'], JSON.stringify(read)).toBeUndefined();
     }
+  });
+
+  it('a navigation landing while the diff is read: navigated, its refs forgotten, the note, and no diff of the page it left (round 1 of #252, SF-2)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    const before = (JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { page_id: string }).page_id;
+    // The page goes to another document as the diff reads it.
+    twist.read = { extra: [{ depth: 0, role: 'button', name: 'Open late', key: 9, sid: 10 }], meanwhile: (events) => events.emit('did-navigate') };
+    const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+    expect(out.data).toMatchObject({ navigated: true, note: 'The page changed: call snapshot again before using refs from before.' });
+    expect(out.data['page_id']).not.toBe(before);
+    expect(out.data['page_changes']).toBeUndefined();
+    // Its refs went with the page.
+    expect(t.scope.memory.elements!.get('n1')!.resolve('e1', out.data['page_id'] as string).ok).toBe(false);
+  });
+
+  it('a Never site landing while the diff is read: refused, nothing of where it went, and Stop meanwhile stops it (round 1 of #252, SF-2)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    twist.read = {
+      meanwhile: (events) => {
+        t.at.url = 'https://private.test/inbox';
+        events.emit('did-navigate');
+      },
+    };
+    const out = await t.call('hover', { tab_id: t.tab, ref: 'e1' });
+    expect(out.isError).toBe(true);
+    expect(refusal(out).refused).toBe('This page can never be read (a private window, a Chord page, or a site the user keeps private).');
+    expect(out.text).not.toContain('private.test');
+    // Stop while the diff is read: stopped, not done.
+    const stopping: Twist = {};
+    const u = await acting({ twist: stopping });
+    stopping.read = { meanwhile: () => void u.agent.stop() };
+    expect(refusal(await u.call('hover', { tab_id: u.tab, ref: 'e1' })).refused).toBe(CONTROL_REFUSALS.stopped);
   });
 
   it('an action’s answer says its page and address once: page_changes keeps its own only where they differ (S18 M2g-2, #206)', async () => {
