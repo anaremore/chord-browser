@@ -17,8 +17,12 @@
  * - **A move that fails** (a locked file, a full disk, any error but "not there") leaves that profile on its old folder
  *   this launch, through `fallbackPartition` (a Session of its own), and its old folder is then occupied: nothing moves
  *   into it. It stays on the list, and the next launch tries again.
+ * - **Off the list as each moves** (`onMoved`, awaited before the next starts): a launch that dies mid-chain leaves
+ *   listed only what hasn't moved, so the next never takes a moved profile's new folder for its old one. If that write
+ *   fails, the sign-ins are in their new folder all the same (no fallback); the old folder is occupied for the rest of
+ *   the launch, and next launch it's gone, so the lingering row moves nothing (Neon's B1-R2 on #329).
  */
-import { cp, readdir, rename, rm, stat } from 'node:fs/promises';
+import { cp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { DEFAULT_PROFILE, isId, isPrivateProfile, profilePartition } from '@chord/core';
 
@@ -29,9 +33,22 @@ export interface PartitionFs {
   rename: typeof rename;
   cp: typeof cp;
   stat: typeof stat;
+  writeFile: typeof writeFile;
 }
 
-const realFs: PartitionFs = { readdir, rm, rename, cp, stat };
+const realFs: PartitionFs = { readdir, rm, rename, cp, stat, writeFile };
+
+/** Development and tests only (CHORD_E2E_PARTITION_MOVE_FAIL): the file system, with `profileId`'s copy and rename failing. */
+export function partitionFsFailingFor(profileId: string): PartitionFs {
+  const target = partitionFolder(profilePartition(profileId));
+  const theirs = (to: unknown) => basename(String(to)) === target || basename(String(to)) === `${STAGING}${target}`;
+  const refuse = () => Promise.reject(Object.assign(new Error(`EBUSY: ${profileId}'s move held (CHORD_E2E_PARTITION_MOVE_FAIL)`), { code: 'EBUSY' }));
+  return {
+    ...realFs,
+    cp: ((from: string, to: string, options: unknown) => (theirs(to) ? refuse() : cp(from, to, options as never))) as typeof cp,
+    rename: ((from: string, to: string) => (theirs(to) ? refuse() : rename(from, to))) as typeof rename,
+  };
+}
 
 /** Chromium's caches in a partition: made again as pages load, so a copy leaves them behind. */
 const CACHES = new Set(['Cache', 'Code Cache', 'GPUCache', 'DawnWebGPUCache', 'GrShaderCache']);
@@ -48,6 +65,9 @@ export const partitionFolder = (partition: string): string => partition.replace(
  */
 export const fallbackPartition = (profileId: string): string => `persist:P-${profileId}`;
 
+/** A fallback whose old folder another Session uses this launch: kept in memory, so it never shares the folder. */
+export const inMemoryFallback = (profileId: string): string => `P-${profileId}`;
+
 /** A profile whose sign-ins are kept apart, by an id a folder can be named from (never `..` or a path). */
 const ownProfile = (id: string): boolean => id !== DEFAULT_PROFILE && isId(id) && !isPrivateProfile(id);
 
@@ -58,15 +78,41 @@ export interface PartitionMoves {
   moved: string[];
 }
 
+/** Written into a new folder before it gets its name: whose it is, so a later launch knows it moved (Opus on #329). */
+export const MOVED_MARKER = '.chord-moved';
+
 /**
  * Moves the listed profiles' sign-ins (`moves`, migration 25's list) to their partitions' folders. `inUse`: every
- * profile a session may be made for this launch (chords' and extensions'); a listed one not in use is left listed.
+ * profile a session may be made for this launch (chords' and extensions'). A listed one not in use counts as moved
+ * (its sign-ins are no chord's, and the cleanup deletes them): one that comes back later never takes a twin's.
+ * `onMoved` takes a profile off the list, awaited as each moves, before the next starts.
  */
-export async function migratePartitions(userData: string, moves: Iterable<string>, inUse: Iterable<string>, fs: PartitionFs = realFs): Promise<PartitionMoves> {
+export async function migratePartitions(
+  userData: string,
+  moves: Iterable<string>,
+  inUse: Iterable<string>,
+  fs: PartitionFs = realFs,
+  onMoved: (profileId: string) => Promise<void> = async () => {},
+): Promise<PartitionMoves> {
   const fallbacks = new Map<string, string>();
   const moved: string[] = [];
   const using = new Set([...inUse].filter(ownProfile));
-  const listed = [...new Set(moves)].filter((id) => ownProfile(id) && using.has(id));
+  const all = [...new Set(moves)].filter(ownProfile);
+  // Old folders a profile runs on this launch (its move failed), or one whose row didn't come off: nothing moves in.
+  const occupied = new Set<string>();
+  /** Moved (or nothing to move): off the list now, before the next move starts. */
+  const done = async (id: string, old: string) => {
+    moved.push(id);
+    try {
+      await onMoved(id);
+    } catch (error) {
+      console.error(`Recording that ${id}'s sign-ins moved failed; nothing moves into its old folder this launch, and the next launch finds it moved:`, error);
+      occupied.add(old);
+    }
+  };
+  // Listed but not in use: nothing to move for anyone (Neon's SF1-R2, Opus's S1 on #329).
+  for (const id of all) if (!using.has(id)) await done(id, `p-${id.toLowerCase()}`);
+  const listed = all.filter((id) => using.has(id));
   if (!listed.length) return { fallbacks, moved };
   const root = join(userData, 'Partitions');
   /** Whether a folder is there; an error that isn't "not there" (permissions, a busy disk) throws. */
@@ -78,18 +124,26 @@ export async function migratePartitions(userData: string, moves: Iterable<string
         throw error;
       },
     );
-  const fallBack = (id: string, error: unknown) => {
+  /** Whose a folder's marker says it is, or null (none, or unreadable). */
+  const markerOf = (folder: string) => readFile(join(root, folder, MOVED_MARKER), 'utf8').then((s) => s.trim(), () => null);
+  const failed: { id: string; old: string }[] = [];
+  const fallBack = (id: string, old: string, error: unknown) => {
     console.error(`Moving ${id}'s sign-ins to their new folder failed; they stay where they were this launch:`, error);
-    fallbacks.set(id, fallbackPartition(id));
+    failed.push({ id, old });
+    occupied.add(old);
   };
 
   let names: string[];
   try {
     names = await fs.readdir(root);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { fallbacks, moved: listed }; // No partitions: nothing to move.
-    for (const id of listed) fallBack(id, error);
-    return { fallbacks, moved };
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      // No partitions at all: nothing to move.
+      for (const id of listed) await done(id, `p-${id.toLowerCase()}`);
+      return { fallbacks, moved };
+    }
+    for (const id of listed) fallBack(id, `p-${id.toLowerCase()}`, error);
+    return { fallbacks: inMemoryWhereShared(failed, new Set()), moved };
   }
   // A copy a crash or a full disk cut short: never a profile's, and in the way of the next.
   for (const name of names) if (name.startsWith(STAGING)) await fs.rm(join(root, name), { recursive: true, force: true }).catch(() => {});
@@ -100,48 +154,76 @@ export async function migratePartitions(userData: string, moves: Iterable<string
   // By old folder: how many listed profiles still need it (a failed move goes on needing it).
   const needing = new Map<string, number>();
   for (const m of plan) needing.set(m.old, (needing.get(m.old) ?? 0) + 1);
-  // Old folders a profile runs on this launch, its move having failed: nothing moves into them.
-  const occupied = new Set<string>();
   // Longest new name first (then by id, to be the same each launch).
   plan.sort((a, b) => b.next.length - a.next.length || (a.id < b.id ? -1 : 1));
 
   for (const { id, next, old } of plan) {
     if (next === old) {
-      moved.push(id);
+      await done(id, old);
       continue;
     }
     if (occupied.has(next) || kept.has(next)) {
-      fallBack(id, new Error(`${next} is still another profile's`));
-      occupied.add(old);
+      fallBack(id, old, new Error(`${next} is still another profile's`));
       continue;
     }
     try {
+      if (await exists(next)) {
+        // Its own, moved by a launch that ended before the list said so: moved.
+        if ((await markerOf(next)) === id) {
+          needing.set(old, needing.get(old)! - 1);
+          await done(id, old);
+          continue;
+        }
+        // Not this one's (a half copy, or a profile deleted before #315): never opened as its, whether or not `old` is there.
+        await fs.rm(join(root, next), { recursive: true, force: true });
+      }
       if (!(await exists(old))) {
-        // Never signed in anywhere (or moved by a launch that ended before it said so): nothing to move.
+        // Never signed in anywhere: nothing to move.
         needing.set(old, needing.get(old)! - 1);
-        moved.push(id);
+        await done(id, old);
         continue;
       }
-      // Not anyone's now (a crashed launch's copy, or a profile deleted before #315): never opened as this one's.
-      if (await exists(next)) await fs.rm(join(root, next), { recursive: true, force: true });
       const last = needing.get(old) === 1 && !kept.has(old);
       if (last) {
+        // The marker travels with the folder: once it has its new name, it says whose it is.
+        await fs.writeFile(join(root, old, MOVED_MARKER), id);
         await fs.rename(join(root, old), join(root, next));
       } else {
         const staging = join(root, `${STAGING}${next}`);
         const from = join(root, old);
-        await fs.cp(from, staging, { recursive: true, filter: (path) => !CACHES.has(path.slice(from.length + 1).split(/[\\/]/)[0]!) });
+        await fs.cp(from, staging, { recursive: true, filter: (path) => !CACHES.has(path.slice(from.length + 1).split(/[\\/]/)[0]!) && !path.endsWith(MOVED_MARKER) });
+        await fs.writeFile(join(staging, MOVED_MARKER), id);
         await fs.rename(staging, join(root, next));
       }
       needing.set(old, needing.get(old)! - 1);
-      moved.push(id);
     } catch (error) {
       await fs.rm(join(root, `${STAGING}${next}`), { recursive: true, force: true }).catch(() => {});
-      fallBack(id, error);
-      occupied.add(old);
+      fallBack(id, old, error);
+      continue;
     }
+    await done(id, old);
   }
-  return { fallbacks, moved };
+  return { fallbacks: inMemoryWhereShared(failed, kept), moved };
+}
+
+/**
+ * The partitions the profiles that couldn't move run on this launch: their old folder (`persist:P-…`) when it's theirs
+ * alone; otherwise, when a profile that doesn't move keeps it or another fallback took it first, one in memory
+ * (`P-…`): signed out this launch, writing nothing. Two Sessions on one folder diverge, and Chromium can't close them
+ * (quitting hung for minutes; Opus on #329).
+ */
+function inMemoryWhereShared(failed: readonly { id: string; old: string }[], kept: ReadonlySet<string>): Map<string, string> {
+  const fallbacks = new Map<string, string>();
+  const taken = new Set(kept);
+  for (const { id, old } of failed) {
+    if (taken.has(old)) {
+      fallbacks.set(id, inMemoryFallback(id));
+      continue;
+    }
+    taken.add(old);
+    fallbacks.set(id, fallbackPartition(id));
+  }
+  return fallbacks;
 }
 
 /**

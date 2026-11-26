@@ -61,7 +61,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { foldersInUse, migratePartitions } from './partitions';
+import { foldersInUse, migratePartitions, partitionFsFailingFor } from './partitions';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -974,9 +974,16 @@ if (!app.requestSingleInstanceLock()) {
     // Each listed profile's sign-ins in the folder its partition is named for now (#315), before any of its sessions is
     // made: of the chords' profiles and the ones extensions are installed in (extensions.start makes theirs). Only
     // migration 25's list moves (none on a profile made since), so a launch with nothing listed does no work at all.
-    const partitionMoves = await migratePartitions(app.getPath('userData'), opened.partitionMoves, [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)]);
+    // Each comes off the list as it moves, before the next starts (a launch that dies mid-chain leaves only what hasn't).
+    const partitionMoves = await migratePartitions(
+      app.getPath('userData'),
+      opened.partitionMoves,
+      [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)],
+      // Development and tests only: one profile's move fails (#329's quit probe: a twin on an in-memory fallback).
+      !app.isPackaged && process.env['CHORD_E2E_PARTITION_MOVE_FAIL'] ? partitionFsFailingFor(process.env['CHORD_E2E_PARTITION_MOVE_FAIL']) : undefined,
+      (id) => opened.persistence.partitionMoved([id]),
+    );
     partitionFallbacks = partitionMoves.fallbacks;
-    void opened.persistence.partitionMoved(partitionMoves.moved).catch((error: unknown) => console.error('Recording moved sign-ins failed (they move again next launch, harmlessly):', error));
     // Sign-ins a chord kept separately, once no chord uses them, are deleted once launch is over, with their copies of
     // the blocker extension. No session loads them meanwhile; which profiles are in use is read then, so one made since stays.
     afterLaunch.run(() => {

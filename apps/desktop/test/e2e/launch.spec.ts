@@ -551,7 +551,8 @@ test('a profile whose id has upper case keeps its sign-ins across the launch tha
     await runAction(shell, 'chord.separateSignIns');
     await expect(shell.getByRole('img', { name: 'Keeps its own sign-ins' })).toBeVisible();
     await visit('/login');
-    await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/login`)).toBe(true);
+    // Its cookie is set once the page has run (its title says so), before /whoami asks.
+    await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/login`)?.title()).toBe('Signed in');
     await visit('/whoami');
     await expect.poll(whoami).toBe('Alex');
   } finally {
@@ -605,6 +606,70 @@ test('a profile whose id has upper case keeps its sign-ins across the launch tha
     await expect.poll(whoami).toBe('Alex');
   } finally {
     await app.close();
+  }
+});
+
+test('a twin whose sign-ins can’t be moved runs in memory, never on its twin’s folder; quitting is prompt (#329 round 2)', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const ownPartitions = () => (existsSync(join(profile, 'Partitions')) ? readdirSync(join(profile, 'Partitions')).filter((n) => n.startsWith('p-')).sort() : []);
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  let shell: Page;
+  let overlay: Page;
+  const visit = async (path: string) => {
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}${path}`);
+    await overlay.keyboard.press('Enter');
+  };
+  // The newest /whoami tab: the one just opened in the chord being checked (each chord's earlier one stays restored).
+  const whoami = () => app.windows().filter((p) => p.url() === `${site.origin}/whoami`).at(-1)?.title();
+  try {
+    shell = await pageWhere(app, isShell);
+    overlay = await pageWhere(app, isOverlay);
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    await shell.getByRole('textbox', { name: 'Chord name' }).fill('Work');
+    await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    await runAction(shell, 'chord.separateSignIns');
+    await visit('/login');
+    // Its cookie is set once the page has run (its title says so), before /whoami asks.
+    await expect.poll(() => app.windows().find((p) => p.url() === `${site.origin}/login`)?.title()).toBe('Signed in');
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
+  } finally {
+    await app.close();
+  }
+
+  // As a build before #315 left it: Work's profile, and a twin (its id in upper case, by sync) sharing its folder.
+  const [folder] = ownPartitions();
+  const id = folder!.slice('p-'.length);
+  const twin = id.toUpperCase();
+  const db = new DatabaseSync(join(profile, 'chord.db'));
+  try {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.prepare("INSERT INTO profile (id, name, partition, is_default, created_at) VALUES (?, 'Twin', ?, 0, 1)").run(twin, `persist:p-${twin}`);
+    db.prepare("INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) SELECT 'twin-chord', ?, 'Twin', icon, theme, rank || 'z', created_at, updated_at FROM chord WHERE profile_id = ?").run(twin, id);
+    db.exec('DROP TABLE partition_move; PRAGMA user_version = 24');
+  } finally {
+    db.close();
+  }
+
+  // The twin's copy fails: it runs in memory (signed out), never on Work's `p-<id>`, which Work keeps.
+  app = await launch({ CHORD_E2E_PARTITION_MOVE_FAIL: twin }, profile);
+  try {
+    shell = await pageWhere(app, isShell);
+    overlay = await pageWhere(app, isOverlay);
+    const chords = shell.getByRole('tablist', { name: 'Chords' });
+    await chords.getByRole('tab', { name: 'Twin' }).click();
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Signed out');
+    await chords.getByRole('tab', { name: 'Work' }).click();
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
+    expect(ownPartitions()).toEqual([folder]);
+  } finally {
+    // Two Sessions on one folder kept Chromium from closing for minutes (Opus on #329): this one closes at once.
+    const started = Date.now();
+    await app.close();
+    expect(Date.now() - started).toBeLessThan(15_000);
   }
 });
 
