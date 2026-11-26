@@ -3,13 +3,17 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rename
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImportedPage } from '@chord/core';
 import { detectProfiles, parseIni, type FoundProfile, type ImportEnv } from '../../src/import/detect';
 import { ImportProblem, openCopy, problemOf } from '../../src/import/files';
 import { pagesOf } from '../../src/import/history';
 import { openHistory, readProfile } from '../../src/import/read';
 import { browserRoots, makeBrowserFixtures, makeChrome, makeFirefox, makeSafari, type FixturePlatform } from '../fixtures/browsers';
+
+// Every test builds real browser profiles on disk (SQLite databases and all): about 0.1 s each alone, past Vitest's 5 s
+// on a busy machine (#302: one timed out under a full test run's load).
+vi.setConfig({ testTimeout: 30_000 });
 
 const DAY = 86_400_000;
 const now = Date.UTC(2026, 9, 24, 12);

@@ -118,7 +118,9 @@ describe('Windows signing', () => {
   });
 });
 
-describe('signing-mode.mjs (the release workflow step)', () => {
+// Each test runs the step as its own Node process, up to five times: about a second each on a busy machine, past
+// Vitest's 5 s (#301: it timed out under a full test run's load).
+describe('signing-mode.mjs (the release workflow step)', { timeout: 30_000 }, () => {
   const script = resolve(import.meta.dirname, '../../scripts/signing-mode.mjs');
   const mac = ['MAC_CSC_LINK', 'MAC_CSC_KEY_PASSWORD', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER'];
   const azure = ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE', 'WIN_PUBLISHER_NAME'];
