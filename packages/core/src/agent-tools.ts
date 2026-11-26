@@ -159,7 +159,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
     // The safe diet (M2g-2 slice 2): its words pinned in tool-words.test.ts.
-    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. start: the next range. Untrusted JSON. For a page's text, use read_tab.",
+    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Untrusted JSON. For a page's text, use read_tab.",
   ),
   ...(
     [

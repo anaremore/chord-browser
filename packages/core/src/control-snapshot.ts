@@ -208,6 +208,14 @@ export class ElementRefs {
     return { ok: false, why: 'stale' };
   }
 
+  /**
+   * Whether this table's latest refs are of this page (S18 M2g-2 slice 3b, #205): with no outline kept for it, they came
+   * from a view that's no baseline (an outline without the page's text), so what an action changed can't be told.
+   */
+  onPage(pageId: string): boolean {
+    return Boolean(pageId) && this.current?.pageId === pageId;
+  }
+
   /** The page moved on (or the tab went to sleep): every ref is stale. */
   forget(): void {
     this.current = null;
@@ -281,11 +289,16 @@ export const ROWS_SHOWN = 5;
 /**
  * The outline's text. With `find`, only the elements whose name has that text (any case), each with the elements it's
  * in; else runs of more than ROWS_COLLAPSE rows alike (each the same roles, the same shape) show their first ROWS_SHOWN.
+ * `text: false` (S18 M2g-2 slice 3b, #205): the page's structure without its text runs (`- text:` lines), which carry no
+ * ref: the full outline, its rows collapsed as they'd be, less its text lines (never a run the text kept apart, such as
+ * headings between paragraphs, collapsed when the text goes).
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[] } {
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[] } {
   const nodes = read.nodes;
+  const noText = opts.text === false;
   let count = 0;
   const lineOf = (node: SnapshotRead['nodes'][number]): string | null => {
+    if (noText && node.role === 'text') return null;
     const depth = Math.max(0, Math.min(40, Math.floor(node.depth)));
     const role = /^[a-z][a-z-]{0,30}$/.test(node.role) ? node.role : 'generic';
     const name = clipName(node.name ?? '');
@@ -320,7 +333,8 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     for (let i = 0; i < nodes.length; i++) {
       const d = depthOf(i);
       while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
-      if ((nodes[i]!.name ?? '').toLowerCase().includes(find)) {
+      // Without the page's text, a text run is never a match (its words aren't shown).
+      if (!(noText && nodes[i]!.role === 'text') && (nodes[i]!.name ?? '').toLowerCase().includes(find)) {
         for (const a of [...path, i]) {
           if (shown.has(a)) continue;
           shown.add(a);
@@ -371,7 +385,8 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
         if (line) lines.push(line);
         render(r + 1, ends[r]!);
       }
-      if (shownRows.length < run.length) {
+      // A run of text said in one line goes with the text.
+      if (shownRows.length < run.length && !(noText && nodes[i]!.role === 'text')) {
         const more = run.length - shownRows.length;
         collapsed += more;
         const role = /^[a-z][a-z-]{0,30}$/.test(nodes[i]!.role) ? nodes[i]!.role : 'generic';

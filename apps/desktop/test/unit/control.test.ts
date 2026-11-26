@@ -11,7 +11,7 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { heldStep, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
+import { heldStep, ONLY_TEXT, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
@@ -3047,6 +3047,67 @@ describe('acting through the gate (S18 M2c)', () => {
       const no = { text: JSON.stringify({ data: { refused: 'No.' } }), isError: true };
       expect(await withOutline(no, 'navigate', look)).toBe(no);
       expect(looks).toEqual(['look']);
+    });
+  });
+
+  describe('snapshot with text: false: the structure without the page’s text (S18 M2g-2 slice 3b, #205)', () => {
+    const NEWS = { depth: 0, role: 'text', name: 'Breaking: the shop is open late tonight' };
+    type Snap = { content: string; refs: number; page_id: string; note?: string; source?: string };
+    const snap = (out: { text?: string }) => JSON.parse(out.text!) as Snap;
+
+    it('no text runs, every element and its ref, and a ref from it acts', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = { extra: [NEWS] };
+      const full = snap(await t.call('snapshot', { tab_id: t.tab }));
+      const outline = snap(await t.call('snapshot', { tab_id: t.tab, text: false }));
+      expect(full.content).toContain('- text: "Breaking: the shop is open late tonight"');
+      expect(outline.content).toBe(full.content.split('\n').filter((l) => !l.includes('- text:')).join('\n'));
+      expect(outline.refs).toBe(full.refs);
+      const home = /link "Home" \[ref=(e\d+)\]/.exec(outline.content)![1]!;
+      expect(result(await t.call('click', { tab_id: t.tab, ref: home })).data).toMatchObject({ done: 'Clicked “Home”' });
+    });
+
+    it('never the diff’s baseline: an action after it says what changed since the last full snapshot, whose ranges stay', async () => {
+      const twist: Twist = {};
+      // acting() took a full snapshot: the baseline.
+      const t = await acting({ twist });
+      // The page shows a new text; the outline without text doesn't show it.
+      twist.read = { extra: [NEWS] };
+      const outline = snap(await t.call('snapshot', { tab_id: t.tab, text: false }));
+      expect(outline.content).not.toContain('Breaking');
+      // The diff after a click compares with the full snapshot before it: the text it never showed is new.
+      const clicked = result(await t.call('click', { tab_id: t.tab, ref: /link "Home" \[ref=(e\d+)\]/.exec(outline.content)![1]! }));
+      expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Breaking: the shop is open late tonight"']);
+    });
+
+    it('with no full snapshot of the page: an action says what changed can’t be told, never silence', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      // A new page (its refs and outline gone), seen only without its text.
+      await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+      const outline = snap(await t.call('snapshot', { tab_id: t.tab, text: false }));
+      const clicked = result(await t.call('click', { tab_id: t.tab, ref: /link "Home" \[ref=(e\d+)\]/.exec(outline.content)![1]! }));
+      expect(clicked.data['page_changes']).toMatchObject({ note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot to see it.' });
+      // A full snapshot then: the next action's diff is a diff again.
+      await t.call('snapshot', { tab_id: t.tab });
+      const again = result(await t.call('click', { tab_id: t.tab, ref: /link "Home" \[ref=(e\d+)\]/.exec(outline.content)![1]! }));
+      expect(again.data['page_changes']).toBeUndefined();
+    });
+
+    it('its ranges are its own read, never the full outline kept; a page of nothing but text says so', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = { extra: [NEWS] };
+      const reads = () => (twist.codes ?? []).filter((c) => c.includes('__chordSnapshots')).length;
+      twist.codes = [];
+      const range = snap(await t.call('snapshot', { tab_id: t.tab, text: false, start: 1 }));
+      expect(reads()).toBe(1);
+      expect(range.content).not.toContain('Breaking');
+      // A page with nothing but text: an empty outline, and where its text is.
+      const only = setup({ read: async (code: string) => (code.includes('__chordSnapshots') ? { url: 'https://news.test/a', title: 'Poem', nodes: [NEWS], cut: {} } : { title: 'Poem', url: 'https://news.test/a', contentType: 'text/html', text: 'x', selection: '' }), actions: true });
+      const poem = snap(await only.call('snapshot', { tab_id: only.scope.refs.refFor('n1'), text: false }));
+      expect(poem).toMatchObject({ content: '', refs: 0, note: ONLY_TEXT });
     });
   });
 

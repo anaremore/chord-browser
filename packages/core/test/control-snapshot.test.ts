@@ -288,6 +288,42 @@ describe('the outline, for as few tokens (the owner, 2026-11-24)', () => {
   });
 });
 
+describe('the outline without the page’s text: snapshot’s text: false (S18 M2g-2 slice 3b, #205)', () => {
+  const read = (nodes: SnapshotRead['nodes']): SnapshotRead => ({ url: 'https://pages.test/', title: 'Page', nodes, cut: {} });
+  const prose = (depth: number, n: number) => Array.from({ length: n }, (_, i) => ({ depth, role: 'text', name: `Paragraph ${i}: ${'words of the page '.repeat(10)}` }));
+  // [the page, its nodes]
+  const pages: [string, SnapshotRead][] = [
+    ['an article: headings, a region, a link in its text', read([{ depth: 0, role: 'main', name: '' }, { depth: 1, role: 'heading', name: 'The story', level: 1 }, ...prose(1, 3), { depth: 1, role: 'region', name: 'Aside' }, { depth: 2, role: 'heading', name: 'More', level: 2 }, ...prose(2, 2), { depth: 2, role: 'link', name: 'Read on', key: 0, sid: 1 }])],
+    ['a form: fields, a password field, a button, a hint', read([{ depth: 0, role: 'form', name: 'Sign up' }, { depth: 1, role: 'textbox', name: 'Email', key: 0, sid: 1, field: field({ type: 'email', label: 'Email' }) }, { depth: 1, role: 'text', name: 'We never share it.' }, { depth: 1, role: 'textbox', name: 'Password', key: 1, sid: 2, field: field({ type: 'password', label: 'Password' }) }, { depth: 1, role: 'button', name: 'Create account', key: 2, sid: 3 }])],
+    ['a list of 300 rows, each with a note', read([{ depth: 0, role: 'list', name: '' }, ...Array.from({ length: 300 }, (_, i) => [{ depth: 1, role: 'listitem', name: '' }, { depth: 2, role: 'link', name: `Row ${i}`, key: i, sid: i + 1 }, { depth: 2, role: 'text', name: `Note ${i}` }]).flat()])],
+    ['twenty paragraphs in a row, then a button', read([{ depth: 0, role: 'main', name: '' }, ...prose(1, 20), { depth: 1, role: 'button', name: 'Next', key: 0, sid: 1 }])],
+    ['nothing but text', read(prose(0, 4))],
+    // The 50-section page as the page script gives it: a heading and its paragraph, side by side, fifty times. Without
+    // the text, the headings are never a run of rows alike to collapse.
+    ['fifty sections, a heading and its paragraph each', read([{ depth: 0, role: 'main', name: '' }, { depth: 1, role: 'heading', name: 'Fifty sections', level: 1 }, ...Array.from({ length: 50 }, (_, i) => [{ depth: 1, role: 'heading', name: `Section ${i + 1}`, level: 2 }, ...prose(1, 1)]).flat()])],
+  ];
+  /** The full outline's lines less its text runs (and a run of them said in one line). */
+  const lessText = (text: string) => text.split('\n').filter((l) => !/^\s*- text:/.test(l) && !/^\s*- … \d+ more lines like these/.test(l)).join('\n');
+
+  it.each(pages)('%s: every line of the full outline but its text, with the same refs', (_page, page) => {
+    const refs = new ElementRefs().issue('p1', 't', snapshotKeys(page), new Map(page.nodes.filter((n) => n.key !== undefined).map((n) => [n.key!, n.sid!])));
+    const full = snapshotOutline(page, refs);
+    const outline = snapshotOutline(page, refs, { text: false });
+    expect(outline.text).toBe(lessText(full.text));
+    expect(outline.text).not.toMatch(/- text:/);
+    expect(outline.refs).toBe(full.refs);
+  });
+
+  it('a password field keeps its line and no ref; find looks only at what it shows', () => {
+    const [, form] = pages[1]!;
+    const refs = new ElementRefs().issue('p1', 't', snapshotKeys(form));
+    expect(snapshotOutline(form, refs, { text: false }).text).toContain('- textbox "Password" [password: the user signs in]');
+    // A text run's words aren't found; an element's are.
+    expect(snapshotOutline(form, refs, { text: false, find: 'never share' }).text).toBe('');
+    expect(snapshotOutline(form, refs, { text: false, find: 'create' }).text).toMatch(/^- form "Sign up"\n {2}- button "Create account" \[ref=e\d+\]$/);
+  });
+});
+
 describe('refs that stay, and the diff after an action (M2g-1)', () => {
   it('a ref given in turn (an id past the cap) never takes a number a later id of the page maps to (round 2 of #145)', () => {
     const refs = new ElementRefs();
