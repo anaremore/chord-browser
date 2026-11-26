@@ -115,9 +115,9 @@ describe('A download the assistant’s click started (S18 M2e-2b)', () => {
     asked.answer!(true);
     await tick();
     t.finish();
-    await tick();
-    await tick();
-    expect(t.files()).toEqual(['invoicepiz.exe']);
+    // Renamed to its own name (an async rename): waited for, never assumed after a few ticks (#294: it failed under a
+    // full test run's load).
+    await vi.waitFor(() => expect(t.files()).toEqual(['invoicepiz.exe']));
   });
 
   it('Allow, just as Windows’ scan holds the finished file: its rename is tried again until it goes, never left under its pending name (main’s Windows E2E, run 45585360658)', async () => {
