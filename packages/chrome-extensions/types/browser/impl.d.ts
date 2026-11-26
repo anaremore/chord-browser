@@ -4,6 +4,13 @@ export interface ChromeExtensionImpl {
     selectTab?(tab: Electron.WebContents, window: Electron.BaseWindow): void;
     removeTab?(tab: Electron.WebContents, window: Electron.BaseWindow): void;
     /**
+     * Chord: chrome.tabs.update({ url }), reload, goBack and goForward. When implemented, the library calls these
+     * instead of moving the page itself, so the app can hold the load until the tab's session is ready.
+     */
+    navigateTab?(tab: Electron.WebContents, url: string): void;
+    reloadTab?(tab: Electron.WebContents, bypassCache: boolean): void;
+    goTab?(tab: Electron.WebContents, way: 'back' | 'forward'): void;
+    /**
      * Populate additional details to a tab descriptor which gets passed back to
      * background pages and content scripts.
      */

@@ -213,6 +213,22 @@ export class TabManager {
   }
 
   /**
+   * A page loaded at `url` and then reloaded, once its session is ready (#326): a PDF citation's page, which Chromium's
+   * viewer reads from `#page=` only as it loads.
+   */
+  reopenAt(contents: WebContents, url: string): void {
+    if (contents.isDestroyed()) return;
+    this.whenProxied(contents, () => {
+      void contents
+        .loadURL(url)
+        .catch(() => undefined)
+        .then(() => {
+          if (!contents.isDestroyed()) contents.reload();
+        });
+    });
+  }
+
+  /**
    * Your Back or Forward (#287): a load still waiting for its session is dropped first (stopWaiting), so it never lands
    * over the page you went to.
    */
@@ -728,7 +744,8 @@ export class TabManager {
       const attempts = agentPage ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
       if (attempts < MAX_CRASH_RELOADS) {
         this.crashReloads.set(nodeId, attempts + 1);
-        contents.reload();
+        // Through the gate, as your Reload is (#326): never before the session's proxy is set or its rules are on.
+        this.reload(contents);
       } else {
         live({ crashed: true, loading: false });
       }
@@ -806,7 +823,9 @@ export class TabManager {
     // Peek and mini windows keep to themselves: a link that wants a new tab opens right there.
     const floating = this.floating.get(openerNodeId);
     if (floating) {
-      void pageOf(floating.view)?.loadURL(url).catch(() => {});
+      // Once its session is ready, over any load still waiting (#326).
+      const page = pageOf(floating.view);
+      if (page) this.whenProxied(page, () => void page.loadURL(url).catch(() => {}));
       return { action: 'deny' };
     }
     // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click).

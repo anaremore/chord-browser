@@ -222,6 +222,17 @@ function toFrames(contents: WebContents, up: boolean): void {
 }
 
 /** The adapter for a page Chord holds. */
+/**
+ * Where a tool's own load or history move goes first: the tab's session gate (tabs.ts' whenProxied, set by Browser),
+ * so it never starts before the session's proxy is set or its rules are on, and a load already waiting is dropped for
+ * it (#326). Until it's set (tests, a page with no Browser), at once.
+ */
+let loadGate: (contents: WebContents, load: () => void) => void = (_contents, load) => load();
+
+export function setLoadGate(gate: (contents: WebContents, load: () => void) => void): void {
+  loadGate = gate;
+}
+
 export function controlPage(contents: WebContents): ControlPage {
   /** A frame's guard stopped a key or an insertion while the guard was up. */
   let frameStopped = false;
@@ -306,7 +317,7 @@ export function controlPage(contents: WebContents): ControlPage {
     navigate: async (url) => {
       const yours = await focusedPage();
       try {
-        return await loaded(contents, () => contents.loadURL(url).catch(() => undefined));
+        return await loaded(contents, () => loadGate(contents, () => void contents.loadURL(url).catch(() => undefined)));
       } finally {
         await giveBackFocus(contents, yours);
       }
@@ -321,7 +332,12 @@ export function controlPage(contents: WebContents): ControlPage {
       if (contents.isDestroyed() || contents.navigationHistory.getEntryAtIndex(entry.index)?.url !== entry.url) return null;
       const yours = await focusedPage();
       try {
-        return await loaded(contents, () => contents.navigationHistory.goToIndex(entry.index));
+        return await loaded(contents, () =>
+          loadGate(contents, () => {
+            // Once the session is ready, and only if that entry is still where it was.
+            if (!contents.isDestroyed() && contents.navigationHistory.getEntryAtIndex(entry.index)?.url === entry.url) contents.navigationHistory.goToIndex(entry.index);
+          }),
+        );
       } finally {
         await giveBackFocus(contents, yours);
       }

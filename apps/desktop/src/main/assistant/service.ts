@@ -1907,8 +1907,8 @@ export class AssistantService {
       // The viewer reads #page= only when it loads, so it reloads there.
       // Never in an agent's tab (S18 M2e-1): the assistant doesn't move an agent's page.
       if (!matches && citation.page && !contents.isDestroyed() && this.agentOf(node) === null) {
-        await contents.loadURL(pdfPageUrl(contents.getURL(), citation.page)).catch(() => undefined);
-        if (!contents.isDestroyed()) contents.reload();
+        // Through the session's gate (#326).
+        this.browser.tabs.reopenAt(contents, pdfPageUrl(contents.getURL(), citation.page));
       }
       return;
     }

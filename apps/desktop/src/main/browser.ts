@@ -72,6 +72,7 @@ import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { buildActs } from './assistant/preview';
 import { attachContextMenu } from './context-menu';
+import { setLoadGate } from './control/page';
 import { clicksTheTab, inputWhy, isAgentInput, usesTheTab } from './control/input';
 import { DevTools } from './devtools';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
@@ -618,9 +619,14 @@ export class Browser {
             const popup = BrowserWindow.fromWebContents(contents);
             return popup ? { window: popup, x: 0, y: 0 } : undefined;
           },
+          // Through the gate, as a tab's are (#326): never before the session is ready, and gone with the popup.
+          reload: () => this.tabs.reload(contents),
+          go: (way) => this.tabs.go(contents, way),
         });
       },
     });
+    // The agent's and the assistant's own loads and history moves wait for the session too (#326).
+    setLoadGate((contents, load) => this.tabs.whenProxied(contents, load));
     this.media = new MediaWatcher({
       isTab: (contents, nodeId) => this.tabs.get(nodeId)?.webContents === contents,
       changed: () => this.syncMedia(),
@@ -754,6 +760,7 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       profileSession: (profileId) => options.profileSession(profileId),
       proxyReady: (session) => options.proxyReady(session),
+      tabMoves: this.tabs,
       root: options.extensions.root,
       preloadPath: options.extensions.preloadPath,
       unpackWorkerPath: options.extensions.unpackWorkerPath,
@@ -1325,7 +1332,8 @@ export class Browser {
                 for (const contents of w.paneContents) {
                   if (contents.isDestroyed() || !isBlockingOff(contents.getURL(), [site])) continue;
                   this.userNavigates?.(contents);
-                  contents.reload();
+                  // Through the gate (#326): a load already waiting is dropped for it, never raced.
+                  this.tabs.reload(contents);
                 }
               }
             }),

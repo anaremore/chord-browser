@@ -44,3 +44,11 @@ the commit "Vendor electron-chrome-extensions 4.9.5 (iamEvanYT fork), unmodified
 
 New files, not from upstream: `package.json`, `tsconfig.json`, `build-types.mjs`, `types/` (generated),
 `src/browser/api/lib/native-messaging-frames.ts`, `test/`, this file, and `README.md`. Upstream's README is kept as `UPSTREAM-README.md`.
+
+## 2026-11-26
+
+- **`src/browser/impl.ts`**: `navigateTab`, `reloadTab` and `goTab` hooks (#326).
+- **`src/browser/api/tabs.ts`**: `chrome.tabs.update({ url })`, `reload`, `goBack` and `goForward` call those hooks when
+  the app implements them, rather than moving the page itself. Chord holds such a load until the tab's session is
+  ready (its proxy set, its ad-blocking rules on), and drops a load already waiting for it. Without the hooks, as
+  upstream.

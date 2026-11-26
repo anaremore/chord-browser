@@ -495,6 +495,50 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it('a link that wants a new tab, in a mini window or a Peek (#326): it loads there once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const view = t.manager.createFloating('f1' as NodeId, { session: {} as Session, url: SECOND, private: false }) as unknown as FakeView;
+    const page = view.page as FakeContents;
+    page.loadURL.mockClear();
+    const proxy = held();
+    waits.push(proxy);
+    const open = page.setWindowOpenHandler.mock.calls[0]![0] as (d: object) => { action: string };
+    expect(open({ url: 'https://third.test/', disposition: 'foreground-tab', features: '', frameName: '', referrer: {}, postBody: null }).action).toBe('deny');
+    expect(page.loadURL).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual(['https://third.test/']);
+  });
+
+  it('a page that crashed, reloaded by itself (#326): once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    // A page that had loaded: its history has it.
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    const proxy = held();
+    waits.push(proxy);
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    expect(t.page.reload).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
+  it('a page opened again at an address (a PDF citation’s page, #326): loaded, then reloaded, once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    t.page.loadURL.mockClear();
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+    expect(t.page.loadURL).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(t.loaded()).toEqual(['https://first.test/doc.pdf#page=3']);
+    expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);

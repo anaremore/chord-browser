@@ -1,4 +1,5 @@
-// Modified by Chord contributors, 2026-10-22: the openActionPopup hook. See CHORD-CHANGES.md in this package.
+// Modified by Chord contributors, 2026-10-22: the openActionPopup hook; 2026-11-26: navigateTab, reloadTab and goTab.
+// See CHORD-CHANGES.md in this package.
 /** App-specific implementation details for extensions. */
 export interface ChromeExtensionImpl {
   createTab?(
@@ -6,6 +7,14 @@ export interface ChromeExtensionImpl {
   ): Promise<[Electron.WebContents, Electron.BaseWindow]>
   selectTab?(tab: Electron.WebContents, window: Electron.BaseWindow): void
   removeTab?(tab: Electron.WebContents, window: Electron.BaseWindow): void
+
+  /**
+   * Chord: chrome.tabs.update({ url }), reload, goBack and goForward. When implemented, the library calls these
+   * instead of moving the page itself, so the app can hold the load until the tab's session is ready.
+   */
+  navigateTab?(tab: Electron.WebContents, url: string): void
+  reloadTab?(tab: Electron.WebContents, bypassCache: boolean): void
+  goTab?(tab: Electron.WebContents, way: 'back' | 'forward'): void
 
   /**
    * Populate additional details to a tab descriptor which gets passed back to

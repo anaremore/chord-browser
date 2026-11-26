@@ -1,3 +1,5 @@
+// Modified by Chord contributors, 2026-11-26: update, reload, goBack and goForward go through the app's
+// navigateTab, reloadTab and goTab when it has them. See CHORD-CHANGES.md in this package.
 import { ExtensionContext } from '../context'
 import { ExtensionEvent } from '../router'
 import {
@@ -243,7 +245,10 @@ export class TabsAPI {
       : this.ctx.store.getActiveTabOfCurrentWindow()
     if (!tab) return
 
-    if (reloadProperties?.bypassCache) {
+    const impl = this.ctx.store.impl
+    if (impl.reloadTab) {
+      impl.reloadTab(tab, Boolean(reloadProperties?.bypassCache))
+    } else if (reloadProperties?.bypassCache) {
       tab.reloadIgnoringCache()
     } else {
       tab.reload()
@@ -265,7 +270,11 @@ export class TabsAPI {
     const props = updateProperties
 
     const url = props.url ? validateExtensionUrl(props.url, event.extension) : undefined
-    if (url) await tab.loadURL(url)
+    if (url) {
+      const impl = this.ctx.store.impl
+      if (impl.navigateTab) impl.navigateTab(tab, url)
+      else await tab.loadURL(url)
+    }
 
     if (typeof props.muted === 'boolean') tab.setAudioMuted(props.muted)
 
@@ -292,7 +301,8 @@ export class TabsAPI {
       ? this.ctx.store.getTabById(tabId)
       : this.ctx.store.getActiveTabOfCurrentWindow()
     if (!tab) return
-    tab.navigationHistory.goForward()
+    if (this.ctx.store.impl.goTab) this.ctx.store.impl.goTab(tab, 'forward')
+    else tab.navigationHistory.goForward()
   }
 
   private goBack(event: ExtensionEvent, arg1?: unknown) {
@@ -301,7 +311,8 @@ export class TabsAPI {
       ? this.ctx.store.getTabById(tabId)
       : this.ctx.store.getActiveTabOfCurrentWindow()
     if (!tab) return
-    tab.navigationHistory.goBack()
+    if (this.ctx.store.impl.goTab) this.ctx.store.impl.goTab(tab, 'back')
+    else tab.navigationHistory.goBack()
   }
 
   onCreated(tabId: number) {

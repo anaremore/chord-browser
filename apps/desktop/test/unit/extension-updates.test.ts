@@ -78,6 +78,7 @@ let announced: string;
 function setup({ updateDeadlineMs = 30_000 } = {}) {
   const extensions = new Extensions({
     state: () => state,
+    tabMoves: { whenProxied: (_contents, load) => load(), reload: vi.fn(), go: vi.fn() },
     dispatch: (command) => {
       const extensions = { ...state.extensions };
       if (command.t === 'extension.record') extensions[`${command.extension.profileId}:${command.extension.id}`] = command.extension;

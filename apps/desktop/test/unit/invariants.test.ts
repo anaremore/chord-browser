@@ -9,6 +9,8 @@
  * - **Requests and windows from main** (S18 M2d, control/sends.ts): a `fetch` through a session, a window-open handler
  *   or a debugger attached from main, outside an agent tab's Fetch hold. Each is listed with what it does for an
  *   agent's tab.
+ * - **Page loads around the session gate** (#326): a load or history move on a page outside tabs.ts, each listed with why
+ *   it may (inside the gate, Chord's own views, or no site).
  * - **Wall-clock budgets** (issue #85): never in the parallel unit suite, only in `*.perf.test.ts`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -280,6 +282,91 @@ describe('requests and windows from main: every call site is audited', () => {
     const listed = entries.map(([kind, receiver]) => `${kind} ${receiver}`).sort();
     const where = sites.map((s) => `${s.kind} ${s.receiver} at line ${s.line}`).join(', ');
     expect(got, `${file}: ${where}. Classify a new one in AUDITED, and take out one that's gone`).toEqual(listed);
+  });
+});
+
+/* ---------- Page loads around the session gate ---------- */
+
+/** A load or history move on a page: the call, and what it's called on. */
+type Move = { method: string; receiver: string; line: number };
+
+const MOVES = /([\w$]+(?:\??\.[\w$]+|\([^()]*\))*)\??\.(loadURL|loadFile|reload|reloadIgnoringCache|goBack|goForward|goToIndex|goToOffset)\s*\(/g;
+/** The tab manager's own (tabs.reload, tabs.go…): the gate itself. */
+const THE_GATE = /(?:^|\.)(?:tabs|tabMoves)$/;
+
+function moves(source: string): Move[] {
+  const text = code(source);
+  return [...text.matchAll(MOVES)].filter((m) => !THE_GATE.test(m[1]!)).map((m) => ({ method: m[2]!, receiver: m[1]!, line: lineOf(text, m.index) }));
+}
+
+/**
+ * Every load and history move on a page outside tabs.ts (the session gate: whenProxied, reload, go, navigate,
+ * reopenAt), by file, method and receiver, with why it may (#326). A new one fails until it's listed here: a page's load
+ * goes through the gate, so it never starts before the session's proxy is set or its rules are on, and a load already
+ * waiting is dropped for it.
+ */
+const LOADS: Record<string, [string, string, string][]> = {
+  'main/browser.ts': [['loadURL', 'contents', "an image search's upload into a tab: inside tabs.whenProxied (the `upload` it's given)"]],
+  'main/context-menu.ts': [['reload', 'deps', "a page's menu's Reload: `deps.reload`, which a page's menu must have (WebMenuDeps): tabs.reload"]],
+  'main/index.ts': [['loadURL', 'contents', "the E2E perf hook's timed reloads of a page already loaded (CHORD_E2E only)"]],
+  'main/window.ts': [
+    ['reload', 'contents', "Chord's own UI view after its renderer crashed: Chord's session, no proxy or rules to wait for"],
+    ['loadURL', 'view.webContents', "Chord's own UI view: Chord's session"],
+    ['loadURL', 'pageOf(view)', "Chord's own UI views, again after a theme or language change: Chord's session"],
+  ],
+  'main/ad-blocking/extension.ts': [['loadURL', 'contents', "the blocker extension's own control page, in its own view: no site"]],
+  'main/control/page.ts': [
+    ['loadURL', 'contents', "the agent's navigate: inside loadGate (tabs.whenProxied, set by Browser)"],
+    ['goToIndex', 'contents.navigationHistory', "the agent's back: inside loadGate, and only if the entry is still where it was"],
+  ],
+  'main/extensions/index.ts': [
+    ['loadURL', 'contents', 'chrome.tabs.update({ url }): inside tabs.whenProxied (tabMoves, which Extensions must be given)'],
+    ['loadURL', 'win', "an extension's own window (chrome.windows.create): after its session's wait (proxyReady), as a tab's first load"],
+  ],
+  'main/extensions/popup.ts': [['loadURL', 'contents', "an extension's popup: after its session's wait (proxyReady), as a tab's first load"]],
+  'main/safe-browsing/guard.ts': [
+    ['goBack', 'contents.navigationHistory', 'Back to safety: leaves a flagged page at once, a load waiting dropped first (guard.ts says why it doesn’t wait, #323)'],
+    ['loadURL', 'contents', 'Back to safety with nothing to go back to: about:blank, no request'],
+  ],
+  'chrome-extensions/browser/popup.ts': [['loadURL', 'win.webContents', "upstream's own popup window: Chord shows popups itself (openActionPopup), so it never opens"]],
+  'chrome-extensions/browser/api/tabs.ts': [
+    ['reloadIgnoringCache', 'tab', 'upstream, for an app without reloadTab: Chord has it'],
+    ['reload', 'tab', 'upstream, for an app without reloadTab: Chord has it'],
+    ['loadURL', 'tab', 'upstream, for an app without navigateTab: Chord has it'],
+    ['goForward', 'tab.navigationHistory', 'upstream, for an app without goTab: Chord has it'],
+    ['goBack', 'tab.navigationHistory', 'upstream, for an app without goTab: Chord has it'],
+  ],
+};
+
+describe('page loads around the session gate (#326): every one is audited', () => {
+  it('reads each kind, and leaves comments and the tab manager’s own alone', () => {
+    const src = [
+      'void contents.loadURL(url); // page.reload()',
+      'contents.navigationHistory.goToIndex(2);',
+      'pageOf(view)?.loadURL(x);',
+      'this.tabs.reload(contents);',
+      'this.deps.tabMoves.go(contents, "back");',
+    ].join('\n');
+    expect(moves(src).map((m) => `${m.method} ${m.receiver}`)).toEqual(['loadURL contents', 'goToIndex contents.navigationHistory', 'loadURL pageOf(view)']);
+  });
+
+  it('each load or history move outside tabs.ts is listed, with its reason', () => {
+    const roots: [string, string][] = [
+      ['main', MAIN],
+      ['chrome-extensions/browser', join(repo, 'packages/chrome-extensions/src/browser')],
+    ];
+    const found: Record<string, [string, string][]> = {};
+    for (const [prefix, root] of roots) {
+      for (const file of files(root, (name) => name.endsWith('.ts'))) {
+        const name = `${prefix}/${rel(file, root)}`;
+        if (name === 'main/tabs.ts') continue;
+        const seen = moves(readFileSync(file, 'utf8')).map((m): [string, string] => [m.method, m.receiver]);
+        if (seen.length) found[name] = seen;
+      }
+    }
+    const listed = Object.fromEntries(Object.entries(LOADS).map(([file, entries]) => [file, entries.map(([method, receiver]): [string, string] => [method, receiver])]));
+    expect(found, 'a load or history move outside the gate: go through tabs (whenProxied, reload, go, navigate), or list it here with why').toEqual(listed);
+    for (const entries of Object.values(LOADS)) for (const [, , why] of entries) expect(why.length).toBeGreaterThan(20);
   });
 });
 
