@@ -373,7 +373,7 @@ export function pageResult(page: {
     retrieved_at: new Date(page.retrievedAt).toISOString(),
     trust: 'untrusted',
     range: { start, end: start + content.length, total: clean.length },
-    ...(page.part ? { part: { ref: page.part.ref, role: page.part.role, name: page.part.name.slice(0, 200) } } : {}),
+    ...(page.part ? { part: { ref: page.part.ref, role: page.part.role, name: cleanPageText(page.part.name).slice(0, 200) } } : {}),
     ...(page.pdf ? { pages: { total: page.pdf.pages, read: page.pdf.read } } : {}),
     ...(page.note ? { note: page.note } : {}),
     content,

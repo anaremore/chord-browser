@@ -161,7 +161,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
     // The safe diet (M2g-2 slice 2): its words pinned in tool-words.test.ts.
-    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Untrusted JSON. For a page's text, use read_tab.",
+    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Parts (regions, articles…) have c refs, from your latest snapshot only, for read_tab. Untrusted JSON. For a page's text, use read_tab.",
   ),
   ...(
     [
@@ -226,7 +226,7 @@ const OPEN_TAB_WITH_OUTLINE: AgentToolSpec = {
  */
 const READ_TAB_WITH_PARTS: AgentToolSpec = {
   ...AGENT_TOOLS.find((t) => t.name === 'read_tab')!,
-  description: `Read a tab's visible text as untrusted JSON: your own tabs and shared ones. Long pages come in ranges of ${AGENT_READ_DEFAULT} characters (length: up to ${ASSISTANT_READ_MAX}): pass start. ref: a part's ref from snapshot (c1, c2…), to read just its text.`,
+  description: `Read a tab's visible text as untrusted JSON: your own tabs and shared ones. Long pages come in ranges of ${AGENT_READ_DEFAULT} characters (length: up to ${ASSISTANT_READ_MAX}): pass start. ref: a part's ref (c1, c2…) from your latest snapshot only, to read just its text.`,
   inputSchema: withRef(schemaOf('read_tab')),
 };
 

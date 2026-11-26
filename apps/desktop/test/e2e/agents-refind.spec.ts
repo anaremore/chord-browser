@@ -778,14 +778,42 @@ test('read_tab by a part’s container ref: just its shown text, as the page rea
     expect(part.content).not.toContain('Story words');
     // Never what CSS hides, `hidden`, `inert`; never a field's value, an editor's contents, an ARIA text field's
     // (whatever its tag), nor a frame's inside.
-    const hidden = ['hidden-display', 'hidden-visibility', 'hidden-opacity', 'hidden-attribute', 'hidden-inert'];
-    const sensitive = ['field-value-secret', 'textarea-secret', 'editor-secret', 'aria-textbox-secret', 'aria-searchbox-secret', 'aria-combobox-secret', 'frame-inside-secret'];
+    const hidden = ['hidden-display', 'hidden-visibility', 'hidden-opacity', 'hidden-attribute'];
+    const sensitive = ['hidden-inert', 'field-value-secret', 'textarea-secret', 'editor-secret', 'aria-textbox-secret', 'aria-searchbox-secret', 'aria-combobox-secret', 'frame-inside-secret'];
     for (const never of [...hidden, ...sensitive]) expect(part.content, never).not.toContain(never);
-    // Parity both ways with the page read: what one leaves out of the page, the other leaves out of the part, and what
-    // one shows, the other does.
+    // Both ways with the page read: what it leaves out of the page, the part's read leaves out too, and what it shows,
+    // the part's does. The page read keeps inert text, as it always has (round 1 of #260): a part's read is a subset.
     const whole = (JSON.parse((await mcp.call('read_tab', { tab_id: tab })).text) as { content: string }).content;
     for (const never of hidden) expect(whole, never).not.toContain(never);
     expect(whole).toContain('Shown words: order 12 shipped.');
+    expect(whole).toContain('hidden-inert');
+
+    // Never more than the page read gives (round 1 of #260): a part inside something the page read never enters is
+    // refused as stale (or has no ref at all), and its words are never read.
+    const STALE = 'That part has changed since your snapshot, or the page moved on: call snapshot again.';
+    const unread: [string, string, boolean][] = [
+      // [the part, its words, whether the page read leaves them out too]
+      ['Offscreen', 'offscreen-secret', true],
+      ['In a button', 'button-secret', true],
+      ['Hidden shown', 'hiddenshown-secret', true],
+      ['Contents hidden', 'contents-secret', true],
+      ['In a combobox', 'combobox-part-secret', false],
+      ['Inert part', 'inert-part-secret', false],
+    ];
+    for (const [name, words, pageLeavesOut] of unread) {
+      const ref = partRef(`region "${name}"`);
+      if (ref) {
+        const read = await mcp.call('read_tab', { tab_id: tab, ref });
+        expect(read.isError, name).toBe(true);
+        expect(read.text, name).toBe(STALE);
+      }
+      if (pageLeavesOut) expect(whole, name).not.toContain(words);
+    }
+    // A part that is a shadow host reads its shadow root.
+    const shadowed = JSON.parse((await mcp.call('read_tab', { tab_id: tab, ref: partRef('region "Shadowed"')! })).text) as { content: string };
+    expect(shadowed.content).toContain('shadow-words');
+    // A section whose label is empty, or names nothing, is no region.
+    expect(outline).not.toMatch(/- region(?: "")? \[ref=/);
 
     // Read-only: an acting tool given a c ref refuses it, and nothing is pressed.
     const PART_ACT = 'A c ref names a part of a page to read with read_tab, never one to act on: use an element’s ref (e1, e2…).';
@@ -796,7 +824,6 @@ test('read_tab by a part’s container ref: just its shown text, as the page rea
     expect(await inPage('window.__pressed')).toBe(0);
 
     // The part renamed since the snapshot: refused as stale, never read.
-    const STALE = 'That part has changed since your snapshot, or the page moved on: call snapshot again.';
     await inPage('document.querySelector("section").setAttribute("aria-label", "Returns"); 0');
     const renamed = await mcp.call('read_tab', { tab_id: tab, ref: orders });
     expect(renamed.isError).toBe(true);

@@ -26,23 +26,29 @@ export interface PageRead {
 
 /**
  * The page's shown text, as read_tab reads it: one walk, for the whole page (EXTRACT_SCRIPT) and for one part of it by its
- * container ref (S18 M2g-2, #207: snapshot.ts' boxTextScript), so what one leaves out the other does (parity, tested both
- * ways). Hidden is what CSS hides (display, visibility, opacity), `hidden`, and `inert` subtrees; off screen isn't.
- * `strict` (a part by its ref): never an editing host's contents, nor an ARIA text field's (`role=textbox`, `searchbox`,
- * `combobox`) whatever its tag, on top of fields' values, which neither ever reads.
+ * container ref (S18 M2g-2, #207: snapshot.ts' boxTextScript), so a part's read is never more than the page's (tested
+ * both ways). Hidden is what CSS hides (display, visibility, opacity), and `hidden`; off screen isn't.
+ * `strict` (a part by its ref) leaves out more, never less: `inert` subtrees, an editing host's contents, and an ARIA
+ * text field's (TEXT_TYPED) whatever its tag, on top of fields' values, which neither ever reads. (The page read keeps
+ * `inert` text as it always has: a modal's backdrop inerts the article a summary is asked of: round 1 of #260.)
  */
 export const TEXT_LIB = String.raw`
   const TEXT_SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','INPUT','TEXTAREA','SELECT','OPTION','DATALIST','BUTTON','SVG','CANVAS','IFRAME','OBJECT','EMBED','VIDEO','AUDIO','PICTURE','HEAD','LINK','META']);
   const TEXT_BLOCK = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|NAV|UL|OL|LI|TABLE|THEAD|TBODY|TR|BLOCKQUOTE|PRE|FIGURE|FIGCAPTION|H[1-6]|DL|DT|DD|FORM|FIELDSET|BR|HR|DETAILS|SUMMARY)$/;
   const TEXT_MAX = 400000;
-  const TEXT_TYPED = new Set(['textbox', 'searchbox', 'combobox']);
+  // Something typed in, by its ARIA role, whatever its tag (round 1 of #260: one set). snapshot.ts' TYPED is narrower on
+  // purpose: a combobox's options are walked there, and named by its words.
+  const TEXT_TYPED = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
+  const textRole = (el) => String(el.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
   // Hidden is what CSS hides, not what's off screen: a section that skips rendering until it's scrolled to,
   // and a long page's top once you've scrolled past it, are still the page's text.
   const textVisible = (el) => {
-    if (el.hidden || el.closest('[inert]')) return false;
+    if (el.hidden) return false;
     if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
-      // display: contents has no box of its own, so it never counts as visible; its children do (Substack wraps whole pages in one).
-      return getComputedStyle(el).display === 'contents';
+      // display: contents has no box of its own, so it never counts as visible; its children do (Substack wraps whole pages
+      // in one). Only if it isn't hidden itself (round 1 of #260): its visibility and opacity still count.
+      const style = getComputedStyle(el);
+      return style.display === 'contents' && style.visibility !== 'hidden' && style.visibility !== 'collapse' && Number(style.opacity) !== 0;
     }
     const r = el.getBoundingClientRect();
     if (r.right >= -500 && r.bottom >= -5000) return true;
@@ -71,7 +77,7 @@ export const TEXT_LIB = String.raw`
         }
         if (TEXT_SKIP.has(tag)) continue;
         if (child.isContentEditable && (strict || (focused && child.contains(focused)))) continue;
-        if (strict && TEXT_TYPED.has(String(child.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase())) continue;
+        if (strict && (child.hasAttribute('inert') || TEXT_TYPED.has(textRole(child)))) continue;
         if (!textVisible(child)) continue;
         const block = TEXT_BLOCK.test(tag);
         if (block) out.push('\n');
@@ -83,6 +89,8 @@ export const TEXT_LIB = String.raw`
         if (block) out.push('\n');
       }
     };
+    // A part that is a shadow host reads its shadow root first, as the walk does every host inside it (round 1 of #260).
+    if (root.shadowRoot) walk(root.shadowRoot);
     walk(root);
     return out.join('').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   };

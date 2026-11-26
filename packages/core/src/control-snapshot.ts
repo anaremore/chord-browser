@@ -125,6 +125,23 @@ export class ElementRefs {
    */
   private boxes: { pageId: string; token: string; byRef: ReadonlyMap<string, ShownBox> } | null = null;
 
+  /**
+   * The container refs of a read's parts (round 1 of #260): numbered as element refs are, from the page's own ids above
+   * every ref the tab had before this page, so a part's ref from another page never names one of this page (the page's
+   * ids start over with each document). Only for the page its refs were just issued for (`issue` with its ids).
+   */
+  boxRefsFor(pageId: string, boxSids: ReadonlyMap<number, number>): Map<number, string> {
+    const out = new Map<number, string>();
+    if (!pageId || !this.base || this.base.pageId !== pageId) return out;
+    for (const [box, sid] of boxSids) {
+      if (!Number.isInteger(sid) || sid <= 0 || sid > SID_MAX) continue;
+      const n = this.base.from + sid;
+      out.set(box, `c${n}`);
+      this.next = Math.max(this.next, n + 1);
+    }
+    return out;
+  }
+
   /** The container refs an outline showed (#207): this page's, under its read's token, in place of the last ones. */
   issueBoxes(pageId: string, token: string, shown: ReadonlyMap<string, ShownBox>): void {
     this.boxes = pageId ? { pageId, token, byRef: new Map(shown) } : null;
@@ -347,7 +364,7 @@ export const ROWS_SHOWN = 5;
  * ref: the full outline, its rows collapsed as they'd be, less its text lines (never a run the text kept apart, such as
  * headings between paragraphs, collapsed when the text goes).
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean; boxes?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[]; boxes?: Map<string, ShownBox> } {
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean; boxes?: ReadonlyMap<number, string> } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[]; boxes?: Map<string, ShownBox> } {
   const nodes = read.nodes;
   const noText = opts.text === false;
   let count = 0;
@@ -366,10 +383,10 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     if (ref) {
       parts.push(`[ref=${ref}]`);
       count++;
-    } else if (opts.boxes && node.box !== undefined && node.sid !== undefined) {
-      const box = `c${node.sid}`;
+    } else if (opts.boxes && node.box !== undefined && opts.boxes.has(node.box)) {
+      const box = opts.boxes.get(node.box)!;
       parts.push(`[ref=${box}]`);
-      shownBoxes.set(box, { box: node.box, role, name: node.name ?? '' });
+      shownBoxes.set(box, { box: node.box });
     }
     if (node.level && node.level >= 1 && node.level <= 6) parts.push(`[level=${node.level}]`);
     for (const state of node.states ?? []) {
@@ -459,11 +476,9 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
   return { text: lines.join('\n'), refs: count, ...(collapsed ? { collapsed } : {}), ...(shownBoxes.size ? { boxes: shownBoxes } : {}) };
 }
 
-/** A container ref's part, as the outline showed it (#207): its place in the read, its role and its name. */
+/** A container ref's part (#207): its place in the read (the page checks its role and name again before reading it). */
 export interface ShownBox {
   box: number;
-  role: string;
-  name: string;
 }
 
 /** A container ref (#207): `c` and the part's page id. Never an element's (`e`): read_tab alone takes it. */

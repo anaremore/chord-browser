@@ -378,7 +378,18 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<input aria-label="Note" value="field-value-secret"><textarea aria-label="Message">textarea-secret</textarea>' +
       '<div contenteditable="true">editor-secret</div><div role="textbox">aria-textbox-secret</div><span role="searchbox">aria-searchbox-secret</span><div role="combobox">aria-combobox-secret</div>' +
       '<iframe title="Chat" srcdoc="<p>frame-inside-secret</p>"></iframe><button>Cancel order</button></section>' +
-      '<article aria-label="Story"><p>Story words.</p></article><table aria-label="Prices"><tr><td>Tea</td><td>3</td></tr></table></main>',
+      '<article aria-label="Story"><p>Story words.</p></article><table aria-label="Prices"><tr><td>Tea</td><td>3</td></tr></table>' +
+      // Parts the page read never enters (round 1 of #260): an off-screen wrapper, a button, a hidden wrapper shown by CSS,
+      // an ARIA text field, an inert wrapper, a display: contents part that's hidden; a part that is a shadow host; and
+      // sections whose label is empty or names nothing (no region).
+      '<div style="position:absolute;left:-10000px;top:-10000px"><section aria-label="Offscreen"><p>offscreen-secret</p></section></div>' +
+      '<button><section aria-label="In a button"><p>button-secret</p></section></button>' +
+      '<div hidden style="display:block"><section aria-label="Hidden shown"><p>hiddenshown-secret</p></section></div>' +
+      '<div role="combobox"><section aria-label="In a combobox"><p>combobox-part-secret</p></section></div>' +
+      '<div inert><section aria-label="Inert part"><p>inert-part-secret</p></section></div>' +
+      '<section aria-label="Contents hidden" style="display:contents;visibility:hidden"><p>contents-secret</p></section>' +
+      '<div id="shadowhost" role="region" aria-label="Shadowed"></div><script>document.getElementById("shadowhost").attachShadow({ mode: "open" }).innerHTML = "<p>shadow-words</p>";</script>' +
+      '<section aria-label=""><p>empty-label-words</p></section><section aria-labelledby="no-such-id"><p>dangling-label-words</p></section></main>',
     '/article50':
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +

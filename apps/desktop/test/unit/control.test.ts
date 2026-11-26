@@ -3369,23 +3369,25 @@ describe('acting through the gate (S18 M2c)', () => {
   describe('read_tab by a part’s container ref (S18 M2g-2, #207)', () => {
     const ORDERS = { depth: 0, role: 'region', name: 'Orders', sid: 50, box: 0 };
     const NEVER_READ = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
-    /** An agent's tab whose page has a part (Orders, c50), snapshot taken: the scope reads parts. */
+    /** An agent's tab whose page has a part (Orders), snapshot taken: the scope reads parts. */
     const withParts = async (opts: { boxes?: boolean } = {}) => {
       const twist: Twist = { read: { extra: [ORDERS] } };
       const t = await acting({ twist });
       if (opts.boxes !== false) (t.scope as { boxes?: boolean }).boxes = true;
       const snap = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { content: string; page_id: string };
-      return { ...t, twist, snap };
+      // Its c ref, numbered as element refs are (round 1 of #260): read from the outline.
+      const part = /region "Orders" \[ref=(c\d+)\]/.exec(snap.content)?.[1] ?? 'c0';
+      return { ...t, twist, snap, part };
     };
     type Part = { trust: string; source: string; content: string; part: { ref: string; role: string; name: string }; range: { start: number; end: number; total: number } };
 
     it('the outline gives the part a c ref, and read_tab reads just its text: untrusted, which part, in ranges', async () => {
       const t = await withParts();
-      expect(t.snap.content).toContain('- region "Orders" [ref=c50]');
-      const out = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: 'c50' })).text!) as Part;
-      expect(out).toMatchObject({ trust: 'untrusted', source: 'web_page', content: 'Order 12 shipped. Order 15 is on its way.', part: { ref: 'c50', role: 'region', name: 'Orders' } });
+      expect(t.snap.content).toMatch(/- region "Orders" \[ref=c\d+\]/);
+      const out = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: t.part })).text!) as Part;
+      expect(out).toMatchObject({ trust: 'untrusted', source: 'web_page', content: 'Order 12 shipped. Order 15 is on its way.', part: { ref: t.part, role: 'region', name: 'Orders' } });
       // Capped and in ranges, as read_tab is.
-      const range = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: 'c50', start: 9, length: 7 })).text!) as Part;
+      const range = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: t.part, start: 9, length: 7 })).text!) as Part;
       expect(range.content).toBe('shipped');
       expect(range.range).toEqual({ start: 9, end: 16, total: 41 });
     });
@@ -3411,10 +3413,52 @@ describe('acting through the gate (S18 M2c)', () => {
       for (const [what, arrange, says] of table) {
         const t = await withParts();
         await arrange(t);
-        const out = await t.call('read_tab', { tab_id: t.tab, ref: what === 'a ref never given' ? 'c999' : 'c50' });
+        const out = await t.call('read_tab', { tab_id: t.tab, ref: what === 'a ref never given' ? 'c999999' : t.part });
         expect(out.isError, what).toBe(true);
         expect(refusal(out).refused, what).toBe(says);
         expect(out.text, what).not.toMatch(/secret|Order 12/);
+      }
+    });
+
+    it('a c ref from the page before never reads one of this page: the page’s own ids start over, refs never do (round 1 of #260)', async () => {
+      const t = await withParts();
+      // The tab goes to another document with a part the page script numbers the same.
+      await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+      const b = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { content: string };
+      expect(b.content).toMatch(/- region "Orders" \[ref=c\d+\]/);
+      expect(b.content).not.toContain(`[ref=${t.part}]`);
+      t.twist.part = () => ({ ok: true, url: 'https://news.test/b', role: 'region', name: 'Orders', text: 'Page B’s orders.' });
+      const old = await t.call('read_tab', { tab_id: t.tab, ref: t.part });
+      expect(old.isError).toBe(true);
+      expect(refusal(old).refused).toBe(PART_REFUSALS.unknown);
+      expect(old.text).not.toContain('Page B');
+    });
+
+    it('Stop as it was read: stopped, and nothing of it kept (round 1 of #260)', async () => {
+      const t = await withParts();
+      (t.scope.memory as { readFrom?: Set<string> }).readFrom = new Set();
+      t.twist.part = () => (t.agent.stop(), { ok: true, url: 'https://elsewhere.test/a', role: 'region', name: 'Orders', text: 'x' });
+      expect(refusal(await t.call('read_tab', { tab_id: t.tab, ref: t.part })).refused).toBe(CONTROL_REFUSALS.stopped);
+      // Never marked as read from where it was (what typing in a page checks), nor in the activity.
+      expect([...t.scope.memory.readFrom!]).toEqual([]);
+      expect(t.activity).not.toContain('Read a part of “Article”');
+    });
+
+    it('read, it’s marked as read from where it was, as any read is (round 1 of #260)', async () => {
+      const t = await withParts();
+      (t.scope.memory as { readFrom?: Set<string> }).readFrom = new Set();
+      t.twist.part = () => ({ ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'x' });
+      await t.call('read_tab', { tab_id: t.tab, ref: t.part });
+      expect([...t.scope.memory.readFrom!]).toEqual(['https://news.test']);
+    });
+
+    it('an outside agent’s part over 20000 characters reads 20000 when it asks for no length, or one that isn’t a number (round 1 of #260)', async () => {
+      const t = await withParts();
+      (t.scope as { readDefault?: number }).readDefault = AGENT_READ_DEFAULT;
+      t.twist.part = () => ({ ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'abcdefghij'.repeat(5_000) });
+      for (const length of [undefined, Number.NaN]) {
+        const out = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: t.part, ...(length === undefined ? {} : { length }) })).text!) as Part;
+        expect(out.range, String(length)).toEqual({ start: 0, end: 20_000, total: 50_000 });
       }
     });
 
@@ -3429,10 +3473,10 @@ describe('acting through the gate (S18 M2c)', () => {
       ];
       t.steps.length = 0;
       for (const [tool, args] of calls) {
-        const out = await t.call(tool, { tab_id: t.tab, ref: 'c50', ...args });
+        const out = await t.call(tool, { tab_id: t.tab, ref: t.part, ...args });
         expect(refusal(out).refused, tool).toBe(PART_REFUSALS.act);
       }
-      const batched = await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'c50' }] }, new AbortController().signal);
+      const batched = await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: t.part }] }, new AbortController().signal);
       expect(batched.isError).toBe(true);
       expect(batched.text).toContain(PART_REFUSALS.act);
       // Nothing was described, pointed at or pressed.

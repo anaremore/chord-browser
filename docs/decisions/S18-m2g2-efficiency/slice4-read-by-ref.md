@@ -13,21 +13,27 @@ The plan's item 4: an agent reads one section of a long page by naming it, inste
 
 ## How
 
-- **Sections are regions.** A `<section>` named by `aria-label` or `aria-labelledby` has the role `region` (as ARIA maps it, and as the outline's items already read it). So a named section shows in the outline, and gets a ref.
+- **Sections are regions.** A `<section>` with a name has the role `region` (as ARIA maps it, and as the outline's items already read it), decided on the name it computes: an empty `aria-label`, or an `aria-labelledby` that names nothing, makes none (round 1 of #260). So a named section shows in the outline, and gets a ref.
 - **Container refs.** Where the scope reads parts (outside agents: `scope.boxes`):
-  - the snapshot gives each region, article, main, navigation, complementary, banner, contentinfo, search, form and table a `c` ref, numbered by the element's own page id (stable from one snapshot to the next, as element refs are);
+  - the snapshot gives each region, article, main, navigation, complementary, banner, contentinfo, search, form and table a `c` ref, numbered as element refs are (round 1 of #260): from the element's own page id, above every ref the tab had before this page. A part's ref from another page never names one of this page, though the page's ids start over with each document;
+  - **from the agent's latest snapshot only:** `snapshot`'s and `read_tab`'s words say so (round 1 of #260). The page keeps only that snapshot's parts;
   - the page keeps each such part by a WeakRef in its read, with the role and name the outline gave it (snapshot.ts: `boxes`), as it keeps the elements it acts on;
   - core keeps them in their own table on `ElementRefs` (`issueBoxes`, `resolveBox`), never an element ref's: an `e` ref never resolves as a part, nor a `c` ref as an element.
   - The assistant gets none: its outline is as it was.
 - **`read_tab` with `ref`** (agents' schema: `^c[1-9][0-9]{0,8}$`):
   - resolves the ref in the table, on the page the tab is on now: another page's is stale, one never given is unknown;
-  - in the page (snapshot.ts: `boxTextScript`) finds the part again from the agent's snapshot, and checks it as an action checks its element: still in the document, shown, its role and name as the outline gave them. Anything else is stale;
+  - in the page (snapshot.ts: `boxTextScript`) finds the part again from the agent's snapshot, and checks it as an action checks its element: still in this document (never one adopted into a frame), shown, its role and name as the outline gave them. Anything else is stale;
+  - **never more than the page read gives** (round 1 of #260, rule 1): every ancestor, out through shadow hosts, must be one the walk would enter. Shown (an off-screen wrapper, or a `hidden` one shown by CSS, isn't), not a tag it skips (a `button`), not an ARIA text field, not `inert`; an editor is refused as one;
   - reads its text by the page read's own walk (extract.ts: `TEXT_LIB`, which `EXTRACT_SCRIPT` now uses too), strict: never an editing host's contents, nor an ARIA text field's, whatever its tag, on top of fields' values and frames, which neither ever reads;
   - refuses a page that's all editor (designMode, an editable body: #145's B-3), and a part that is one;
   - under `read_tab`'s rules: its card, the scope's `readable`, Never sites before the read and after it (on the read's own address), Settings' Nothing (`blockedNow`), Stop, and a page that went to another document as it was read (stale);
   - answers as `read_tab` does (untrusted, capped, in ranges with `start` and `length`, the agent's default), with which part it is (`part`: its ref, role and name).
 - **Read-only.** Every acting tool refuses a `c` ref at run time with its own words, before anything is described, pointed at or pressed; `batch` refuses it before step 1. Their schemas' `ref` pattern (`^e…`) already refuses it.
-- **The shared walk.** The page read now leaves out `inert` subtrees too, as the snapshot always has, so the two walks' rules are one (the threat checklist's set: `display`, `visibility`, `opacity`, `hidden`, `inert`).
+- **The shared walk** (extract.ts: `TEXT_LIB`): one walk for the page read and a part's, so a part's read is never more than the page's.
+  - The strict (part) walk leaves out more, never less: `inert` subtrees, editing hosts and ARIA text fields (`TEXT_TYPED`: textbox, searchbox, combobox, spinbutton).
+  - The page read keeps `inert` text as it always has (round 1 of #260): a modal's backdrop inerts the article a summary is asked of.
+  - `display: contents` counts as shown only if it isn't hidden itself (its visibility and opacity: round 1 of #260).
+  - A part that is a shadow host reads its shadow root (round 1 of #260).
 
 ## Rule 1, for parts
 
@@ -47,7 +53,7 @@ The plan's lines (threat-checklist.md, *`read_tab(ref)`: one element's text*):
   - *Test:* agents.spec, a section holding each, and a frame: none of their text is in the part's read.
   - A page whose body is editable, or in `designMode`, is refused (#145's B-3). *Test:* agents.spec (`designMode` on: refused in Chord's words); control.test (the editor answer).
 - **Hidden text:**
-  - the same visibility rules as `extract.ts` (one walk): `display`, `visibility`, `opacity`, `hidden`, `inert`;
+  - the same visibility rules as `extract.ts` (one walk): `display`, `visibility`, `opacity`, `hidden`; `inert` too for a part, never for the page read;
   - *Test:* agents.spec, parity both ways: each hidden text is absent from the part's read and the page's, and the shown text present in both.
 - **Frames:** never a frame's inside, same-origin or not. *Test:* agents.spec (a `srcdoc` frame's words are absent).
 - **Re-verified before reading:**

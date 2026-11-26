@@ -94,8 +94,9 @@ export const SNAPSHOT_LIB = String.raw`
       case 'img': return (el.getAttribute('alt') || '').trim() ? 'img' : null;
       case 'figure': return 'figure';
       case 'article': return 'article';
-      // A section named by aria-label or aria-labelledby is a region (#207), as ARIA maps it and itemRole reads it.
-      case 'section': return el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') ? 'region' : null;
+      // A section with a name is a region (#207), as ARIA maps it and itemRole reads it: decided on the name it computes,
+      // never an empty or dangling aria-label or aria-labelledby (round 1 of #260).
+      case 'section': return nameOf(el, 'region') ? 'region' : null;
       case 'fieldset': return 'group';
       case 'iframe': case 'frame': return 'iframe';
       case 'hr': return 'separator';
@@ -648,14 +649,23 @@ export function boxTextScript(owner: string, token: string, box: number): string
   ${SNAPSHOT_LIB}
   ${TEXT_LIB}
   ${SNAPSHOT_FIND}
-  if (document.designMode === 'on' || (document.body && document.body.isContentEditable) || document.documentElement.isContentEditable) return { ok: false, why: 'editor' };
+  const html = document.documentElement;
+  if (document.designMode === 'on' || (document.body && document.body.isContentEditable) || (html && html.isContentEditable)) return { ok: false, why: 'editor' };
   const read = snapshotFind(args.owner, args.token);
   const b = read && read.boxes ? read.boxes[args.box] : null;
   const el = b ? b.ref.deref() : null;
-  if (!el || !el.isConnected || !textVisible(el)) return { ok: false, why: 'stale' };
+  // Still in this document (never one adopted into a frame), shown, and not itself what the walk never reads.
+  if (!el || !el.isConnected || el.ownerDocument !== document || !textVisible(el) || TEXT_SKIP.has(el.tagName)) return { ok: false, why: 'stale' };
   if (el.isContentEditable) return { ok: false, why: 'editor' };
   const role = roleNow(el);
   if (role !== b.role || nameOf(el, role) !== b.name) return { ok: false, why: 'stale' };
+  // Never more than the page read gives (round 1 of #260, rule 1): every ancestor, out through shadow hosts, is one the
+  // walk would enter: shown (an off-screen wrapper, a hidden one shown by CSS), not a tag it skips (a button), not an
+  // ARIA text field nor inert (the strict walk's), not an editor.
+  for (let n = el.parentElement || (el.parentNode && el.parentNode.host) || null; n; n = n.parentElement || (n.parentNode && n.parentNode.host) || null) {
+    if (n.isContentEditable) return { ok: false, why: 'editor' };
+    if (TEXT_SKIP.has(n.tagName) || TEXT_TYPED.has(textRole(n)) || n.hasAttribute('inert') || !textVisible(n)) return { ok: false, why: 'stale' };
+  }
   return { ok: true, url: location.href, role: b.role, name: b.name, text: readText(el, true) };
 })(${JSON.stringify({ owner, token, box })})`;
 }
