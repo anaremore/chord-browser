@@ -413,6 +413,26 @@ describe('round 3 of #286: a page can’t stall main (Neon’s B1), nor stretch 
   });
 });
 
+describe('drawing a place checks only the characters a run limit can rule out (round 5 of #286)', () => {
+  it('the same passwords as checking every character, for the same random numbers', () => {
+    const r = seeded(51);
+    const classes = ['lower', 'upper', 'digit', 'special', 'ascii-printable', '[abc]', '[0123]', '[ab01]', '[kl]', '[xyz]', '[-_.]'];
+    let compared = 0;
+    for (let i = 0; i < 300; i++) {
+      const parts = [`allowed: ${classes[r(classes.length)]}`, `required: ${classes[r(classes.length)]}`];
+      if (r(2)) parts.push(`required: ${classes[r(classes.length)]}`);
+      parts.push(r(3) === 0 ? `max-consecutive: ${1 + r(3)}` : r(2) ? `max-repeating: ${1 + r(3)}` : `max-sequential: ${1 + r(3)}`);
+      if (r(2)) parts.push(`minlength: ${4 + r(60)}`);
+      const rules = rulesOf(`${parts.join('; ')};`);
+      for (let seed = 1; seed <= 3; seed++) {
+        expect(drawOnce(rules, seeded(seed * 31 + i)), parts.join('; ')).toBe(drawOnce(rules, seeded(seed * 31 + i), { everyCharacter: true }));
+        compared++;
+      }
+    }
+    expect(compared).toBe(900);
+  });
+});
+
 describe('a regression sweep against main (round 2 of #286)', () => {
   /**
    * 400 seeded rule sets (run limits, required and allowed classes, half with a maxlength), each tried on 20 seeds by

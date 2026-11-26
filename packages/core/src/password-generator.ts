@@ -750,7 +750,7 @@ function drawWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): str
  * each place in turn from its class less the characters that would break a run there. Never a run too long, so no try
  * is thrown away for one; a try is lost only where a small class has nothing left (`stuckChance`).
  */
-function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): string | null {
+function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt, everyCharacter = false): string | null {
   const { pool, length, forced } = plan;
   const shuffle = (list: string[]) => {
     for (let i = list.length - 1; i > 0; i--) {
@@ -793,8 +793,13 @@ function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): st
   }
   let password = '';
   let tail = NO_TAIL;
+  // Each class's characters once; and at a place, only the last character and its two neighbours in order can break a
+  // run limit there, so only they are checked (round 5 of #286, Opus: 10,000 places × 88 characters each, 50-90 ms).
+  const unique = new Map<string, string[]>();
+  const charsOf = (cls: string) => unique.get(cls) ?? (unique.set(cls, [...new Set(cls)]), unique.get(cls)!);
   for (const cls of places) {
-    const left = [...new Set(cls)].filter((c) => allows(extend(tail, c), rules));
+    const risky = everyCharacter ? null : [tail.last, inOrderAfter(tail.last, -1), inOrderAfter(tail.last, 1)];
+    const left = charsOf(cls).filter((c) => (risky && !risky.includes(c)) || allows(extend(tail, c), rules));
     if (!left.length) return null;
     const c = left[randomInt(left.length)]!;
     password += c;
@@ -804,7 +809,9 @@ function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): st
 }
 
 /** Tests only (#60): one try, as `generatePassword` makes each, so every outcome of its random numbers can be counted. */
-export function drawOnce(rules: PasswordRuleSet, randomInt: RandomInt): string | null {
+export function drawOnce(rules: PasswordRuleSet, randomInt: RandomInt, options: { everyCharacter?: boolean } = {}): string | null {
   const plan = drawable(rules);
-  return plan ? drawWith(plan, rules, randomInt) : null;
+  if (!plan) return null;
+  // `everyCharacter` (tests only): every character of a place's class checked, the reference the fast path matches.
+  return options.everyCharacter && limitsRuns(rules) ? buildWith(plan, rules, randomInt, true) : drawWith(plan, rules, randomInt);
 }

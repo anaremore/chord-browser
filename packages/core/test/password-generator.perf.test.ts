@@ -65,6 +65,35 @@ describe('the generator on a page’s rules built to be slow', () => {
     `allowed: lower, digit; ${ONE.slice(0, 15).map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1;`,
     `allowed: ascii-printable; ${DISTINCT.slice(0, 120).map((c) => `required: [${c}];`).join(' ')} max-repeating: 1; max-sequential: 2; minlength: 121;`,
   ];
+  // Opus's (round 5 of #286): long passwords from wide classes, where drawing each place checked every character of its
+  // class against the run limits (50-90 ms a focus).
+  const SYMBOLS = [...'-!#$%&*+.:;=?@^_~'];
+  const TRIPLES = SYMBOLS.flatMap((a, i) => SYMBOLS.slice(i + 1).flatMap((b, j) => SYMBOLS.slice(i + j + 2).map((c) => a + b + c))).slice(0, 80);
+  const LETTERS_DIGITS = [...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'];
+  const drawn = [
+    `allowed: lower, upper, digit, [-!#$%&*+.:;=?@^_~]; ${LETTERS_DIGITS.map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1; minlength: 1000;`,
+    `allowed: ascii-printable; ${LETTERS_DIGITS.map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1;`,
+    `allowed: [ab]; required: [a]; ${TRIPLES.map((t) => `required: [${t}];`).join(' ')} max-sequential: 1; minlength: 64;`,
+    `allowed: ascii-printable; ${LETTERS_DIGITS.map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1; minlength: 1000;`,
+    // Neon's N4-1 (round 4's first witness): thirty single letters, b to G, and the look-alikes.
+    `allowed: ascii-printable; ${[...'bcdefghijklmnopqrstuvwxyzABCDEFG'].slice(0, 30).map((c) => `required: [${c}];`).join(' ')} required: [01IOlo|]; max-consecutive: 1; minlength: 31;`,
+  ];
+  /** A random source as Chord's is (crypto.randomInt in main): not seeded. */
+  const anyRandom: RandomInt = (n) => Math.floor(Math.random() * n);
+  it.each(drawn)(`%s: a focus under ${BUDGET_MS} ms, fifteen times`, (site) => {
+    const times: number[] = [];
+    for (let i = 0; i < 15; i++) {
+      const started = performance.now();
+      const rules = passwordRulesFor({}, site).rules;
+      const password = generatePassword(rules, anyRandom);
+      if (password !== null && !isStrongPassword(password, rules)) describeWeakPassword(password, rules);
+      times.push(performance.now() - started);
+    }
+    const slowest = Math.max(...times);
+    console.log(`${site.slice(0, 60)}…: slowest ${slowest.toFixed(1)} ms of 15`);
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  });
+
   it.each(heavy)(`%s: a focus under ${BUDGET_MS} ms`, (site) => {
     const times: number[] = [];
     for (let i = 0; i < 3; i++) {
