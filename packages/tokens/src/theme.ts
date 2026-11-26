@@ -108,6 +108,15 @@ export const DANGER: Record<Appearance, Oklch> = {
 };
 
 /**
+ * Something isn't working as you set it and you might act on it (DESIGN.md §4.5, used sparingly): Settings → Privacy's
+ * *Not blocking in Work* (#284). A warm amber, apart from danger's red, at ≥ 4.5:1 on every surface.
+ */
+export const WARNING: Record<Appearance, Oklch> = {
+  light: { l: 0.53, c: 0.14, h: 50 },
+  dark: { l: 0.78, c: 0.12, h: 60 },
+};
+
+/**
  * An outside agent at work (S18; mocks/agents-s18-m1.html): its bar's text and Stop, the edge of the tab it's
  * reading, its section in the sidebar. A blue apart from any chord's accent, so it never reads as yours.
  */
@@ -335,6 +344,7 @@ export function createChordTheme(input: ChordThemeInput, context: ThemeContext):
       '--color-accent-fg': accentFg,
       '--color-focus-ring': cssOklch(ring),
       '--color-danger': cssOklch(DANGER[appearance]),
+      '--color-warning': cssOklch(WARNING[appearance]),
       '--color-agent': cssOklch(AGENT[appearance].fg),
       '--color-agent-surface': cssOklch(AGENT[appearance].bg),
       '--color-agent-edge': cssOklch(AGENT[appearance].edge),

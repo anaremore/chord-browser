@@ -81,10 +81,10 @@ function describe(control: ReactNode, id: string | undefined): ReactNode {
     : cloneElement(control as ReactElement<{ describedBy?: string }>, { describedBy: id });
 }
 
-export function Row({ label, description, control, changed, onReset }: { label: string; description?: string; control: ReactNode; changed?: boolean; onReset?(): void }) {
+export function Row({ label, description, control, changed, onReset, tone }: { label: string; description?: string; control: ReactNode; changed?: boolean; onReset?(): void; tone?: 'warning' }) {
   const descriptionId = useId();
   return (
-    <div className={styles.row}>
+    <div className={styles.row} data-tone={tone}>
       <div className={styles.rowText}>
         <span className={styles.rowLabel}>{label}</span>
         {description && (

@@ -213,6 +213,56 @@ test('Settings → Privacy: the switch turns blocking off and on, and lists the 
   }
 });
 
+test('a chord whose blocking didn’t come on (#284): its row in Settings → Privacy, Try again, Trying…, then the row goes', async () => {
+  // Development builds only: the extension's first load fails, each load held 1.5 s (so Trying… shows).
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'once', CHORD_E2E_AD_BLOCKING_DELAY_MS: '1500' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    const row = settings.getByText(/^Not blocking in /);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByText('Ad blocking couldn’t start for this chord, so its pages load without it.')).toBeVisible();
+    // For the owner's preview: light, then dark.
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-failed-light.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'dark'));
+    await settings.waitForTimeout(400);
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-failed-dark.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'system'));
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    const trying = settings.getByRole('button', { name: 'Trying…' });
+    await expect(trying).toBeVisible();
+    await expect(trying).toBeDisabled();
+    await settings.screenshot({ path: test.info().outputPath('ad-blocking-trying.png') });
+    // It comes on: the row goes, and the rules are on.
+    await expect(row).toBeHidden({ timeout: 20_000 });
+    await rulesReady(app);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a chord whose blocking still won’t come on (#284): Try again, Trying…, and the row comes back as it was', async () => {
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_FAIL: 'always', CHORD_E2E_AD_BLOCKING_DELAY_MS: '1500' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await shell.evaluate(() => (window as unknown as Chord).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    await expect(settings.getByText(/^Not blocking in /)).toBeVisible({ timeout: 20_000 });
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    await expect(settings.getByRole('button', { name: 'Trying…' })).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 20_000 });
+    await expect(settings.getByText(/^Not blocking in /)).toBeVisible();
+    // Blocking off: no row (nothing to block).
+    await settings.getByRole('switch', { name: 'Block ads and trackers' }).click();
+    await expect(settings.getByText(/^Not blocking in /)).toBeHidden();
+  } finally {
+    await app.close();
+  }
+});
+
 test('a private window is covered: its requests are checked in Chord, its ad slots hidden, and its own exceptions go with it', async () => {
   const app = await launch();
   try {

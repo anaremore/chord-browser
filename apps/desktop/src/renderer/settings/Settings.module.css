@@ -204,6 +204,57 @@
   font: var(--text-small);
 }
 
+/* Something isn't working as set (Privacy's *Not blocking in Work*, #284): the label in warning, after a dot. */
+.row[data-tone='warning'] .rowLabel {
+  color: var(--color-warning);
+}
+
+.row[data-tone='warning'] .rowLabel::before {
+  content: '';
+  display: inline-block;
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  margin-inline-end: var(--space-2);
+  border-radius: var(--radius-full);
+  background: currentColor;
+  vertical-align: 0.05em;
+}
+
+/* Try again, under way: the button says *Trying…* beside a small ring that turns (still with reduced motion). */
+.trying {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.trying::before {
+  content: '';
+  inline-size: var(--space-3);
+  block-size: var(--space-3);
+  border: var(--size-hairline) solid var(--color-divider);
+  border-block-start-color: var(--color-fg-muted);
+  border-radius: var(--radius-full);
+  animation: trying-turn var(--duration-spin) linear infinite;
+}
+
+@keyframes trying-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trying::before {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .row[data-tone='warning'] .rowLabel {
+    color: CanvasText;
+  }
+}
+
 .value {
   color: var(--color-fg-muted);
   font: var(--text-body);

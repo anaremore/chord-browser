@@ -21,6 +21,7 @@ import { AD_BLOCKING_NOTICE, blockingSite, DEFAULT_SETTINGS, SAFE_BROWSING_NOTIC
 import type { AdBlockingStatus, SafeBrowsingStatus, SettingsSnapshot } from '@chord/ipc';
 import { Check, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { notBlockingRow } from './ad-blocking-row';
 import { api } from './api';
 import { RadioGroup, Row, SectionHeader, Switch } from './controls';
 import { ProxySection, type ProxyFocus } from './Proxy';
@@ -62,9 +63,19 @@ function AdBlocking({ snapshot }: { snapshot: SettingsSnapshot }) {
   const { enabled, offSites } = snapshot.settings.adBlocking;
   const [status, setStatus] = useState<AdBlockingStatus | null>(null);
   const [site, setSite] = useState('');
+  // The chords whose blocking didn't come on (#284), never with blocking off.
+  const notBlocking = enabled && status ? notBlockingRow(status.notOn, snapshot.chords) : null;
+  const showing = notBlocking !== null;
   useEffect(() => {
-    void api.settings.adBlocking().then(setStatus);
-  }, [enabled]);
+    const refresh = () => void api.settings.adBlocking().then(setStatus);
+    refresh();
+    if (!enabled) return;
+    // Main's word on it changes by itself (a try ending, a late success): every second while the row shows, else now and then.
+    const timer = setInterval(refresh, showing ? 1000 : 5000);
+    return () => clearInterval(timer);
+  }, [enabled, showing]);
+  const tryAgain = (profiles: readonly string[]) =>
+    void Promise.all(profiles.map((profileId) => api.settings.retryAdBlocking(profileId))).then(() => api.settings.adBlocking().then(setStatus));
   const set = (patch: Partial<typeof snapshot.settings.adBlocking>) => void api.settings.set({ adBlocking: patch });
   const added = blockingSite(site.trim());
   const addSite = () => {
@@ -83,6 +94,18 @@ function AdBlocking({ snapshot }: { snapshot: SettingsSnapshot }) {
           onReset={() => set({ enabled: DEFAULT_SETTINGS.adBlocking.enabled })}
           control={<Switch label="Block ads and trackers" checked={enabled} onChange={(on) => set({ enabled: on })} />}
         />
+        {notBlocking && (
+          <Row
+            tone="warning"
+            label={notBlocking.label}
+            description={notBlocking.description}
+            control={
+              <button type="button" className={notBlocking.trying ? `${styles.linkButton} ${styles.trying}` : styles.linkButton} disabled={notBlocking.trying} onClick={() => tryAgain(notBlocking.profiles)}>
+                {notBlocking.trying ? 'Trying…' : 'Try again'}
+              </button>
+            }
+          />
+        )}
         {enabled && status && <Row label="The lists" description={blockingListsLine(status)} control={null} />}
         {enabled && (
           <Row

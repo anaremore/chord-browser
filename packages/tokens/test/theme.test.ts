@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DANGER,
+  WARNING,
   PRESETS,
   contrast,
   createChordTheme,
@@ -88,6 +89,17 @@ describe('createChordTheme', () => {
       for (const s of lightSurfaces) expect(contrast(oklchToRgb(DANGER.light), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
       for (const s of darkSurfaces) expect(contrast(oklchToRgb(DANGER.dark), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it('keeps the warning color readable on the lightest and darkest surfaces (#284)', () => {
+    for (let h = 0; h < 360; h += 15) {
+      const lightSurfaces = [{ l: 0.975, c: 0.006, h }, { l: 1, c: 0, h }];
+      const darkSurfaces = [{ l: 0.21, c: 0.006, h }, { l: 0.25, c: 0.008, h }];
+      for (const s of lightSurfaces) expect(contrast(oklchToRgb(WARNING.light), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
+      for (const s of darkSurfaces) expect(contrast(oklchToRgb(WARNING.dark), oklchToRgb(s))).toBeGreaterThanOrEqual(4.5);
+    }
+    const ctx: ThemeContext = { systemAppearance: 'light', material: 'translucent' };
+    expect(createChordTheme({ stops: presetStops('fog'), grain: 1, appearance: 'light' }, ctx).vars['--color-warning']).toBeTruthy();
   });
 
   it('gives fallback favicons a letter at ≥ 4.5:1 on its square, at every hue', () => {
