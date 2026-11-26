@@ -243,7 +243,7 @@ const fillWork = { steps: 0 };
 
 /** Tests only (round 3 of #286): how far `fillable` walked making these rules' plan, at most FILL_BUDGET. */
 export function fillSteps(rules: PasswordRuleSet): number {
-  planFor(rules);
+  makePlan(rules);
   return fillWork.steps;
 }
 
@@ -459,7 +459,18 @@ export function runsAllow(password: string, rules: PasswordRuleSet): boolean {
  * run limits let it be, and weak: never look-alikes for strength alone, under the floor too (the owner's decision of
  * 2026-11-18; four digits are from 2–9). Null when the rules allow no character or no length.
  */
+/**
+ * Each rule set's plan, worked out once (Opus, round 3 of #286): a focus asks for it three times (the password, its
+ * strength, the words for a weak one) with the same rules, and a page's rules can make it costly. Rule sets aren't
+ * changed once made.
+ */
+const plans = new WeakMap<PasswordRuleSet, Plan | null>();
 function planFor(rules: PasswordRuleSet): Plan | null {
+  if (!plans.has(rules)) plans.set(rules, makePlan(rules));
+  return plans.get(rules)!;
+}
+
+function makePlan(rules: PasswordRuleSet): Plan | null {
   fillWork.steps = 0;
   planWork.units = 0;
   const minLength = Math.max(1, rules.minLength);

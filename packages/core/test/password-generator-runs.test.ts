@@ -356,6 +356,9 @@ describe('round 2 of #286: the fallbacks’ regressions (Neon’s B1, B2; Opus�
 describe('round 3 of #286: a page can’t stall main (Neon’s B1), nor stretch a weak password (Neon’s B2)', () => {
   // Neon's inputs: a page's own passwordrules, worked out on Electron's main thread on every focus. Each stays inside its
   // walk's budget here; how long each takes is held in password-generator.perf.test.ts (pnpm test:perf).
+  const SYMBOL_CLASSES = ['!@#', '$%^', '&*(', ')-_', '=+.', ',;:', '<>?', '/~!', '@#$', '%^&', '*()']
+    .map((c) => `required: [${c}];`)
+    .join(' ');
   const heavy = [
     'allowed: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
     'allowed: [ab01IOlo|]; required: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
@@ -368,6 +371,11 @@ describe('round 3 of #286: a page can’t stall main (Neon’s B1), nor stretch 
     `allowed: lower, digit; ${'required: [a]; required: [b]; '.repeat(150)}max-repeating: 1; minlength: 400;`,
     `allowed: lower, digit; ${'required: [a]; '.repeat(90)}max-consecutive: 1; minlength: 200;`,
     `allowed: lower, digit; ${[...'abcdefghijkmnpqrstuvwxyz23456789'].map((c) => `required: [${c}];`).join(' ')} max-sequential: 1; minlength: 900;`,
+    // Opus's (round 3 of #286): a two-letter pool in order, one letter required, and eleven classes of three symbols
+    // (about 140 s at be3a5bda for generatePassword, as long again for isStrongPassword).
+    `allowed: [ab]; required: [a]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 64;`,
+    `allowed: [ab]; required: [a]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 40;`,
+    `allowed: [kl]; required: [l]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 64;`,
   ];
   it.each(heavy)('B1, %s: its walk inside its budget, and a password or none (never a hang)', (site) => {
     const rules = rulesOf(site);

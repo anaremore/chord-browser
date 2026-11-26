@@ -27,6 +27,9 @@ function seeded(seed: number): RandomInt {
 }
 
 describe('the generator on a page’s rules built to be slow', () => {
+  const SYMBOL_CLASSES = ['!@#', '$%^', '&*(', ')-_', '=+.', ',;:', '<>?', '/~!', '@#$', '%^&', '*()']
+    .map((c) => `required: [${c}];`)
+    .join(' ');
   const heavy = [
     'allowed: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
     'allowed: [ab01IOlo|]; required: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
@@ -39,6 +42,11 @@ describe('the generator on a page’s rules built to be slow', () => {
     `allowed: lower, digit; ${'required: [a]; required: [b]; '.repeat(150)}max-repeating: 1; minlength: 400;`,
     `allowed: lower, digit; ${'required: [a]; '.repeat(90)}max-consecutive: 1; minlength: 200;`,
     `allowed: lower, digit; ${[...'abcdefghijkmnpqrstuvwxyz23456789'].map((c) => `required: [${c}];`).join(' ')} max-sequential: 1; minlength: 900;`,
+    // Opus's (round 3 of #286): a two-letter pool in order, one letter required, and eleven classes of three symbols
+    // (about 140 s at be3a5bda for generatePassword, as long again for isStrongPassword).
+    `allowed: [ab]; required: [a]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 64;`,
+    `allowed: [ab]; required: [a]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 40;`,
+    `allowed: [kl]; required: [l]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 64;`,
   ];
   it.each(heavy)(`%s: under ${BUDGET_MS} ms`, (site) => {
     const rules = passwordRulesFor({}, site).rules;
