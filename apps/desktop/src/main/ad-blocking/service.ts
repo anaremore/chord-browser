@@ -22,7 +22,7 @@ import { isBlockingOff } from '@chord/core';
 import type { AdBlockingStatus } from '@chord/ipc';
 import { session as electronSession, type OnBeforeRequestListenerDetails, type Session, type WebContents } from 'electron';
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { mark } from '../launch-timeline';
 import { proxies } from '../proxy';
@@ -261,12 +261,16 @@ export class AdBlocking {
     this.profiles.delete(profileId);
   }
 
-  /** Profiles no chord uses any more (their sign-ins were deleted): their extension folders go too. */
+  /**
+   * Profiles no chord uses any more (their sign-ins were deleted): their extension folders go too, and their staging
+   * folders (#281), with the one all profiles shared before (`Staging/rules`).
+   */
   async forgetProfiles(inUse: ReadonlySet<string>): Promise<void> {
     await this.ready;
     const keep = new Set([...inUse].map(folderName));
-    const dir = join(this.config.root, 'Extension');
-    for (const folder of await readdir(dir).catch(() => [])) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
+    for (const dir of [join(this.config.root, 'Extension'), join(this.config.root, 'Staging')]) {
+      for (const folder of await readdir(dir).catch(() => [])) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
+    }
     for (const profileId of Object.keys(this.saved.profiles)) if (!inUse.has(profileId)) delete this.saved.profiles[profileId];
     this.save();
   }
@@ -350,15 +354,24 @@ export class AdBlocking {
       .finally(() => profile.release('off'));
   }
 
-  /** The newest set's rules into a profile's extension (read here, so a bundled set inside the asar works too). */
+  /**
+   * The newest set's rules into a profile's extension (read here, so a bundled set inside the asar works too). Each
+   * profile stages its own copy (#274): profiles update side by side, and one removing a shared folder while another
+   * still copied out of it left that one with no rules (Windows: EPERM rmdir).
+   */
   private async writeRules(blocker: BlockerExtension): Promise<void> {
     const set = this.current!;
     if (set.dir !== this.config.bundledDir) return await blocker.write(set.dir);
-    const staging = join(this.config.root, 'Staging');
-    await mkdir(join(staging, 'rules'), { recursive: true });
-    for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
-    await blocker.write(staging);
-    await rm(staging, { recursive: true, force: true });
+    const staging = join(this.config.root, 'Staging', basename(blocker.folder));
+    try {
+      await mkdir(join(staging, 'rules'), { recursive: true });
+      for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
+      await blocker.write(staging);
+    } finally {
+      // Gone whether the write worked or not; one that can't go yet (a scanner holding a handle) never fails the rules
+      // already written (Neon's round 1 of #281). The next write, or forgetProfiles, takes it.
+      await rm(staging, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   /** Once a launch: Chromium has what Chord last applied, or it's applied again. */

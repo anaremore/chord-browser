@@ -66,14 +66,19 @@ export class BlockerExtension {
     return this.extension !== null && this.session.extensions.getExtension(this.extension.id) !== null;
   }
 
-  /** Put a compiled set's rules in the folder, with the manifest and control page, and drop Chromium's index of the old ones. Unloaded first. */
+  /**
+   * Put a compiled set's rules in the folder, with the control page and the manifest, and drop Chromium's index of the
+   * old ones. Unloaded first. The manifest goes in last, once the rules are all there: a folder with one is taken as
+   * written (the service's stale check), so a copy that fails must leave none (Neon's nit on #281).
+   */
   async write(setDir: string): Promise<void> {
     this.unload();
+    await rm(join(this.folder, 'manifest.json'), { force: true });
     await mkdir(join(this.folder, 'rules'), { recursive: true });
-    await writeFile(join(this.folder, 'manifest.json'), JSON.stringify(MANIFEST, null, 2));
     await writeFile(join(this.folder, 'control.html'), CONTROL_PAGE);
     for (const id of RULESETS) await cp(join(setDir, 'rules', `${id}.json`), join(this.folder, 'rules', `${id}.json`));
     await rm(join(this.folder, '_metadata'), { recursive: true, force: true });
+    await writeFile(join(this.folder, 'manifest.json'), JSON.stringify(MANIFEST, null, 2));
   }
 
   /** Load the extension; true if it wasn't loaded. Its rules load a moment later, on Chromium's own threads. */
