@@ -273,6 +273,20 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.manager.stopWaiting(t.page as never)).toBe(false);
   });
 
+  it('a wait that rejects (#299): over, the page loads; asked again, the same rejected wait doesn’t spin', async () => {
+    const failed = Promise.reject(new Error('the proxy couldn’t be set'));
+    failed.catch(() => {});
+    const t = setup([]);
+    t.page.loadURL.mockClear();
+    // The gate keeps answering the same rejected wait (page-gate.ts keeps one promise per session).
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => failed;
+    t.manager.navigate(NODE, SECOND);
+    await tick();
+    await tick();
+    expect(t.loaded()).toEqual([SECOND]);
+    expect(firstLoadPending(t.page)).toBe(false);
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);

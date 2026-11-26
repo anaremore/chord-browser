@@ -368,6 +368,7 @@ export class Browser {
     this.store = new Store(options.initial);
     setShortcutOverrides(this.store.state.settings.shortcuts);
     this.safeBrowsing = new SafeBrowsingGuard({
+      stopWaiting: (contents) => void this.tabs.stopWaiting(contents),
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       enabled: () => options.safeBrowsing.enabled(),

@@ -68,6 +68,16 @@ describe('an extension’s pop-out waits for its session (#277)', () => {
     expect(win.loadURL).toHaveBeenCalledOnce();
   });
 
+  it('a wait that rejects (#299): over, it loads; the same rejected wait again doesn’t spin', async () => {
+    FakeWindow.made.length = 0;
+    const failed = Promise.reject(new Error('no'));
+    failed.catch(() => {});
+    const extensions = new Extensions({ profileSession: () => ({}), proxyReady: () => failed } as never);
+    (extensions as unknown as { openPopupWindow(p: string, u: string, d: object): unknown }).openPopupWindow('default', 'chrome-extension://x/popup.html', {});
+    await tick();
+    expect(FakeWindow.made[0]!.loadURL).toHaveBeenCalledOnce();
+  });
+
   it('closed during the wait: never loaded', async () => {
     const rules = held();
     const win = popOut([rules]);

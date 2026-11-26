@@ -130,10 +130,12 @@ export class TabManager {
     this.loadTurns.get(contents)?.overtaken?.();
     const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
     this.loadTurns.set(contents, turn);
-    const go = () => {
+    // `failed`: a wait that rejected (#299): it's over. Asked again, a source answering that same wait isn't waited on.
+    const go = (failed?: Promise<void>) => {
       if (contents.isDestroyed()) return void (this.waitMarked.delete(contents) && setFirstLoadPending(contents, false));
       if (this.loadTurns.get(contents) !== turn) return;
-      const pending = this.deps.proxyReady(contents.session);
+      const asked = this.deps.proxyReady(contents.session);
+      const pending = asked === failed ? null : asked;
       if (pending) {
         this.waiting.add(contents);
         if (!firstLoadPending(contents)) {
@@ -142,7 +144,10 @@ export class TabManager {
           const nodeId = this.nodeFor(contents);
           if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true } });
         }
-        void pending.then(go);
+        pending.then(
+          () => go(),
+          () => go(pending),
+        );
         return;
       }
       this.waiting.delete(contents);

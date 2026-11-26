@@ -31,6 +31,8 @@ export interface GuardDeps {
   handOver(contents: WebContents, nodeId: NodeId, url: string): void;
   /** "Back to safety" with nothing to go back to. */
   closeTab(nodeId: NodeId): void;
+  /** Drop a load of the page still waiting for its session (tabs.ts' stopWaiting), so it never lands after this (#300). */
+  stopWaiting?(contents: WebContents): void;
 }
 
 interface Watch {
@@ -123,6 +125,9 @@ export class SafeBrowsingGuard {
    */
   private leave(contents: WebContents, watch: Watch, nodeId?: NodeId): void {
     watch.own = true;
+    // A load waiting for the page's session would land over where this goes (#300): dropped first. Back to safety
+    // itself doesn't wait for the session: it leaves a flagged page at once.
+    this.deps.stopWaiting?.(contents);
     if (contents.navigationHistory.canGoBack()) {
       contents.navigationHistory.goBack();
       return;

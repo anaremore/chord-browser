@@ -271,10 +271,16 @@ export class Extensions {
       return { action: 'deny' };
     });
     // Its session's pages wait until it's ready (#189); so does this one, asked again as each wait ends (#277).
-    const load = (): void => {
+    // A wait that rejects is over (#299): asked again, a source answering that same wait isn't waited on.
+    const load = (failed?: Promise<void>): void => {
       if (win.isDestroyed()) return;
-      const pending = this.deps.proxyReady?.(win.webContents.session);
-      if (pending) void pending.then(load);
+      const asked = this.deps.proxyReady?.(win.webContents.session) ?? null;
+      const pending = asked === failed ? null : asked;
+      if (pending)
+        pending.then(
+          () => load(),
+          () => load(pending),
+        );
       else void win.loadURL(url).catch(() => {});
     };
     load();
