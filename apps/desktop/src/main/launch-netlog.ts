@@ -15,15 +15,42 @@ import { app, netLog } from 'electron';
 type NetEvent = { time: string; type: number; phase: number; source: { id: number; type: number }; params?: Record<string, unknown> };
 type NetLogFile = { constants: { logEventTypes: Record<string, number>; logEventPhase: Record<string, number> }; events: NetEvent[] };
 
+let dir: string | null = null;
 let file: string | null = null;
 
-/** Start recording (call once, before `ready`): only in a CI test build, where a stalled first page fails a test. */
+/**
+ * Start recording (call once, before `ready`): only in a CI test build, where a stalled first page fails a test, and
+ * never in the perf tier (CHORD_E2E_SHARD=perf), whose launch times it would add to. It stops once the first page has
+ * committed or failed (stopNetLog), so the rest of a test runs without it.
+ */
 export function recordNetLog(): void {
-  if (app.isPackaged || !process.env['CI']) return;
-  const dir = mkdtempSync(join(tmpdir(), 'chord-netlog-'));
+  if (app.isPackaged || !process.env['CI'] || process.env['CHORD_E2E_SHARD'] === 'perf') return;
+  dir = mkdtempSync(join(tmpdir(), 'chord-netlog-'));
   file = join(dir, 'net.json');
   void app.whenReady().then(() => netLog.startLogging(file!, { captureMode: 'default' }).catch(() => (file = null)));
-  app.once('quit', () => rmSync(dir, { recursive: true, force: true }));
+}
+
+/**
+ * Its folder, removed. Never at quit: on Windows the log file is still open until Chromium's network service lets go
+ * (EPERM, #261's first run), and a folder left in the test run's own temporary folder goes with that.
+ */
+function removeLog(): void {
+  const gone = dir;
+  dir = null;
+  file = null;
+  try {
+    if (gone) rmSync(gone, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Still held (Windows): left in the test run's temporary folder, which goes with the run.
+  }
+}
+
+/** The first page committed or failed: nothing to look at, so the recording stops and its file goes. */
+export function stopNetLog(): void {
+  if (!file) return;
+  void (netLog.currentlyLogging ? netLog.stopLogging() : Promise.resolve())
+    .then(removeLog)
+    .catch(() => undefined);
 }
 
 /** At most this many of the request's events are shown: the start and the end of a long one say where it stopped. */
@@ -38,6 +65,8 @@ export async function requestEvents(url: string): Promise<string[]> {
     log = JSON.parse(readFileSync(file, 'utf8')) as NetLogFile;
   } catch (error) {
     return [`(the net log couldn't be read: ${error instanceof Error ? error.message : String(error)})`];
+  } finally {
+    removeLog();
   }
   const names = new Map(Object.entries(log.constants.logEventTypes).map(([name, id]) => [id, name]));
   const phases = new Map(Object.entries(log.constants.logEventPhase).map(([name, id]) => [id, name.replace(/^PHASE_/, '').toLowerCase()]));

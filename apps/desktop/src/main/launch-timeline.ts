@@ -16,7 +16,7 @@
  * that request's events from Chromium's net log (launch-netlog.ts, CI's test builds only): how far it got.
  */
 import { app, type WebContents } from 'electron';
-import { recordNetLog, requestEvents } from './launch-netlog';
+import { recordNetLog, requestEvents, stopNetLog } from './launch-netlog';
 
 const started = Date.now();
 const marks: string[] = [];
@@ -61,11 +61,13 @@ export function watchLaunch(slowAfterMs = 5000): void {
       if (!/^https?:/.test(url)) return;
       mark(`committed ${path(url)} (${code})`);
       settled = true;
+      stopNetLog();
     });
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
       if (!isMainFrame || !/^https?:/.test(url)) return;
       mark(`failed ${path(url)}: ${code} ${description}`);
       settled = true;
+      stopNetLog();
     });
     contents.on('did-finish-load', () => {
       if (firstLoaded || !web()) return;
