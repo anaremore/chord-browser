@@ -427,6 +427,14 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
     // The press tried again (the review of #117, round 3): the page replaces its button as the pointer arrives, once
     // armed (window.arm), in the way ?m= says.
     '/moves': '<title>Moves</title><main id=m></main><p id=log></p><script src="/moves.js"></script>',
+    // Round 1 of #270 (B1): twin rows, each with its Cancel, and twin toolbars, each with its Pick. The test changes
+    // them between a snapshot's answer and the task after it (chordTestHooks.agentBeforeFinish).
+    '/twins':
+      '<title>Twins</title><div id=list><div id=w1 role=row><button onclick="log(\'cancel A\')">Cancel</button></div>' +
+      '<div id=w2 role=row><button onclick="log(\'cancel B\')">Cancel</button></div></div>' +
+      '<div id=c1 role=toolbar><button onclick="log(\'confirm 1\')">Pick</button></div>' +
+      '<div id=c2 role=toolbar><button onclick="log(\'confirm 2\')">Pick</button></div>' +
+      '<p id=log></p><script>function log(t) { document.getElementById("log").textContent += t + ";"; }</script>',
     '/redraws': '<title>Redraws</title><div id=big></div><div id=keep><button id=kb>Keep</button></div><div id=pt role=region aria-label="Table 7"><button>Muck</button> <button>Muck</button></div><main id=m></main><p id=log></p><script src="/redraws.js"></script>',
     '/act':
       '<title>Act</title><style>body{margin:0}button,input{position:fixed;left:20px;width:200px;height:40px}button{top:20px}input{top:80px}#log{margin-top:140px}</style>' +

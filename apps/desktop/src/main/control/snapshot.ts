@@ -353,14 +353,17 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     const n = up ? up.n + 1 : 1;
     const part = args.probe.items ? null : itemOf(el, role);
     const items = up ? up.items : null;
-    // The element itself, not its place's part: that's read in the task after the snapshot (placeOf), only for a kept
-    // ref's ancestors, from the node held (a replaced one keeps its tag and attributes), never for every element (#166).
-    if (args.probe.eagerPart) [el.localName, el.getAttribute('role') || ''].length;
-    return { el, up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
+    // Its tag and role as the walk saw them, as strings: never the element, whose role the page can change before the task
+    // after the snapshot (round 1 of #270, B1: a twin row's ref then found the other row). The place's pairs are built
+    // in that task (placeOf), only for a kept ref's ancestors, never one array per element (#166).
+    const at = { tag: el.localName, role: el.getAttribute('role') || '', up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
+    // (As main did before #166, for agentSnapshotParts' comparison: measured only.)
+    if (args.probe.eagerPart) at.part = [at.tag, at.role];
+    return at;
   };
   const placeOf = (chain) => {
     const parts = [];
-    for (let c = chain; c && parts.length < 64; c = c.up) parts.push([c.el.localName, c.el.getAttribute('role') || '']);
+    for (let c = chain; c && parts.length < 64; c = c.up) parts.push([c.tag, c.role]);
     return JSON.stringify(parts);
   };
   // Kept on the chain's node (round 2 of #145): its children all ask for the same items.
@@ -488,6 +491,13 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     read.finishMs = performance.now() - began;
   };
   read.finish = finish;
+  // (Tests only: the one change of the page chordTestHooks.agentBeforeFinish set, made between the answer and the task
+  // after it, where a page can change before that task runs (round 1 of #270, B1). Only Chord's world can set it.)
+  const beforeFinish = globalThis.__chordBeforeFinish;
+  if (typeof beforeFinish === 'function') {
+    globalThis.__chordBeforeFinish = null;
+    try { beforeFinish(); } catch {}
+  }
   setTimeout(finish, 0);
   // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away. The ones before it
   // stay behind it, at most SNAPSHOT_HISTORY in all (M2g-1): a ref the agent got from one of them (a diff after an action

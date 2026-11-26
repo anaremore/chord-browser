@@ -105,8 +105,9 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         const walkMedian = walk[Math.floor(walk.length / 2)]!;
         console.log(`[snapshot ratio] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${path}: the snapshot ${(median / walkMedian).toFixed(2)}x a plain walk of the page (snapshot median ${median.toFixed(1)} ms, walk median ${walkMedian.toFixed(1)} ms; logged, not held)`);
       }
-      if (path === '/rows-300') {
+      if (path === '/rows-300' && TIMES_HELD) {
         // #166: what each part of the walk costs here, each left out in turn with the full snapshot (logged, never held).
+        // Where times are held (off CI, or CHORD_PERF_ENFORCE=1): 200 more snapshots would cost CI's run 15-20 s (#270).
         type Parts = Record<string, number[]> | null;
         const parts = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotParts(u: string, r: number): Promise<Parts> } }).chordTestHooks.agentSnapshotParts(u, r), [`${site.origin}${path}`, 40] as const))!;
         const med = (xs: number[]) => sorted(xs)[Math.floor(xs.length / 2)]!;
