@@ -88,18 +88,15 @@ describe('ad blocking’s folders, through the service (#283)', () => {
     expect(existsSync(extension(root, folderName('Work')))).toBe(true);
   });
 
-  it.each([
-    ['win32', true],
-    ['darwin', true],
-    ['linux', false],
-  ] as const)('forgetProfiles on %s, with work and Work in use: an old Work folder (Extension’s and Staging’s, #281) stays (%s), where case is ignored, as work’s own', async (os, stays) => {
+  // Opus's SF1 on #290: on Linux too (an NTFS, FAT or ciopfs mount ignores case there), so Work's old folder may be work's.
+  it.each(['win32', 'darwin', 'linux'] as const)('forgetProfiles on %s, with work and Work in use: an old Work folder (Extension’s and Staging’s, #281) stays, as work’s own may be it', async (os) => {
     const { blocking, root } = service((r) => {
       mkdirSync(extension(r, 'Work'), { recursive: true });
       mkdirSync(join(r, 'Staging', 'Work'), { recursive: true });
     });
     Object.defineProperty(process, 'platform', { value: os });
     await blocking.forgetProfiles(new Set(['work', 'Work']));
-    expect(existsSync(extension(root, 'Work'))).toBe(stays);
-    expect(existsSync(join(root, 'Staging', 'Work'))).toBe(stays);
+    expect(existsSync(extension(root, 'Work'))).toBe(true);
+    expect(existsSync(join(root, 'Staging', 'Work'))).toBe(true);
   });
 });

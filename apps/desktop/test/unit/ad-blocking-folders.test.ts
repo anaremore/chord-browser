@@ -18,7 +18,9 @@ describe('folderName: one folder per profile', () => {
     ['a/b', 'a\\b'],
     ['x', 'X'],
     ['', '_'],
-    // Windows drops a name's trailing dots and spaces: these would be `work`'s folder (Neon's N1 on #290).
+    // These guard the kept-name pattern (/^[a-z0-9-]{1,64}$/), not regressions of #283: Windows drops a name's
+    // trailing dots and spaces, so these would be `work`'s folder (Neon's N1 on #290), and `..` / `../x` are path steps.
+    // (Opus's N3 on #290.)
     ['work.', 'work'],
     ['work ', 'work'],
     ['..', '.'],
@@ -56,19 +58,16 @@ describe('stays: forgetProfiles never removes a folder a profile in use has', ()
   // A profile 'work' in use (a kept name), and 'Work' from before #283 (whose folder was 'Work').
   const inUse = new Set([folderName('work'), folderName('Work')]);
 
-  it.each(['win32', 'darwin'] as const)('on %s (case ignored): the old "Work" folder is the same as "work"’s, and stays', (platform) => {
-    expect(stays('Work', inUse, platform)).toBe(true);
-    expect(stays('work', inUse, platform)).toBe(true);
-    expect(stays('gone', inUse, platform)).toBe(false);
+  it('case ignored, on every platform (a Linux mount can ignore it too): the old "Work" folder may be "work"’s, and stays', () => {
+    expect(stays('Work', inUse)).toBe(true);
+    expect(stays('work', inUse)).toBe(true);
+    expect(stays('WORK', inUse)).toBe(true);
+    expect(stays(folderName('Work'), inUse)).toBe(true);
+    expect(stays(folderName('Work').toUpperCase(), inUse)).toBe(true);
+    expect(stays('gone', inUse)).toBe(false);
   });
 
-  it.each(['win32', 'darwin', 'linux'] as const)('on %s: an old "Work" folder goes when only Work is in use (its folder is the hashed one)', (platform) => {
-    expect(stays('Work', new Set([folderName('Work')]), platform)).toBe(false);
-  });
-
-  it('on Linux (case kept): only the names in use stay; the old "Work" folder is another one, and goes', () => {
-    expect(stays('work', inUse, 'linux')).toBe(true);
-    expect(stays(folderName('Work'), inUse, 'linux')).toBe(true);
-    expect(stays('Work', inUse, 'linux')).toBe(false);
+  it('an old "Work" folder goes when only Work is in use (its folder is the hashed one)', () => {
+    expect(stays('Work', new Set([folderName('Work')]))).toBe(false);
   });
 });

@@ -21,12 +21,13 @@ export function folderName(profileId: string): string {
 }
 
 /**
- * Whether a folder found in `Extension` is a profile's in use (`inUse`, its folder names): kept by `forgetProfiles`,
- * never removed under it. Where the file system ignores case (Windows, macOS), a folder from before #283 named in
- * another case (`Work`) is the same folder as a kept name (`work`), so it's compared without case there.
+ * Whether a folder found in `Extension` or `Staging` is a profile's in use (`inUse`, its folder names): kept by
+ * `forgetProfiles`, never removed under it. Compared without case on every platform: where the file system ignores
+ * case (Windows, macOS, and a Linux mount of NTFS, FAT or ciopfs), a folder from before #283 named in another case
+ * (`Work`) is the same folder as a kept name (`work`), and removing it would remove that one. Where case counts, the
+ * cost is an old folder of a few MB left behind (Opus's SF1 on #290).
  */
-export function stays(folder: string, inUse: ReadonlySet<string>, platform: NodeJS.Platform = process.platform): boolean {
-  if (platform === 'linux') return inUse.has(folder);
+export function stays(folder: string, inUse: ReadonlySet<string>): boolean {
   const lower = folder.toLowerCase();
   for (const name of inUse) if (name.toLowerCase() === lower) return true;
   return false;
