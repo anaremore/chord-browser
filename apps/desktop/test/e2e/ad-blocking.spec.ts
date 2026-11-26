@@ -160,6 +160,21 @@ test('a chord’s pages: ads and trackers blocked, ad slots hidden, and a site t
   }
 });
 
+test('Chromium slow to add the extension (#189): a fresh profile’s first page waits past launch’s 3 s cap for its rules, and its first request is blocked', async () => {
+  const before = adHits();
+  // Development builds only: the extension's load held 4.5 s, as a slow Windows disk did on CI.
+  const app = await launch({ CHORD_E2E_AD_BLOCKING_DELAY_MS: '4500' });
+  try {
+    const tab = await pageWhere(app, (url) => url.startsWith(newsUrl()));
+    // Its first load, not a reload: the page loaded only once the rules were on.
+    const results = await tab.evaluate(() => (window as unknown as { results: Promise<{ ad: string; own: string }> }).results);
+    expect(results).toEqual({ ad: 'blocked', own: 'loaded' });
+    expect(adHits() - before).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
+
 test('Settings → Privacy: the switch turns blocking off and on, and lists the sites it’s off for', async () => {
   const app = await launch();
   try {

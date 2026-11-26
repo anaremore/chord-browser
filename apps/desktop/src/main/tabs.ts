@@ -16,7 +16,7 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
-import { holdFilePickers, bypassServiceWorkers, holdFailed, setFirstLoadPending } from './agents/pickers';
+import { holdFilePickers, bypassServiceWorkers, firstLoadPending, holdFailed, setFirstLoadPending } from './agents/pickers';
 import { agentGuardUp } from './control/page';
 import { heldFromFrame } from './agents/held';
 
@@ -108,17 +108,44 @@ export class TabManager {
   /** Tabs with an icon, by site, kept up to date as tabs change: no pass over every tab to find one. */
   private readonly tabIcons: TabIconIndex;
 
+  /** Each page's newest load waiting for its session (whenProxied): an older one's wait ends without loading. */
+  private readonly loadTurns = new WeakMap<WebContents, { overtaken?: () => void }>();
+  /** Pages whose wait for their session marked their first load pending (whenProxied): unmarked as it loads. */
+  private readonly waitMarked = new WeakSet<WebContents>();
+
   constructor(private readonly deps: TabManagerDeps) {
     this.tabIcons = new TabIconIndex(() => deps.state());
   }
 
-  /** Load in `contents` once its session's proxy is in place: at once when it is (no proxy, or set long ago). */
-  private whenProxied(contents: WebContents, load: () => void): void {
-    const pending = this.deps.proxyReady(contents.session);
-    if (!pending) return load();
-    void pending.then(() => {
-      if (!contents.isDestroyed()) load();
-    });
+  /**
+   * Load in `contents` once its session is ready (its proxy in place, its chord's ad-blocking rules on, #189): at once
+   * when it is. Only the newest load asked for here runs: one asked for during the wait (a navigation, an upload) is
+   * never landed on by an older one, whose `overtaken` is called. The session is asked again before loading (a wait
+   * can end while another starts). Meanwhile the tab shows loading, and an agent's tool call waits for the page
+   * (agents/pickers.ts' firstLoadPending, which pageLoaded waits on) rather than calling it unloadable.
+   */
+  whenProxied(contents: WebContents, load: () => void, overtaken?: () => void): void {
+    this.loadTurns.get(contents)?.overtaken?.();
+    const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
+    this.loadTurns.set(contents, turn);
+    const go = () => {
+      if (contents.isDestroyed()) return void (this.waitMarked.delete(contents) && setFirstLoadPending(contents, false));
+      if (this.loadTurns.get(contents) !== turn) return;
+      const pending = this.deps.proxyReady(contents.session);
+      if (pending) {
+        if (!firstLoadPending(contents)) {
+          this.waitMarked.add(contents);
+          setFirstLoadPending(contents, true);
+          const nodeId = this.nodeFor(contents);
+          if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true } });
+        }
+        void pending.then(go);
+        return;
+      }
+      if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
+      load();
+    };
+    go();
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
@@ -257,11 +284,15 @@ export class TabManager {
     // An agent's tab: a blank page first, for a renderer to bypass service workers in (agents/pickers.ts), then its
     // address, only if that answered (fail closed: a service worker would send out of the hold's sight). The blank
     // page is never the tab's: not its address, nor in its back list.
+    let overtaken = false;
     const primed = async () => {
+      if (overtaken) return;
       this.priming.add(contents);
       await contents.loadURL('about:blank').catch(() => undefined);
       const bypassed = await bypassServiceWorkers(contents);
       this.priming.delete(contents);
+      // Another load came first (whenProxied): it's the page now, never this one over it.
+      if (overtaken) return;
       // No bypass, no page (fail closed): the hold is failed (nothing acts there), and what waits on it stops waiting.
       if (!bypassed || contents.isDestroyed()) {
         holdFailed(contents);
@@ -279,7 +310,15 @@ export class TabManager {
     };
     // Its first page is on its way from now (a read or open_tab waits for it, never the blank page before it).
     if (armed) setFirstLoadPending(contents, true);
-    this.whenProxied(contents, () => (armed ? void armed.then(primed) : load()));
+    // A load asked for over an agent tab's first page before it came (you, in the address bar): its hold is failed (nothing
+    // acts there, as a page loaded without its service workers bypassed), and nothing waits for a first page that won't come.
+    const overtake = () => {
+      if (!firstLoadPending(contents)) return;
+      overtaken = true;
+      holdFailed(contents);
+      setFirstLoadPending(contents, false);
+    };
+    this.whenProxied(contents, () => (armed ? void armed.then(primed) : load()), armed ? overtake : undefined);
     return view;
   }
 

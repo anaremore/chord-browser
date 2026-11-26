@@ -748,6 +748,7 @@ export class Browser {
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       profileSession: (profileId) => options.profileSession(profileId),
+      proxyReady: (session) => options.proxyReady(session),
       root: options.extensions.root,
       preloadPath: options.extensions.preloadPath,
       unpackWorkerPath: options.extensions.unpackWorkerPath,
@@ -1674,10 +1675,9 @@ export class Browser {
       contents.loadURL(request.url, { postData: [{ type: 'rawData', bytes: request.body }], extraHeaders: `Content-Type: ${request.contentType}
 ` }).catch(() => {});
     };
-    // A tab just made in a session whose proxy is still being set (a private window's first) waits for it, as its page does.
-    const pending = this.options.proxyReady(contents.session);
-    if (pending) void pending.then(upload);
-    else upload();
+    // A tab just made in a session not ready yet (its proxy being set, its rules not on) waits, as its page does, and
+    // takes over from the page's own first load (tabs.ts' whenProxied): the upload is what loads.
+    this.tabs.whenProxied(contents, upload);
   }
 
   /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */
