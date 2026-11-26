@@ -6,7 +6,7 @@
  * agent connects.
  */
 import { EventEmitter } from 'node:events';
-import { AGENT_BAR_HEIGHT, CONTROL_REFUSALS, agentToolList, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
+import { AGENT_BAR_HEIGHT, AGENT_READ_DEFAULT, CONTROL_REFUSALS, agentToolList, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
 import { size } from '@chord/tokens';
 import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
@@ -989,6 +989,11 @@ describe('open_tab and a Never site (security review)', () => {
     expect(JSON.stringify(listed)).not.toMatch(PRIVATE);
     expect(JSON.parse(listed.content[0]!.text)).toMatchObject({ data: { tabs: [] } });
     expect(JSON.stringify(await a.reply(3, 'read_tab', { tab_id: 'a1' }))).not.toMatch(PRIVATE);
+  });
+
+  it('an outside agent reads 20000 at a time when it asks for no length (S18 M2g-2, #206)', () => {
+    const t = setup();
+    expect(agentScope(t.agent, { state: () => t.store.state, chordId: () => t.chordId, neverSites: () => [] }).readDefault).toBe(AGENT_READ_DEFAULT);
   });
 
   it('list_tabs while a tab is on a Never site, before anything closes it: not listed, and nothing it held is told', () => {

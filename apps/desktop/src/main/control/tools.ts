@@ -361,12 +361,17 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
     await call.activity(tool, `Read your selection in “${node.title || safeHost(node.url)}”`, node.url);
     return { text: pageResult({ ref, url: read.url, text: read.selection, retrievedAt: Date.now(), pageId: sameId(page, pageId) }) };
   }
-  const start = typeof args['start'] === 'number' ? args['start'] : 0;
-  const length = typeof args['length'] === 'number' ? args['length'] : undefined;
-  const text = pageResult({ ref, url: read.url, text: read.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pageId: sameId(page, pageId) });
+  // Whole numbers only (round 1 of #252, SF-1): a length that isn't one is none asked for, never a way past the
+  // scope's default (#206: outside agents read 20000 at a time) or the one-character minimum.
+  const start = wholeArg(args['start']) ?? 0;
+  const length = wholeArg(args['length']) ?? call.scope.readDefault;
+  const text = pageResult({ ref, url: read.url, text: read.text, start, ...(length !== undefined ? { length } : {}), retrievedAt: Date.now(), pageId: sameId(page, pageId) });
   await call.activity(tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
   return { text };
 }
+
+/** A number argument as a whole number, or none (NaN, Infinity, anything else): round 1 of #252, SF-1. */
+const wholeArg = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : undefined);
 
 /**
  * A PDF in Chromium's viewer: its bytes through the tab's own session, its
@@ -377,8 +382,10 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
   const { memory } = call.scope;
   const title = node.title || safeHost(node.url);
   const url = page.url();
-  const start = typeof args['start'] === 'number' ? args['start'] : 0;
-  const length = typeof args['length'] === 'number' ? args['length'] : undefined;
+  // Whole numbers only (round 1 of #252, SF-1): a length that isn't one is none asked for, never a way past the
+  // scope's default (#206: outside agents read 20000 at a time) or the one-character minimum.
+  const start = wholeArg(args['start']) ?? 0;
+  const length = wholeArg(args['length']) ?? call.scope.readDefault;
   let pdf = memory.pdfs.get(node.id);
   if (!pdf || pdf.url !== url || start === 0) {
     /** The download ended up somewhere the scope won't read it (a shared tab's PDF on another site): its words, not *never*. */
@@ -410,7 +417,7 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
     pdf.totalPages > read ? `This PDF has ${pdf.totalPages} pages; pages 1–${read} were read, the most Chord reads.` : '',
     pdf.pages.every((p) => !p.trim()) ? 'This PDF has no text to read (it may be scanned pages); tab_screenshot shows the page on screen.' : '',
   ].filter(Boolean);
-  const text = pageResult({ ref, url, text: pdf.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}), pageId: sameId(page, pageId) });
+  const text = pageResult({ ref, url, text: pdf.text, start, ...(length !== undefined ? { length } : {}), retrievedAt: Date.now(), pdf: { pages: pdf.totalPages, read }, ...(notes.length ? { note: notes.join(' ') } : {}), pageId: sameId(page, pageId) });
   await call.activity('read_tab', `Read “${title}”`, pdf.totalPages > read ? `PDF, pages 1–${read} of ${pdf.totalPages}` : `PDF, ${pdf.totalPages} page${pdf.totalPages === 1 ? '' : 's'}`);
   return { text };
 }
@@ -522,6 +529,16 @@ const emptyDiff = (changes: Record<string, unknown>): boolean => {
   const lines = (changes['page_changes'] as { lines?: unknown } | undefined)?.lines;
   return Array.isArray(lines) && lines.length === 0;
 };
+
+/**
+ * What changed, inside an action's answer (S18 M2g-2, #206): its page and address said once. Its page is always the
+ * answer's (a page that went to another document meanwhile is said navigated, with no diff: round 1 of #252); its
+ * address is kept only where it differs (the same document gone to another address, a pushState, as it was read).
+ */
+function saidOnce(changes: Record<string, unknown>, url: string): Record<string, unknown> {
+  const { page_id: _of, url: at, ...rest } = changes['page_changes'] as Record<string, unknown>;
+  return { page_changes: { ...(at !== url ? { url: at } : {}), ...rest } };
+}
 
 /** A diff past this many lines says to call snapshot instead (M2g-1: never more than the outline would have cost). */
 const DIFF_MAX_LINES = 60;
@@ -791,12 +808,23 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false, focusTaken = false): Promise<ToolOutput> => {
     const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
     if (after) return refuse(after);
-    if (navigated) scope.memory.elements?.get(node.id)?.forget();
+    const settledOn = page.id;
     await call.activity(tool, what, page.url());
     const caught = host.caught?.(node) ?? [];
     // What changed since the agent's last snapshot, after an action on an element of a page that didn't go elsewhere
     // (M2g-1: the default; not between a batch's steps).
-    const changes = !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
+    let changes = !navigated && tool !== 'navigate' && tool !== 'back' && !scope.noDiff ? await pageChanges(call, node.id, page) : null;
+    // The diff's read can take seconds (round 1 of #252, SF-2): Stop meanwhile stops it, a page that went where it may
+    // not be read is refused (nothing of where), and one that went to another document is said to have, its refs
+    // forgotten and no diff of the page it left. The answer's page, address and title are then all of where it is now.
+    if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+    const late = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
+    if (late) return refuse(late);
+    if (page.id !== settledOn) {
+      navigated = true;
+      changes = null;
+    }
+    if (navigated) scope.memory.elements?.get(node.id)?.forget();
     return {
       text: toolResult({
         tab_id: ref,
@@ -817,7 +845,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         ...(caught.length ? { caught } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
         // Nothing changed: nothing extra (round 2 of #145: a diff costs nothing then).
-        ...(changes && !emptyDiff(changes) ? changes : {}),
+        ...(changes && !emptyDiff(changes) ? saidOnce(changes, page.url()) : {}),
       }),
     };
   };
