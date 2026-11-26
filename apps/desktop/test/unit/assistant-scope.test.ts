@@ -57,6 +57,12 @@ describe('navigate’s snapshot: true, behind its own flag (S18 M2g-2 slice 3a; 
     expect(duetScope(t.chat, t.host, true, false).outlineOnGo).toBeUndefined();
     expect(duetScope(t.chat, t.host, true, true).outlineOnGo).toBe(true);
   });
+
+  it('the flat find, behind its own flag (#208)', () => {
+    const t = setup();
+    expect(t.scope.findFlat).toBeUndefined();
+    expect(duetScope(t.chat, t.host, true, false, true).findFlat).toBe(true);
+  });
 });
 
 describe('read_tab’s range for the assistant (S18 M2g-2, #206)', () => {

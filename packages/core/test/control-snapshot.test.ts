@@ -8,6 +8,8 @@ import {
   assistantTools,
   cleanSnapshotRead,
   ElementRefs,
+  FIND_MAX,
+  FIND_NEAREST,
   isActionTool,
   isNeverOffered,
   SNAPSHOT_KEPT,
@@ -437,6 +439,86 @@ describe('parts of a page by their container refs (S18 M2g-2, #207)', () => {
     expect(refs.resolveBox('c2', 'p1')).toEqual({ ok: false, why: 'unknown' });
     refs.forget();
     expect(refs.resolveBox('c4', 'p1')).toEqual({ ok: false, why: 'unknown' });
+  });
+});
+
+describe('find, flat: up to 20 matches with their items, the nearest names when none (S18 M2g-2, #208)', () => {
+  /** 300 orders, each a row "Order N" with View and Cancel; then a Help link. */
+  const orders = (n = 300): SnapshotRead => ({
+    url: 'https://shop.test/',
+    title: 'Orders',
+    nodes: [
+      { depth: 0, role: 'table', name: 'Orders' },
+      ...Array.from({ length: n }, (_, i) => [
+        { depth: 1, role: 'row', name: `Order ${i + 1}`, sid: 1000 + 3 * i },
+        { depth: 2, role: 'button', name: 'View', key: 2 * i, sid: 1001 + 3 * i },
+        { depth: 2, role: 'button', name: 'Cancel', key: 2 * i + 1, sid: 1002 + 3 * i },
+      ]).flat(),
+      { depth: 0, role: 'link', name: 'Help with returns', key: 2 * n, sid: 9000 },
+    ],
+    cut: {},
+  });
+  const keyed = (read: SnapshotRead) => new ElementRefs().issue('p1', 't', snapshotKeys(read), new Map(read.nodes.filter((n) => n.key !== undefined).map((n) => [n.key!, n.sid!])));
+
+  it('a broad find: 20 lines, each flat with the item it’s in, then how many more and how to narrow it', () => {
+    const read = orders();
+    const out = snapshotOutline(read, keyed(read), { find: 'Cancel', flat: true });
+    const lines = out.text.split('\n');
+    expect(out.matched).toBe(300);
+    expect(lines).toHaveLength(FIND_MAX + 1);
+    expect(lines[0]).toMatch(/^- button "Cancel" \[ref=e\d+\] \(in row "Order 1"\)$/);
+    expect(lines.slice(0, FIND_MAX).every((l) => !l.startsWith('  '))).toBe(true);
+    expect(lines[FIND_MAX]).toBe('- … 280 more matches: make find narrower (an item’s words help: Cancel 150)');
+    expect(out.refs).toBe(FIND_MAX);
+  });
+
+  it('an item’s words narrow it: every word in the name or its item’s', () => {
+    const read = orders();
+    const out = snapshotOutline(read, keyed(read), { find: 'Cancel 150', flat: true });
+    expect(out.text).toMatch(/^- button "Cancel" \[ref=e\d+\] \(in row "Order 150"\)$/);
+    expect(out.matched).toBe(1);
+    // The item alone finds it and what's in it.
+    const row = snapshotOutline(read, keyed(read), { find: 'order 150', flat: true });
+    expect(row.text.split('\n')).toEqual([expect.stringMatching(/^- row "Order 150"$/), expect.stringMatching(/^- button "View" .*\(in row "Order 150"\)$/), expect.stringMatching(/^- button "Cancel" .*\(in row "Order 150"\)$/)]);
+  });
+
+  it('nothing matches: the nearest names by words in common, stop-words left out, at most 5; none near, nothing', () => {
+    const read = orders(3);
+    const near = snapshotOutline(read, keyed(read), { find: 'the returns policy', flat: true });
+    expect(near).toMatchObject({ matched: 0, nearest: true });
+    expect(near.text).toMatch(/^- link "Help with returns" \[ref=e\d+\]$/);
+    // Only stop-words in common: nothing near.
+    const none = snapshotOutline(read, keyed(read), { find: 'the of with', flat: true });
+    expect(none).toMatchObject({ text: '', matched: 0 });
+    expect(none.nearest).toBeUndefined();
+    // At most FIND_NEAREST.
+    const many = snapshotOutline(orders(20), keyed(orders(20)), { find: 'order refund', flat: true });
+    expect(many.text.split('\n')).toHaveLength(FIND_NEAREST);
+  });
+
+  it('without the page’s text, a text run never matches', () => {
+    const read: SnapshotRead = { url: 'https://p.test/', title: '', cut: {}, nodes: [{ depth: 0, role: 'text', name: 'Cancel anytime' }, { depth: 0, role: 'button', name: 'Cancel', key: 0, sid: 1 }] };
+    expect(snapshotOutline(read, keyed(read), { find: 'cancel', flat: true, text: false }).text).toMatch(/^- button "Cancel" \[ref=e\d+\]$/);
+  });
+});
+
+describe('only the refs shown are acted on (S18 M2g-2, #208; plan rule 1)', () => {
+  it('the refs on lines an answer showed, this page’s only: another page starts over; forget takes them', () => {
+    const refs = new ElementRefs();
+    refs.issue('p1', 't', [0, 1, 2], new Map([[0, 1], [1, 2], [2, 3]]));
+    refs.showRefs('p1', '- button "A" [ref=e1]\n  - … 2 more button like these');
+    expect(refs.wasShown('e1', 'p1')).toBe(true);
+    // Issued, never shown: never acted on.
+    expect(refs.resolve('e2', 'p1')).toMatchObject({ ok: true });
+    expect(refs.wasShown('e2', 'p1')).toBe(false);
+    // Shown later (a find, a range): then it is.
+    refs.showRefs('p1', '+ - button "B" [ref=e2]');
+    expect(refs.wasShown('e2', 'p1')).toBe(true);
+    expect(refs.wasShown('e2', 'p2')).toBe(false);
+    refs.showRefs('p2', '- link "C" [ref=e9]');
+    expect(refs.wasShown('e1', 'p1')).toBe(false);
+    refs.forget();
+    expect(refs.wasShown('e9', 'p2')).toBe(false);
   });
 });
 

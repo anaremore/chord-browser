@@ -142,6 +142,26 @@ export class ElementRefs {
     return out;
   }
 
+  /**
+   * The element refs the agent was shown on this page (S18 M2g-2, #208; plan rule 1): only these are acted on. Refs are
+   * still issued for every element (numbered by the page's ids, so none is ever rebound), but one on a line the agent was
+   * never shown (a collapsed run's row, a line past the range it read, an element a find didn't list) is never acted on:
+   * the acting tools ask `wasShown`. Gathered from each answer's own text, on the page it's of; another page starts over.
+   */
+  private shown: { pageId: string; refs: Set<string> } | null = null;
+
+  /** The element refs on the lines an answer showed (an outline's range, a find's lines, a diff's lines), for this page. */
+  showRefs(pageId: string, text: string): void {
+    if (!pageId) return;
+    if (!this.shown || this.shown.pageId !== pageId) this.shown = { pageId, refs: new Set() };
+    for (const m of text.matchAll(/\[ref=(e[1-9][0-9]{0,8})\]/g)) this.shown.refs.add(m[1]!);
+  }
+
+  /** Whether the agent was shown this ref on this page (#208): an acting tool's check before `resolve`. */
+  wasShown(ref: unknown, pageId: string): boolean {
+    return typeof ref === 'string' && Boolean(pageId) && this.shown?.pageId === pageId && this.shown.refs.has(ref);
+  }
+
   /** The container refs an outline showed (#207): this page's, under its read's token, in place of the last ones. */
   issueBoxes(pageId: string, token: string, shown: ReadonlyMap<string, ShownBox>): void {
     this.boxes = pageId ? { pageId, token, byRef: new Map(shown) } : null;
@@ -220,7 +240,7 @@ export class ElementRefs {
    * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
    */
   preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
-    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issued: this.issued, boxes: this.boxes };
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issued: this.issued, boxes: this.boxes, shown: this.shown };
     try {
       return this.refsFor(pageId, keys, sids).byKey;
     } finally {
@@ -241,6 +261,7 @@ export class ElementRefs {
       this.kept = null;
       this.textless = null;
       this.boxes = null;
+      this.shown = null;
     }
     if (sids && pageId && (!this.base || this.base.pageId !== pageId)) this.base = { pageId, from: this.next - 1 };
     const taken = new Set<string>();
@@ -292,6 +313,7 @@ export class ElementRefs {
     this.kept = null;
     this.textless = null;
     this.boxes = null;
+    this.shown = null;
   }
 }
 
@@ -364,7 +386,7 @@ export const ROWS_SHOWN = 5;
  * ref: the full outline, its rows collapsed as they'd be, less its text lines (never a run the text kept apart, such as
  * headings between paragraphs, collapsed when the text goes).
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean; boxes?: ReadonlyMap<number, string> } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[]; boxes?: Map<string, ShownBox> } {
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean; boxes?: ReadonlyMap<number, string>; flat?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[]; boxes?: Map<string, ShownBox>; matched?: number; nearest?: boolean } {
   const nodes = read.nodes;
   const noText = opts.text === false;
   let count = 0;
@@ -404,6 +426,11 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
   const lines: string[] = [];
   // find: the matches, each with the elements it's in (those not shown yet).
   const find = opts.find?.trim().toLowerCase();
+  // find, flat (S18 M2g-2, #208): at most FIND_MAX matches, one line each with the item it's in; none, the nearest names.
+  if (find && opts.flat) {
+    const out = flatFind(nodes, find, noText, (i) => lineOf(nodes[i]!), depthOf);
+    return { text: out.lines.join('\n'), refs: count, matched: out.matched, ...(out.nearest ? { nearest: true } : {}), ...(shownBoxes.size ? { boxes: shownBoxes } : {}) };
+  }
   if (find) {
     const path: number[] = [];
     const shown = new Set<number>();
@@ -474,6 +501,73 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
   };
   render(0, nodes.length);
   return { text: lines.join('\n'), refs: count, ...(collapsed ? { collapsed } : {}), ...(shownBoxes.size ? { boxes: shownBoxes } : {}) };
+}
+
+/** How many matches a find shows (#208): past it, how many more, and a narrower find. */
+export const FIND_MAX = 20;
+/** How many nearest names a find with no match shows (#208). */
+export const FIND_NEAREST = 5;
+/** The roles an element's item is (the outline's names for them, as the page's itemsOf reads them). */
+const FIND_ITEMS = new Set(['row', 'listitem', 'article', 'dialog', 'alertdialog', 'tabpanel', 'region']);
+/** Words a find's nearest names never count (#208). */
+const STOP_WORDS = new Set(['a', 'an', 'the', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'and', 'or', 'with', 'from', 'is', 'it', 'this', 'that', 'my', 'your', 'our']);
+const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/**
+ * A flat find (#208): each node whose name has the query, or whose name with its item's has every one of its words
+ * (`Cancel 150`: the Cancel button in row "Order 150"), at most FIND_MAX, one line each (the outline's own, unindented),
+ * with the item it's in. Past FIND_MAX, how many more. None: the nearest names, by words in common (stop-words left out),
+ * at most FIND_NEAREST; none of those either, nothing. Text runs never match without the page's text (`noText`).
+ */
+function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, lineOf: (i: number) => string | null, depthOf: (i: number) => number): { lines: string[]; matched: number; nearest: boolean } {
+  const words = wordsOf(find);
+  const path: number[] = [];
+  const itemOf: (number | null)[] = new Array(nodes.length);
+  for (let i = 0; i < nodes.length; i++) {
+    const d = depthOf(i);
+    while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
+    let item: number | null = null;
+    for (let k = path.length - 1; k >= 0; k--) {
+      const a = nodes[path[k]!]!;
+      if (FIND_ITEMS.has(a.role) && a.name) { item = path[k]!; break; }
+    }
+    itemOf[i] = item;
+    path.push(i);
+  }
+  const withItem = (i: number): string | null => {
+    const line = lineOf(i);
+    if (line === null) return null;
+    const item = itemOf[i];
+    return `- ${line.trimStart().slice(2)}${item !== null && item !== undefined ? ` (in ${nodes[item]!.role} ${JSON.stringify(clipName(nodes[item]!.name))})` : ''}`;
+  };
+  const matches: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    if (noText && n.role === 'text') continue;
+    const name = (n.name ?? '').toLowerCase();
+    const item = itemOf[i];
+    const hay = item !== null && item !== undefined ? `${name} ${(nodes[item]!.name ?? '').toLowerCase()}` : name;
+    if (name.includes(find) || (words.length > 0 && words.every((w) => hay.includes(w)))) matches.push(i);
+  }
+  const lines = matches.slice(0, FIND_MAX).map(withItem).filter((l): l is string => l !== null);
+  if (matches.length > FIND_MAX) {
+    const more = matches.length - FIND_MAX;
+    lines.push(`- … ${more} more match${more === 1 ? '' : 'es'}: make find narrower (an item’s words help: Cancel 150)`);
+  }
+  if (matches.length) return { lines, matched: matches.length, nearest: false };
+  // The nearest names: the most words in common with the query's (stop-words left out), the page's order on ties.
+  const wanted = new Set(words.filter((w) => !STOP_WORDS.has(w)));
+  if (!wanted.size) return { lines: [], matched: 0, nearest: false };
+  const scored: [number, number][] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    if (n.role === 'text' || !n.name) continue;
+    const common = new Set(wordsOf(n.name).filter((w) => wanted.has(w))).size;
+    if (common) scored.push([i, common]);
+  }
+  scored.sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+  const nearest = scored.slice(0, FIND_NEAREST).map(([i]) => withItem(i)).filter((l): l is string => l !== null);
+  return { lines: nearest, matched: 0, nearest: nearest.length > 0 };
 }
 
 /** A container ref's part (#207): its place in the read (the page checks its role and name again before reading it). */

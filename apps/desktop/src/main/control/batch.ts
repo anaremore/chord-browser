@@ -60,6 +60,8 @@ export async function runBatch(scope: ControlScope, browser: ControlBrowser, arg
     if (nodeId !== null && !lookup.ok && (lookup.why === 'unknown' || pageId)) {
       return { text: `Step ${i + 1}: ${lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(a['ref'])) : ELEMENT_REFUSALS.stale}`, isError: true };
     }
+    // Never one the agent wasn't shown (#208: rule 1), before step 1 runs.
+    if (nodeId !== null && lookup.ok && !elements!.wasShown(a['ref'], pageId)) return { text: `Step ${i + 1}: ${ELEMENT_REFUSALS.unknown(String(a['ref']))}`, isError: true };
   }
   // The tab's cards let go of so far: a change means the user took it over (gate.ts' releases).
   const released = nodeId !== null ? scope.agent.releases(nodeId) : 0;

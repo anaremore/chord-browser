@@ -617,9 +617,19 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const { tab } = await look('/orders300');
       // The outline shows 5 of 300 rows: the agent asks for what it wants by its words, as find takes them today.
       const found = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Cancel' })).text).split('\n');
-      const row = found.findIndex((l) => l.includes('row "Order 150"'));
-      const cancel = found.slice(row).find((l) => l.includes('button "Cancel"'));
-      if (row < 0 || !cancel) return false;
+      // A flat find (#208): each line with its item. Twenty of three hundred: the line after says to narrow it by the
+      // item's words, and the agent does. (A build without it: the tree, each match under its row.)
+      let cancel = found.find((l) => l.includes('button "Cancel"') && l.includes('(in row "Order 150")'));
+      if (!cancel && found.some((l) => l.includes('more matches: make find narrower'))) {
+        cancel = outlineOf((await ask('snapshot', { tab_id: tab, find: 'Cancel 150' })).text)
+          .split('\n')
+          .find((l) => l.includes('button "Cancel"') && l.includes('(in row "Order 150")'));
+      }
+      if (!cancel) {
+        const row = found.findIndex((l) => l.includes('row "Order 150"'));
+        cancel = row < 0 ? undefined : found.slice(row).find((l) => l.includes('button "Cancel"'));
+      }
+      if (!cancel) return false;
       await act('click', { tab_id: tab, ref: /\[ref=(e\d+)\]/.exec(cancel)![1]! });
       return String(await inPage('/orders300', 'document.getElementById("log").textContent')).trim() === 'cancelled 150';
     });

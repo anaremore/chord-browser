@@ -4,7 +4,7 @@
  * can't drop one unseen.
  */
 import { describe, expect, it } from 'vitest';
-import { ACTING_LINES_GO_OUTLINE, AGENT_INSTRUCTIONS, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantInstructions, assistantTools } from '../src';
+import { ACTING_LINES_GO_OUTLINE, AGENT_INSTRUCTIONS, ASSISTANT_FLAT_FIND_RELEASED, assistantFlatFind, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantInstructions, assistantTools } from '../src';
 
 /** Tokens, as the eval counts them: characters ÷ 4. */
 const tokens = (v: unknown) => Math.ceil((typeof v === 'string' ? v : JSON.stringify(v)).length / 4);
@@ -60,6 +60,7 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     ['agents', 'batch', /one of your own tabs/],
     ['agents', 'batch', /asking the user/],
     ['agents', 'wait_for', /One wait at a time/],
+    ['agents', 'snapshot', /find: up to 20 elements whose names \(with their item's\) have its words, each with its item; none: the nearest names/],
     // read_tab's ranges (#206, round 1 of #252): an outside agent's default and most, the assistant's most.
     ['agents', 'read_tab', /ranges of 20000 characters \(length: up to 40000\)/],
     ['assistant', 'read_tab', /ranges of up to 40000 characters/],
@@ -105,6 +106,8 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     expect(assistantTools(true, true).find((t) => t.name === 'navigate')!.description).not.toMatch(/snapshot/);
     expect(props(assistantTools(true, true, true), 'navigate')).toEqual(['tab_id', 'url', 'snapshot']);
     expect(assistantTools(true, true, true).find((t) => t.name === 'navigate')!.description).toMatch(/with snapshot, returns its outline as snapshot gives it/);
+    // The flat find's flag (#208): development builds, not packaged ones until it's released.
+    expect([assistantFlatFind({ packaged: false }), assistantFlatFind({ packaged: true })]).toEqual([true, ASSISTANT_FLAT_FIND_RELEASED]);
     // The flag: development builds have it; packaged ones not until it's released; only with M2 in the build.
     expect([assistantGoOutline({ packaged: false }), assistantGoOutline({ packaged: true }), assistantGoOutline({ packaged: true }, true)]).toEqual([true, ASSISTANT_GO_OUTLINE_RELEASED, true]);
     // Its instructions say so, only when it's on.

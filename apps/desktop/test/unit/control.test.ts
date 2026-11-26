@@ -11,7 +11,7 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
+import { FIND_NEAREST_NOTE, FIND_NONE_NOTE, heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
@@ -3482,6 +3482,57 @@ describe('acting through the gate (S18 M2c)', () => {
       // Nothing was described, pointed at or pressed.
       expect(t.steps).toEqual([]);
       expect(t.cards).toHaveLength(0);
+    });
+  });
+
+  describe('find, flat, and only the refs shown acted on (S18 M2g-2, #208)', () => {
+    /** Twelve rows alike after the page's elements: past ROWS_COLLAPSE, five shown, the rest said in one line. */
+    const ROWS = Array.from({ length: 12 }, (_, i) => [
+      { depth: 0, role: 'listitem', name: '', sid: 100 + 2 * i },
+      { depth: 1, role: 'button', name: `Act ${i}`, key: 20 + i, sid: 101 + 2 * i },
+    ]).flat();
+    type Snap = { content: string; note?: string; page_id: string };
+    const withRows = async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = { extra: ROWS };
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      const snap = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap;
+      return { ...t, twist, snap };
+    };
+
+    it('a collapsed row’s ref is never acted on until a line shows it (a find): click and batch refuse it', async () => {
+      const t = await withRows();
+      expect(t.snap.content).toContain('more listitem like these');
+      // Act 11's row is collapsed: its ref exists (by its page id), never shown.
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      expect(hidden).toBeDefined();
+      t.steps.length = 0;
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: hidden })).refused).toBe(ELEMENT_REFUSALS.unknown(hidden));
+      const batched = await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: hidden }] }, new AbortController().signal);
+      expect(batched.text).toBe(`Step 2: ${ELEMENT_REFUSALS.unknown(hidden)}`);
+      expect(t.steps).toEqual([]);
+      // A find shows it: then it's the agent's to act on.
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Act 11' })).text!) as Snap;
+      const ref = /\[ref=(e\d+)\]/.exec(found.content)![1]!;
+      expect(refs.wasShown(ref, found.page_id)).toBe(true);
+    });
+
+    it('a find is flat, with its items; with no match, the nearest names and Chord’s own note; never the diff’s baseline', async () => {
+      const t = await withRows();
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Act 3' })).text!) as Snap;
+      expect(found.content).toMatch(/^- button "Act 3" \[ref=e\d+\]$/);
+      const none = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'the shipping options' })).text!) as Snap;
+      expect(none.note).toBe(FIND_NEAREST_NOTE);
+      expect(none.content).toContain('combobox "Shipping"');
+      const nothing = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'zebra' })).text!) as Snap;
+      expect(nothing).toMatchObject({ note: FIND_NONE_NOTE, content: '' });
+      // The diff after an action compares with the last full snapshot, never a find's view: a text shown since is new.
+      t.twist.read = { extra: [...ROWS, { depth: 0, role: 'text', name: 'Saved' }] };
+      await t.call('snapshot', { tab_id: t.tab, find: 'Act 3' });
+      const clicked = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+      expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Saved"']);
     });
   });
 

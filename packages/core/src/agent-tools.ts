@@ -75,6 +75,15 @@ export const assistantActing = (build: { packaged: boolean }, released = ASSISTA
  */
 export const ASSISTANT_GO_OUTLINE_RELEASED = false as boolean;
 
+/**
+ * The assistant's find, flat (S18 M2g-2, #208): at most 20 matches, one line each with its item; none, the nearest names.
+ * Off in packaged builds until it's released; development builds have it.
+ */
+export const ASSISTANT_FLAT_FIND_RELEASED = false as boolean;
+
+/** Whether this build gives the assistant the flat find (ASSISTANT_FLAT_FIND_RELEASED, or any build that isn't packaged). */
+export const assistantFlatFind = (build: { packaged: boolean }, released = ASSISTANT_FLAT_FIND_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
+
 /** Whether this build offers the assistant `navigate`'s `snapshot: true` (ASSISTANT_GO_OUTLINE_RELEASED, or any build that isn't packaged). */
 export const assistantGoOutline = (build: { packaged: boolean }, released = ASSISTANT_GO_OUTLINE_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
 
@@ -161,7 +170,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
     // The safe diet (M2g-2 slice 2): its words pinned in tool-words.test.ts.
-    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Parts (regions, articles…) have c refs, from your latest snapshot only, for read_tab. Untrusted JSON. For a page's text, use read_tab.",
+    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: up to 20 elements whose names (with their item's) have its words, each with its item; none: the nearest names. text: false: the structure without the page's text, far smaller. start: the next range. Parts (regions, articles…) have c refs, from your latest snapshot only, for read_tab. Untrusted JSON. For a page's text, use read_tab.",
   ),
   ...(
     [
