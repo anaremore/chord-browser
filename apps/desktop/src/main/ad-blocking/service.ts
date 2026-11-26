@@ -62,7 +62,7 @@ export interface AdBlockingConfig {
 export const RULES_WAIT_MS = 15_000;
 
 /** How a session's wait for its rules ended: they're on, blocking is off, adding them failed, or the cap came first. */
-export type RulesStatus = 'in' | 'off' | 'failed' | 'timeout';
+type RulesStatus = 'in' | 'off' | 'failed' | 'timeout';
 
 export interface AdBlockingDeps {
   /** Settings → Privacy → Block ads and trackers. */
