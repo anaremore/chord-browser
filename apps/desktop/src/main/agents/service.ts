@@ -404,7 +404,7 @@ export class AgentService {
 }
 
 /** The pipe's DACL, tightened by window-owner.exe (its `restrict-pipe` verb); its exit code. */
-export function restrictPipe(helper: string, path: string): Promise<number> {
+function restrictPipe(helper: string, path: string): Promise<number> {
   return new Promise((resolve) => {
     execFile(helper, ['restrict-pipe', path], { windowsHide: true, timeout: 10_000 }, (error) => {
       if (!error) return resolve(0);

@@ -27,7 +27,7 @@ export function endpointPath(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, 
 }
 
 /** Lines a peer may send before its hello (the token and a client's initialize fit easily). */
-export const HELLO_MAX = 64 * 1024;
+const HELLO_MAX = 64 * 1024;
 /** Lines after it: a tool call and its arguments. */
 export const MESSAGE_MAX = 4 * 1024 * 1024;
 /** Lines from Chord to the relay: a screenshot is the largest answer. */
@@ -188,7 +188,7 @@ export async function startEndpoint(options: EndpointOptions): Promise<Endpoint>
  * an existing one, whose mode writeFileSync would keep), then renamed over the old one in
  * one step, so a reader sees the old file or the new one, never half of either.
  */
-export function writeTokenFile(file: string, text: string): void {
+function writeTokenFile(file: string, text: string): void {
   const temp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     writeFileSync(temp, text, { mode: 0o600, flag: 'wx' });

@@ -57,7 +57,7 @@ export function relay(profile: string) {
   return { child, request, call, exited: new Promise<number | null>((done) => child.once('exit', (code) => done(code))) };
 }
 
-export function resolveElectron(): string {
+function resolveElectron(): string {
   // The electron package's main export is the path of its binary.
   return (process.getBuiltinModule('module').createRequire(join(appDir, 'package.json'))('electron') as string);
 }
@@ -80,7 +80,7 @@ export async function answer(app: ElectronApplication, name: string, button: 'De
 }
 
 /** The shop's results (M2c): a button that says it worked, one under a banner, a list of choices. */
-export const shopResults = (q: string) =>
+const shopResults = (q: string) =>
   `<title>Results</title><main><h1>Results for ${q}</h1>` +
   '<button onclick="document.getElementById(\'log\').textContent = \'return started\'">Start a return</button><p id=log></p>' +
   '<div style="position:relative;inline-size:200px"><button>Under the banner</button><div role=dialog aria-label="Cookie settings" style="position:absolute;inset:-4px;background:white">Cookies</div></div>' +
@@ -118,7 +118,7 @@ export const refOf = (outline: string, line: string) => {
 export const siteCardOf = (popover: Page, name: string) => popover.getByRole('alertdialog', { name: new RegExp(`^Let ${name} click and type on `) });
 
 /** A list of rows of links, buttons and text: `rows` of 5 elements each. */
-export const rowsPage = (rows: number) =>
+const rowsPage = (rows: number) =>
   `<title>Rows</title><main><h1>Rows</h1><ul>${Array.from({ length: rows }, (_, i) => `<li><a href="/r${i}">Row ${i}</a> <span>Note ${i}</span> <button>Act ${i}</button></li>`).join('')}</ul></main>`;
 
 /**

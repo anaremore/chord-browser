@@ -48,10 +48,10 @@ export type ActOp =
 /** What the page said. `point`'s x and y are the element's middle in the view, in CSS pixels; `editable`, whether it takes text. */
 /** A form's field, as risk needs it (never its value): its description for sensitiveField, and whether it takes text. */
 /** `goes`: a submit would send it (filled, chosen, checked, not disabled): a state, never its value (the owner's test of 982ce10). */
-export type ActFormField = SnapshotField & { text: boolean; goes: boolean };
+type ActFormField = SnapshotField & { text: boolean; goes: boolean };
 
 /** What the step is, from the page (S18 M2d): main builds core's RiskElement from it (control-risk.ts). */
-export interface ActRisk {
+interface ActRisk {
   tag: string;
   type: string;
   href: string;

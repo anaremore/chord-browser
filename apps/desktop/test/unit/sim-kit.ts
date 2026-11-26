@@ -18,7 +18,7 @@
 import { expect, vi } from 'vitest';
 
 /** A small, fast seeded PRNG (mulberry32): the same seed, the same run. */
-export class Rng {
+class Rng {
   private state: number;
   constructor(seed: number) {
     this.state = seed >>> 0 || 1;

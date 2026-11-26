@@ -10,6 +10,6 @@ import { ASSISTANT_ACTING_RELEASED, assistantActing } from '@chord/core';
 declare const __CHORD_PREVIEW_ACTING__: boolean | undefined;
 
 /** Set at build time from CHORD_PREVIEW_ACTING (electron.vite.config.ts): true only in a preview installer. */
-export const PREVIEW_ACTING: boolean = typeof __CHORD_PREVIEW_ACTING__ === 'boolean' && __CHORD_PREVIEW_ACTING__;
+const PREVIEW_ACTING: boolean = typeof __CHORD_PREVIEW_ACTING__ === 'boolean' && __CHORD_PREVIEW_ACTING__;
 
 export const buildActs = (): boolean => assistantActing({ packaged: app.isPackaged }, ASSISTANT_ACTING_RELEASED || PREVIEW_ACTING);

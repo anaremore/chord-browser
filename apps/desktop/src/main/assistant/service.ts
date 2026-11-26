@@ -2246,7 +2246,7 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.e
  * kind, never only its text, so what can't be read back (files) is left alone and said, never cleared (Claude's B2,
  * round 2 of #150). Electron's main-process clipboard is the web's async one.
  */
-export const electronClipboard = {
+const electronClipboard = {
   snapshot: (): Promise<ClipboardSnapshot> => readClipboardItems(),
   same: async (raw: unknown): Promise<boolean> => {
     const was = raw as ClipboardSnapshot;

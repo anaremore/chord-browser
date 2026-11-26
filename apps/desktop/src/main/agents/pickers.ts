@@ -38,10 +38,6 @@ export function pickersLost(contents: object): boolean {
  */
 const sessions = new WeakMap<object, Set<string>>();
 
-export function frameSessions(contents: object): ReadonlySet<string> {
-  return sessions.get(contents) ?? new Set();
-}
-
 /**
  * The targets the hold attaches, each held at its start: frames of another process, and dedicated workers (made to
  * read only: holdWorker). Never a service worker: it's the site's, shared with your

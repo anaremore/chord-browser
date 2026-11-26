@@ -16,7 +16,7 @@ import { errorCopy, killTree, type AssistantSession, type ProviderError, type Se
 import { cliPath, spawnSpec } from './launch';
 
 /** Default-on features that add tools (research §3.3). Unknown names are ignored by older versions. */
-export const CODEX_FEATURES_OFF = [
+const CODEX_FEATURES_OFF = [
   'shell_tool',
   'unified_exec',
   'view_image',
