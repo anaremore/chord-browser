@@ -31,6 +31,8 @@ export interface ControlPage {
   readonly mark: DocumentMark;
   /** Whether it went to another document since `mark`, committed (one on its way is waited for, at most `ms`). */
   committedSince(mark: DocumentMark, ms: number): Promise<boolean>;
+  /** #143: `fn` when the page commits another document or goes (its tab closed, crashed); the returned function stops it. */
+  onLeave(fn: () => void): () => void;
   /** Where the page is now, which can be ahead of its tab's saved address. */
   url(): string;
   /** The page went (its tab closed, slept or crashed). */
@@ -231,6 +233,14 @@ export function controlPage(contents: WebContents): ControlPage {
       return contents.isDestroyed() ? { document: -1, starts: -1 } : documentMark(contents);
     },
     committedSince: (mark, ms) => committedSince(contents, mark, ms),
+    onLeave: (fn) => {
+      contents.on('did-navigate', fn);
+      contents.on('destroyed', fn);
+      return () => {
+        contents.off('did-navigate', fn);
+        contents.off('destroyed', fn);
+      };
+    },
     url: () => (contents.isDestroyed() ? '' : contents.getURL()),
     gone: () => contents.isDestroyed(),
     read: () => readPage(contents),

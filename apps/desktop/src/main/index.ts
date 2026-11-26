@@ -1149,6 +1149,8 @@ if (!app.requestSingleInstanceLock()) {
         // can't run from inside the archive), in out/ in a development one (#107).
         const helper = process.platform !== 'win32' ? null : app.isPackaged ? join(process.resourcesPath, 'window-owner.exe') : join(app.getAppPath(), 'out/window-owner/window-owner.exe');
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
+        // #143's journey: a call's whole deadline (CALL_WAIT_MS), shorter (development builds only).
+        const callWaitMs = Number(devEnv('CHORD_AGENT_CALL_WAIT_MS')) || undefined;
         // The window used last (never a private one): where the connect card and an agent's toasts go.
         const lastWindow = () => {
           const w = agentBrowser.lastBrowserWindow();
@@ -1190,6 +1192,7 @@ if (!app.requestSingleInstanceLock()) {
           // E2E only (development builds): the OS can't say who's calling, as in the Flatpak or without ss.
           ...(!app.isPackaged && process.env['CHORD_E2E_NO_PEER'] === '1' ? { peer: async () => ({ pid: null }) } : {}),
           waitMs,
+          ...(callWaitMs ? { callWaitMs } : {}),
           dispatch: (command) => agentBrowser.store.dispatch(command),
           neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
           chords: {

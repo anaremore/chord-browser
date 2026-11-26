@@ -194,6 +194,10 @@ export const ACT_REFUSALS = {
   // S18 M2e-1: a card let go of because the user took the tab over (a card's no that wasn't theirs).
   takenOver: 'The user took that tab over while you waited, so nothing was done there. Call snapshot again if you still need to act there.',
   changed: 'That element changed since the snapshot (it’s gone, hidden, or now says something else). Call snapshot again.',
+  // Two or more alike (the same role, name, item and place: #211), and the page redrew them: never a guess.
+  ambiguous: 'The page redrew that element, and it has a look-alike (the same name, in the same place), so which one you meant can’t be told and nothing was done. Call snapshot (with find: the words of its row or item) and use the ref of the one you mean. If it’s refused the same way again, the page keeps redrawing them: tell the user instead of trying again.',
+  // The same, for a client whose find can't name a row by its words (the packaged assistant's, until its flat find ships).
+  ambiguousPlain: 'The page redrew that element, and it has a look-alike (the same name, in the same place), so which one you meant can’t be told and nothing was done. Call snapshot and use the ref of the one you mean. If it’s refused the same way again, the page keeps redrawing them: tell the user instead of trying again.',
   covered: (what: string) => `Something is covering that element: ${what}. Deal with it first, or call snapshot again.`,
   disabled: 'That element is disabled.',
   notEditable: 'That element doesn’t take text.',
@@ -215,8 +219,13 @@ export const ACT_REFUSALS = {
   stepChanged: 'The page changed what that step would do while the card was up, so nothing was done. Call snapshot again.',
   sendsDropped: 'The user didn’t answer in time, so what the page was sending was dropped. Ask the user, then do that step again.',
   sendsTooMany: 'The page kept sending data to more sites, so Chord dropped the rest and stopped. Ask the user what to do.',
+  // #143 (Neon's B4): navigate's card allowed after the page it held a send for had moved on.
+  movedOn: 'The page moved on to another page while the card was up, so what it was sending was dropped.',
+  // #143: an action on a tab whose last step's sends still wait on the user's card (that call answered at its deadline).
+  sendsPending: 'What this tab sent after your last step still waits for the user on Chord’s card. Its outcome comes with your next result: wait a moment or do something else, then go on here.',
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
-  noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.',
+  // It can follow an input that ran (#143, round 2 of #266): never an invitation to do the step again unseen.
+  noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?). The step may have gone in: call snapshot before you try it again.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',
   noMove: 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.',
   sharedReadOnly: 'That tab is shared with you to read, not to act on. Ask the user if they want you to act in your own tab.',
@@ -226,3 +235,46 @@ export const ACT_REFUSALS = {
   text: `type takes text of at most ${TYPE_TEXT_MAX} characters.`,
   noBack: 'That tab has nowhere to go back to.',
 } as const;
+
+/**
+ * #143: a call answers by its deadline (an outside agent's CALL_WAIT_MS, under every client's own timeout) even while
+ * a Send data card for what its step sent is still up. The step ran: the call says so, and that what it sent waits for
+ * the user; the card stays up, and its outcome comes with the agent's next result (sendsLater).
+ */
+export const ACT_SENDS_WAITING = 'What the page is sending waits for the user on Chord’s card: don’t repeat this step. Its outcome comes with your next result.';
+
+/** #143: why a step's sends, handed over past its call's deadline, went or didn't (HandedOver's one exit, settle). */
+export type SendsWhy = 'allowed' | 'no' | 'no-answer' | 'took-over' | 'stopped' | 'moved-on' | 'closed' | 'ended' | 'too-many' | 'unchecked';
+
+/** Each reason a step's sends didn't go, in the past tense: what happened, never what to call next. */
+export const SENDS_WHY: Record<Exclude<SendsWhy, 'allowed'>, string> = {
+  no: 'the user said no.',
+  'no-answer': 'the user didn’t answer in time.',
+  'took-over': 'the user took the tab.',
+  stopped: 'the user pressed Stop.',
+  'moved-on': 'the page moved on to another page first.',
+  closed: 'the tab was closed.',
+  ended: 'the agent’s session with Chord ended.',
+  'too-many': 'the page kept sending to more sites, so Chord dropped the rest.',
+  unchecked: 'Chord couldn’t check it.',
+};
+
+/**
+ * #143: one step's sends, settled after its call answered, for the agent's next result. Inside the untrusted envelope
+ * (toolResult): `step` is the page's own words (`Clicked “Dark mode”`). `went`: all of it (the user allowed it), some
+ * (allowed, then a later card wasn't), or none.
+ */
+export interface SendsLater {
+  tab_id: string;
+  tool: string;
+  step: string;
+  went: 'all' | 'some' | 'none';
+  why: string;
+}
+
+/** The entry for a step's settled sends: `allowed` only when every card was allowed. */
+export function sendsLater(tab: string, tool: string, step: string, why: SendsWhy, someAllowed: boolean): SendsLater {
+  if (why === 'allowed') return { tab_id: tab, tool, step, went: 'all', why: 'The step ran, and what it sent went: the user allowed it.' };
+  const went = someAllowed ? 'some' : 'none';
+  return { tab_id: tab, tool, step, went, why: `The step ran; ${went === 'some' ? 'some of what it sent went, the rest didn’t' : 'what it sent didn’t go'}: ${SENDS_WHY[why]}` };
+}

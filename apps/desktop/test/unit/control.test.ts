@@ -6,16 +6,18 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { ACT_REFUSALS, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, ACT_SENDS_WAITING, sendsLater, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, toolResult, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
 import { FIND_NEAREST_NOTE, FIND_NONE_NOTE, heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
+import { byDeadline, HandedOver, laterContent, OpenCards, takeLater } from '../../src/main/control/handed-over';
+import { INPUT_REDRAWN } from '../../src/main/control/act-steps';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
-import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer } from '../../src/main/control/sends';
+import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer, type SendWatch } from '../../src/main/control/sends';
 import { NOT_SHARED } from '../../src/main/agents/scope';
 import { siteOfUrl } from '../../src/main/agents/shares';
 
@@ -218,8 +220,16 @@ function fakePage(url: string, read: Answer) {
     history: { url: string; skippable?: boolean }[];
     active: number;
     /** The debugger's answers (control/deep.ts): its hit test, a closed shadow root in the element, a file picker held. */
-    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean };
+    deep: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean; postsTo?: string[] };
     debugging: string[];
+    /** #143: the page commits another document (did-navigate), as a GET navigation of its own would. */
+    navigate?: (url: string) => void;
+    /** #143: the page goes (its tab closed). */
+    destroy?: () => void;
+    /** #143: a load that commits and never stops (its did-stop-loading never comes). */
+    stallLoad?: boolean;
+    /** #143: the page starts a navigation of its own (a step's after-load wait then waits for it). */
+    startNavigation?: () => void;
     /** A debugger event, as Chromium would send it (a request the page makes, paused). */
     emitDebug?: (method: string, params: unknown, sessionId?: string) => void;
     /** The page's requests went (deep.ping, deep.posts): once per page. */
@@ -231,12 +241,22 @@ function fakePage(url: string, read: Answer) {
   } = { url, zoom: 1, input: [], text: [], loads: [], history: [{ url }], active: 0, deep: {}, debugging: [] };
   const debugEvents = new EventEmitter();
   let attached = false;
+  at.navigate = (to) => {
+    at.url = to;
+    events.emit('did-navigate');
+  };
+  at.destroy = () => void events.emit('destroyed');
+  at.startNavigation = () => {
+    at.loading = true;
+    events.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, url: 'https://news.test/next' });
+  };
   at.emitDebug = (method, params, sessionId) => void debugEvents.emit('message', {}, method, params, sessionId);
   const go = (index: number) => {
     at.active = index;
     at.url = at.history[index]!.url;
     events.emit('did-navigate');
-    events.emit('did-stop-loading');
+    if (at.stallLoad) at.loading = true;
+    else events.emit('did-stop-loading');
   };
   const contents = {
     // Acting (S18 M2c): what an action sends, recorded.
@@ -244,8 +264,10 @@ function fakePage(url: string, read: Answer) {
     sendInputEvent: (e: unknown) => {
       at.input.push(e);
       // A page that sends as the agent acts (S18 M2d): its requests, paused by the tab's send hold, once its first input came.
-      if (!at.sent && (at.deep.ping || at.deep.posts)) {
+      if (!at.sent && (at.deep.ping || at.deep.posts || at.deep.postsTo)) {
         at.sent = true;
+        // #143: posts to several sites at once, each its own Send data card (askHeld asks them one after another).
+        for (const [i, to] of (at.deep.postsTo ?? []).entries()) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: `m${i}`, request: { method: 'POST', url: to }, resourceType: 'Fetch' }), 0);
         if (at.deep.ping) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'b1', request: { method: 'POST', url: 'https://stats.test/collect' }, resourceType: 'Ping' }), 0);
         if (at.deep.posts) setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r1', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Document' }), 0);
       }
@@ -268,7 +290,16 @@ function fakePage(url: string, read: Answer) {
       canGoBack: () => at.active > 0,
       getActiveIndex: () => at.active,
       getEntryAtIndex: (i: number) => at.history[i],
-      goToIndex: (i: number) => go(i),
+      goToIndex: (i: number) => {
+        // A page that sends as it's left (deep.postsOnLoad), going back too (#143's back card).
+        if (!at.sent && at.deep.postsOnLoad) {
+          at.sent = true;
+          setTimeout(() => debugEvents.emit('message', {}, 'Fetch.requestPaused', { requestId: 'r2', request: { method: 'POST', url: 'https://news.test/beacon' }, resourceType: 'Fetch' }), 0);
+          setTimeout(() => go(i), 5);
+          return;
+        }
+        go(i);
+      },
       // Chromium's: past the entries the page added without a gesture.
       goBack: () => {
         let i = at.active - 1;
@@ -352,6 +383,8 @@ function setup(
     read?: Answer;
     cardWaitMs?: number;
     sendWaitMs?: number;
+    /** #143: the call's own deadline (an outside agent's CALL_WAIT_MS): its answer by then, whatever card is still up. */
+    callDeadlineMs?: number;
     onCard?: (t: Meanwhile) => void;
     onEnsure?: (t: Meanwhile) => void;
     onCapture?: (t: Meanwhile) => void;
@@ -405,7 +438,8 @@ function setup(
   /** Each held card's answer, for a test to give late. */
   const holds: ((g: Grant) => void)[] = [];
   const activity: string[] = [];
-  const memory: ToolMemory = { pdfs: new Map(), form: null, nextField: 1, read: new Set() };
+  // An outside agent's (a deadline): the sends a call answered before, and what became of them (#143).
+  const memory: ToolMemory = { pdfs: new Map(), form: null, nextField: 1, read: new Set(), ...(opts.callDeadlineMs ? { sendsWaiting: new Set<NodeId>(), later: [] } : {}) };
   const scope: ControlScope = {
     agent,
     ...(opts.actions ? { actions: true } : {}),
@@ -421,6 +455,7 @@ function setup(
     mayInspect: (node) => (node.id === 'n1' ? null : 'Not that one.'),
     ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
     ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
+    ...(opts.callDeadlineMs ? { callDeadlineMs: opts.callDeadlineMs } : {}),
     ...(opts.waits === false ? {} : { waits: true }),
     ...(opts.sharedOn ? { siteOk: (_node: TabNode, url: string) => siteOfUrl(url) === opts.sharedOn, whyNot: () => NOT_SHARED } : {}),
     activity: async (_tool, summary) => void activity.push(summary),
@@ -1262,7 +1297,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
+  type Twist = { ambiguous?: boolean; ambiguousAt?: Record<string, number>; ambiguousCompare?: boolean; goneWhy?: 'changed' | 'ambiguous'; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1313,6 +1348,14 @@ describe('acting through the gate (S18 M2c)', () => {
       const f = twist.field ?? el.field;
       const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}), ...(twist.place ? twist.place(args.op) : {}) };
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
+      // Look-alikes the page redrew (#211): which one can't be told.
+      if (twist.ambiguous) return { ok: false, why: 'ambiguous' };
+      // Where the text went, checked after it went in (#211's round 2: Fable's probe).
+      if (args.op === 'values' && args.mode === 'compare' && twist.ambiguousCompare) return { ok: false, why: 'ambiguous' };
+      if (twist.ambiguousAt?.[args.op]) {
+        twist.ambiguousAt[args.op]!--;
+        return { ok: false, why: 'ambiguous' };
+      }
       if (twist.replaced?.[args.op] && !(args as { refind?: boolean }).refind) {
         twist.replaced[args.op]!--;
         return { ok: false, why: 'replaced' };
@@ -1335,7 +1378,7 @@ describe('acting through the gate (S18 M2c)', () => {
         if (hits === 2) return twist.noMoveOff ? { ok: false, why: 'no-move' } : { ok: true, ...said };
       }
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
-      if (args.op === 'focused' && twist.goneAfterKey && (twist.sent?.() ?? []).some((e) => e.type === 'keyDown')) return { ok: false, why: 'changed' };
+      if (args.op === 'focused' && twist.goneAfterKey && (twist.sent?.() ?? []).some((e) => e.type === 'keyDown')) return { ok: false, why: twist.goneWhy ?? 'changed' };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       // Where typing went (#112): this field changed, and others (a twist's count) did too.
       if (args.op === 'values') return args.mode === 'compare' ? { ok: true, ...said, changed: !twist.unchanged, has: Boolean(twist.has), others: twist.others ?? 0 } : { ok: true, ...said };
@@ -1348,7 +1391,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; callDeadlineMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean; postsTo?: string[] } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -1359,6 +1402,7 @@ describe('acting through the gate (S18 M2c)', () => {
       answer: opts.answer ?? 'once',
       ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
       ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
+      ...(opts.callDeadlineMs ? { callDeadlineMs: opts.callDeadlineMs } : {}),
       ...(opts.onCard ? { onCard: opts.onCard } : {}),
       act: { doing: (_n, d) => void doings.push(d), keepSite: (site) => void kept.push(site), ...opts.act },
     });
@@ -1802,7 +1846,8 @@ describe('acting through the gate (S18 M2c)', () => {
     ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['click', 'a closed shadow root in the element (#112)', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
-    ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?), so nothing was done. Try again in a moment.'],
+    ['click', 'a look-alike in its place under the point (#211)', { hit: { ok: false, why: 'ambiguous' } }, ACT_REFUSALS.ambiguousPlain],
+    ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?). The step may have gone in: call snapshot before you try it again.'],
   ];
   it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
     const t = await acting({ deep });
@@ -1939,12 +1984,46 @@ describe('acting through the gate (S18 M2c)', () => {
   });
 
   it('Enter on a button the page redrew between its keydown and the rest: said it may not have worked, never done, never pressed again (#117)', async () => {
-    const twist: Twist = { goneAfterKey: true };
+    // Gone, or a look-alike now in its place (#211's review: the reason, never one refusal's words, decides).
+    for (const goneWhy of ['changed', 'ambiguous'] as const) {
+      const twist: Twist = { goneAfterKey: true, goneWhy };
+      const t = await acting({ twist });
+      twist.sent = () => t.at.input as { type: string }[];
+      expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused, goneWhy).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
+      // Its keydown, then only the key let go of; once.
+      expect((t.at.input as { type: string }[]).map((e) => e.type), goneWhy).toEqual(['keyDown', 'keyUp']);
+    }
+  });
+
+  it('a look-alike in its place after input went in: never “nothing was done”, said it may not have worked (#211’s round 2)', async () => {
+    // Enter in a field (a comment box that sends on Enter, then redraws): its keydown went in.
+    const twist: Twist = { goneAfterKey: true, goneWhy: 'ambiguous' };
     const t = await acting({ twist });
     twist.sent = () => t.at.input as { type: string }[];
-    expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
-    // Its keydown, then only the key let go of; once.
-    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+    const keyed = refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Enter' })).refused;
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toContain('keyDown');
+    expect(keyed).toBe(INPUT_REDRAWN);
+    // Typed text, then where it went answered by a look-alike: the text went in.
+    const u = await acting({ twist: { ambiguousCompare: true } });
+    const typed = refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).refused;
+    expect(u.at.text).toEqual(['wool']);
+    expect(typed).toBe(INPUT_REDRAWN);
+    // A value set (a time field: never clicked), then where it went answered by a look-alike: the value went in.
+    ELEMENTS.push({ role: 'textbox', name: 'Delivery time', editable: true, field: field({ type: 'time' }), risk: { tag: 'input', type: 'time' } });
+    try {
+      const v = await acting({ twist: { ambiguousCompare: true } });
+      expect(refusal(await v.call('type', { tab_id: v.tab, ref: `e${ELEMENTS.length}`, text: '18:30' })).refused).toBe(INPUT_REDRAWN);
+      expect(v.steps).toContain('setValue');
+      expect((v.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toEqual([]);
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('a look-alike redrawn before a key went in (nothing sent): as a node gone, found again and checked again by the retry (#211’s review)', async () => {
+    const t = await acting({ twist: { ambiguousAt: { focused: 1 } } });
+    expect(result(await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Tab' })).data['done']).toBe('Pressed Tab in “Search”');
+    expect(t.steps.filter((x) => x === 'guard')).toHaveLength(2);
   });
 
   it('round 5 of #117 (Claude and Neon): a lost input is never tried again; Enter is done only if its keydown went through; tries end on Stop or a step that changed', async () => {
@@ -2428,6 +2507,448 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(JSON.parse(u.cards.find((c) => c.step?.why === 'send')!.subject)).toEqual(['n1', 'navigate', 'sends', expect.stringMatching(/^[0-9a-f]{8}$/)]);
     });
 
+    // #143, on fake timers in real seconds: a client that gives up at 60 s (Codex's default), the call's deadline 50 s
+    // (CALL_WAIT_MS), a Send data card that waits 90 s (its own sendWaitMs). Each failed on the code before HandedOver.
+    describe('#143: a Send data card past the call’s deadline (HandedOver)', () => {
+      const STEP = 'Clicked “Home”';
+      /** A click whose page posts, its card held, the call answered by the client's 60 s. */
+      async function handedOver(opts: { postsTo?: string[] } = {}) {
+        const t = await acting({ deep: opts.postsTo ? { postsTo: opts.postsTo } : { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+        vi.useFakeTimers();
+        let out: { text?: string; isError?: boolean } | undefined;
+        void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((o) => void (out = o));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(out, 'the call answered before the client’s 60 s').toBeDefined();
+        const sendCards = () => t.cards.filter((c) => c.step?.why === 'send');
+        const dropped = () => t.at.debugging.some((m: string) => m === 'Fetch.failRequest' || m === 'Fetch.fulfillRequest');
+        const later = () => (t.scope.memory.later ?? []).map((l) => l.entry);
+        return { t, out: out!, sendCards, dropped, later };
+      }
+      afterEach(() => void vi.useRealTimers());
+
+      it('the call answers by its deadline: the step ran (not an error), what it sent waits; the card stays; another action there is refused; Allow sends it, once, and the next result says so', async () => {
+        const { t, out, sendCards, later } = await handedOver();
+        expect(out.isError).toBeFalsy();
+        expect(JSON.parse(out.text!).data).toMatchObject({ done: STEP, sending: ACT_SENDS_WAITING, loading: true });
+        expect(sendCards()).toHaveLength(1);
+        expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+        expect(t.scope.memory.sendsWaiting?.has('n1')).toBe(true);
+        expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.sendsPending);
+        expect(later()).toEqual([]);
+        t.holds.at(-1)!('once');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.at.debugging).toContain('Fetch.continueRequest');
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'allowed', true)]);
+        expect(later()[0]!.why).toBe('The step ran, and what it sent went: the user allowed it.');
+        expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+        expect((t.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toHaveLength(1);
+      });
+
+      it('never answered: held until the card’s own wait, never before; then dropped, the card down, and “the user didn’t answer in time”', async () => {
+        const { t, sendCards, dropped, later } = await handedOver();
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(sendCards()).toHaveLength(1);
+        expect(dropped()).toBe(false);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(dropped()).toBe(true);
+        expect(t.agent.state('n1').cards).toEqual([]);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'no-answer', false)]);
+        expect(later()[0]!.why).toBe('The step ran; what it sent didn’t go: the user didn’t answer in time.');
+      });
+
+      it('Don’t: dropped, and “the user said no”', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.holds.at(-1)!('deny');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dropped()).toBe(true);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'no', false)]);
+      });
+
+      it('the tab closed while it waits (the live store, never the TabNode taken before): never “went”, the card down (Neon’s B1)', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.close('n1');
+        t.at.destroy!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'closed', false)]);
+        expect(dropped()).toBe(true);
+        expect(t.agent.state('n1').cards).toEqual([]);
+        // An Allow on the card after that sends nothing.
+        t.holds.at(-1)!('once');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+      });
+
+      it('its session over while it waits (Keep, the agent gone: failHeld): never “went” (Neon’s B1)', async () => {
+        const { t, later } = await handedOver();
+        failHeld(t.pages.get('n1')!.contents);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'ended', false)]);
+        expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+      });
+
+      it('Stop while it waits: dropped, and “the user pressed Stop”', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.agent.stop();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dropped()).toBe(true);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'stopped', false)]);
+      });
+
+      it('the page goes to another document while it waits (a GET navigation of its own): the card comes down at once, dropped, “the page moved on” (Neon’s SF3)', async () => {
+        const { t, dropped, later } = await handedOver();
+        t.at.navigate!('https://news.test/elsewhere');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'moved-on', false)]);
+        expect(dropped()).toBe(true);
+        expect(t.agent.state('n1').cards).toEqual([]);
+      });
+
+      it('three sites in one action: the first card’s Allow, the second’s Don’t: “some went, the rest didn’t” (Neon’s SF2)', async () => {
+        const { t, later } = await handedOver({ postsTo: ['https://a.test/1', 'https://b.test/2', 'https://c.test/3'] });
+        t.holds.at(-1)!('once');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([]);
+        t.holds.at(-1)!('deny');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(later()).toEqual([sendsLater(t.tab, 'click', STEP, 'no', true)]);
+        expect(later()[0]!.why).toBe('The step ran; some of what it sent went, the rest didn’t: the user said no.');
+      });
+
+      it('a batch whose step hands over stops there: done, sending and stopped_after, never the next step into sendsPending (Neon’s B2, Opus’s S1)', async () => {
+        const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+        vi.useFakeTimers();
+        let out: { text?: string; isError?: boolean } | undefined;
+        void runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: 'e1' }] }, new AbortController().signal).then((o) => void (out = o));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(out).toBeDefined();
+        expect(out!.isError).toBeFalsy();
+        expect(JSON.parse(out!.text!).data).toMatchObject({ done: [STEP], sending: ACT_SENDS_WAITING, stopped_after: 1 });
+        expect((t.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toHaveLength(1);
+      });
+
+      it('navigate past its deadline: under way (loading), never an outline, its card on; Stop at the hand-over never hands over (Neon’s B4, Opus’s N2)', async () => {
+        const t = await acting({ deep: { postsOnLoad: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+        vi.useFakeTimers();
+        let out: { text?: string; isError?: boolean } | undefined;
+        void t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' }).then((o) => void (out = o));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(out).toBeDefined();
+        expect(JSON.parse(out!.text!).data).toMatchObject({ done: 'Going to news.test/b', loading: true, sending: ACT_SENDS_WAITING });
+        // With snapshot: true, no outline (and no wait for one).
+        let looked = false;
+        const withIt = await withOutline(out!, 'navigate', async () => ((looked = true), { text: '{}' }));
+        expect(looked).toBe(false);
+        expect(withIt).toBe(out);
+      });
+
+      it('no card up at the deadline: answered as before, nothing said to wait, the tab free', async () => {
+        const t = await acting({ callDeadlineMs: 1, act: { siteAllowed: () => true } });
+        const out = await t.call('click', { tab_id: t.tab, ref: 'e1' });
+        expect(out.isError).toBeFalsy();
+        expect(JSON.parse(out.text!).data).not.toHaveProperty('sending');
+        expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+        expect((await t.call('click', { tab_id: t.tab, ref: 'e1' })).isError).toBeFalsy();
+      });
+
+      it('a card answered at once (a call already stopped, a grant) is never “up”: no hand-over with no card (Neon’s B5)', async () => {
+        const agent = new ControlAgent('t', async () => 'once');
+        const cards = new OpenCards(agent, 'n1');
+        const ask = cards.ask(async () => 'deny' as const);
+        const answered = ask();
+        expect(cards.isUp()).toBe(false);
+        await answered;
+        expect(cards.isUp()).toBe(false);
+      });
+
+      it('a call’s own answer never carries its outcome beside its *waits*: takeLater keeps that call’s, takes the rest', () => {
+        const mine = {};
+        const memory = { pdfs: new Map(), form: null, nextField: 1, read: new Set<NodeId>(), later: [{ from: mine, entry: sendsLater('a1', 'click', 'x', 'allowed', true) }, { from: {}, entry: sendsLater('a2', 'click', 'y', 'no', false) }] } as ToolMemory;
+        expect(takeLater(memory, mine).map((e) => e.tab_id)).toEqual(['a2']);
+        expect(takeLater(memory, {}).map((e) => e.tab_id)).toEqual(['a1']);
+        expect(memory.later).toEqual([]);
+      });
+
+      // Round 2 of #266 (Neon, Opus). Each fails at 86d013b, or with its fix taken out.
+      describe('round 2', () => {
+        /** A step whose page posts, its card held, called on fake timers. `ms`: how long to let it run. */
+        async function stepPast(o: { tool?: 'click' | 'navigate' | 'back'; deadline?: number; ms?: number; onCard?: (t: Awaited<ReturnType<typeof acting>>) => void; twist?: Twist; mayAct?: () => string | null; postsTo?: string[]; stopAt?: number; before?: (t: Awaited<ReturnType<typeof acting>>) => void; posts?: boolean; at?: { ms: number; run: (t: Awaited<ReturnType<typeof acting>>) => void } } = {}) {
+          const box: { t?: Awaited<ReturnType<typeof acting>> } = {};
+          const t = await acting({
+            deep: o.posts === false ? {} : o.tool === 'navigate' || o.tool === 'back' ? { postsOnLoad: true } : o.postsTo ? { postsTo: o.postsTo } : { posts: true },
+            answer: 'hold',
+            cardWaitMs: 50_000,
+            sendWaitMs: 90_000,
+            callDeadlineMs: o.deadline ?? 50_000,
+            onCard: () => o.onCard?.(box.t!),
+            ...(o.twist ? { twist: o.twist } : {}),
+            act: { siteAllowed: () => true, ...(o.mayAct ? { mayAct: o.mayAct } : {}) },
+          });
+          box.t = t;
+          o.before?.(t);
+          const codesAtCall = o.twist?.codes?.length ?? 0;
+          vi.useFakeTimers();
+          let out: { text?: string; isError?: boolean } | undefined;
+          const args = o.tool === 'navigate' ? { tab_id: t.tab, url: 'https://news.test/b' } : o.tool === 'back' ? { tab_id: t.tab } : { tab_id: t.tab, ref: 'e1' };
+          const stop = new AbortController();
+          // Stop (the user's: the agent's Stop) at `stopAt`, on the fake clock.
+          if (o.stopAt !== undefined) setTimeout(() => t.agent.stop(), o.stopAt);
+          // Something that happens during the call, on the fake clock.
+          if (o.at) setTimeout(() => o.at!.run(t), o.at.ms);
+          void t.callUntil(o.tool ?? 'click', args, stop.signal).then((x) => void (out = x));
+          await vi.advanceTimersByTimeAsync(o.ms ?? 60_000);
+          const later = () => (t.scope.memory.later ?? []).map((l) => l.entry);
+          return { t, out: () => out, later, codesSince: () => (o.twist?.codes ?? []).slice(codesAtCall) };
+        }
+
+        it('blocker 1: past the deadline with something held and no card up, byDeadline waits for the card without a timer, wakes when it opens, and leaves nothing behind', async () => {
+          vi.useFakeTimers();
+          const agent = new ControlAgent('t', () => new Promise<Grant>(() => undefined));
+          const cards = new OpenCards(agent, 'n1');
+          let settled: unknown;
+          void byDeadline(new Promise(() => undefined), Date.now() + 1_000, cards, Promise.resolve(), () => 1).then((r) => void (settled = r));
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(settled).toBeUndefined();
+          // Waiting for the card: no timer (a poller would keep one).
+          expect(vi.getTimerCount(), 'a timer left waiting for the card').toBe(0);
+          void cards.ask(() => agent.ask(card({ kind: 'step', subject: 'sends' }), new AbortController().signal))();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).toEqual({ later: true });
+          expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it('opened() with a stop already aborted waits for nothing and leaves nothing listening', async () => {
+          const agent = new ControlAgent('t', async () => 'once');
+          const cards = new OpenCards(agent, 'n1');
+          const stop = new AbortController();
+          stop.abort();
+          let woke = false;
+          void cards.opened(stop.signal).then(() => void (woke = true));
+          void cards.ask(() => agent.ask(card({ kind: 'step', subject: 'sends' }), new AbortController().signal))();
+          await new Promise((r) => setTimeout(r, 0));
+          expect(woke).toBe(false);
+        });
+
+        it('blocker 2: navigate’s card allowed after the page moved on sends nothing, and says none went (never “some”)', async () => {
+          const { t, later } = await stepPast({ tool: 'navigate' });
+          t.holds.at(-1)!('once');
+          await vi.advanceTimersByTimeAsync(0);
+          expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+          expect(later()).toEqual([sendsLater(t.tab, 'navigate', 'Going to news.test/b', 'moved-on', false)]);
+        });
+
+        it('a refusal of the step’s own after its input (the page never saw the pointer arrive), past the deadline: no hand-over, the card down, nothing later', async () => {
+          const { t, out, later } = await stepPast({ twist: { noMove: true } });
+          expect(out()?.isError).toBe(true);
+          expect(out()!.text).not.toContain('sending');
+          expect(t.agent.state('n1').cards).toEqual([]);
+          expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+          expect(later()).toEqual([]);
+        });
+
+        it('done() refusing after the hand-over (the page went where it can’t be read): withdrawn, no card left up, nothing later', async () => {
+          const { t, out, later } = await stepPast({ onCard: (t) => t.go('n1', 'https://private.test/x', true) });
+          expect(out()?.isError).toBe(true);
+          expect(t.agent.state('n1').cards).toEqual([]);
+          expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+          expect(later()).toEqual([]);
+        });
+
+        for (const tool of ['click', 'navigate'] as const) {
+          it(`Stop right as ${tool} hands over (its own deadline moment): its cards down, nothing waits, and the answer and the outcome agree`, async () => {
+            const at = { start: 0 };
+            const { t, out, later } = await stepPast({
+              tool,
+              before: () => void (at.start = Date.now()),
+              // Armed when the card opens: after byDeadline's own timer, so the hand-over comes first and Stop right after.
+              onCard: (t) => void setTimeout(() => t.agent.stop(), at.start + 50_000 - Date.now()),
+            });
+            expect(t.agent.state('n1').cards).toEqual([]);
+            expect(t.scope.memory.sendsWaiting?.size).toBe(0);
+            // Said to wait: its outcome is Stop. Refused: nothing later.
+            const said = JSON.parse(out()!.text!) as { data: { sending?: string } };
+            if (said.data.sending) expect(later().map((e) => e.why)).toEqual(['The step ran; what it sent didn’t go: the user pressed Stop.']);
+            else expect(later()).toEqual([]);
+          });
+        }
+
+        it('should-fix 4: navigate checks the tab before it hands over (the user took it while the card was up): no hand-over', async () => {
+          const { t, out, later } = await stepPast({ tool: 'navigate', onCard: (t) => t.agent.pause('n1', true) });
+          expect(out()?.text ?? '').not.toContain('sending');
+          expect(t.agent.state('n1').cards).toEqual([]);
+          expect(later()).toEqual([]);
+        });
+
+        it('after a hand-over, no diff of the page and no wait for its load: answered at the deadline though the page never stops loading', async () => {
+          const twist: Twist = { codes: [] };
+          const { out, codesSince } = await stepPast({ twist, deadline: 2_000, ms: 2_500, onCard: (t) => t.at.startNavigation!() });
+          expect(out(), 'answered by the deadline, not after the 10 s load').toBeDefined();
+          expect(JSON.parse(out()!.text!).data).toMatchObject({ sending: ACT_SENDS_WAITING, loading: true });
+          // No pageChanges: no snapshot read since the call began.
+          expect(codesSince().filter((c) => c.includes('__chordSids')).length).toBe(0);
+        });
+
+        it('should-fix 6, byDeadline: past the deadline with the input done, no card up and nothing held, it answers now (`past`), never waiting on the step’s load', async () => {
+          vi.useFakeTimers();
+          const cards = { isUp: () => false, opened: () => new Promise<void>(() => undefined) } as unknown as OpenCards;
+          let settled: unknown;
+          void byDeadline(new Promise(() => undefined), Date.now() + 1_000, cards, Promise.resolve(), () => 0).then((r) => void (settled = r));
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(settled).toEqual({ past: true });
+        });
+
+        it('byDeadline: a card up at the deadline waits for the input before it hands over', async () => {
+          vi.useFakeTimers();
+          const cards = { isUp: () => true, opened: () => new Promise<void>(() => undefined) } as unknown as OpenCards;
+          let inputOver: () => void = () => undefined;
+          const input = new Promise<void>((over) => (inputOver = over));
+          let settled: unknown;
+          void byDeadline(new Promise(() => undefined), Date.now() + 1_000, cards, input, () => 0).then((r) => void (settled = r));
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(settled, 'never before the input is done').toBeUndefined();
+          inputOver();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).toEqual({ later: true });
+        });
+
+        it('the page moving on after an Allow (nothing held, no card up), the step still loading: never “moved on”; “went” once it’s done', async () => {
+          const { t, later } = await stepPast({ deadline: 2_000, ms: 2_500, onCard: (t) => t.at.startNavigation!() });
+          t.holds.at(-1)!('once');
+          await vi.advanceTimersByTimeAsync(0);
+          // The step's still under way (its load): the hand-over hasn't settled, and still listens.
+          expect(later()).toEqual([]);
+          t.at.navigate!('https://news.test/after');
+          await vi.advanceTimersByTimeAsync(0);
+          expect(later(), 'settled as moved on with nothing held').toEqual([]);
+          await vi.advanceTimersByTimeAsync(15_000);
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'allowed', true)]);
+        });
+
+        it('the user takes the tab while it waits: “took the tab”', async () => {
+          const { t, later } = await stepPast();
+          t.agent.pause('n1', true);
+          failHeld(t.pages.get('n1')!.contents);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'took-over', false)]);
+        });
+
+        it('nit: Keep on one tab while it waits (the tab no longer the agent’s): “took the tab”, never “ended”', async () => {
+          let kept = false;
+          const { t, later } = await stepPast({ mayAct: () => (kept ? 'That tab is the user’s now.' : null) });
+          kept = true;
+          failHeld(t.pages.get('n1')!.contents);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'took-over', false)]);
+        });
+
+        it('the page sending to too many sites while it waits: some went, then “too many sites”', async () => {
+          const sites = Array.from({ length: 25 }, (_, i) => `https://s${i}.test/x`);
+          const { t, later } = await stepPast({ postsTo: sites });
+          for (let i = 0; i < 3; i++) {
+            t.holds.at(-1)!('once');
+            await vi.advanceTimersByTimeAsync(0);
+          }
+          expect(later()).toEqual([sendsLater(t.tab, 'click', 'Clicked “Home”', 'too-many', true)]);
+        });
+
+        it('settle twice records once; withdraw after a settle (during done()) takes its entry back (should-fix 5)', async () => {
+          const { t, later } = await stepPast();
+          const memory = t.scope.memory;
+          const entries = () => later().length;
+          // The hand-over the call made: settle it twice through its ways out (Don't, then Stop).
+          t.holds.at(-1)!('deny');
+          await vi.advanceTimersByTimeAsync(0);
+          t.agent.stop();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(entries()).toBe(1);
+          // settle itself, twice: one entry.
+          const once = new HandedOver({ nodeId: 'n3', tab: 't3', tool: 'click', step: 'y', w: { held: () => [], deny: () => undefined, end: () => undefined, cancelled: new AbortController().signal } as unknown as SendWatch, allowed: () => 0, cards: new OpenCards(t.agent, 'n3'), cardsEnd: new AbortController(), memory, from: undefined, live: () => null, onLeave: () => () => undefined });
+          once.settle('no');
+          once.settle('stopped');
+          expect(later().filter((e) => e.tab_id === 't3').map((e) => e.why)).toEqual(['The step ran; what it sent didn’t go: the user said no.']);
+          memory.later = memory.later!.filter((l) => l.entry.tab_id !== 't3');
+          // A HandedOver settled, then withdrawn: no entry left for a call that answered an error.
+          const w = { held: () => [], deny: () => undefined, end: () => undefined, cancelled: new AbortController().signal } as unknown as SendWatch;
+          const handed = new HandedOver({ nodeId: 'n2', tab: 't2', tool: 'click', step: 'x', w, allowed: () => 0, cards: new OpenCards(t.agent, 'n2'), cardsEnd: new AbortController(), memory, from: undefined, live: () => null, onLeave: () => () => undefined });
+          handed.settle('moved-on');
+          expect(entries()).toBe(2);
+          handed.withdraw();
+          expect(entries()).toBe(1);
+        });
+
+        it('nit: a batch’s hand-over step keeps `navigated`', async () => {
+          const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50_000, sendWaitMs: 90_000, callDeadlineMs: 50_000, act: { siteAllowed: () => true } });
+          vi.useFakeTimers();
+          let out: { text?: string } | undefined;
+          void runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }] }, new AbortController().signal).then((o) => void (out = o));
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(JSON.parse(out!.text!).data).toMatchObject({ navigated: false, sending: ACT_SENDS_WAITING });
+        });
+
+        it('nit: navigate’s hand-over answer says its page, address and title; its card reads as a sentence', async () => {
+          const { t, out } = await stepPast({ tool: 'navigate' });
+          expect(JSON.parse(out()!.text!).data).toEqual(expect.objectContaining({ page_id: expect.any(String), url: expect.any(String), title: expect.any(String) }));
+          expect(t.cards.find((c) => c.step?.why === 'send')!.description).toBe('is going to news.test/b');
+        });
+
+        it('nit: back’s card reads as a sentence', async () => {
+          const { t } = await stepPast({ tool: 'back', before: (t) => void (t.at.history = [{ url: 'https://news.test/before' }, { url: t.at.url }], t.at.active = 1) });
+          expect(t.cards.find((c) => c.step?.why === 'send')!.description).toBe('is going back');
+        });
+
+        // The blocker of round 3: navigate's `past` (nothing held at the deadline, the page still loading) checks first.
+        for (const [what, setUp, why] of [
+          ['a redirect to a Never site', (t: Awaited<ReturnType<typeof acting>>) => void (t.at.redirects = { 'https://news.test/b': 'https://private.test/x' }), 'This page can never be read'],
+          ['a paused tab', (t: Awaited<ReturnType<typeof acting>>) => t.agent.pause('n1', true), CONTROL_REFUSALS.paused],
+          ['a lost hold', (t: Awaited<ReturnType<typeof acting>>) => void pickers.lost.add(t.pages.get('n1')!.contents), 'Chord couldn’t check that page right now'],
+        ] as const) {
+          it(`navigate past its deadline, still loading, on ${what}: refused, never “Going to…” with the page`, async () => {
+            // A redirect is there before the call; a pause or a lost hold comes during it (the fake clock, at 1 s).
+            const during = what !== 'a redirect to a Never site';
+            const { t, out } = await stepPast({ tool: 'navigate', posts: false, deadline: 2_000, ms: 3_000, before: (t) => ((t.at.stallLoad = true), during ? undefined : setUp(t)), ...(during ? { at: { ms: 1_000, run: setUp } } : {}) });
+            expect(out(), 'answered by the deadline').toBeDefined();
+            expect(out()!.isError).toBe(true);
+            expect(out()!.text).toContain(why.slice(0, 30));
+            expect(out()!.text).not.toContain('private.test');
+            pickers.lost.delete(t.pages.get('n1')!.contents);
+          });
+        }
+
+        it('navigate past its deadline, still loading, readable: answered then, `loading`, never `sending`', async () => {
+          const { out } = await stepPast({ tool: 'navigate', posts: false, deadline: 2_000, ms: 3_000, before: (t) => void (t.at.stallLoad = true) });
+          expect(out()!.isError).toBeFalsy();
+          expect(JSON.parse(out()!.text!).data).toMatchObject({ done: 'Going to news.test/b', loading: true });
+          expect(JSON.parse(out()!.text!).data).not.toHaveProperty('sending');
+        });
+
+        it('click past its deadline (nothing held), the page it set off gone where it can’t be read: refused, never its page', async () => {
+          const box: { t?: Awaited<ReturnType<typeof acting>> } = {};
+          // The click sets off a navigation (afterActing waits for its load) to a Never site, still loading at the deadline.
+          const t = await acting({ callDeadlineMs: 2_000, act: { siteAllowed: () => true }, onAct: (_e, op) => {
+            if (op !== 'hit' || !box.t || box.t.at.loading) return;
+            box.t.at.startNavigation!();
+            box.t.go('n1', 'https://private.test/x', true);
+          } });
+          box.t = t;
+          vi.useFakeTimers();
+          let out: { text?: string; isError?: boolean } | undefined;
+          void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((x) => void (out = x));
+          await vi.advanceTimersByTimeAsync(3_000);
+          expect(out, 'answered by the deadline').toBeDefined();
+          expect(out!.isError).toBe(true);
+          expect(out!.text).not.toContain('private.test');
+        });
+
+        it('the next reply carries `later` inside the untrusted envelope; the hand-over reply never does (laterContent)', () => {
+          const mine = {};
+          const memory = { pdfs: new Map(), form: null, nextField: 1, read: new Set<NodeId>(), later: [{ from: mine, entry: sendsLater('a1', 'click', 'Clicked “x”', 'allowed', true) }] } as ToolMemory;
+          expect(laterContent(memory, mine)).toEqual([]);
+          const next = laterContent(memory, {});
+          expect(next).toEqual([{ type: 'text', text: toolResult({ later: [sendsLater('a1', 'click', 'Clicked “x”', 'allowed', true)] }) }]);
+          expect(JSON.parse(next[0]!.text).trust).toBe('untrusted');
+        });
+      });
+    });
+
     it('a send card in an action holds live requests, so it waits CONTROL_WAIT_MS even where site and step cards wait as long as it takes (the assistant: D2, the reviews of #147)', async () => {
       const t = await acting({ deep: { posts: true }, answer: 'hold', act: { siteAllowed: () => true } });
       vi.useFakeTimers();
@@ -2643,6 +3164,21 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(out.isError).toBe(true);
       expect(ok(out)).toEqual({ refused: 'Step 2 (type) was refused.', step: 2, tool: 'type', why: 'The user said no to this step. Don’t try it another way; ask the user what to do.', done: ['Pointed at “Home”'] });
       expect(clicks(u)).toBe(0);
+    });
+
+    it('a step refused for a look-alike stops the batch there, saying how to choose (#211)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist, act: { siteAllowed: () => true } });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      const line = t.scope.activity;
+      (t.scope as { activity: typeof line }).activity = async (...a) => {
+        await line(...a);
+        twist.ambiguous = true;
+      };
+      const out = await batch(t, [{ tool: 'hover', ref: 'e1' }, { tool: 'click', ref: 'e1' }, { tool: 'hover', ref: 'e1' }]);
+      expect(out.isError).toBe(true);
+      expect(ok(out)).toEqual({ refused: 'Step 2 (click) was refused.', step: 2, tool: 'click', why: ACT_REFUSALS.ambiguous, done: ['Pointed at “Home”'] });
+      expect(clicks(t)).toBe(0);
     });
 
     it('what a step sends is held and asked about, as for its own call', async () => {
@@ -3665,6 +4201,25 @@ describe('acting through the gate (S18 M2c)', () => {
       const clicked = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
       expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Saved"']);
     });
+  });
+
+  it('look-alikes the page redrew: refused, saying how to choose, and nothing pressed (#211)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    twist.ambiguous = true;
+    t.steps.length = 0;
+    // Without the flat find (the packaged assistant's): never told to find by the row's words, which it can't.
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguousPlain);
+    expect(t.steps).toEqual(['describe']);
+    (t.scope as { findFlat?: boolean }).findFlat = true;
+    t.steps.length = 0;
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguous);
+    expect(t.steps).toEqual(['describe']);
+    // The debugger's look at the element (deep.open) says so too, never "no check" (#211's review).
+    const u = await acting({ twist: { replaced: { describe: 1 } }, deep: { opens: ['ambiguous'] } });
+    (u.scope as { findFlat?: boolean }).findFlat = true;
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguous);
+    expect((u.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toEqual([]);
   });
 
   it('navigate and back: its own tabs, http and https, never a site kept private; the site card once, as any action', async () => {

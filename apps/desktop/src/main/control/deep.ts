@@ -37,7 +37,7 @@ const OBJECT_GROUP = 'chord-acting';
 /** Each command's limit. */
 const DEEP_COMMAND_MS = 3000;
 
-export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'replaced' | 'changed' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
+export type DeepAnswer = { ok: true } | { ok: false; why: 'stale' | 'replaced' | 'changed' | 'ambiguous' | 'covered' | 'no-move' | 'file' | 'closed' | 'no-check'; cover?: { role: string; name: string }; step?: string };
 
 export interface DeepSession {
   /** What's under (x, y), in the document's CSS pixels (the view's point plus the scroll: DOM.getNodeForLocation's), is the element's own. */
@@ -67,7 +67,8 @@ const CHECK_FN = String.raw`function (owner, token, key) {
   const entry = read.keep[key];
   const el = entry && entry.ref.deref();
   // Replaced since the action pointed at it (a page that re-renders): said so, and the action starts over (tools.ts).
-  if (!el || !el.isConnected) return { ok: false, why: entry && entry.path !== undefined ? 'replaced' : 'stale' };
+  // Twins (#211): which one can't be told, never looked for again.
+  if (!el || !el.isConnected) return { ok: false, why: entry && entry.twins ? 'ambiguous' : entry && entry.path !== undefined ? 'replaced' : 'stale' };
   const FRAMES = new Set(['iframe', 'frame', 'embed', 'object', 'fencedframe']);
   const up = (n) => n.parentNode ? (n.parentNode.nodeType === 11 ? n.parentNode.host : n.parentNode) : null;
   const coverOf = (cover) => {
@@ -233,13 +234,13 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
           const now = await send<{ result: { objectId?: string; value?: unknown } }>('Runtime.evaluate', {
             contextId: worldId,
             objectGroup: OBJECT_GROUP,
-            expression: `(() => { ${SNAPSHOT_FIND} const r = snapshotFind(${JSON.stringify(owner)}, ${JSON.stringify(token)}); if (!r) return 'stale'; if (r.finish) r.finish(); const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.path !== undefined ? 'replaced' : 'changed'; })()`,
+            expression: `(() => { ${SNAPSHOT_FIND} const r = snapshotFind(${JSON.stringify(owner)}, ${JSON.stringify(token)}); if (!r) return 'stale'; if (r.finish) r.finish(); const e = r.keep[${JSON.stringify(key)}]; if (!e) return 'stale'; const el = e.ref.deref(); if (el && el.isConnected) return el; return e.twins ? 'ambiguous' : e.path !== undefined ? 'replaced' : 'changed'; })()`,
           });
           if (!now) return { ok: false, why: 'no-check', step: `open ${lastError}` };
           const currentId = now.result.objectId;
           if (!currentId) {
             const why = now.result.value;
-            return { ok: false, why: why === 'stale' || why === 'replaced' || why === 'changed' ? why : 'no-check' };
+            return { ok: false, why: why === 'stale' || why === 'replaced' || why === 'changed' || why === 'ambiguous' ? why : 'no-check' };
           }
           const described = await send<{ node: Node }>('DOM.describeNode', { objectId: currentId, depth: -1, pierce: true });
           if (!described) return { ok: false, why: 'no-check' };
