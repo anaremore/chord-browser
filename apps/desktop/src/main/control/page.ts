@@ -44,7 +44,8 @@ export interface ControlPage {
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */
   /** `pinned`: the agent's own (it reads it), kept until its next; false for a diff's (M2g-1). */
-  snapshot(owner: string, token: string, pinned?: boolean, boxes?: boolean): Promise<SnapshotRead | null>;
+  /** `frameRefs`: refs inside same-origin frames (#210): an agent's own tab only. */
+  snapshot(owner: string, token: string, pinned?: boolean, boxes?: boolean, frameRefs?: boolean): Promise<SnapshotRead | null>;
   /** One part's shown text by its container ref (#207: snapshot.ts' boxTextScript); null if the page didn't answer. */
   readBox(owner: string, token: string, box: number): Promise<BoxAnswer | null>;
   /** wait_for in the page, at most `ms` (snapshot.ts' waitScript); null if the page didn't answer. */
@@ -248,7 +249,7 @@ export function controlPage(contents: WebContents): ControlPage {
     screenshot: () => screenshot(contents),
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
-    snapshot: (owner, token, pinned, boxes) => snapshotPage(contents, owner, token, pinned, boxes),
+    snapshot: (owner, token, pinned, boxes, frameRefs) => snapshotPage(contents, owner, token, pinned, boxes, {}, frameRefs),
     readBox: (owner, token, box) => readBoxPage(contents, owner, token, box),
     waitFor: (want, ms) => waitInPage(contents, want, ms),
     shows: (waitMs) => pageShows(contents, waitMs),

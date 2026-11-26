@@ -50,7 +50,9 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     has(/^- generic "Track package" \[ref=e\d+\]$/);
     has(/^- button "More" \[ref=e\d+\] \[collapsed\]$/);
     has(/^- button "In the shadow" \[ref=e\d+\]$/);
+    // A same-origin frame (a srcdoc): read, its button under it with a ref, in an agent's own tab (#210).
     has(/^- iframe "Chat"$/);
+    has(/^- button "Inside" \[ref=e\d+\]$/);
     has(/^- textbox "Message" \[ref=e\d+\] \[filled\]$/);
     has(/^- textbox "Card number" \[payment detail: the user fills it\]$/);
     has(/^- textbox \[ref=e\d+\] \[filled\]$/);
@@ -64,7 +66,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     has(/^- button "Pick" \[ref=e\d+\]$/);
     expect(lines.filter((l) => /^- textbox "Card number" \[payment detail: the user fills it\]$/.test(l))).toHaveLength(2);
     // What's hidden, what's in a frame, and what's in a field never show.
-    for (const never of ['Invisible', 'Inside', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07', '5555', 'typed-in-a-cell', 'typed-in-a-list-item', 'typed-in-a-heading', 'typed-label-source', 'Hidden, any case', 'initial-textarea-content', 'option-label-x']) expect(snap.content).not.toContain(never);
+    for (const never of ['Invisible', 'wool scarf', 'secret-note-value', 'hunter2-secret', 'Hidden until opened', '123-45-6789', '4242', 'typed-into-a-role-textbox', 'Hidden from assistive tech', '07', '5555', 'typed-in-a-cell', 'typed-in-a-list-item', 'typed-in-a-heading', 'typed-label-source', 'Hidden, any case', 'initial-textarea-content', 'option-label-x']) expect(snap.content).not.toContain(never);
 
     // A page that's all editor: one typed field, never walked (review 3 of #104).
     for (const [i, path] of ['/edit-body', '/edit-html', '/design-mode'].entries()) {

@@ -496,6 +496,139 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
     '/later-send': '<title>Later</title><main><button onclick="setTimeout(() => fetch(location.origin.replace(\'127.0.0.1\', \'localhost\') + \'/later-post\', { method: \'POST\', body: \'x\', keepalive: true }).catch(() => {}), 1500)">Save later</button></main>',
     // #322 (Opus's N1): a page that sends as it's clicked: held by the click's own card, mid-action.
     '/now-send': '<title>Now</title><main><button onclick="fetch(location.origin.replace(\'127.0.0.1\', \'localhost\') + \'/now-post\', { method: \'POST\', body: \'x\', keepalive: true }).catch(() => {})">Save now</button></main>',
+    // #210: same-origin frames (frames.md's fixtures; F1 to F12). Each frame page logs what's pressed in it.
+    // F1: a form in a frame, with what the snapshot never shows (hidden, aria-hidden, inert), and a region (no box ref).
+    '/frame-form': '<title>Shop</title><main><h1>Shop</h1><iframe title="Order form" src="/frame-form-inner" style="width:420px;height:300px"></iframe></main>',
+    '/frame-form-inner':
+      '<title>Order</title><section aria-label="Order details"><form action="/frame-order" method=post><label>Name <input name=name></label> <label>Size <select name=size><option>S</option><option>M</option></select></label> <button>Send order</button></form></section>' +
+      '<button hidden>Hidden secret</button><div aria-hidden=true><button>Ghost button</button></div><div inert><button>Inert button</button></div><div id=closed></div><p id=log></p>' +
+      '<script>document.getElementById("closed").attachShadow({ mode: "closed" }).innerHTML = "<button>Closed secret</button>";</script>' +
+      '<script>document.addEventListener("click", (e) => { if (e.target.closest("button")) document.getElementById("log").textContent += " pressed"; });</script>',
+    // Nested: three frames deep are read; a fourth isn't entered.
+    '/frame-nested': '<title>Nest</title><iframe title="Outer" src="/frame-outer" style="width:600px;height:400px"></iframe>',
+    '/frame-outer': '<title>Outer</title><button>Outer go</button><iframe title="Inner" src="/frame-innermost" style="width:500px;height:300px"></iframe>',
+    '/frame-innermost': '<title>Inner</title><button>Inner go</button><iframe title="Deepest" src="/frame-deepest" style="width:400px;height:200px"></iframe>',
+    '/frame-deepest': '<title>Deepest</title><button>Deepest go</button><iframe title="Too deep" src="/frame-toodeep"></iframe>',
+    '/frame-toodeep': '<title>Too deep</title><button>Too deep go</button>',
+    // F2: a frame the test sends elsewhere (another site, or another page of this one), or removes.
+    '/frame-goes': '<title>Widget host</title><main><h1>Host</h1><section aria-label="Shelf A"><iframe id=w title="Widget" src="/frame-widget"></iframe></section><section aria-label="Shelf B" id=shelfB><p>Shelf B</p></section></main>',
+    '/frame-widget':
+      '<title>Widget</title><button>Widget go</button><p id=log></p><script>document.querySelector("button").onclick = () => { document.getElementById("log").textContent += " go"; };</script>',
+    // #320's NSF2: frames by their tag, whatever their role: a frameset's frames are read, and so is an iframe whose role
+    // is presentation; a frame's fallback (its children, never rendered) never is, nor in a control's name.
+    '/frame-set':'<!doctype html><html><head><title>Set</title></head><frameset cols="50%,50%"><frame title="Left set" src="/frame-widget"><frame title="Right set" src="/frame-widget"></frameset></html>',
+    '/frame-presentation':
+      '<title>Plain</title><main><iframe role="presentation" title="Plain" srcdoc="<button>Shown inside</button><p>Plain words inside</p>">Fallback never shown</iframe>' +
+      '<iframe role="button" title="Pressable" srcdoc="<p>Inside the pressable</p>">Fallback pressable words</iframe>' +
+      // A frame inside a button, a label, and an aria-labelledby target: its fallback is no part of any name (round 2, Neon).
+      '<button>Buy <iframe title="In button" srcdoc="<p>x</p>">Fallback in button</iframe></button>' +
+      '<label>Gift note <iframe title="In label" srcdoc="<p>x</p>">Fallback in label</iframe><input></label>' +
+      '<span id=lb>Coupon <iframe title="In labelledby" srcdoc="<p>x</p>">Fallback in labelledby</iframe></span><input aria-labelledby=lb>' +
+      '<a href="#here">Link words <iframe title="In link" srcdoc="<p>x</p>">Fallback in link</iframe></a>' +
+      '<h2>Heading words <iframe title="In heading" srcdoc="<p>x</p>">Fallback in heading</iframe></h2>' +
+      // A frame that is itself the labelledby target: words() starts at it (VALUE_TAGS).
+      '<iframe id=fr title="Direct" srcdoc="<p>x</p>">Fallback in direct</iframe><input aria-labelledby=fr placeholder="Direct field"></main>' +
+      '<script>const x = document.createElement("iframe"); x.setAttribute("role", "region"); x.title = "Regional"; x.src = location.origin.replace("127.0.0.1", "localhost") + "/frame-widget"; document.querySelector("main").append(x);</script>',
+    // NSF3: frames whose own document is hidden (its html or body): never read.
+    '/frame-hidden-doc':
+      '<title>Hidden docs</title><main>' +
+      '<iframe title="Body hidden" srcdoc="<body hidden><button>Body hidden go</button>body hidden words</body>"></iframe>' +
+      '<iframe title="Html aria-hidden" srcdoc="<html aria-hidden=true><body><button>Aria hidden go</button></body></html>"></iframe>' +
+      '<iframe title="Body none" srcdoc="<body style=display:none><button>Display none go</button></body>"></iframe>' +
+      '<iframe title="Body inert" srcdoc="<body inert><button>Inert go</button></body>"></iframe>' +
+      '<iframe title="Body invisible" srcdoc="<body style=visibility:hidden><button>Invisible go</button></body>"></iframe>' +
+      '<iframe title="Body clear" srcdoc="<body style=opacity:0><button>Clear go</button></body>"></iframe></main>',
+    // A top inert at its root: never read (the root check, and the walk's own checks too).
+    '/top-hidden': '<title>Hidden top</title><body inert><button>Top hidden go</button><p>top hidden words</p></body>',
+    // #320's round 2 (Fable's S3): aria-hidden on the top's body hides nothing on screen (a site's mistake): read.
+    '/top-aria-hidden': '<title>Shown top</title><body aria-hidden="true"><button>Top aria go</button><p>top aria words</p></body>',
+    // NSF4: shown() against the frame's own window: a fixed button past the frame's width (inside the top's), and a button
+    // scrolled up out of the frame's view (still on its page).
+    '/frame-scrolled': '<title>Scrolled</title><main><iframe title="Scroller" src="/frame-scroll-inner" style="width:300px;height:200px"></iframe></main>',
+    '/frame-scroll-inner': '<title>Scroll</title><button>Up top</button><div style="height:2000px"></div><button style="position:fixed;left:600px;top:10px">Far fixed</button><script>addEventListener("load", () => scrollTo(0, 800));</script>',
+    // F9: frames this slice never reads: sandboxed (an opaque origin), and another origin (localhost).
+    '/frame-other':
+      '<title>Others</title><main><iframe title="Boxed" sandbox="allow-scripts" src="/frame-widget"></iframe></main>' +
+      '<script>const x = document.createElement("iframe"); x.title = "Elsewhere"; x.src = location.origin.replace("127.0.0.1", "localhost") + "/frame-widget"; document.querySelector("main").append(x);</script>',
+    // NN1: the ref budget filled exactly at the top (2,000 buttons), then an editor frame: cut, and said so.
+    '/frame-editor-full':
+      '<title>Full</title><main id="m"></main><iframe title="Late body" src="/frame-editor-inner"></iframe>' +
+      '<script>const m = document.getElementById("m"); for (let i = 0; i < 2000; i++) { const b = document.createElement("button"); b.textContent = "B" + i; m.append(b); }</script>',
+    // #273 with #320 (NSF2): an unnamed row with a frame in it. The frame's fallback (its light-DOM text, never rendered)
+    // is no part of the row's words: patching it changes nothing the row says.
+    '/frame-in-row':
+      '<title>Rows</title><main><ul><li><span>Order A</span> <iframe title="Map" srcdoc="<p>map</p>">old fallback</iframe> <button>Cancel</button></li></ul><p id=log></p></main>' +
+      '<script>window.patchFallback = () => { document.querySelector("iframe").textContent = "new fallback"; }; document.querySelector("button").onclick = () => { document.getElementById("log").textContent += " cancel"; };</script>',
+    // F11: a huge frame: 25,000 nodes before its button.
+    '/frame-huge': '<title>Huge</title><iframe title="Huge" src="/frame-huge-inner"></iframe><button>After the frame</button>',
+    '/frame-huge-inner':
+      '<title>Huge inner</title><div id=big></div><button>Past the end</button><script>{ const big = document.getElementById("big"); for (let i = 0; i < 25000; i++) big.append(document.createElement("span")); }</script>',
+    // wait_for: a button and a text drawn late inside a frame.
+    '/frame-late': '<title>Late host</title><iframe title="Late" src="/frame-late-inner"></iframe>',
+    '/frame-late-inner':
+      '<title>Late</title><p>Waiting.</p><script>window.drawLate = () => { const b = document.createElement("button"); b.textContent = "Late in frame"; document.body.append(b); const p = document.createElement("p"); p.textContent = "Ready now"; document.body.append(p); };</script>',
+    // F12: the same button in two sibling frames, each redrawn every 100 ms; and a top button the page moves into a frame.
+    '/frame-twins':
+      '<title>Twins</title><iframe title="Left" src="/frame-twin-inner"></iframe><iframe title="Right" src="/frame-twin-inner"></iframe>',
+    '/frame-twin-inner':
+      '<title>Twin</title><div id=slot></div><p id=log></p><script>const draw = () => { const b = document.createElement("button"); b.textContent = "Go"; b.onclick = () => { document.getElementById("log").textContent += " go"; }; document.getElementById("slot").replaceChildren(b); }; draw(); const timer = setInterval(draw, 100);' +
+      'window.removeGo = () => { clearInterval(timer); document.getElementById("slot").replaceChildren(); }; window.holdStill = () => clearInterval(timer);</script>',
+    '/frame-swallows':
+      '<title>Swallows</title><main><div id=m><button id=fold>Fold</button></div><p id=log></p></main>' +
+      '<script>window.swallow = () => { const f = document.createElement("iframe"); f.title = "Swallowed"; f.srcdoc = "<p>here</p>"; f.onload = () => f.contentDocument.body.append(document.getElementById("fold")); document.getElementById("m").append(f); };</script>',
+    // B5: a top button adopted into a frame (the live node, moved), and a frame's button adopted into the top.
+    '/frame-adopt':
+      '<title>Adopt</title><main><button id=mv>Move me</button><iframe id=f title="Widget" src="/frame-widget"></iframe><div id=here></div></main>' +
+      '<script>window.intoFrame = () => document.getElementById("f").contentDocument.body.append(document.getElementById("mv")); window.outOfFrame = () => document.getElementById("here").append(document.getElementById("f").contentDocument.querySelector("button"));</script>',
+    // B4: frames that aren't shown: 0×0, and put off the page.
+    '/frame-hidden':
+      '<title>Hidden frames</title><main><h1>Hidden</h1><iframe title="Zero" src="/frame-widget" width=0 height=0 style="border:0"></iframe><iframe title="Away" src="/frame-widget" style="position:absolute;left:-9999px"></iframe></main>',
+    // B2: editor frames (an editable body; designMode), with words typed in them.
+    '/frame-editor':
+      '<title>Compose</title><main><iframe title="Message body" src="/frame-editor-inner"></iframe><iframe title="Rich note" srcdoc="<p>draft secret words</p><script>document.designMode = &quot;on&quot;;</script>"></iframe>' +
+      // #320's SF2: editor frames that are sensitive by their name, as the same fields at the top are.
+      '<iframe title="Card number" srcdoc="<body contenteditable>4242</body>"></iframe><iframe title="Password" srcdoc="<body contenteditable>hunter2</body>"></iframe>' +
+      // #320's round 2 (Fable's S1): sensitive by the editor's own label, whatever the frame is called (or not called).
+      '<iframe title="Notes" srcdoc="<body contenteditable aria-label=&quot;Card number&quot;>4111</body>"></iframe><iframe srcdoc="<body contenteditable aria-label=&quot;Password&quot;>s3cret</body>"></iframe></main>',
+    '/frame-editor-inner': '<title>Body</title><body contenteditable><p>typed secret words</p>direct secret words<span contenteditable="false">island secret words <button>Mention chip</button></span></body>',
+    // B1: a top whose origin is opaque (a CSP sandbox, its header set by the server) with a srcdoc frame.
+    // B1: a frame of another origin made readable by document.domain (both relax to a.localhost, with
+    // Origin-Agent-Cluster: ?0): its document can be read, but its origin isn't the top's, so it's never entered.
+    '/frame-dd':
+      '<title>Relaxed</title><main><script>document.domain = "a.localhost"; const f = document.createElement("iframe"); f.title = "Relaxed"; f.src = location.protocol + "//b." + location.host + "/frame-dd-inner"; document.querySelector("main").append(f);</script></main>',
+    '/frame-dd-inner': '<title>Inner</title><script>document.domain = "a.localhost";</script><button>Relaxed inside</button>',
+    // A CSP-sandboxed (opaque) top, with a srcdoc frame and a script-made blank one. Chord's world can't read either
+    // frame's document here (#320's N2), so this pins that they stay unread, not the 'null' guard itself.
+    '/frame-opaque':
+      '<title>Opaque</title><main><iframe title="Inner" srcdoc="<button>Inside</button>"></iframe></main>' +
+      '<script>const f = document.createElement("iframe"); f.title = "Blank"; document.querySelector("main").append(f); f.contentDocument.body.innerHTML = "<button>Blank inside</button>";</script>',
+    // F10 (PR 1): the same card form at the top, to compare with the frame's.
+    '/card-top':
+      '<title>Checkout top</title><form method=post action="/frame-pay"><label>Card number <input autocomplete=cc-number name=cc></label><label>Expiry <input autocomplete=cc-exp name=exp></label><button>Pay now</button></form>',
+    // F3: a same-origin frame, see-through, put over a top button.
+    '/frame-decoy':
+      '<title>Decoy</title><main style="position:relative"><button id=pay style="width:200px;height:60px">Pay</button>' +
+      '<iframe title="Decoy" srcdoc="<p>.</p>" style="position:absolute;left:0;top:0;width:220px;height:80px;opacity:0.01;border:0"></iframe><p id=log></p></main>' +
+      '<script>document.getElementById("pay").onclick = () => { document.getElementById("log").textContent += " paid"; };</script>',
+    // F4 (PR 2): a frame in a scrolled, padded, bordered box; and a transformed frame.
+    '/frame-moved':
+      '<title>Moved</title><div style="height:900px"></div><div id=box style="overflow:auto;height:300px;padding:17px;border:9px solid #333"><div style="height:400px"></div>' +
+      '<iframe title="Moved" src="/frame-widget" style="border:6px solid #000;padding:11px"></iframe><div style="height:400px"></div></div>' +
+      '<iframe title="Turned" src="/frame-widget" style="transform:rotate(3deg) scale(1.1)"></iframe>',
+    // F6 and F7 (PR 2): a frame's form that posts to another site; one with no action (it posts to the frame's own address).
+    '/frame-post': '<title>Posts</title><iframe title="Partner form" src="/frame-post-inner"></iframe><iframe title="Plain form" src="/frame-plain-inner"></iframe>',
+    '/frame-post-inner':
+      '<title>Partner</title><script>document.write("<form method=post action=\'" + location.origin.replace("127.0.0.1", "localhost") + "/partner-order\'><button>Send to partner</button></form>");</script>',
+    '/frame-plain-inner': '<title>Plain</title><form method=post><label>Note <input name=note></label><button>Save note</button></form>',
+    // F5 (PR 3): a frame that takes the focus to the top on keydown.
+    '/frame-steals':
+      '<title>Steals</title><input id=top aria-label="Top field"><iframe title="Stealer" src="/frame-steals-inner"></iframe>',
+    '/frame-steals-inner':
+      '<title>Stealer</title><label>Comment <input id=c></label><script>document.getElementById("c").addEventListener("keydown", () => parent.document.getElementById("top").focus());</script>',
+    // F10 (PR 3): a card form in a frame.
+    '/frame-card': '<title>Checkout</title><iframe title="Payment" src="/frame-card-inner"></iframe>',
+    '/frame-card-inner':
+      '<title>Payment</title><form method=post action="/frame-pay"><label>Card number <input autocomplete=cc-number name=cc></label><label>Expiry <input autocomplete=cc-exp name=exp></label><button>Pay now</button></form>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
@@ -732,7 +865,7 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
             ? noisy
             : (pages[req.url ?? '/'] ?? pages[(req.url ?? '/').split('?')[0]!]);
     // /lookout sends a Permissions-Policy that doesn't parse (the final pass of #112: an agent's tab replaces it).
-    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', ...(req.url === '/lookout' ? { 'permissions-policy': '@' } : {}) });
+    res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', ...(req.url === '/lookout' ? { 'permissions-policy': '@' } : {}), ...(req.url === '/frame-opaque' ? { 'content-security-policy': 'sandbox allow-scripts' } : {}), ...(req.url === '/frame-dd' || req.url === '/frame-dd-inner' ? { 'origin-agent-cluster': '?0' } : {}) });
     res.end(body ?? 'not found');
   });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));

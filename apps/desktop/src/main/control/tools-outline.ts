@@ -1,9 +1,9 @@
 /** The control layer's outline tools (split from tools.ts, #213): snapshot, and wait_for. */
 import { randomBytes } from 'node:crypto';
-import { CONTROL_REFUSALS, ACT_REFUSALS, ElementRefs, nodeOf, snapshotKeys, snapshotNote, snapshotOutline, snapshotResult, toolResult, type NodeId, SNAPSHOT_FIND_MAX, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, WAIT_FOR_TEXT_MAX, snapshotDiff, snapshotDiffShown, snapshotLines, snapshotLinesWithRefs, snapshotRange, refsInRange, type SnapshotRead } from '@chord/core';
+import { CONTROL_REFUSALS, ACT_REFUSALS, ElementRefs, nodeOf, snapshotKeys, snapshotNote, snapshotOutline, snapshotResult, toolResult, type NodeId, type TabNode, SNAPSHOT_FIND_MAX, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, WAIT_FOR_TEXT_MAX, snapshotDiff, snapshotDiffShown, snapshotLines, snapshotLinesWithRefs, snapshotRange, refsInRange, type SnapshotRead } from '@chord/core';
 import { pageOf } from '../view-page';
 import type { WaitAnswer } from './snapshot';
-import type { ToolOutput } from './scope';
+import type { ControlScope, ToolOutput } from './scope';
 import { type Call, blockedNow, currentPage, isOutput, loadedPage, markRead, originOf, refuse, resolveTab, safeHost, sameId, unreadable } from './tool-call';
 import { STILL_LOADING } from './tools-act';
 
@@ -23,6 +23,15 @@ import { STILL_LOADING } from './tools-act';
  * wait for a load: a page loading, before the read or after it, or one that went elsewhere as it was read, gives no
  * outline (STILL_LOADING), never the page it was leaving (round 1 of #232, SF1).
  */
+
+/**
+ * Refs inside same-origin frames (#210's B3): only in an agent's own tab (acting there, no lease, nothing against its
+ * acting: #320's SF1), never a tab of yours, nor one shared with an outside agent.
+ */
+function frameRefsFor(scope: ControlScope, node: TabNode): boolean {
+  return Boolean(scope.act) && !scope.act?.lease && scope.act?.mayAct(node) === null;
+}
+
 export async function snapshotTool(call: Call, args: Record<string, unknown>, settled = false): Promise<ToolOutput> {
   const { scope, browser } = call;
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs or an attached tab id.');
@@ -69,7 +78,7 @@ export async function snapshotTool(call: Call, args: Record<string, unknown>, se
   const pageId = page.id;
   let token = randomBytes(12).toString('hex');
   // A flat find's read is unpinned (round 1 of #263): it never takes the agent's full snapshot's place in the page.
-  let read = await page.snapshot(scope.agent.id, token, !flat, Boolean(scope.boxes));
+  let read = await page.snapshot(scope.agent.id, token, !flat, Boolean(scope.boxes), frameRefsFor(scope, node));
   // Nothing in it: a page that draws itself after it loads (the owner, 2026-11-24: a new tab's first look came back
   // empty). Taken once more when the page shows something, at most FIRST_LOOK_MS later; still nothing, the result says so.
   // Not for a page that went somewhere it may not be read, or (for an action's answer) began loading or went elsewhere:
@@ -77,7 +86,7 @@ export async function snapshotTool(call: Call, args: Record<string, unknown>, se
   const movedOn = () => (read ? blockedNow(call, node.id, page, 'That page could not be read.', read.url) !== null : false) || (settled && (loadingNow() || !sameId(page, pageId)));
   if (read && read.nodes.length === 0 && !call.stopped() && !movedOn() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped() && !movedOn()) {
     token = randomBytes(12).toString('hex');
-    read = await page.snapshot(scope.agent.id, token, !flat, Boolean(scope.boxes));
+    read = await page.snapshot(scope.agent.id, token, !flat, Boolean(scope.boxes), frameRefsFor(scope, node));
   }
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read ? [read.url] : []));
@@ -183,7 +192,8 @@ export async function pageChanges(call: Call, nodeId: NodeId, page: NonNullable<
   const token = randomBytes(12).toString('hex');
   const issuedBefore = refs.issues;
   // A diff's snapshot: kept a while, never in place of the agent's own (pinned).
-  const read = await page.snapshot(call.scope.agent.id, token, false);
+  const tab = nodeOf(call.browser.store.state, nodeId);
+  const read = await page.snapshot(call.scope.agent.id, token, false, false, tab?.kind === 'tab' && frameRefsFor(call.scope, tab as TabNode));
   if (!read || call.stopped() || page.id !== kept.pageId) return null;
   // A snapshot of the agent's landed meanwhile: it wins (round 2 of #145), and this read is no diff of it. An outline
   // without text too, which keeps no baseline (round 1 of #247, Neon's SF2): any refs issued meanwhile.

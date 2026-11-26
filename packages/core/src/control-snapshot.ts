@@ -376,7 +376,7 @@ const clipName = (text: string): string => {
   return clean.length > SNAPSHOT_NAME_MAX ? `${clean.slice(0, SNAPSHOT_NAME_MAX - 1)}…` : clean;
 };
 const quoted = (text: string) => JSON.stringify(text);
-const STATE = /^(checked|mixed|selected|expanded|collapsed|pressed|disabled|required|empty|filled|readonly|other-site)$/;
+const STATE = /^(checked|mixed|selected|expanded|collapsed|pressed|disabled|required|empty|filled|readonly|other-site|not-shown|too-deep)$/;
 
 /**
  * The keys that get refs: every keyed node but a field Chord never lets an agent touch (forms' `sensitiveField`). A
@@ -433,7 +433,7 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     for (const state of node.states ?? []) {
       if (!STATE.test(state) || (sensitive && (state === 'empty' || state === 'filled'))) continue;
       // A frame of another site: what's in it can't be read (#112: never an empty node).
-      parts.push(state === 'other-site' ? '[contents not accessible: another site]' : `[${state}]`);
+      parts.push(state === 'other-site' ? '[contents not accessible: another site]' : state === 'not-shown' ? '[contents not read: not shown]' : state === 'too-deep' ? '[contents not read: too deep]' : `[${state}]`);
     }
     if (node.choice && !sensitive) parts.push(`[choice=${quoted(clipName(node.choice))}]`);
     if (sensitive) parts.push(`[${SENSITIVE_NOTE[sensitive]}]`);
@@ -630,6 +630,8 @@ function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, l
     while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
     let item: number | null = null;
     for (let k = path.length - 1; k >= 0; k--) {
+      // A frame is where its item ends (#320's NN2): a control in a frame is in that frame, never an item outside it.
+      if (nodes[path[k]!]!.role === 'iframe') { item = label(path[k]!) ? path[k]! : null; break; }
       if (FIND_ITEMS.has(nodes[path[k]!]!.role) && label(path[k]!)) { item = path[k]!; break; }
     }
     itemOf[i] = item;

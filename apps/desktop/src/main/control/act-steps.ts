@@ -198,6 +198,8 @@ export function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   // The same node, its unnamed row saying something else now (#268's review): maybe another row's, never pressed.
   if (answer.why === 'row') return ACT_REFUSALS.rowChanged;
   if (answer.why === 'row-empty') return ACT_REFUSALS.rowEmpty;
+  // Inside a same-origin frame (#210, PR 1: read, not acted on yet).
+  if (answer.why === 'in-frame') return ACT_REFUSALS.inFrame;
   if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';

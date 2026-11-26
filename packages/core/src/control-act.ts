@@ -200,6 +200,8 @@ export const ACT_REFUSALS = {
   rowChanged: 'The row that element is in says something else now, so it may be another row’s and nothing was done. Call snapshot and use the ref it gives. If it’s refused the same way again, the row keeps changing (a timer, a live count): tell the user instead of trying again.',
   // A row that says nothing but its control, redrawn (#268's review, S5): nothing tells it from the next row's.
   rowEmpty: 'The page redrew that element, and the row it’s in says nothing that tells it from another row’s, so it can’t be found again and nothing was done. Call snapshot and use the ref it gives right away. If it’s refused the same way again, the page keeps redrawing it: tell the user instead of trying again.',
+  // Inside a same-origin frame (#210): read, but not acted on in this slice.
+  inFrame: 'That element is inside a frame on the page. Chord can read frames but can’t act inside them yet, so nothing was done. Ask the user to do it.',
   // The same, for a client whose find can't name a row by its words (the packaged assistant's, until its flat find ships).
   ambiguousPlain: 'The page redrew that element, and it has a look-alike (the same name, in the same place), so which one you meant can’t be told and nothing was done. Call snapshot and use the ref of the one you mean. If it’s refused the same way again, the page keeps redrawing them: tell the user instead of trying again.',
   covered: (what: string) => `Something is covering that element: ${what}. Deal with it first, or call snapshot again.`,
