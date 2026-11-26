@@ -92,10 +92,14 @@ describe('ad blocking’s folders, through the service (#283)', () => {
     ['win32', true],
     ['darwin', true],
     ['linux', false],
-  ] as const)('forgetProfiles on %s, with work and Work in use: the old Extension/Work stays (%s), where case is ignored, as work’s own folder', async (os, stays) => {
-    const { blocking, root } = service((r) => mkdirSync(extension(r, 'Work'), { recursive: true }));
+  ] as const)('forgetProfiles on %s, with work and Work in use: an old Work folder (Extension’s and Staging’s, #281) stays (%s), where case is ignored, as work’s own', async (os, stays) => {
+    const { blocking, root } = service((r) => {
+      mkdirSync(extension(r, 'Work'), { recursive: true });
+      mkdirSync(join(r, 'Staging', 'Work'), { recursive: true });
+    });
     Object.defineProperty(process, 'platform', { value: os });
     await blocking.forgetProfiles(new Set(['work', 'Work']));
     expect(existsSync(extension(root, 'Work'))).toBe(stays);
+    expect(existsSync(join(root, 'Staging', 'Work'))).toBe(stays);
   });
 });
