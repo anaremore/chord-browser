@@ -9,7 +9,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
   AGENT_ENDPOINT_FILE,
@@ -628,7 +628,12 @@ describe('Zero cost, and off in packaged builds', () => {
       run.on('close', () => done(out));
     });
     const { parseChain } = await import('../../src/main/agents/parent');
-    expect(parseChain(answer)[0]).toMatchObject({ pid: child.pid, path: realpathSync.native(program) });
+    const [first] = parseChain(answer);
+    expect(first?.pid).toBe(child.pid);
+    // The folder's name exactly, and the same file: Windows gives the path as it was started (a runner's TEMP has 8.3
+    // names, RUNNER~1), so both are resolved, as sameProgram does. A mangled path resolves to nothing.
+    expect(first?.path).toContain(basename(dir));
+    expect(realpathSync.native(first!.path!)).toBe(realpathSync.native(program));
   }, 30_000);
 
   // #264 (Opus's SF1): with no console of its own (a detached start), the helper still answers, in UTF-8 with no BOM:
