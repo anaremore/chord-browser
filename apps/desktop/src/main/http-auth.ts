@@ -117,6 +117,15 @@ type Answer = (username?: string, password?: string) => void;
  */
 export type AuthAnswer = { username: string; password: string } | { account: number; username: string } | null;
 
+/** An address for #199's trace: its path alone (no query, no fragment, no user info). */
+const pathOf = (url: string): string => {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return '?';
+  }
+};
+
 /** One frame's navigation: its number (from its start) and the address it's asking for now (after its redirects). */
 interface Navigation {
   nav: number;
@@ -291,6 +300,7 @@ export class AuthBroker {
     // ends with no word at all (Electron reports no failure, and lists the frame a while longer), only this.
     contents.on('did-stop-loading', () => {
       if (contents.isDestroyed() || contents.isLoading()) return;
+      this.trace?.(() => `stop-loading, ending ${[...frames].map(([id, n]) => `f${id} n${n.nav}`).join(' ') || 'nothing'}`);
       for (const id of [...frames.keys()]) {
         end(id);
         this.navigationGone(contents, id, () => false);
@@ -306,6 +316,7 @@ export class AuthBroker {
       if (before && !before.doubtful) superseded.set(id, (superseded.get(id) ?? 0) + 1);
       frames.delete(id);
       frames.set(id, navigation);
+      this.trace?.(() => `start f${id} n${navigation.nav} ${pathOf(details.url)}${before ? ` (replaces n${before.nav}${before.doubtful ? ', doubtful' : ''})` : ''}`);
       if (frames.size > FRAMES_MAX) {
         const oldest = frames.keys().next().value!;
         end(oldest);
@@ -318,10 +329,12 @@ export class AuthBroker {
       const navigation = id === undefined ? undefined : frames.get(id);
       if (!navigation || details.isSameDocument) return;
       navigation.url = details.url;
+      this.trace?.(() => `redirect f${id} n${navigation.nav} ${pathOf(details.url)}`);
       this.redirected(contents, id!, navigation);
     }) as never);
     contents.on('did-frame-navigate', ((_event: unknown, url: string, code: number, _status: string, _main: boolean, processId: number, routingId: number) => {
       const id = frameOf(processId, routingId);
+      this.trace?.(() => `commit f${id ?? '?'} n${id === undefined ? '?' : (frames.get(id)?.nav ?? '-')} ${code} ${pathOf(url)}`);
       if (id === undefined) {
         sweep();
         return this.settled(contents);
@@ -341,6 +354,7 @@ export class AuthBroker {
       }
       const navigation = frames.get(id);
       const replaced = superseded.get(id) ?? 0;
+      this.trace?.(() => `fail f${id} n${navigation?.nav ?? '-'} ${pathOf(url)}${replaced > 0 ? ` (a replaced one's, ${replaced} owed)` : ''}`);
       // Maybe a replaced navigation's failure, whichever address it had: the frame's own navigation goes on. Two to
       // the same address can't be told apart, but either order ends the right one: the second failure to come does.
       // A replaced one that never reports (see `superseded`) leaves its count to the page's stopping loading, which
@@ -391,6 +405,7 @@ export class AuthBroker {
       prompt.frames.delete(frame);
       // Every request this box answers is gone: it goes too, and an answer to it would reach nothing.
       if (prompt.frames.size === 0 && prompt.followed) {
+        this.trace?.(() => `box ${prompt.id} cancelled: n${navigation.nav} (f${frame}) ended`);
         this.pending.splice(this.pending.indexOf(prompt), 1);
         for (const answer of prompt.answers) answer();
         changed = true;
@@ -414,6 +429,7 @@ export class AuthBroker {
     let changed = false;
     for (const prompt of [...this.pending]) {
       if (prompt.contents !== contents || !prompt.unplaced) continue;
+      this.trace?.(() => `box ${prompt.id} cancelled: unplaced, and nothing navigating`);
       this.pending.splice(this.pending.indexOf(prompt), 1);
       for (const answer of prompt.answers) answer();
       changed = true;
@@ -475,6 +491,7 @@ export class AuthBroker {
     const failed = retry && !!held && !info.isProxy && held.origin === origin && held.realm === realm;
     if (failed) this.drop(held!);
     const same = this.pending.find((p) => p.nodeId === nodeId && p.origin === origin && p.realm === realm && p.proxy === info.isProxy);
+    this.trace?.(() => `login ${pathOf(details.url)} ${details.isRequestForNavigation ? 'nav' : 'sub'}${retry ? ' retry' : ''} asking [${asking.map(([id, n]) => `f${id} n${n.nav}`).join(' ')}] → ${same ? `box ${same.id} (callback ${same.answers.length + 1})` : `box ${this.nextId}`}`);
     if (same) {
       same.answers.push(answer);
       for (const [id, navigation] of asking) same.frames.set(id, navigation);
@@ -610,11 +627,28 @@ export class AuthBroker {
     if (this.answers.length > 20) this.answers.shift();
   }
 
+  /**
+   * #199, tests only (`traceForTests`, from chordTestHooks): each `login` and box, and each navigation's start,
+   * redirect, commit and failure, with its frame and number: whose request a box's answer went to. Addresses by path
+   * only; no usernames, no passwords. Off in Chord: nothing is recorded unless a test turned it on.
+   */
+  private trace: ((what: () => string) => void) | null = null;
+  private readonly traced: string[] = [];
+  traceForTests(): void {
+    if (this.trace) return;
+    const t0 = this.now();
+    this.trace = (what) => {
+      this.traced.push(`${this.now() - t0} ${what()}`);
+      if (this.traced.length > 60) this.traced.shift();
+    };
+  }
+
   /** The boxes waiting and what became of the last answers, for tests (chordTestHooks.httpAuth). */
-  forTests(): { pending: { id: number; origin: string; realm: string; ready: boolean; busy: boolean; retry: boolean; fill: boolean; accounts: number; locked: boolean }[]; answers: string[] } {
+  forTests(): { pending: { id: number; origin: string; realm: string; ready: boolean; busy: boolean; retry: boolean; fill: boolean; accounts: number; locked: boolean }[]; answers: string[]; trace: string[] } {
     return {
       pending: this.pending.map((p) => ({ id: p.id, origin: p.origin, realm: p.realm, ready: p.ready, busy: p.busy, retry: p.retry, fill: p.fill, accounts: p.accounts.length, locked: p.locked })),
       answers: this.answers.slice(),
+      trace: this.traced.slice(),
     };
   }
 
@@ -622,6 +656,7 @@ export class AuthBroker {
     const index = this.pending.indexOf(prompt);
     if (index < 0) return;
     this.pending.splice(index, 1);
+    this.trace?.(() => `box ${prompt.id} ${credentials ? 'answered' : 'cancelled'}: ${prompt.answers.length} callback(s), frames [${[...prompt.frames].map(([id, n]) => `f${id} n${n.nav}`).join(' ')}]`);
     for (const answer of prompt.answers) {
       if (credentials) answer(credentials.username, credentials.password);
       else answer();

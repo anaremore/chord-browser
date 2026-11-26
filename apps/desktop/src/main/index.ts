@@ -1337,6 +1337,8 @@ if (!app.requestSingleInstanceLock()) {
     // End-to-end tests only (never when packaged): what extensions add to a page's
     // right-click menu, read without opening a native menu; and launch timing.
     if (dev('CHORD_E2E_HOOKS')) {
+      // #199: HTTP sign-in's trace (each box, and the navigations it answers), read with httpAuth() below.
+      httpAuth.traceForTests();
       // Right-click menus are read, not shown: their labels, newest last, by page.
       const contextMenus = new Map<number, ObservedItem[]>();
       observeContextMenusForTests((contents, items) => contextMenus.set(contents.id, items));
