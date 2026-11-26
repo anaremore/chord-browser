@@ -15,7 +15,10 @@ const { Store } = await import('../../src/main/store');
 
 const theme = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
 const dirs: string[] = [];
-afterEach(() => {
+/** Each service's start (its folders, panel.json), waited for before its folder goes: never removed under it (#279). */
+const opening: Promise<unknown>[] = [];
+afterEach(async () => {
+  await Promise.allSettled(opening.splice(0));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -35,6 +38,7 @@ function setup(scope: AssistantScope) {
   const persistence = { assistant: async () => ({ threads: [] }) };
   // No windows to push the panel to (its push runs on a timer after the test too).
   const service = new AssistantService({ store, allWindows: [] } as never, persistence as never, dir);
+  opening.push((service as unknown as { opened: Promise<void> }).opened);
   return { store, service, mine };
 }
 
