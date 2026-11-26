@@ -99,4 +99,41 @@ describe('profile partitions after #315 (migration)', () => {
     expect(partitions()).toEqual(once);
     expect(Object.values(once).some((p) => p.startsWith('migrating:'))).toBe(false);
   });
+
+  it('lists the profiles whose folder must move: profile rows and extensions’ profiles with upper case or `_`; never Chord’s own, the default or a private window’s (Opus on #329)', () => {
+    before(['Work', 'a_b', '01a21619-df80-7e66-9577-09ceec5d0a05', 'plain']);
+    const old = new DatabaseSync(file);
+    old.exec('PRAGMA foreign_keys = OFF');
+    old.prepare("INSERT INTO profile (id, name, partition, is_default, created_at) VALUES ('private-W1', 'P', 'chord-private-W1', 0, 1)").run();
+    const ext = old.prepare("INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at) VALUES (?, ?, 'E', '1', 'store', '/x', NULL, 1, 0, 0)");
+    ext.run('Ext_Only', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    ext.run('default', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    ext.run('Work', 'cccccccccccccccccccccccccccccccc');
+    old.close();
+    const db = new ChordDatabase(file);
+    try {
+      expect(db.partitionMoves()).toEqual(['Ext_Only', 'Work', 'a_b']);
+      // Moved: off the list, for good.
+      db.partitionMoved(['Work', 'a_b']);
+      expect(db.partitionMoves()).toEqual(['Ext_Only']);
+    } finally {
+      db.close();
+    }
+    // Opened again: the migration doesn't run twice, so nothing comes back on the list.
+    const again = new ChordDatabase(file);
+    try {
+      expect(again.partitionMoves()).toEqual(['Ext_Only']);
+    } finally {
+      again.close();
+    }
+  });
+
+  it('a new database lists nothing: no profile was ever in a folder of the old naming', () => {
+    const db = new ChordDatabase(file);
+    try {
+      expect(db.partitionMoves()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 });

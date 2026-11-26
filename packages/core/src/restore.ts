@@ -132,7 +132,9 @@ const EXTENSION_ID = /^[a-p]{32}$/;
 export function restoreExtensions(saved: readonly InstalledExtension[] | undefined): Record<string, InstalledExtension> {
   const out: Record<string, InstalledExtension> = {};
   for (const e of saved ?? []) {
-    if (!e || !EXTENSION_ID.test(e.id) || typeof e.profileId !== 'string' || !e.profileId) continue;
+    // Its profile: the default, or one kept apart with an id as `isId` allows (a folder is named from it, #315), never a
+    // private window's (Neon's SF1 on #329).
+    if (!e || !EXTENSION_ID.test(e.id) || typeof e.profileId !== 'string' || !(e.profileId === DEFAULT_PROFILE || (isId(e.profileId) && !isPrivateProfile(e.profileId)))) continue;
     if (e.source !== 'store' && e.source !== 'unpacked') continue;
     if (typeof e.path !== 'string' || !e.path || typeof e.version !== 'string' || !e.version) continue;
     out[extensionKey(e.profileId, e.id)] = {

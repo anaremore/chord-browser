@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PROFILE, profilePartition } from '../src';
-import { restoreChord } from '../src/restore';
+import { restoreChord, restoreExtensions } from '../src/restore';
 
 /** What Electron makes of a persistent partition's name, for its folder. */
 const folder = (partition: string) => partition.replace(/^persist:/, '').toLowerCase();
@@ -64,5 +64,15 @@ describe('restoreChord’s profile (#315: a partition’s folder assumes an id a
   });
   it.each(['a/b', '..', '', 'é', 'x'.repeat(65), 'private-w1'])('%j (not an id, or a private window’s) restores as the default profile', (id) => {
     expect(restoreChord(chord(id) as never).profileId).toBe(DEFAULT_PROFILE);
+  });
+});
+
+describe('restoreExtensions’ profile (Neon’s SF1 on #329: a folder is named from it)', () => {
+  const ext = (profileId: string) => ({ id: 'a'.repeat(32), profileId, name: 'E', version: '1', source: 'store' as const, path: '/x', notifiedVersion: null, pinned: true, installedAt: 0, updatedAt: 0 });
+  it.each(['Work', 'work_1', DEFAULT_PROFILE])('%j stays', (id) => {
+    expect(Object.values(restoreExtensions([ext(id)])).map((e) => e.profileId)).toEqual([id]);
+  });
+  it.each(['/../../x', '..', '', 'private-w1', 'x'.repeat(65)])('%j (not an id a folder can be named from, or a private window’s) is dropped', (id) => {
+    expect(restoreExtensions([ext(id)])).toEqual({});
   });
 });

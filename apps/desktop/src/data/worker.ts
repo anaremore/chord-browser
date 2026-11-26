@@ -75,7 +75,7 @@ process.parentPort.on('message', (event) => {
         const saved = db.load();
         const navs = db.loadNavs();
         const effects = db.loadEffects();
-        reply({ id: request.id, ok: true, saved, navs, effects, timing: { up, open, prune, read: lap() } });
+        reply({ id: request.id, ok: true, saved, navs, effects, partitionMoves: db.partitionMoves(), timing: { up, open, prune, read: lap() } });
         break;
       }
       case 'write': {
@@ -200,6 +200,11 @@ process.parentPort.on('message', (event) => {
       case 'export.counts':
         if (!db) throw new Error('chord-data: export before open');
         reply({ id: request.id, ok: true, counts: db.exportCounts() });
+        break;
+      case 'partition.moved':
+        if (!db) throw new Error('chord-data: partition.moved before open');
+        db.partitionMoved(request.ids);
+        reply({ id: request.id, ok: true });
         break;
       case 'close':
         sync.close();

@@ -26,7 +26,7 @@ import {
 import type { AntigravityAnswer, RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';
-import { basename, delimiter, join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { app, BaseWindow, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import type { ImportEnv } from '../import/detect';
 import { AdBlocking } from './ad-blocking/service';
@@ -61,7 +61,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { migratePartitions, partitionFolder } from './partitions';
+import { foldersInUse, migratePartitions } from './partitions';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -971,19 +971,19 @@ if (!app.requestSingleInstanceLock()) {
     proxies.start({ proxyFor: (owner) => proxyFor(browser?.store.state ?? initial, owner), contents: () => webContents.getAllWebContents() });
     setDictionarySource(initial.settings.googleFree);
     const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
-    // Each profile's sign-ins in the folder its partition is named for now (#315), before any of its sessions is made:
-    // the chords' profiles and the ones extensions are installed in (extensions.start makes theirs). Chord's own ids
-    // never move, so this is a stat or two only where an id has upper case or `_`.
-    partitionFallbacks = await migratePartitions(app.getPath('userData'), [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)]);
+    // Each listed profile's sign-ins in the folder its partition is named for now (#315), before any of its sessions is
+    // made: of the chords' profiles and the ones extensions are installed in (extensions.start makes theirs). Only
+    // migration 25's list moves (none on a profile made since), so a launch with nothing listed does no work at all.
+    const partitionMoves = await migratePartitions(app.getPath('userData'), opened.partitionMoves, [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)]);
+    partitionFallbacks = partitionMoves.fallbacks;
+    void opened.persistence.partitionMoved(partitionMoves.moved).catch((error: unknown) => console.error('Recording moved sign-ins failed (they move again next launch, harmlessly):', error));
     // Sign-ins a chord kept separately, once no chord uses them, are deleted once launch is over, with their copies of
     // the blocker extension. No session loads them meanwhile; which profiles are in use is read then, so one made since stays.
     afterLaunch.run(() => {
       const inUse = new Set([...Object.values(browser!.store.state.chords).map((c) => c.profileId), ...profiles.keys()]);
       // The folders in use: each session made's own, as Electron named it, and each profile in use's (its old one if
       // its sign-ins couldn't be moved this launch), never worked out again for a session that has one (#315).
-      const folders = [...inUse].map((id) => partitionFolder(partitionFallbacks.get(id) ?? profilePartition(id)));
-      for (const ses of profiles.values()) if (ses.storagePath) folders.push(basename(ses.storagePath));
-      void removeUnusedPartitions(app.getPath('userData'), folders);
+      void removeUnusedPartitions(app.getPath('userData'), foldersInUse(inUse, partitionFallbacks, [...profiles.values()].map((ses) => ses.storagePath)));
       void adBlocking.forgetProfiles(inUse);
     });
 

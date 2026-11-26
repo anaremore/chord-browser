@@ -558,16 +558,18 @@ test('a profile whose id has upper case keeps its sign-ins across the launch tha
     await app.close();
   }
 
-  // As a build before #315 would have left it: the same profile with upper case in its id (as sync or import can
-  // bring), its sign-ins in the folder Electron named in lower case.
+  // As a build before #315 (schema 24) would have left it: the same profile with upper case in its id (as sync or
+  // import can bring), its row holding `persist:p-${id}` as that build wrote it, and its sign-ins in the folder Electron
+  // named in lower case. Migration 25 then runs at the next launch, lists it, and the folder moves (Neon's N2 on #329).
   const [folder] = ownPartitions();
   const id = folder!.slice('p-'.length);
   const upper = id.toUpperCase();
   const db = new DatabaseSync(join(profile, 'chord.db'));
   try {
     db.exec('PRAGMA foreign_keys = OFF');
-    db.prepare('UPDATE profile SET id = ?, partition = ? WHERE id = ?').run(upper, `persist:p-${upper.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`, id);
+    db.prepare('UPDATE profile SET id = ?, partition = ? WHERE id = ?').run(upper, `persist:p-${upper}`, id);
     db.prepare('UPDATE chord SET profile_id = ? WHERE profile_id = ?').run(upper, id);
+    db.exec('DROP TABLE partition_move; PRAGMA user_version = 24');
   } finally {
     db.close();
   }
@@ -581,6 +583,26 @@ test('a profile whose id has upper case keeps its sign-ins across the launch tha
     await expect.poll(whoami).toBe('Alex');
     // Moved: one folder, its new one (the old is gone, not left behind or deleted with the sign-ins in it).
     await expect.poll(ownPartitions).toEqual([`p-${upper.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`]);
+  } finally {
+    await app.close();
+  }
+  // Migration 25 ran (the row holds its new partition) and the profile came off the move list once moved.
+  const after = new DatabaseSync(join(profile, 'chord.db'), { readOnly: true });
+  try {
+    expect(after.prepare('PRAGMA user_version').get()).toEqual({ user_version: 25 });
+    expect(after.prepare('SELECT partition FROM profile WHERE id = ?').get(upper)).toEqual({ partition: `persist:p-${upper.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}` });
+    expect(after.prepare('SELECT id FROM partition_move').all()).toEqual([]);
+  } finally {
+    after.close();
+  }
+  app = await launch({}, profile);
+  try {
+    // A later launch: nothing listed, nothing moves, still signed in.
+    shell = await pageWhere(app, isShell);
+    overlay = await pageWhere(app, isOverlay);
+    await shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Work' }).click();
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
   } finally {
     await app.close();
   }

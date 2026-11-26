@@ -316,6 +316,16 @@ export class ChordDatabase {
     }
   }
 
+  /** #315 (migration 25): the profiles whose partition folder is still to move to its new name. */
+  partitionMoves(): string[] {
+    return (this.sql('SELECT id FROM partition_move ORDER BY id').all() as Row[]).map((r) => str(r['id']));
+  }
+
+  /** #315: these profiles' folders have moved; they never move again. */
+  partitionMoved(ids: readonly string[]): void {
+    for (const id of ids) this.sql('DELETE FROM partition_move WHERE id = ?').run(id);
+  }
+
   /**
    * Profiles no chord uses any more (its sign-ins were shared again, or the
    * chord was deleted): their rows go. Returns their partitions. Main deletes

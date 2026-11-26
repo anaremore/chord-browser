@@ -243,6 +243,8 @@ export type DataRequest =
   | { id: number; type: 'device' }
   /** What an export would hold, for Settings' card. The export itself reads the database in a process of its own. */
   | { id: number; type: 'export.counts' }
+  /** #315: these profiles' partition folders have moved; they come off `partition_move`. */
+  | { id: number; type: 'partition.moved'; ids: string[] }
   /** Sync (docs/decisions/S15-your-data.md §6–§8): chord-data's thread owns its tables, and its worker thread the folder. */
   | ({ id: number } & SyncRequest)
   | { id: number; type: 'close' };
@@ -370,6 +372,8 @@ export type DataResponse =
       ok: true;
       saved?: PersistedState | null;
       navs?: Record<string, NavState>;
+      /** `open`: the profiles whose partition folder is still to move (#315). */
+      partitionMoves?: string[];
       effects?: SavedEffects[];
       search?: SearchResult;
       archive?: ArchivePage;

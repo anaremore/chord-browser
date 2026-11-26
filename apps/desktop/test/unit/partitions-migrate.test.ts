@@ -1,20 +1,22 @@
 /**
- * #315: at launch, before any profile's session is made, each profile whose partition folder changed name (its id has
- * upper case or `_`) gets its sign-ins in the new folder. Copied while another profile still needs the old one (a case
- * twin), through `.migrating-<new>` so only a whole copy ever gets a `p-*` name; renamed for the last. A profile whose
- * move fails runs this launch on its old partition (`persist:p-${id}`, case kept) and keeps its old folder.
+ * #315: at launch, before any profile's session is made, the profiles migration 25 listed get their sign-ins in their
+ * partition's new folder. Longest new name first (a new folder can be another's old one), copied while another still
+ * needs the old one, renamed for the last; through `.migrating-<new>`; a stale new folder removed, never opened; a
+ * failed move runs that profile on its old folder (`fallbackPartition`) and nothing moves into that folder.
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { profilePartition } from '@chord/core';
-import { migratePartitions, partitionFolder, type PartitionFs } from '../../src/main/partitions';
+import { fallbackPartition, foldersInUse, migratePartitions, partitionFolder, type PartitionFs } from '../../src/main/partitions';
 import { removeUnusedPartitions } from '../../src/main/persistence';
 
 const dirs: string[] = [];
+beforeEach(() => void vi.spyOn(console, 'error').mockImplementation(() => {}));
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -22,6 +24,7 @@ afterEach(() => {
 function userData(folders: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), 'chord-partitions-'));
   dirs.push(root);
+  mkdirSync(join(root, 'Partitions'), { recursive: true });
   for (const [folder, owner] of Object.entries(folders)) {
     mkdirSync(join(root, 'Partitions', folder, 'Cache'), { recursive: true });
     writeFileSync(join(root, 'Partitions', folder, 'Cookies'), owner);
@@ -31,11 +34,13 @@ function userData(folders: Record<string, string>): string {
 }
 const partitionsDir = (root: string) => join(root, 'Partitions');
 const cookies = (root: string, folder: string) => (existsSync(join(partitionsDir(root), folder, 'Cookies')) ? readFileSync(join(partitionsDir(root), folder, 'Cookies'), 'utf8') : null);
-const folderOf = (id: string) => profilePartition(id).replace(/^persist:/, '');
+const folderOf = (id: string) => partitionFolder(profilePartition(id));
+/** The sign-ins a profile opens now: its new folder, or its old one through its fallback. */
+const opens = (root: string, id: string, fallbacks: ReadonlyMap<string, string>) => cookies(root, partitionFolder(fallbacks.get(id) ?? profilePartition(id)));
 const listed = (root: string) => readdirSync(partitionsDir(root)).sort();
 
 /** The real file system, with `cp` or `rename` failing for the targets `fail` names. */
-function failing(fail: { cp?: (to: string) => boolean; rename?: (to: string) => boolean }): PartitionFs {
+function failing(fail: { cp?: (to: string) => boolean; rename?: (from: string, to: string) => boolean }): PartitionFs {
   return {
     ...fsp,
     cp: async (from, to, options) => {
@@ -48,112 +53,153 @@ function failing(fail: { cp?: (to: string) => boolean; rename?: (to: string) => 
       return fsp.cp(from, to, options);
     },
     rename: async (from, to) => {
-      if (fail.rename?.(String(to))) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      if (fail.rename?.(String(from), String(to))) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
       return fsp.rename(from, to);
     },
   };
 }
 
 describe('migratePartitions (#315)', () => {
-  it('Chord’s own ids: nothing moves, nothing falls back', async () => {
+  it('nothing listed (every launch after the move, and every profile Chord made): nothing moves or is even looked at', async () => {
     const id = '01a21619-df80-7e66-9577-09ceec5d0a05';
     const root = userData({ [`p-${id}`]: id });
-    expect(await migratePartitions(root, [id, 'default'])).toEqual(new Map());
-    expect(listed(root)).toEqual([`p-${id}`]);
+    const readdir = vi.fn(fsp.readdir);
+    expect(await migratePartitions(root, [], [id, 'Work'], { ...fsp, readdir } as unknown as PartitionFs)).toEqual({ fallbacks: new Map(), moved: [] });
+    expect(readdir).not.toHaveBeenCalled();
   });
 
-  it('`Work` alone: its folder is renamed, its sign-ins kept', async () => {
+  it('`Work` alone: its folder renamed, its sign-ins kept; off the list', async () => {
     const root = userData({ 'p-work': 'Work' });
-    expect(await migratePartitions(root, ['Work'])).toEqual(new Map());
+    expect(await migratePartitions(root, ['Work'], ['Work'])).toEqual({ fallbacks: new Map(), moved: ['Work'] });
     expect(cookies(root, folderOf('Work'))).toBe('Work');
     expect(listed(root)).toEqual([folderOf('Work')]);
   });
 
   it('`Work` and `work`: `work` keeps `p-work`, `Work` gets a copy (no caches)', async () => {
     const root = userData({ 'p-work': 'shared' });
-    await migratePartitions(root, ['Work', 'work']);
+    await migratePartitions(root, ['Work'], ['Work', 'work']);
     expect(cookies(root, 'p-work')).toBe('shared');
     expect(cookies(root, folderOf('Work'))).toBe('shared');
     expect(existsSync(join(partitionsDir(root), folderOf('Work'), 'Cache'))).toBe(false);
-    expect(listed(root)).toEqual([folderOf('Work'), 'p-work'].sort());
   });
 
   it.each([
     ['Work', 'WORK'],
     ['work_1', 'Work_1'],
-  ])('twins %j and %j, neither keeping the old folder: each gets the sign-ins, none starts empty (Argon’s B2)', async (a, b) => {
+  ])('twins %j and %j, neither keeping the old folder: each gets the sign-ins; the last renames it', async (a, b) => {
     const old = `p-${a.toLowerCase()}`;
     const root = userData({ [old]: 'shared' });
-    expect(await migratePartitions(root, [a, b])).toEqual(new Map());
+    const { fallbacks } = await migratePartitions(root, [a, b], [a, b]);
+    expect(fallbacks).toEqual(new Map());
     expect(cookies(root, folderOf(a))).toBe('shared');
     expect(cookies(root, folderOf(b))).toBe('shared');
-    // The last one renamed it: the old folder is gone.
     expect(existsSync(join(partitionsDir(root), old))).toBe(false);
   });
 
-  it('already migrated: nothing moves; an old folder that isn’t there: nothing to do', async () => {
-    const root = userData({ [folderOf('Work')]: 'Work', 'p-work': 'leftover' });
-    expect(await migratePartitions(root, ['Work', 'Abc'])).toEqual(new Map());
-    expect(cookies(root, folderOf('Work'))).toBe('Work');
-    expect(cookies(root, 'p-work')).toBe('leftover');
-    expect(existsSync(join(partitionsDir(root), folderOf('Abc')))).toBe(false);
+  it.each([
+    // One's new folder is the other's old one (Neon's and Opus's B1 on #329): each keeps its own.
+    [['_work', 'Work'], { 'p-_work': '_work', 'p-work': 'Work' }],
+    [['aB', 'a_b'], { 'p-a_b': 'a_b', 'p-ab': 'aB' }],
+    [['a_b', 'a__b'], { 'p-a_b': 'a_b', 'p-a__b': 'a__b' }],
+    [['_work', '__work', 'Work'], { 'p-_work': '_work', 'p-__work': '__work', 'p-work': 'Work' }],
+  ] as const)('%j: a chain of folders, each profile ends with exactly its own sign-ins', async (ids, folders) => {
+    const root = userData(folders);
+    const { fallbacks, moved } = await migratePartitions(root, ids, ids);
+    expect(fallbacks).toEqual(new Map());
+    expect([...moved].sort()).toEqual([...ids].sort());
+    for (const id of ids) expect(opens(root, id, fallbacks), id).toBe(id);
   });
 
-  it('a copy that dies part-way never leaves a `p-*`; what a crash left in `.migrating-*` goes at the next launch, which migrates (B3)', async () => {
-    const root = userData({ 'p-work': 'shared' });
-    const fallbacks = await migratePartitions(root, ['Work', 'work'], failing({ cp: () => true }));
-    expect(fallbacks).toEqual(new Map([['Work', 'persist:p-Work']]));
-    expect(listed(root)).toEqual(['p-work']);
-    // A crash mid-copy (no catch to clean up): its half copy is still there at the next launch.
-    mkdirSync(join(partitionsDir(root), `.migrating-${folderOf('Work')}`));
-    writeFileSync(join(partitionsDir(root), `.migrating-${folderOf('Work')}`, 'Cookies'), 'half');
-    // Next launch, the disk has room again.
-    expect(await migratePartitions(root, ['Work', 'work'])).toEqual(new Map());
+  it('a stale new folder (a profile deleted before #315 left `p-a_b`): removed, never opened as `aB`’s', async () => {
+    const root = userData({ 'p-a_b': 'someone gone', 'p-ab': 'aB' });
+    const { fallbacks } = await migratePartitions(root, ['aB'], ['aB']);
+    expect(opens(root, 'aB', fallbacks)).toBe('aB');
+  });
+
+  it('`_work`’s move fails while `Work` is to move into its folder: both stay on their old folders, nothing overwritten (Neon’s occupied)', async () => {
+    const root = userData({ 'p-_work': '_work', 'p-work': 'Work' });
+    const { fallbacks, moved } = await migratePartitions(root, ['_work', 'Work'], ['_work', 'Work'], failing({ rename: (from) => from.endsWith('p-_work') }));
+    expect(fallbacks).toEqual(
+      new Map([
+        ['_work', fallbackPartition('_work')],
+        ['Work', fallbackPartition('Work')],
+      ]),
+    );
+    expect(moved).toEqual([]);
+    expect(opens(root, '_work', fallbacks)).toBe('_work');
+    expect(opens(root, 'Work', fallbacks)).toBe('Work');
+  });
+
+  it('a crash mid-chain (after `_work` moved, before `Work` did, and before either came off the list): the relaunch finishes it', async () => {
+    // As the crash left it: `_work` renamed into `p-__work`, `Work` still in `p-work`, both still listed.
+    const root = userData({ 'p-__work': '_work', 'p-work': 'Work' });
+    const { fallbacks, moved } = await migratePartitions(root, ['_work', 'Work'], ['_work', 'Work']);
+    expect(fallbacks).toEqual(new Map());
+    expect([...moved].sort()).toEqual(['Work', '_work']);
+    expect(opens(root, '_work', fallbacks)).toBe('_work');
+    expect(opens(root, 'Work', fallbacks)).toBe('Work');
+  });
+
+  it('a crashed copy (a whole `p-_work` copied, not yet off the list): copied again from the old folder, which is still there', async () => {
+    const root = userData({ 'p-work': 'shared', [folderOf('Work')]: 'half', [`.migrating-${folderOf('Work')}`]: 'half' });
+    const { fallbacks } = await migratePartitions(root, ['Work'], ['Work', 'work']);
+    expect(opens(root, 'Work', fallbacks)).toBe('shared');
     expect(listed(root)).toEqual([folderOf('Work'), 'p-work'].sort());
-    expect(cookies(root, folderOf('Work'))).toBe('shared');
   });
 
-  it('one twin’s copy fails and it falls back to the old folder: the other copies instead of renaming it away (Argon’s note 1)', async () => {
+  it('`Work` arriving after the upgrade (sync, import): never listed, so it gets nothing of `work`’s (Opus’s SF1 on #329)', async () => {
+    const root = userData({ 'p-work': 'work' });
+    const { fallbacks } = await migratePartitions(root, [], ['Work', 'work']);
+    expect(opens(root, 'Work', fallbacks)).toBeNull();
+    expect(cookies(root, 'p-work')).toBe('work');
+  });
+
+  it('one twin’s copy fails (ENOSPC) and it falls back: the other copies instead of renaming the folder away (Argon’s note 1)', async () => {
     const root = userData({ 'p-work': 'shared' });
     let copies = 0;
-    // The first copy made fails (ENOSPC), whichever twin makes it.
-    const fallbacks = await migratePartitions(root, ['Work', 'WORK'], failing({ cp: () => ++copies === 1 }));
+    const { fallbacks } = await migratePartitions(root, ['Work', 'WORK'], ['Work', 'WORK'], failing({ cp: () => ++copies === 1 }));
     expect(fallbacks.size).toBe(1);
-    const [failed, legacy] = [...fallbacks][0]!;
+    const [failed] = [...fallbacks.keys()];
     const other = failed === 'Work' ? 'WORK' : 'Work';
-    expect(legacy).toBe(`persist:p-${failed}`);
-    expect(cookies(root, folderOf(other))).toBe('shared');
-    // The one that failed runs on its old partition, whose folder (Electron's lower case) still has its sign-ins.
-    expect(cookies(root, legacy.replace(/^persist:/, '').toLowerCase())).toBe('shared');
-    expect(existsSync(join(partitionsDir(root), folderOf(failed)))).toBe(false);
+    expect(opens(root, other, fallbacks)).toBe('shared');
+    expect(opens(root, failed!, fallbacks)).toBe('shared');
+    expect(listed(root).filter((f) => f.startsWith('.migrating-'))).toEqual([]);
   });
 
-  it('a rename that fails: that profile runs on `persist:p-${id}` with its case (a Session apart from its twin’s), and keeps its folder (SF1)', async () => {
+  it('a stat that fails for another reason than "not there" (EACCES): that profile falls back, its folder never deleted (Neon’s N1)', async () => {
     const root = userData({ 'p-work': 'Work' });
-    const fallbacks = await migratePartitions(root, ['Work'], failing({ rename: () => true }));
-    expect(fallbacks).toEqual(new Map([['Work', 'persist:p-Work']]));
-    expect(fallbacks.get('Work')).not.toBe(profilePartition('work'));
-    expect(cookies(root, 'p-work')).toBe('Work');
-    // The cleanup once launch is over counts its old folder as in use: main passes the folder of the partition each
-    // profile runs on (its old one here), and its session's own (Opus's blocker-class note on #315's PR 2).
-    await removeUnusedPartitions(root, [partitionFolder(fallbacks.get('Work')!)]);
+    const fs: PartitionFs = { ...fsp, stat: (async () => Promise.reject(Object.assign(new Error('EACCES'), { code: 'EACCES' }))) as unknown as PartitionFs['stat'] };
+    const { fallbacks, moved } = await migratePartitions(root, ['Work'], ['Work'], fs);
+    expect(fallbacks).toEqual(new Map([['Work', fallbackPartition('Work')]]));
+    expect(moved).toEqual([]);
+    await removeUnusedPartitions(root, foldersInUse(['Work'], fallbacks, []));
     expect(cookies(root, 'p-work')).toBe('Work');
   });
 
-  it('no Partitions folder yet (a first launch): nothing to do', async () => {
+  it('a listed profile not in use this launch: left listed; an id no folder can be named from: never touched (Neon’s SF1)', async () => {
+    const root = userData({ 'p-work': 'Work' });
+    expect(await migratePartitions(root, ['Work', '../../x', 'private-w1'], ['../../x', 'private-w1'])).toEqual({ fallbacks: new Map(), moved: [] });
+    expect(cookies(root, 'p-work')).toBe('Work');
+  });
+
+  it('no Partitions folder yet (never signed in anywhere): nothing to move, off the list', async () => {
     const root = mkdtempSync(join(tmpdir(), 'chord-partitions-'));
     dirs.push(root);
-    expect(await migratePartitions(root, ['Work'])).toEqual(new Map());
+    expect(await migratePartitions(root, ['Work'], ['Work'])).toEqual({ fallbacks: new Map(), moved: ['Work'] });
   });
 });
 
-describe('removeUnusedPartitions after #315', () => {
-  it('a legacy `p-work_1` goes once unused; a migrated profile’s new folder stays; `.migrating-*` is never touched (SF2)', async () => {
-    const root = userData({ 'p-work_1': 'old', [folderOf('Work_1')]: 'Work_1', '.migrating-p-x': 'staging', 'p-0123abcd': 'gone' });
-    await removeUnusedPartitions(root, [partitionFolder(profilePartition('Work_1'))]);
-    expect(cookies(root, 'p-work_1')).toBeNull();
-    expect(cookies(root, 'p-0123abcd')).toBeNull();
-    expect(cookies(root, folderOf('Work_1'))).toBe('Work_1');
-    expect(cookies(root, '.migrating-p-x')).toBe('staging');
+describe('fallbackPartition (Neon’s B2 on #329)', () => {
+  it('never any profile’s partition: a Session of its own, in the old folder', () => {
+    for (const id of ['_work', 'Work', 'work', 'a_b', 'aB', '__', 'x']) {
+      for (const other of ['_work', 'Work', 'work', 'a_b', 'aB', '__', 'x', 'default']) expect(fallbackPartition(id)).not.toBe(profilePartition(other));
+      expect(partitionFolder(fallbackPartition(id))).toBe(`p-${id.toLowerCase()}`);
+    }
+  });
+});
+
+describe('foldersInUse (Neon’s SF2 on #329)', () => {
+  it('each profile’s folder (its fallback’s if it has one), and each session’s own, by its storagePath', () => {
+    expect(foldersInUse(['Work', 'abc'], new Map([['Work', fallbackPartition('Work')]]), ['/u/Partitions/p-xyz', null, undefined])).toEqual(['p-work', 'p-abc', 'p-xyz']);
   });
 });

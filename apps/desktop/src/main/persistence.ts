@@ -218,7 +218,7 @@ export class Persistence {
   /** `timing` and `attempts`: how the open went, for the launch timeline. */
   static async open(
     file: string,
-  ): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; effects: SavedEffects[]; timing: OpenTiming | null; attempts: number }> {
+  ): Promise<{ persistence: Persistence; saved: PersistedState | null; navs: Record<string, NavState>; effects: SavedEffects[]; partitionMoves: string[]; timing: OpenTiming | null; attempts: number }> {
     const persistence = new Persistence(file);
     persistence.spawn();
     // A disk that's busy for a moment gets two more tries before Chord gives up on the profile.
@@ -228,7 +228,7 @@ export class Persistence {
       return persistence.request({ type: 'open', file, prune: true });
     }, OPEN_RETRY_WAITS_MS);
     if (!response.ok) throw new Error(response.error);
-    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, effects: response.effects ?? [], timing: response.timing ?? null, attempts };
+    return { persistence, saved: response.saved ?? null, navs: response.navs ?? {}, effects: response.effects ?? [], partitionMoves: response.partitionMoves ?? [], timing: response.timing ?? null, attempts };
   }
 
   private spawn(): void {
@@ -473,6 +473,13 @@ export class Persistence {
     const response = await this.request({ type: 'device' });
     if (!response.ok || !response.device) throw new Error(response.ok ? 'chord-data: no device id' : response.error);
     return response.device;
+  }
+
+  /** #315: these profiles' partition folders have moved, so they never move again. */
+  async partitionMoved(ids: readonly string[]): Promise<void> {
+    if (!ids.length) return;
+    const response = await this.request({ type: 'partition.moved', ids: [...ids] });
+    if (!response.ok) throw new Error(response.error);
   }
 
   /** What an export would hold, for Settings' card. Pending writes go first, so what was just added counts. */
