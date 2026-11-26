@@ -64,7 +64,7 @@ function setup(agent = true) {
   const remember = vi.spyOn(manager as unknown as { rememberIcon: () => void }, 'rememberIcon');
   const icon = () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } });
   const settle = () => new Promise((r) => setTimeout(r, 0));
-  return { kind, view, fetch, answer: (r: Response) => answer(r), icon, remember, dispatch, settle, go: (u: string) => (url = u) };
+  return { manager, kind, view, fetch, answer: (r: Response) => answer(r), icon, remember, dispatch, settle, go: (u: string) => (url = u) };
 }
 
 describe('a tab of yours: another site’s icon is fetched without its cookies (#324)', () => {
@@ -141,12 +141,26 @@ describe('an agent’s tab’s favicon (#322)', () => {
     expect(t.fetch.mock.calls[0]![1]).toMatchObject({ credentials: 'omit', redirect: 'error' });
   });
 
-  it('B2: a page no longer the tab’s fetches nothing; one replaced during the fetch dispatches nothing', async () => {
+  it('B2: a page no longer the tab’s fetches nothing', async () => {
     const t = setup();
     t.view.page.destroyed = true;
     t.view.page.emit('page-favicon-updated', {}, ['https://shop.test/icon.png']);
     await t.settle();
     expect(t.fetch).not.toHaveBeenCalled();
+  });
+
+  it('B2: a page replaced in its tab during the fetch (still alive, no longer the tab’s) dispatches nothing', async () => {
+    const t = setup();
+    t.view.page.emit('page-favicon-updated', {}, ['https://shop.test/icon.png']);
+    await t.settle();
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+    // The tab gets another page (a keep, a reload into a new view): the old one lives on, no longer the tab's.
+    (t.manager as unknown as { views: Map<NodeId, unknown> }).views.set(NODE, new FakeView());
+    t.answer(t.icon());
+    await t.settle();
+    await t.settle();
+    expect(t.view.page.isDestroyed()).toBe(false);
+    expect(t.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ t: 'tab.updated', nodeId: NODE }));
   });
 
   it('SF2: a page closed by the time its icon comes back keeps none', async () => {

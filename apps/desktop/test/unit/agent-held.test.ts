@@ -10,6 +10,11 @@ describe('heldDetail', () => {
     ['an opaque frame (sandboxed)', 'dialog', 'alert: x', 'null', 'https://shop.test', 'a frame from another site tried to show a dialog'],
     ['an opaque frame on an opaque page (two sandboxes are never one site)', 'dialog', 'alert: x', 'null', 'null', 'a frame from another site tried to show a dialog'],
     ['another origin’s picker', 'file', 'showOpenFilePicker', 'https://ads.test', 'https://shop.test', 'a frame from https://ads.test tried to open a file picker'],
+    // #115 PR 2: a print, in Chord's own words (the way it asked, cut short), never the page's.
+    ['the top frame’s print', 'print', 'window.print()', null, null, 'the page tried to print (window.print()); Chord doesn’t print for agents'],
+    ['a frame of the page’s own origin: its print', 'print', 'document.execCommand("print")', 'https://shop.test', 'https://shop.test', 'the page tried to print (document.execCommand("print")); Chord doesn’t print for agents'],
+    ['another origin’s print', 'print', 'window.print()', 'https://ads.test', 'https://shop.test', 'a frame from https://ads.test tried to print; Chord doesn’t print for agents'],
+    ['an opaque frame’s print', 'print', 'window.print()', 'null', 'https://shop.test', 'a frame from another site tried to print; Chord doesn’t print for agents'],
   ] as const)('%s', (_what, kind, detail, frame, top, heard) => expect(heldDetail(kind, detail, frame, top)).toBe(heard));
 });
 

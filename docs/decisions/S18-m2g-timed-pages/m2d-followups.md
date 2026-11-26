@@ -23,7 +23,7 @@ In an agent's tab, the page names the icon's address. That makes a request with 
 
 **Design:** `focusToGiveBack` also requires `before.page` to be a visible pane of that window now, as `window.ts` checks for its own focus moves. Otherwise the focus goes to the shown page, or nowhere. It stays a pure function, with a unit test.
 
-## 3. `window.print()` in an agent tab: open
+## 3. `window.print()` in an agent tab: PR 2 (#115)
 
 **Today:** nothing stops it. The page's `window.print()` (any frame's) opens the native print dialog for a tab you can't see: a window that isn't the agent's, outside every card. It also blocks the page (and the debugger's commands to it time out: `user-watch.ts:12`).
 
@@ -43,7 +43,7 @@ In an agent's tab, the page names the icon's address. That makes a request with 
 - **Another site's frame** (its own process) calling `print()`: the top's renderer kept answering even without the stub, so the probe can't tell whether a dialog opened there. The design covers it anyway: the hold already auto-attaches every out-of-process frame before it runs (`pickers.ts`), and the same script is added on each of those sessions. A probe on the frame's own process is needed before PR 2.
 - **The preload alternative** (world 999 rewriting the page's world) wasn't taken: a script-made `about:blank` frame gets no preload before the page can reach it, while the debugger's script reached it in every case above.
 
-**Design, from the spike:** the hold (`pickers.ts`), when it arms a tab or auto-attaches a frame's session, adds the stub as a new-document script before the page runs. The stub reports each attempt through a `Runtime.addBinding` (rate-limited) as `page:agentHeld`, kind `print`.
+**Design, from the spike:** the hold (`pickers.ts`), when it arms a tab or auto-attaches a frame's session, adds the stub as a new-document script before the page runs. The stub reports each attempt through a `Runtime.addBinding` (rate-limited) as `page:agentHeld`, kind `print`. *(Superseded by Argon's B3: the stub reports through a cancelable event the preload passes on, never `Runtime.addBinding`, which `deep.ts`' `Runtime.disable` drops.)*
 
 ## 4. E2E: a keepalive POST held by a card, then the tab closed: open (the test)
 
@@ -57,7 +57,7 @@ In an agent's tab, the page names the icon's address. That makes a request with 
 
 If something arrives, that's a bug in the hold's teardown (`sends.ts`): fail the request (`Fetch.failRequest`) on close, before detaching.
 
-## 5. Reloading a crashed agent tab: open
+## 5. Reloading a crashed agent tab: PR 2 (#115), part 1 not needed on Electron 45
 
 **Today:** an agent's tab is never reloaded on its own after a crash (`tabs.ts:538`). It shows "This page stopped", its hold is lost, and acting there is refused. But a reload **you** start (its Reload button, or the menu) loads the page first: the hold is armed again only at `did-finish-load` (`pickers.ts:295`). What the page sends while it loads goes out unheld, with the agent's session.
 
@@ -122,7 +122,11 @@ If something arrives, that's a bug in the hold's teardown (`sends.ts`): fail the
   - `'print'` is added to `AgentHeld` and `heldFromFrame`.
 - **Workers** have no `print` or `document`: nothing to do there (a comment says so).
 
+**What PR 2 found:** another site's frame (its own process) printing blocks its own renderer without the stub; with it, that renderer answers, and the agent hears that a frame from that origin tried to print. The stub reaches it through the hold's script on each auto-attached frame session.
+
 **B4. A crashed agent's tab, reloaded.** There are three parts.
+
+**What PR 2 found (Electron 45.5.0, the container):** part 1's gap doesn't happen. The hold's debugger session survives the renderer crash (`debugger.isAttached()` is still true 200 ms after your Reload), and its new-document scripts carry over to the reloaded page: its first inline script already finds no `SharedWorker` or `serviceWorker`, and `print` non-configurable. The agent's own `navigate` on its crashed tab is refused before anything loads, and nothing the new page would send reaches the server. So part 1 isn't built; two E2Es (agents-m2d.spec) guard both paths, and fail if either regresses. Part 2 is #333's (#326): it routes the remaining direct loads through `TabManager`'s gate and lists every direct load outside tabs.ts with its reason. Part 3 holds as it is: after your Reload the agent hears that you're using the tab. The agent's refusal on a crashed tab now says so (`ACT_REFUSALS.crashed`), never that a DevTools window may be busy.
 1. **Arm before the load.** A crashed renderer can't take the renderer-side commands, so a reload of a crashed agent's tab:
    - arms the browser-side hold first (`Target.setAutoAttach`, `Fetch.enable`);
    - starts the navigation;
@@ -140,9 +144,9 @@ If something arrives, that's a bug in the hold's teardown (`sends.ts`): fail the
 | --- | --- | --- | --- |
 | M1 | An agent's page makes Chord send its session's cookies to an address it picks (the favicon), or a redirect does | Agent tabs: the first `data:` or own-origin icon, no credentials, no redirects, Never checked before and after | Unit: no fetch for another origin's or a Never site's icon; an own-origin icon after another origin's is the one fetched; the fetch has `credentials: 'omit'` and `redirect: 'error'`. E2E: a `localhost` icon never reached; an own-origin icon that redirects to `localhost`: the redirect never followed |
 | M2 | Your typing goes to a hidden page after an action, or stays on the hidden agent's tab | Back only to a page still shown; else the window's shown page, never the agent's tab | Unit: `focusToGiveBack`'s table, each row |
-| M3 | A print dialog opens for an agent's hidden tab | The stub in every new document, non-configurable, the command coerced once; reported through the preload | E2E: `print()` from the page, a fresh frame, a `srcdoc` frame, another site's frame; `execCommand('print')`, `'PRINT'`, after `delete`, and with a `toString` that changes; each: no dialog, and the agent hears it. Also after an action (the debugger's `Runtime.disable` has run) |
-| M4 | A held send resumes when its tab closes, or its debugger lets go | Failed before the page closes; and on detach or crash, the cards answered no | E2E: a card between actions, the tab closed by the agent and by you: nothing arrives, the card goes. Unit: `destroy` fails held before it closes; a detach and a crash, between actions and in an action; quitting |
-| M5 | A crashed agent tab's reload loads before it's held | Arm the browser side, start, arm the renderer side while the document is paused, then let it go; every load through `TabManager` | E2E: an agent's tab crashed (`forcefullyCrashRenderer`), then you click *Try again*: the agent is paused (your take-over); the hold was armed before the load (the page's on-load dialog and file picker are held, and its new-document stub is in); its on-load POST is yours, never the agent's. A guard test: no direct `reload()` or `loadURL()` on an agent's tab outside `TabManager` |
+| M3 | A print dialog opens for an agent's hidden tab | The stub in every new document: `print` and `execCommand` non-configurable accessors (a setter that ignores: a page's own wrapping never throws), the command coerced once; reported through the preload | E2E (agents-m2d): `print()` from the page, after `delete`, a script-made frame's (and that one called on the top), a `srcdoc` frame's, another site's frame's; `execCommand('print')`, `'PRINT'`, after `delete`, a fresh frame's (and on the top), a `toString` that changes; a page that wraps either in strict code; a print 1.2 s after the action answered. Each: the renderer answers, the page goes on, and the agent hears it. `execCommand('copy')` still works; the wrapper keeps native's shape (one argument; a Symbol throws) |
+| M4 | A held send resumes when its tab closes, or its debugger lets go | Failed before the page closes; and on detach or crash, the cards answered no | E2E: a card in an action (the click's page sends at once) and one between actions, each with the tab closed by the agent and by you: nothing arrives, the card goes (regression guards). Unit: `destroy` fails held before it closes; a detach and a crash, between actions and in an action; quitting |
+| M5 | A crashed agent tab's reload loads before it's held | Not built on Electron 45.5.0: the hold's debugger session and its new-document scripts survive the crash (see B4). The agent's actions on a crashed tab are refused, said as a tab that stopped working (`crashed`, or `crashedAfter` once input went in); every load goes through `TabManager`'s gate (#333) | E2E (agents-m2d): an agent's tab crashed (`forcefullyCrashRenderer`), then your Reload: the new page's first script finds the hold's script in place, and the agent hears you're using the tab. The agent's `navigate` on its crashed tab: refused, nothing sent. Unit (control.test): a crash before the press says nothing was done; after the click, after typed text, or once a load started, that the step may have gone in |
 
 ## Size
 

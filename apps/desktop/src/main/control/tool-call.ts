@@ -63,7 +63,29 @@ export const READABLE_ADDRESS = /^(https?|file):/i;
  * the page is, which can be ahead of the tab's saved address; `urls`: where the read itself says it was;
  * `unread`: what to say when one of them is no web address (the read's usual words).
  */
+/**
+ * A crashed page's refusal (#115 PR 2; #336), by the TAB, never the caller's scope alone (Neon's NB3): `went`, input
+ * (or a load) had gone in, so the step may have gone in.
+ * - A tab of the user's (not an agent's chord), leased or shared: Chord reloads it, so no reload advice (Fable's S4).
+ * - An outside agent's own tab (an agent's chord), the agent itself acting there (no lease): Chord never reloads it, so
+ *   its own way first, a new tab of the address and this one closed (Fable's S2).
+ * - An agent's tab reached by a caller that can't open or close tabs (the assistant): the user's reload, nothing else.
+ */
+export function crashedWhy(call: Call, nodeId: NodeId, went: boolean): string {
+  const state = call.browser.store.state;
+  const node = nodeOf(state, nodeId);
+  const agents = Boolean(node && state.chords?.[node.chordId]?.agent);
+  if (!agents) return went ? ACT_REFUSALS.crashedAfterYours : ACT_REFUSALS.crashedYours;
+  if (call.scope.act && !call.scope.act.lease) return went ? ACT_REFUSALS.crashedAfter : ACT_REFUSALS.crashed;
+  return went ? ACT_REFUSALS.crashedAfterAgentTab : ACT_REFUSALS.crashedAgentTab;
+}
+
 export function blockedNow(call: Call, nodeId: NodeId, page: ControlPage | null, unread: string, ...urls: string[]): string | null {
+  return blockedAfter(call, nodeId, page, unread, false, ...urls);
+}
+
+/** blockedNow, after an action whose input (or load) may have gone in (`went`): a crash then says so (#336, Neon's NB2). */
+export function blockedAfter(call: Call, nodeId: NodeId, page: ControlPage | null, unread: string, went: boolean, ...urls: string[]): string | null {
   // Settings' Nothing (or the scope's own off), turned on meanwhile: nothing more is read (round 1 of #232, SF2).
   const off = call.scope.off();
   if (off) return off;
@@ -71,6 +93,8 @@ export function blockedNow(call: Call, nodeId: NodeId, page: ControlPage | null,
   if (now?.kind !== 'tab') return CONTROL_REFUSALS.closed;
   if (!call.scope.readable(now)) return unreadable(call.scope, now);
   if (page?.gone()) return unread;
+  // Its page crashed: said so, at once, for every read and act (#336, Fable's S1).
+  if (page?.crashed?.()) return crashedWhy(call, nodeId, went);
   const addresses = [...(page ? [page.url()] : []), ...urls];
   const sites = call.scope.neverSites();
   if (addresses.some((url) => READABLE_ADDRESS.test(url) && isNeverReadable(url, sites))) return NEVER;
@@ -98,7 +122,8 @@ export async function loadedPage(browser: ControlBrowser, nodeId: NodeId, signal
   if (!contents) return null;
   // A page with a frame held unsecured never finishes loading (agents/pickers.ts): no waiting on it.
   // Stop and the client's cancel end the wait at once (round 1 of #145, SF3).
-  if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000, signal);
+  // Nor on a crashed page (#336, Fable's S1): it never loads, and blockedNow says why at once.
+  if (!pickersUnsecured(contents) && !contents.isCrashed()) await pageLoaded(contents, 15_000, signal);
   return contents.isDestroyed() ? null : controlPage(contents, browser.tabs);
 }
 
@@ -108,7 +133,8 @@ export async function loadedPage(browser: ControlBrowser, nodeId: NodeId, signal
  */
 export async function pageLoaded(contents: WebContents, ms: number, signal?: AbortSignal): Promise<void> {
   const until = Date.now() + ms;
-  const waiting = () => !contents.isDestroyed() && (contents.isLoading() || firstLoadPending(contents));
+  // Never on a crashed page (#336, Neon's NSF3): it won't load, and the read or action says why at once.
+  const waiting = () => !contents.isDestroyed() && !contents.isCrashed() && (contents.isLoading() || firstLoadPending(contents));
   while (waiting() && Date.now() < until && !signal?.aborted) {
     await new Promise<void>((done) => {
       const finish = () => {
@@ -116,14 +142,16 @@ export async function pageLoaded(contents: WebContents, ms: number, signal?: Abo
         signal?.removeEventListener('abort', finish);
         contents.off('did-stop-loading', finish);
         contents.off('destroyed', finish);
+        contents.off('render-process-gone', finish);
         done();
       };
       // An agent's tab between its blank page and its first: looked at again shortly (that load may not have started yet).
       const timer = setTimeout(finish, contents.isLoading() ? until - Date.now() : 50);
       signal?.addEventListener('abort', finish, { once: true });
       contents.once('did-stop-loading', finish);
-      // Closed mid-load (#116): at once, not at the time limit.
+      // Closed mid-load (#116), or crashed (NSF3): at once, not at the time limit.
       contents.once('destroyed', finish);
+      contents.once('render-process-gone', finish);
     });
   }
 }

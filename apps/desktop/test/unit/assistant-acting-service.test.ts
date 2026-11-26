@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emptyState, nodeOf, splitOf, type State } from '@chord/core';
+import { ACT_REFUSALS, emptyState, nodeOf, splitOf, type State } from '@chord/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
@@ -76,7 +76,7 @@ function setup(acting = true) {
   const pages = new Map<string, { isDestroyed(): boolean }>();
   const page = (id: string) => {
     let p = pages.get(id);
-    if (!p) pages.set(id, (p = { isDestroyed: () => false, getURL: () => 'https://game.example/table' } as { isDestroyed(): boolean }));
+    if (!p) pages.set(id, (p = { isDestroyed: () => false, isCrashed: () => false, getURL: () => 'https://game.example/table' } as { isDestroyed(): boolean }));
     return p;
   };
   const dir = mkdtempSync(join(tmpdir(), 'chord-assistant-'));
@@ -175,7 +175,7 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
       return answer;
     };
     let gone = false;
-    const contents = { isDestroyed: () => gone, getURL: () => 'https://game.example/table' };
+    const contents = { isDestroyed: () => gone, isCrashed: () => false, getURL: () => 'https://game.example/table' };
     const ask = t.inner.tailCard(s, t.mine, contents);
     expect(await ask(['https://game.example'], null, new AbortController().signal)).toBe('deny');
     expect(cards[0]!.step).toMatchObject({ site: 'game.example', sends: ['game.example'] });
@@ -303,6 +303,28 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     expect(await begun).toBe(USER_TAB_REFUSALS.tookOver);
     expect(leases.owners.has(t.page(t.mine))).toBe(false);
     expect(s.leased.has(t.mine)).toBe(false);
+  });
+
+  it('a tab of yours whose page crashed, before the lease or while it was had: said as the crash, never its developer tools (#336, Neon’s SF2)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> } } }).actingHost(s);
+    const page = t.page(t.mine) as unknown as { isCrashed: () => boolean };
+    // Already crashed: no lease asked for.
+    page.isCrashed = () => true;
+    let asked = 0;
+    leases.begin = async () => (asked++, 'on');
+    expect(await host.lease.begin({ id: t.mine })).toBe(ACT_REFUSALS.crashedYours);
+    expect(asked).toBe(0);
+    // Crashed while the lease was being had (the lease says no): the crash.
+    page.isCrashed = () => false;
+    leases.begin = async () => {
+      page.isCrashed = () => true;
+      return 'no';
+    };
+    expect(await host.lease.begin({ id: t.mine })).toBe(ACT_REFUSALS.crashedYours);
+    page.isCrashed = () => false;
+    leases.begin = async () => 'on';
   });
 
   it('every way out of a chat latches: opening another, continuing, the panel closed, the assistant hidden (E6; Neon’s B4, round 2)', async () => {

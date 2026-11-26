@@ -207,6 +207,19 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
     }
   });
 
+  it('a print note is one per tab and way until the agent hears it: a page printing again, or 25 frames at once, says it once (#336, Fable’s S3)', () => {
+    const t = setup();
+    const top = 'the page tried to print (window.print()); Chord doesn’t print for agents';
+    const exec = 'the page tried to print (document.execCommand("print")); Chord doesn’t print for agents';
+    for (let i = 0; i < 25; i++) t.chords.note('a1', 'print', top);
+    t.chords.note('a1', 'print', exec);
+    t.chords.note('a2', 'print', top);
+    expect(t.chords.drain(t.agent).map((n) => `${n.nodeId} ${n.detail}`)).toEqual([`a1 ${top}`, `a1 ${exec}`, `a2 ${top}`]);
+    // Heard: the next print says it again.
+    t.chords.note('a1', 'print', top);
+    expect(t.chords.drain(t.agent)).toHaveLength(1);
+  });
+
   const show = (t: ReturnType<typeof setup>, nodeId: string) => t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId });
 
   // [what you did, whether a window shows the tab, where it takes the page]
@@ -387,7 +400,7 @@ describe('Your hand on an agent’s tab (S18 M2e-1)', () => {
 
   it('a page closed while an action waits on its load: the wait ends at once, not at its limit', async () => {
     let destroyed = false;
-    const contents = Object.assign(new EventEmitter(), { isDestroyed: () => destroyed, isLoading: () => true }) as unknown as WebContents;
+    const contents = Object.assign(new EventEmitter(), { isDestroyed: () => destroyed, isLoading: () => true, isCrashed: () => false }) as unknown as WebContents;
     // On fake timers, so no wall clock decides it (issue #85): the wait ends as the page goes, 20 ms in, not at 10 s.
     vi.useFakeTimers();
     try {
@@ -811,6 +824,7 @@ function connected(t: ReturnType<typeof setup>, loadMs?: number, actions = true)
   const contents = Object.assign(events, {
     isDestroyed: () => false,
     isLoading: () => page.loading,
+    isCrashed: () => false,
     getURL: () => page.at,
     getTitle: () => 'Statements for Ada',
     executeJavaScriptInIsolatedWorld: async () => {

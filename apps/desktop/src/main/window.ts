@@ -11,7 +11,7 @@
  * At launch, popover, preview and overlay load once the shell has painted (`deferViews`).
  */
 import { join } from 'node:path';
-import { registerWindowShown, shownIn, unregisterWindowShown, type ShownParts } from './window-shown';
+import { cardsYours, registerWindowShown, shownIn, unregisterWindowShown, type ShownParts } from './window-shown';
 import { AGENT_BAR_HEIGHT, clampPeekCard, DEFAULT_DEVTOOLS, devtoolsLayout, devtoolsSize, paneRects, type Bounds, type DevtoolsLayout, type DevtoolsSettings, type SplitDirection, type WindowId, type WindowModel } from '@chord/core';
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
@@ -1255,7 +1255,7 @@ export class AppWindow {
       peek: this.peekOnScreen ? (this.peekContents ?? null) : null,
       docked: this.devtools.map((tools, i) => (tools && this.dockedDevtools(i) ? (pageOf(tools.view) ?? null) : null)),
       floating: [popover, pageOf(this.menuView) ?? null],
-      yours: popover && this.popover.getVisible() && this.cardsOwner === 'you' ? popover : null,
+      yours: cardsYours(popover, this.popover.getVisible(), this.cardsOwner),
     };
   }
 

@@ -493,6 +493,8 @@ export class AgentChords {
     // A site asks for a sign-in on every retry and every page of it: one note per tab and origin (the note names
     // it) until the agent hears it.
     if (what === 'signin' && chord.notes.some((n) => n.what === 'signin' && n.nodeId === nodeId && n.detail === text)) return;
+    // A print, the same: one per tab and way until the agent hears it (#336, Fable's S3: a page that loops, or 25 frames).
+    if (what === 'print' && chord.notes.some((n) => n.what === 'print' && n.nodeId === nodeId && n.detail === text)) return;
     chord.notes.push({ nodeId, what, detail: text });
     if (chord.notes.length > NOTES_KEPT) chord.notes.splice(0, chord.notes.length - NOTES_KEPT);
   }

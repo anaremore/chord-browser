@@ -492,6 +492,63 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
     '/icons-redirect': '<title>Icons</title><link rel="icon" href="/fav-redirect"><p>Icons</p>',
     // #322's N5: a page with a cookie of its own origin, then its own icon: fetched with no cookies.
     '/icons-cookie': '<title>Icons</title><script>document.cookie = "sid=agent-secret; path=/"; const l = document.createElement("link"); l.rel = "icon"; l.href = "/fav-cookie.png"; document.head.append(l);</script><p>Icons</p>',
+    // #115 PR 2 (item 5, Argon's B4): a page that sends to another site as it loads; loaded by the agent into its crashed
+    // tab, it's refused before it loads, so nothing is sent.
+    '/crash-sends': '<title>Sends</title><p>Sends</p><script>fetch(location.origin.replace("127.0.0.1", "localhost") + "/crash-post", { method: "POST", body: "x", keepalive: true }).catch(() => {});</script>',
+    // #115 PR 2 (item 5, Argon's B4): what the hold's new-document script did before the page's first script ran (no
+    // shared or service workers, print a constant), and which load this is.
+    '/crash-probe':
+      '<title>Probe</title><main><p id=probe></p></main><script>document.getElementById("probe").textContent = "lacks=" + (typeof SharedWorker === "undefined" && !("serviceWorker" in navigator)) +' +
+      '" printStub=" + (Object.getOwnPropertyDescriptor(window, "print")?.configurable === false) + " load=" + Math.random().toString(36).slice(2, 8);</script>',
+    // #115 PR 2 (item 3, Argon's B3): every way a page asks to print, one per tab (?c=). Its log says the page went on.
+    '/print-ways':
+      '<title>Print</title><main><button id=try>Try</button><p id=log></p></main><script>' +
+      'const c = new URLSearchParams(location.search).get("c"); const log = (s) => { document.getElementById("log").textContent += " " + s; };' +
+      'const frame = (srcdoc) => { const f = document.createElement("iframe"); if (srcdoc) f.srcdoc = srcdoc; document.querySelector("main").append(f); return f; };' +
+      'const run = {' +
+      ' print: () => window.print(),' +
+      ' deleted: () => { delete window.print; window.print(); },' +
+      ' "frame-print": () => frame().contentWindow.print(),' +
+      ' "frame-print-on-top": () => frame().contentWindow.print.call(window),' +
+      ' "srcdoc-print": () => frame("<script>print()<\\/script>"),' +
+      ' exec: () => document.execCommand("print"),' +
+      ' "exec-upper": () => document.execCommand("PRINT"),' +
+      ' "exec-deleted": () => { delete Document.prototype.execCommand; document.execCommand("print"); },' +
+      ' "exec-frame": () => frame().contentDocument.execCommand("print"),' +
+      ' "exec-frame-on-top": () => frame().contentDocument.execCommand.call(document, "print"),' +
+      ' "exec-flip": () => { let n = 0; document.execCommand({ toString: () => (n++ ? "print" : "copy") }); },' +
+      ' copy: () => log("copy=" + document.execCommand("copy")),' +
+      // #336 (Fable's N1): a blank frame in a blank frame (neither has a preload): said by the top's.
+      ' "nested-blank": () => { const outer = frame(); const inner = outer.contentDocument.createElement("iframe"); outer.contentDocument.body.append(inner); inner.contentWindow.print(); },' +
+      // #336 (Fable's N3): a page that tries to silence its own note: a blank frame's parent replaced, an event init's
+      // inherited field that throws.
+      ' "silence-parent": () => { const f = frame(); f.contentWindow.parent = 5; f.contentWindow.print(); },' +
+      ' "silence-proto": () => { Object.defineProperty(Object.prototype, "bubbles", { get() { throw new Error("no"); }, configurable: true }); try { window.print(); } finally { delete Object.prototype.bubbles; } },' +
+      // #336 (Neon's NSF1): a blank frame that cancels the note on its own window, or removes itself as print begins.
+      ' "silence-cancel": () => { const f = frame(); f.contentWindow.addEventListener("chord:print-held", (e) => e.preventDefault(), true); f.contentWindow.print(); },' +
+      ' "silence-remove": () => { const f = frame(); f.contentWindow.addEventListener("beforeprint", () => f.remove()); f.contentWindow.print(); },' +
+      // #336 (Fable's N4): a page waiting on afterprint goes on.
+      ' "afterprint": () => { addEventListener("beforeprint", () => log("beforeprint")); addEventListener("afterprint", () => log("afterprint")); window.print(); },' +
+      // #336 (Fable's S3): a second print, another way, 183 ms after the first: both said.
+      ' "print-twice": () => { window.print(); setTimeout(() => document.execCommand("print"), 183); },' +
+      // #336 (Opus's N4): a print after the action answered (a timer), between actions.
+      ' "print-later": () => setTimeout(() => { window.print(); log("printed-later"); }, 1200),' +
+      // #336 (Opus's S2): a page that wraps print or execCommand, in strict code: its assignment never throws (ignored).
+      ' "assign-strict": () => { "use strict"; window.print = () => log("replaced"); window.print(); },' +
+      ' "assign-exec-strict": () => { "use strict"; Document.prototype.execCommand = () => log("replaced"); document.execCommand("print"); },' +
+      // #336 (Opus's N5): the wrapper's shape, as native: one declared argument, and a Symbol command throws.
+      ' "exec-shape": () => { log("length=" + document.execCommand.length); try { document.execCommand(Symbol("x")); log("symbol=went"); } catch (e) { log("symbol=" + e.name); } try { document.execCommand(); log("none=went"); } catch (e) { log("none=" + e.name); } },' +
+      '};' +
+      'document.getElementById("try").onclick = () => { try { run[c](); } catch (e) { log("threw " + e.name); } log("after " + c); };</script>',
+    // Another site's frame (its own process) that prints as it loads.
+    // #336 (Opus's NS1, round 2): a page's own print, declared (a function, then a var): its scripts run, and its own
+    // print is what it calls.
+    '/print-declare':
+      '<title>Declare</title><main><p id=log></p></main>' +
+      '<script>function print() { document.getElementById("log").textContent += " own"; } print(); document.getElementById("log").textContent += " ran";</script>' +
+      '<script>var print = function () { document.getElementById("log").textContent += " var"; }; print();</script>',
+    '/print-host': '<title>Host</title><main><p>Host</p><script>const f = document.createElement("iframe"); f.title = "Other"; f.src = location.origin.replace("127.0.0.1", "localhost") + "/print-self"; document.querySelector("main").append(f);</script></main>',
+    '/print-self': '<title>Self</title><p id=s>self</p><script>setTimeout(() => { print(); document.getElementById("s").textContent = "printed-on"; }, 300);</script>',
     // #115 (M4): a send that goes after the action's answer (a timer), so its card comes between actions.
     '/later-send': '<title>Later</title><main><button onclick="setTimeout(() => fetch(location.origin.replace(\'127.0.0.1\', \'localhost\') + \'/later-post\', { method: \'POST\', body: \'x\', keepalive: true }).catch(() => {}), 1500)">Save later</button></main>',
     // #322 (Opus's N1): a page that sends as it's clicked: held by the click's own card, mid-action.

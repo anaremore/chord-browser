@@ -157,6 +157,23 @@ if (!agentTab && isTop && (protocol === 'https:' || protocol === 'http:')) {
 if (agentTab && protocol !== 'chrome-extension:' && protocol !== 'devtools:') {
   const held = (kind: 'dialog' | 'file', detail: string) => ipcRenderer.send('page:agentHeld', { kind, detail: String(detail).slice(0, 500) });
   contextBridge.executeInMainWorld({ func: holdForAgent, args: [held] });
+  // Print (#115 PR 2): the hold's stub (agents/agent-scripts.ts' PAGE_LACKS) refuses it and says so with this event,
+  // heard here in this frame's own world first (capture, before any of the page's) and cancelled, so a frame with no
+  // preload of its own passes it up instead. At most one each 100 ms, for the IPC only: main keeps one note per tab and
+  // way until the agent hears it (agents/chords.ts), so a page that loops on print, or 25 frames, say it once (#336,
+  // Fable's S3), and a second print another way a moment later is said too.
+  let printedAt = -Infinity;
+  (globalThis as unknown as { addEventListener(type: string, listener: (event: { detail: unknown; preventDefault(): void }) => void, capture: boolean): void }).addEventListener(
+    'chord:print-held',
+    (event) => {
+      event.preventDefault();
+      const now = performance.now();
+      if (now - printedAt < 100) return;
+      printedAt = now;
+      ipcRenderer.send('page:agentHeld', { kind: 'print', detail: event.detail === 'execCommand' ? 'document.execCommand("print")' : 'window.print()' });
+    },
+    true,
+  );
   const guardWindow = globalThis as unknown as Parameters<typeof installAgentGuard>[0];
   // The guard while an agent's text and keys go in: the window's first listeners (agent-guard.ts). A frame's blocks
   // every key and insertion while main has it up (an agent's input is never for a frame), and says so.

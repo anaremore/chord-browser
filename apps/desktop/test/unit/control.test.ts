@@ -198,8 +198,14 @@ const tab = (id: string, url: string, title = 'Article'): TabNode => ({ id, kind
 function stateWith(nodes: TabNode[]): State {
   const buckets: Record<string, Record<string, TabNode>> = {};
   for (const n of nodes) (buckets[bucketOf(n.id)] ??= {})[n.id] = n;
-  return { nodes: buckets } as unknown as State;
+  // Its chord, so a tab's owner can be told (#336, Neon's NB3: an agent's chord marks an outside agent's own tabs).
+  return { nodes: buckets, chords: { c1: { id: 'c1' } } } as unknown as State;
 }
+
+/** Marks the test's chord as an outside agent's (its tabs that agent's own), or the user's. */
+const chordIsAgents = (t: { browser: { store: { state: State } } }, agents: boolean) => {
+  (t.browser.store.state.chords as Record<string, { id: string; agent?: { name: string } }>)['c1'] = agents ? { id: 'c1', agent: { name: 'Codex' } } : { id: 'c1' };
+};
 
 type Answer = 'hang' | { text: string } | ((code: string, events: EventEmitter) => Promise<unknown>);
 
@@ -235,6 +241,8 @@ function fakePage(url: string, read: Answer) {
     emitDetach?: () => void;
     /** The page's renderer gone (render-process-gone, a crash). */
     crash?: () => void;
+    /** What isCrashed answers (#336: a crash said as one, before or after input went in). */
+    crashed?: boolean;
     /** The page's requests went (deep.ping, deep.posts): once per page. */
     sent?: boolean;
     /** Every debugger command, with its parameters. */
@@ -272,6 +280,7 @@ function fakePage(url: string, read: Answer) {
   const contents = {
     // Acting (S18 M2c): what an action sends, recorded.
     getZoomFactor: () => at.zoom,
+    isCrashed: () => Boolean(at.crashed),
     sendInputEvent: (e: unknown) => {
       at.input.push(e);
       // A page that sends as the agent acts (S18 M2d): its requests, paused by the tab's send hold, once its first input came.
@@ -370,8 +379,11 @@ function fakePage(url: string, read: Answer) {
       return { getSize: () => ({ width: 1280, height: 800 }), toPNG: () => Buffer.from('secret'), toBitmap: () => Buffer.from([1, 2, 3, 255, 9, 9, 9, 255]) };
     },
     executeJavaScriptInIsolatedWorld: (_world: number, [script]: { code: string }[]) =>
-      // Whether the page shows anything yet (snapshot.ts' pageShows): it does.
-      script!.code.includes('const has = () =>')
+      // A crashed page's scripts never run: rejected, as Electron's are (#336, Neon's round 2).
+      at.crashed
+        ? Promise.reject(new Error('Render frame was disposed before WebFrameMain could be accessed'))
+        : // Whether the page shows anything yet (snapshot.ts' pageShows): it does.
+          script!.code.includes('const has = () =>')
         ? Promise.resolve(true)
         : typeof read === 'function'
         ? read(script!.code, events)
@@ -2726,6 +2738,135 @@ describe('acting through the gate (S18 M2c)', () => {
       box.contents = s4.pages.get('n1')!.contents;
       expect(refusal(await s4.call('navigate', { tab_id: s4.tab, url: 'https://news.test/b' })).refused).toBe(ACT_REFUSALS.noCheck);
       leaseLost.delete(box.contents);
+    });
+
+    it('the page crashed during the action: said as a tab that stopped working, and whether the step may have gone in (#336’s B1 and S1)', async () => {
+      const box: { contents?: object; at?: { crashed?: boolean; crash?: () => void } } = {};
+      const crashAt = (op: string, nth: number) => (_events: EventEmitter, at: string) => {
+        if (at === op && --nth === 0 && box.contents) {
+          leaseLost.add(box.contents);
+          if (box.at) box.at.crashed = true;
+          // As a real crash does (#336, Neon's NB1): render-process-gone, so what's held fails and its watch is cancelled.
+          box.at?.crash?.();
+        }
+      };
+      const run = async (op: string, nth: number, tool: string, args: Record<string, unknown>) => {
+        const t = await acting({ onAct: crashAt(op, nth), act: { siteAllowed: () => true } });
+        chordIsAgents(t, true);
+        box.contents = t.pages.get('n1')!.contents;
+        box.at = t.at;
+        const out = refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused;
+        leaseLost.delete(box.contents);
+        return out;
+      };
+      // Its first look on a page already crashed (its scripts reject): nothing was done, said as the crash (SF1).
+      {
+        const t = await acting({ act: { siteAllowed: () => true } });
+        chordIsAgents(t, true);
+        t.at.crashed = true;
+        const out = refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused;
+        expect(out, 'its look rejected as the page crashed').toBe(ACT_REFUSALS.crashed);
+      }
+      // Before any input (the check right before the press): nothing was done.
+      expect(await run('describe', 2, 'click', { ref: 'e1' }), 'before the press').toBe(ACT_REFUSALS.crashed);
+      // After the click went in (the page settling): it may have gone in.
+      expect(await run('settle', 1, 'click', { ref: 'e1' }), 'after the click').toBe(ACT_REFUSALS.crashedAfter);
+      // After the first typed text, before the next: it may have gone in.
+      expect(await run('unguard', 1, 'type', { ref: 'e2', text: 'hello world' }), 'after typed text').toBe(ACT_REFUSALS.crashedAfter);
+      // A real crash after the key, with the checks that follow failing as a crashed page's do (#336, Neon's round 2, B1):
+      // Space on a button (its keydown, then its checks), Enter in a field, typed text.
+      expect(await run('guard', 1, 'press_key', { ref: 'e1', key: 'Space' }), 'before the key: nothing done').toBe(ACT_REFUSALS.crashed);
+      expect(await run('unguard', 1, 'press_key', { ref: 'e1', key: 'Space' }), 'Space, then its checks').toBe(ACT_REFUSALS.crashedAfter);
+      expect(await run('unguard', 1, 'press_key', { ref: 'e2', key: 'Enter' }), 'Enter in a field').toBe(ACT_REFUSALS.crashedAfter);
+      // Each input marked before it goes in (Neon's NB2): a choice, a hover, a date field's value.
+      expect(await run('choose', 1, 'select_option', { ref: 'e3', option: 'Express' }), 'as the choice went in').toBe(ACT_REFUSALS.crashedAfter);
+      expect(await run('settle', 1, 'hover', { ref: 'e1' }), 'after the hover').toBe(ACT_REFUSALS.crashedAfter);
+      ELEMENTS.push({ role: 'textbox', name: 'Birthday', editable: true, risk: { tag: 'input', type: 'date' } });
+      try {
+        expect(await run('setValue', 1, 'type', { ref: `e${ELEMENTS.length}`, text: '1987-02-17' }), 'as the value went in').toBe(ACT_REFUSALS.crashedAfter);
+      } finally {
+        ELEMENTS.pop();
+      }
+      // A load: crashed before its gate let it start, nothing was done; crashed once it started, it may have gone (S1).
+      const crashNow = () => {
+        if (box.contents) leaseLost.add(box.contents);
+        if (box.at) box.at.crashed = true;
+        box.at?.crash?.();
+      };
+      const lease = { begin: async () => (queueMicrotask(crashNow), null), end: () => undefined, going: () => undefined };
+      const before = await acting({ act: { siteAllowed: () => true, lease } });
+      box.contents = before.pages.get('n1')!.contents;
+      box.at = before.at;
+      // (A tab of yours, by its lease: no reload advice, Fable's S4.)
+      expect(refusal(await before.call('navigate', { tab_id: before.tab, url: 'https://news.test/b' })).refused, 'a load that never started').toBe(ACT_REFUSALS.crashedYours);
+      leaseLost.delete(box.contents);
+      const after = await acting({ act: { siteAllowed: () => true } });
+      chordIsAgents(after, true);
+      box.contents = after.pages.get('n1')!.contents;
+      box.at = after.at;
+      (after.browser.tabs as { queueLoad: unknown }).queueLoad = (_c: unknown, load: () => unknown) => {
+        load();
+        crashNow();
+      };
+      expect(refusal(await after.call('navigate', { tab_id: after.tab, url: 'https://news.test/b' })).refused, 'a load that went').toBe(ACT_REFUSALS.crashedAfter);
+      leaseLost.delete(box.contents);
+      // A tab of yours (the assistant's lease): the same, without reload advice (Chord reloads it: Fable's S4).
+      const yours = await acting({ onAct: crashAt('settle', 1), act: { siteAllowed: () => true, lease: { begin: async () => null, end: () => undefined, going: () => undefined } } });
+      box.contents = yours.pages.get('n1')!.contents;
+      box.at = yours.at;
+      expect(refusal(await yours.call('click', { tab_id: yours.tab, ref: 'e1' })).refused, 'yours, after the click').toBe(ACT_REFUSALS.crashedAfterYours);
+      leaseLost.delete(box.contents);
+      // back (N6): crashed once its move started, it may have gone.
+      const backT = await acting({ act: { siteAllowed: () => true } });
+      chordIsAgents(backT, true);
+      box.contents = backT.pages.get('n1')!.contents;
+      box.at = backT.at;
+      backT.at.history = [{ url: 'https://news.test/' }, { url: 'https://news.test/a' }];
+      backT.at.active = 1;
+      (backT.browser.tabs as { queueLoad: unknown }).queueLoad = (_c: unknown, load: () => unknown) => {
+        load();
+        crashNow();
+      };
+      expect(refusal(await backT.call('back', { tab_id: backT.tab })).refused, 'back that went').toBe(ACT_REFUSALS.crashedAfter);
+      leaseLost.delete(box.contents);
+    });
+
+    it('a crashed page: every tool says so at once, for an outside agent’s own tab and for a tab of yours, never a wait or “could not be read” (#336, Fable’s S1 and S4)', async () => {
+      const lease = { begin: async () => null, end: () => undefined, going: () => undefined };
+      // By the tab, never the caller's scope alone (#336, Neon's NB3).
+      for (const [whose, act, agents, crashedWords] of [
+        ['an outside agent’s own tab', {}, true, ACT_REFUSALS.crashed],
+        ['a tab of yours, leased by the assistant', { lease }, false, ACT_REFUSALS.crashedYours],
+        ['a tab of yours an outside agent acts in (shared)', {}, false, ACT_REFUSALS.crashedYours],
+        ['an agent’s tab, reached by the assistant (it can’t open or close tabs)', { lease }, true, ACT_REFUSALS.crashedAgentTab],
+      ] as const) {
+        const tools: [string, Record<string, unknown>][] = [
+          ['read_tab', {}],
+          ['snapshot', {}],
+          ['click', { ref: 'e1' }],
+          ['type', { ref: 'e2', text: 'hi' }],
+          ['press_key', { ref: 'e2', key: 'Enter' }],
+          ['navigate', { url: 'https://news.test/b' }],
+          ['back', {}],
+          // And the inspecting reads (#336, Neon's NSF2).
+          ['read_form', {}],
+          ['page_diagnostics', {}],
+        ];
+        for (const [tool, args] of tools) {
+          const t = await acting({ act: { siteAllowed: () => true, ...act } });
+          chordIsAgents(t, agents);
+          const contents = t.pages.get('n1')!.contents;
+          t.at.history = [{ url: 'https://news.test/' }, { url: 'https://news.test/a' }];
+          t.at.active = 1;
+          t.at.crashed = true;
+          leaseLost.add(contents);
+          const out = await t.call(tool, { tab_id: t.tab, ...args });
+          leaseLost.delete(contents);
+          const json = out.text?.startsWith('{') ? (JSON.parse(out.text) as { data?: { refused?: string; error?: string }; error?: string; refused?: string }) : null;
+          const said = json ? (json.data?.refused ?? json.data?.error ?? json.refused ?? json.error) : out.text;
+          expect(said, `${whose}: ${tool}`).toBe(crashedWords);
+        }
+      }
     });
 
     it('what the page’s response to an action was caught doing (a dialog, a picker, unload) goes in the next result, so the model never says done when the page said no (Claude’s S1, round 2 of #150)', async () => {

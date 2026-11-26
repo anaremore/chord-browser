@@ -298,7 +298,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
     const notes = deps.chords?.drain(agent) ?? [];
     if (notes.length === 0) return [];
     const list = notes.map((n) => ({ tab_id: scope.refs.refFor(n.nodeId), what: n.what, detail: n.detail }));
-    const note = 'Chord held or refused these in your tabs: page dialogs (answered at once: OK, Cancel, nothing typed), file pickers, new windows, downloads and sign-in boxes (cancelled: Chord doesn’t sign agents in).';
+    const note = 'Chord held or refused these in your tabs: page dialogs (answered at once: OK, Cancel, nothing typed), file pickers, print (refused: Chord doesn’t print for agents), new windows, downloads and sign-in boxes (cancelled: Chord doesn’t sign agents in).';
     return [{ type: 'text', text: JSON.stringify({ trust: 'untrusted', held: list, note }) }];
   };
 
