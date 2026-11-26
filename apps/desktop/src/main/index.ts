@@ -1473,6 +1473,46 @@ if (!app.requestSingleInstanceLock()) {
           return { times, after, walk, nodes: last?.nodes.length ?? 0, keys: last?.nodes.filter((n) => n.key !== undefined).length ?? 0, cut: last?.cut ?? null };
         },
         /**
+         * Round 1 of #270 (B1): one change of the page at `url`, `code` run in Chord's world by the next snapshot there,
+         * between its answer and the task after it, where the page can change before that task: a test's way to land
+         * in that gap every time. Once, then gone.
+         */
+        agentBeforeFinish: async (url: string, code: string) => {
+          const { ASSISTANT_WORLD } = await import('./control/extract');
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return false;
+          await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `globalThis.__chordBeforeFinish = () => { ${code} }; true` }]);
+          return true;
+        },
+        /**
+         * #166: what each part of the snapshot's walk costs on the page at `url`: the snapshot as an agent's, and with one
+         * part left out at a time (snapshot.ts' SnapshotProbe), all in turn, `runs` rounds, so load that comes and goes
+         * falls on each. Milliseconds, round trip from main, by variant. Measured only: no agent's snapshot leaves one out.
+         */
+        agentSnapshotParts: async (url: string, runs: number) => {
+          const [{ snapshotPage }, { ASSISTANT_WORLD }] = await Promise.all([import('./control/snapshot'), import('./control/extract')]);
+          const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
+          if (!contents) return null;
+          const variants = { full: {}, eagerPart: { eagerPart: true }, shape: { shape: true }, near: { near: true }, items: { items: true } } as const;
+          const times: Record<string, number[]> = {};
+          // An owner per variant, so no variant's ids (sidOf's cache) are another's (round 1 of #270, SF1); all of them
+          // let go of afterwards, as no agent's.
+          const owners = Object.keys(variants).map((name) => `parts-${name}`);
+          for (let i = 0; i < runs; i++) {
+            for (const [name, probe] of Object.entries(variants)) {
+              const owner = `parts-${name}`;
+              const started = performance.now();
+              await snapshotPage(contents, owner, `parts${i}${name}`, true, true, probe);
+              (times[name] ??= []).push(performance.now() - started);
+              // Its task after the snapshot run before the next is timed (as agentSnapshotTimes does).
+              await new Promise((done) => setTimeout(done, 20));
+              await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { const r = globalThis.__chordSnapshots.get(${JSON.stringify(owner)}); if (r && r.finish) r.finish(); return 0; })()` }]);
+            }
+          }
+          await contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: `(() => { for (const o of ${JSON.stringify(owners)}) { globalThis.__chordSnapshots && globalThis.__chordSnapshots.delete(o); globalThis.__chordSids && globalThis.__chordSids.delete(o); } return 0; })()` }]);
+          return times;
+        },
+        /**
          * S18 M2c's budget: an action's own work in the page before its input is sent (the element checked, scrolled to
          * and hit-tested: the `point` step), round trip from main, `runs` times, on the middle element of a snapshot.
          */

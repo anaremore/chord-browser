@@ -282,8 +282,16 @@ export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => {
 
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
 /** `boxes`: the parts it may read by their container refs (#207), kept as its keyed elements are, in their own list. */
-function snapshotScript(owner: string, token: string, pinned = true, boxes = false): string {
-  const args = { owner, token, pinned, boxes, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
+/**
+ * What the walk leaves out, for a test that measures what each of its parts costs (#166; chordTestHooks.
+ * agentSnapshotParts): the shape's parts (`shape`), each element's nearest label, button, link and form (`near`), its
+ * item (`items`); or, as before #166, each element's place's part built in the walk (`eagerPart`). A snapshot with a
+ * probe is never an agent's: only measured.
+ */
+export type SnapshotProbe = Partial<Record<'shape' | 'near' | 'items' | 'eagerPart', true>>;
+
+function snapshotScript(owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}): string {
+  const args = { owner, token, pinned, boxes, probe, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   ${boxes ? TEXT_LIB : ''}
@@ -332,6 +340,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   // And each element's nearest label, button, link and form, itself included, for its children's shapes (refShape).
   const NO_NEAR = { label: null, button: null, a: null, form: null };
   const nearHere = (el, up) => {
+    if (args.probe.near) return NO_NEAR;
     const above = up ? up.near : NO_NEAR;
     const tag = el.localName;
     if (tag === 'label') return { ...above, label: el };
@@ -342,13 +351,19 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   };
   const link = (el, up, role) => {
     const n = up ? up.n + 1 : 1;
-    const part = itemOf(el, role);
+    const part = args.probe.items ? null : itemOf(el, role);
     const items = up ? up.items : null;
-    return { part: [el.localName, el.getAttribute('role') || ''], up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
+    // Its tag and role as the walk saw them, as strings: never the element, whose role the page can change before the task
+    // after the snapshot (round 1 of #270, B1: a twin row's ref then found the other row). The place's pairs are built
+    // in that task (placeOf), only for a kept ref's ancestors, never one array per element (#166).
+    const at = { tag: el.localName, role: el.getAttribute('role') || '', up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
+    // (As main did before #166, for agentSnapshotParts' comparison: measured only.)
+    if (args.probe.eagerPart) at.part = [at.tag, at.role];
+    return at;
   };
   const placeOf = (chain) => {
     const parts = [];
-    for (let c = chain; c && parts.length < 64; c = c.up) parts.push(c.part);
+    for (let c = chain; c && parts.length < 64; c = c.up) parts.push([c.tag, c.role]);
     return JSON.stringify(parts);
   };
   // Kept on the chain's node (round 2 of #145): its children all ask for the same items.
@@ -406,7 +421,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: args.probe.shape ? null : shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
       }
       // A part's ref only where its read would go (round 2 of #260, N1: never one always refused as changed).
       if (args.boxes && CONTAINERS.has(role) && boxes.length < args.maxRefs && !partBlocked(el)) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
@@ -459,7 +474,8 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
         if (!k.chain) continue;
         k.items = itemsAt(k.chain);
         k.path = placeOf(k.chain);
-        k.shape = shapeOf(k.parts);
+        // (A probe that left the parts out has none: measured only, never an agent's.)
+        k.shape = k.parts ? shapeOf(k.parts) : '';
       }
     } catch { shapesOk = false; }
     const whole = shapesOk && !(cut.refs || cut.elements || cut.time);
@@ -480,6 +496,13 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     read.finishMs = performance.now() - began;
   };
   read.finish = finish;
+  // (Tests only: the one change of the page chordTestHooks.agentBeforeFinish set, made between the answer and the task
+  // after it, where a page can change before that task runs (round 1 of #270, B1). Only Chord's world can set it.)
+  const beforeFinish = globalThis.__chordBeforeFinish;
+  if (typeof beforeFinish === 'function') {
+    globalThis.__chordBeforeFinish = null;
+    try { beforeFinish(); } catch {}
+  }
   setTimeout(finish, 0);
   // Each owner's latest snapshot, its own: another agent's snapshot of this page never takes it away. The ones before it
   // stay behind it, at most SNAPSHOT_HISTORY in all (M2g-1): a ref the agent got from one of them (a diff after an action
@@ -638,9 +661,9 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true, boxes = false): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
-  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned, boxes) }]), null, SNAPSHOT_MS));
+  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned, boxes, probe) }]), null, SNAPSHOT_MS));
 }
 
 /** One part's shown text by its container ref (#207), or why not: changed since the snapshot, or the page an editor. */
