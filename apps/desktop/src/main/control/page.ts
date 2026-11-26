@@ -109,15 +109,22 @@ export interface ControlPage {
    */
   /** `acted`: told when the action itself is done, before the page settles (phases.ts). */
   afterActing(act: () => void | Promise<void>, acted?: () => void): Promise<{ navigated: boolean; loading: boolean }>;
-  /** Goes to an address and waits for the load (at most ACT_LOAD_MS). */
-  navigate(url: string): Promise<{ loading: boolean }>;
+  /**
+   * Goes to an address once the tab's session is ready, and waits for that load (at most ACT_LOAD_MS from its start).
+   * Null when it never started: overtaken while it waited (your load, a newer one), or `abandoned` by then (Stop,
+   * paused, taken over: round 1 of #333).
+   */
+  navigate(url: string, abandoned?: () => boolean): Promise<{ loading: boolean } | null>;
   /**
    * The entry just before this one in the tab's history, or null. Not goBack's: Chromium's goBack skips entries a page
    * added without a gesture (a pushState), so it can land further back than the entry checked.
    */
   backEntry(): { index: number; url: string } | null;
-  /** Goes to exactly that entry, if it's still there (null if not), and waits for the load. */
-  back(entry: { index: number; url: string }): Promise<{ loading: boolean } | null>;
+  /**
+   * Goes to exactly that entry once the tab's session is ready, if it's still the one just before this page then (null
+   * if not, or overtaken, or `abandoned`), and waits for that load.
+   */
+  back(entry: { index: number; url: string }, abandoned?: () => boolean): Promise<{ loading: boolean } | null>;
   title(): string;
 }
 
@@ -221,19 +228,48 @@ function toFrames(contents: WebContents, up: boolean): void {
   }
 }
 
-/** The adapter for a page Chord holds. */
 /**
- * Where a tool's own load or history move goes first: the tab's session gate (tabs.ts' whenProxied, set by Browser),
- * so it never starts before the session's proxy is set or its rules are on, and a load already waiting is dropped for
- * it (#326). Until it's set (tests, a page with no Browser), at once.
+ * The tab's session gate, which a tool's own load and history move go through (#326): tabs.ts' queueLoad. `load` runs
+ * once the session's proxy is set and its rules are on, over any load already waiting; it returns false when it didn't
+ * load after all (the tab's loading comes off). `overtaken` is called instead if another load replaces it first. Safe
+ * Browsing hears of a load that waits.
  */
-let loadGate: (contents: WebContents, load: () => void) => void = (_contents, load) => load();
-
-export function setLoadGate(gate: (contents: WebContents, load: () => void) => void): void {
-  loadGate = gate;
+export interface LoadGate {
+  queueLoad(contents: WebContents, load: () => boolean | void, overtaken?: () => void): void;
 }
 
-export function controlPage(contents: WebContents): ControlPage {
+/**
+ * A tool's load through the gate: `start` (null: not now, it didn't load) runs once the session is ready, unless the
+ * caller `abandoned` it by then; then that load is waited for, as `loaded` does, its stop listened for from its start
+ * only (never an earlier load's: Neon's B2, round 1 of #333). Null at once when it didn't start.
+ */
+function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => unknown) | null, abandoned?: () => boolean): Promise<{ loading: boolean } | null> {
+  return new Promise((done) => {
+    let decided = false;
+    gate.queueLoad(
+      contents,
+      () => {
+        if (decided) return false;
+        decided = true;
+        const go = contents.isDestroyed() || abandoned?.() ? null : start();
+        if (!go) {
+          done(null);
+          return false;
+        }
+        void loaded(contents, go).then(done);
+        return true;
+      },
+      () => {
+        if (decided) return;
+        decided = true;
+        done(null);
+      },
+    );
+  });
+}
+
+/** The adapter for a page Chord holds; its own loads go through `gate` (the tab manager's, #326). */
+export function controlPage(contents: WebContents, gate: LoadGate): ControlPage {
   /** A frame's guard stopped a key or an insertion while the guard was up. */
   let frameStopped = false;
   const onFrameStopped = () => void (frameStopped = true);
@@ -314,10 +350,10 @@ export function controlPage(contents: WebContents): ControlPage {
       if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
     },
     afterActing: (act, acted) => afterActing(contents, act, acted),
-    navigate: async (url) => {
+    navigate: async (url, abandoned) => {
       const yours = await focusedPage();
       try {
-        return await loaded(contents, () => loadGate(contents, () => void contents.loadURL(url).catch(() => undefined)));
+        return await gatedLoad(contents, gate, () => () => contents.loadURL(url).catch(() => undefined), abandoned);
       } finally {
         await giveBackFocus(contents, yours);
       }
@@ -328,16 +364,14 @@ export function controlPage(contents: WebContents): ControlPage {
       const url = index >= 0 ? contents.navigationHistory.getEntryAtIndex(index)?.url : undefined;
       return url ? { index, url } : null;
     },
-    back: async (entry) => {
-      if (contents.isDestroyed() || contents.navigationHistory.getEntryAtIndex(entry.index)?.url !== entry.url) return null;
+    back: async (entry, abandoned) => {
+      // The entry just before this page, as checked: the page still one past it, and the entry still that address
+      // (Neon's SF1, round 1 of #333). Asked now and again once the session is ready.
+      const still = () => !contents.isDestroyed() && contents.navigationHistory.getActiveIndex() === entry.index + 1 && contents.navigationHistory.getEntryAtIndex(entry.index)?.url === entry.url;
+      if (!still()) return null;
       const yours = await focusedPage();
       try {
-        return await loaded(contents, () =>
-          loadGate(contents, () => {
-            // Once the session is ready, and only if that entry is still where it was.
-            if (!contents.isDestroyed() && contents.navigationHistory.getEntryAtIndex(entry.index)?.url === entry.url) contents.navigationHistory.goToIndex(entry.index);
-          }),
-        );
+        return await gatedLoad(contents, gate, () => (still() ? () => contents.navigationHistory.goToIndex(entry.index) : null), abandoned);
       } finally {
         await giveBackFocus(contents, yours);
       }

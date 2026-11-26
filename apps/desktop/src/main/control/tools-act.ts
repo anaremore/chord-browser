@@ -307,7 +307,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       let past = false;
       const stepWords = tool === 'navigate' ? `Going to ${barAddress(target)}` : 'Going back';
       try {
-        const going = tool === 'navigate' ? page.navigate(target) : page.back(back!);
+        // Never started once the session is ready, if by then Stop, a pause or your hand came (round 1 of #333).
+        const abandoned = () => call.stopped() || scope.agent.state(node.id).paused || takenOver() !== null;
+        const going = tool === 'navigate' ? page.navigate(target, abandoned) : page.back(back!, abandoned);
         // The hold lost meanwhile (a detach, the renderer gone) is never a success (Neon's B5, round 2 of #147).
         // Your own taking over reads as yours, before the hold's loss (Neon's S1, round 3). A card's Allow counts only
         // while the page is the document it was when the card opened (#143, Neon's B4: as an action's, below); a no or
@@ -383,7 +385,13 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (sent) return refuse(sent);
       // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
       if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
-      if (!went) return refuse(ACT_REFUSALS.noBack);
+      // It never started: Stop, a pause or your hand say so; else another load came first, or (back) the tab's history
+      // moved while it waited (Opus's N4, round 1 of #333).
+      if (!went) {
+        if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+        if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
+        return refuse(takenOver() ?? (tool === 'back' ? ACT_REFUSALS.backMoved : ACT_REFUSALS.overtaken));
+      }
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
       // You took the tab while it loaded: it went, but the agent hears it's yours now.

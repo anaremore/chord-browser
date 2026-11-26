@@ -51,4 +51,5 @@ New files, not from upstream: `package.json`, `tsconfig.json`, `build-types.mjs`
 - **`src/browser/api/tabs.ts`**: `chrome.tabs.update({ url })`, `reload`, `goBack` and `goForward` call those hooks when
   the app implements them, rather than moving the page itself. Chord holds such a load until the tab's session is
   ready (its proxy set, its ad-blocking rules on), and drops a load already waiting for it. Without the hooks, as
-  upstream.
+  upstream. With `navigateTab`, `tabs.update({ url })` answers before the load starts (upstream waited for `loadURL`),
+  and its tab details have no `pendingUrl`: the tab still shows its old address until the load begins.

@@ -1845,7 +1845,7 @@ export class AssistantService {
     if (checked.writes.length === 0) return this.noteFill(message, 'Choose at least one field to fill.');
     const undo = randomBytes(12).toString('hex');
     const highlight = { color: this.browser.accentOf(node.id) ?? 'Highlight', ms: durations.fillHighlight, stagger: durations.stagger, easing: easing.standard };
-    const outcome = await controlPage(contents).fillForm({ token: meta.token, writes: checked.writes, undo, highlight });
+    const outcome = await controlPage(contents, this.browser.tabs).fillForm({ token: meta.token, writes: checked.writes, undo, highlight });
     if (!outcome.ok) return this.endFill(state, message, 'expired', FILL_PROBLEMS[outcome.why]);
     // Fields that changed as the others went in (a country's states) were left as they were: the card names them.
     const note = fillChangedNote(meta.read.fields.filter((f) => outcome.skipped.includes(f.key)).map((f) => f.label));
@@ -1861,7 +1861,7 @@ export class AssistantService {
     if (!u) return;
     this.fillUndos.delete(token);
     const contents = pageOf(this.browser.tabs.get(u.nodeId));
-    const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await controlPage(contents).undoFill(token) : null;
+    const result = contents && !contents.isDestroyed() && samePage(u.url, contents.getURL()) ? await controlPage(contents, this.browser.tabs).undoFill(token) : null;
     if (!result) return this.toast(u.windowId, { id: `assistant-fill:${u.messageId}`, message: 'Couldn’t undo: the page has moved on' });
     const message = u.state.messages.find((m) => m.id === u.messageId);
     if (message) await this.endFill(u.state, message, 'undone', result.kept ? `${fieldCount(result.kept)} you changed since stayed as you left ${result.kept === 1 ? 'it' : 'them'}.` : undefined);

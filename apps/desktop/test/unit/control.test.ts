@@ -420,7 +420,7 @@ function setup(
         return state;
       },
     },
-    tabs: { get: view, ensure: (id) => (opts.onEnsure?.({ go, close }), view(id)) },
+    tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: view, ensure: (id) => (opts.onEnsure?.({ go, close }), view(id)) },
     readers: { viewFor: () => undefined },
   };
   const cards: ControlCard[] = [];
@@ -2251,6 +2251,20 @@ describe('acting through the gate (S18 M2c)', () => {
   it('navigate and back: a pause that comes after the tab was loaded sends nothing', async () => {
     const t: Awaited<ReturnType<typeof acting>> = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
     expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' })).refused).toBe(CONTROL_REFUSALS.paused);
+    expect(t.at.loads).toEqual([]);
+  });
+
+  it.each([
+    ['navigate', { url: 'https://news.test/b' }, ACT_REFUSALS.overtaken],
+    ['back', {}, ACT_REFUSALS.backMoved],
+  ] as const)('%s overtaken while it waited for the session (round 1 of #333, Opus’s N4): refused in its own words, nothing loaded', async (tool, args, refused) => {
+    const t = await acting();
+    // Somewhere to go back to.
+    t.at.history = [{ url: 'https://news.test/before' }, { url: t.at.url }];
+    t.at.active = 1;
+    // The tab's gate: another load replaced this one before the session was ready.
+    (t.browser.tabs as { queueLoad: unknown }).queueLoad = (_c: unknown, _load: unknown, overtaken?: () => void) => overtaken?.();
+    expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused).toBe(refused);
     expect(t.at.loads).toEqual([]);
   });
 

@@ -47,7 +47,7 @@ const profile = () => {
   return dir;
 };
 
-const browser: ControlBrowser = { store: { state: { nodes: {} } as unknown as State }, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } };
+const browser: ControlBrowser = { store: { state: { nodes: {} } as unknown as State }, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } };
 
 type Ask = (who: ConnectingAgent, signal: AbortSignal) => Promise<ConnectAnswer>;
 

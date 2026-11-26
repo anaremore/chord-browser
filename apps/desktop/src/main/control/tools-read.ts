@@ -61,7 +61,7 @@ export async function readTool(call: Call, tool: AssistantToolName, args: Record
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
       return refuse(NOTHING_SHOWN('Take the picture'));
     }
-    const shot = await (reader ? controlPage(reader) : page).screenshot();
+    const shot = await (reader ? controlPage(reader, browser.tabs) : page).screenshot();
     // Kept only once the picture is taken, and never after Stop (as diagnostics and read_form do).
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     const taken = blockedNow(call, node.id, page, 'Could not take the picture.');

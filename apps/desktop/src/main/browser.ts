@@ -72,7 +72,6 @@ import { AutoPip } from './auto-pip';
 import { placeOnDisplays } from './bounds';
 import { buildActs } from './assistant/preview';
 import { attachContextMenu } from './context-menu';
-import { setLoadGate } from './control/page';
 import { clicksTheTab, inputWhy, isAgentInput, usesTheTab } from './control/input';
 import { DevTools } from './devtools';
 import { DrmNotices, drmServiceFor, findBrowsers, launchEnv } from './drm';
@@ -625,8 +624,6 @@ export class Browser {
         });
       },
     });
-    // The agent's and the assistant's own loads and history moves wait for the session too (#326).
-    setLoadGate((contents, load) => this.tabs.whenProxied(contents, load));
     this.media = new MediaWatcher({
       isTab: (contents, nodeId) => this.tabs.get(nodeId)?.webContents === contents,
       changed: () => this.syncMedia(),

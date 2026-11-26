@@ -287,28 +287,73 @@ describe('requests and windows from main: every call site is audited', () => {
 
 /* ---------- Page loads around the session gate ---------- */
 
-/** A load or history move on a page: the call, and what it's called on. */
+/** A load or history move on a page: the call, and what it's called on (whitespace, `!` and `?` left out). */
 type Move = { method: string; receiver: string; line: number };
 
-const MOVES = /([\w$]+(?:\??\.[\w$]+|\([^()]*\))*)\??\.(loadURL|loadFile|reload|reloadIgnoringCache|goBack|goForward|goToIndex|goToOffset)\s*\(/g;
-/** The tab manager's own (tabs.reload, tabs.go…): the gate itself. */
-const THE_GATE = /(?:^|\.)(?:tabs|tabMoves)$/;
+const MOVE_NAMES = 'loadURL|loadFile|reload|reloadIgnoringCache|goBack|goForward|goToIndex|goToOffset|restore';
+/**
+ * Each place a page is loaded or moved in its history: `.loadURL(`, `?.loadURL(`, `!.loadURL(`, across lines, through
+ * `.call` / `.apply` / `.bind`, or `['loadURL']` (Opus's SF5, round 1 of #333).
+ */
+const MOVE = new RegExp(`(?:[?!]?\\.\\s*(${MOVE_NAMES})\\b|\\[\\s*(['"\`])(${MOVE_NAMES})\\2\\s*\\])(?=\\s*(?:\\(|\\.\\s*(?:call|apply|bind)\\b))`, 'g');
+/** The tab manager's own (tabs.reload, tabs.go…): the gate itself, by these names only (Opus's N2). */
+const THE_GATE = new Set(['this.tabs', 'this.deps.tabs', 'this.deps.tabMoves']);
+
+/** What's called, read back from `end` (where its `.` or `[` is): a chain of names, calls and indexes. */
+function receiverBefore(text: string, end: number): string {
+  let i = end - 1;
+  const skip = () => {
+    while (i >= 0 && /[\s!?]/.test(text[i]!)) i--;
+  };
+  const back = (open: string, close: string) => {
+    let depth = 0;
+    for (; i >= 0; i--) {
+      if (text[i] === close) depth++;
+      else if (text[i] === open && --depth === 0) {
+        i--;
+        return;
+      }
+    }
+  };
+  skip();
+  const stop = i + 1;
+  for (;;) {
+    if (text[i] === ')') back('(', ')');
+    else if (text[i] === ']') back('[', ']');
+    while (i >= 0 && /[\w$]/.test(text[i]!)) i--;
+    const at = i;
+    skip();
+    if (text[i] === '.') {
+      i--;
+      skip();
+      continue;
+    }
+    i = at;
+    break;
+  }
+  return text.slice(i + 1, stop).replace(/[\s!?]/g, '');
+}
 
 function moves(source: string): Move[] {
   const text = code(source);
-  return [...text.matchAll(MOVES)].filter((m) => !THE_GATE.test(m[1]!)).map((m) => ({ method: m[2]!, receiver: m[1]!, line: lineOf(text, m.index) }));
+  return [...text.matchAll(MOVE)]
+    .map((m) => ({ method: (m[1] ?? m[3])!, receiver: receiverBefore(text, m.index), line: lineOf(text, m.index) }))
+    .filter((m) => !THE_GATE.has(m.receiver) && (m.method !== 'restore' || /(?:^|\.)navigationHistory$/.test(m.receiver)));
 }
 
 /**
- * Every load and history move on a page outside tabs.ts (the session gate: whenProxied, reload, go, navigate,
- * reopenAt), by file, method and receiver, with why it may (#326). A new one fails until it's listed here: a page's load
- * goes through the gate, so it never starts before the session's proxy is set or its rules are on, and a load already
- * waiting is dropped for it.
+ * Every load and history move on a page (tabs.ts' too), by file, method and receiver, with why it may (#326; round 1 of
+ * #333). A new one fails until it's listed here: a page's load goes through the gate (tabs.ts' whenProxied, and
+ * queueLoad, load, reload, go, navigate, reopenAt over it), so it never starts before the session's proxy is set or its
+ * rules are on, and a load already waiting is dropped for it.
  */
 const LOADS: Record<string, [string, string, string][]> = {
   'main/browser.ts': [['loadURL', 'contents', "an image search's upload into a tab: inside tabs.whenProxied (the `upload` it's given)"]],
   'main/context-menu.ts': [['reload', 'deps', "a page's menu's Reload: `deps.reload`, which a page's menu must have (WebMenuDeps): tabs.reload"]],
-  'main/index.ts': [['loadURL', 'contents', "the E2E perf hook's timed reloads of a page already loaded (CHORD_E2E only)"]],
+  'main/index.ts': [
+    ['reload', 'browser.tabs', "the page's Reload key: tabs.reload, the gate (Browser's own tab manager, by another name here)"],
+    ['loadURL', 'contents', "the E2E perf hook's timed reloads of a page already loaded (CHORD_E2E only)"],
+  ],
   'main/window.ts': [
     ['reload', 'contents', "Chord's own UI view after its renderer crashed: Chord's session, no proxy or rules to wait for"],
     ['loadURL', 'view.webContents', "Chord's own UI view: Chord's session"],
@@ -316,20 +361,35 @@ const LOADS: Record<string, [string, string, string][]> = {
   ],
   'main/ad-blocking/extension.ts': [['loadURL', 'contents', "the blocker extension's own control page, in its own view: no site"]],
   'main/control/page.ts': [
-    ['loadURL', 'contents', "the agent's navigate: inside loadGate (tabs.whenProxied, set by Browser)"],
-    ['goToIndex', 'contents.navigationHistory', "the agent's back: inside loadGate, and only if the entry is still where it was"],
+    ['loadURL', 'contents', "the agent's navigate: started by the gate (gatedLoad, the tab manager's queueLoad)"],
+    ['goToIndex', 'contents.navigationHistory', "the agent's back: started by the gate, and only if the entry is still the one just before"],
   ],
-  'main/extensions/index.ts': [
-    ['loadURL', 'contents', 'chrome.tabs.update({ url }): inside tabs.whenProxied (tabMoves, which Extensions must be given)'],
-    ['loadURL', 'win', "an extension's own window (chrome.windows.create): after its session's wait (proxyReady), as a tab's first load"],
-  ],
+  'main/extensions/index.ts': [['loadURL', 'win', "an extension's own window (chrome.windows.create): after its session's wait (proxyReady), as a tab's first load"]],
   'main/extensions/popup.ts': [['loadURL', 'contents', "an extension's popup: after its session's wait (proxyReady), as a tab's first load"]],
   'main/safe-browsing/guard.ts': [
     ['goBack', 'contents.navigationHistory', 'Back to safety: leaves a flagged page at once, a load waiting dropped first (guard.ts says why it doesn’t wait, #323)'],
     ['loadURL', 'contents', 'Back to safety with nothing to go back to: about:blank, no request'],
   ],
+  'main/tabs.ts': [
+    ['loadURL', 'contents', 'load: started by the gate (queueLoad)'],
+    ['reloadIgnoringCache', 'contents', 'reload (Hard Reload): started by the gate (queueLoad)'],
+    ['reload', 'contents', 'reload: started by the gate (queueLoad)'],
+    ['loadURL', 'contents', 'reopenAt: started by the gate (queueLoad)'],
+    ['reload', 'contents', 'reopenAt’s reload: after a load that went, in the same turn, through the gate again'],
+    ['goBack', 'contents.navigationHistory', 'go: started by the gate (queueLoad), if there’s still somewhere to go'],
+    ['goForward', 'contents.navigationHistory', 'go: started by the gate (queueLoad), if there’s still somewhere to go'],
+    ['restore', 'contents.navigationHistory', 'a tab’s view made again (sleep, a restart): its first load, started by the gate (whenProxied in ensure)'],
+    ['loadURL', 'contents', 'a restored history that failed: its address, through the gate, in the same turn only'],
+    ['loadURL', 'contents', 'a tab’s first load: started by the gate (whenProxied in ensure)'],
+    ['loadURL', 'contents', 'an agent tab’s blank page (about:blank, no request), primed inside the gate’s turn'],
+    ['loadURL', 'contents', 'a Peek’s or a mini window’s first load: started by the gate (whenProxied in createFloating)'],
+    ['reload', 'this', 'a crashed page’s reload: this.reload, the gate, and not over a load you asked for that’s waiting'],
+  ],
   'chrome-extensions/browser/popup.ts': [['loadURL', 'win.webContents', "upstream's own popup window: Chord shows popups itself (openActionPopup), so it never opens"]],
   'chrome-extensions/browser/api/tabs.ts': [
+    ['reload', 'this', "the API's own handlers (this.reload.bind(this)) as it registers them: no page"],
+    ['goForward', 'this', "the API's own handlers (this.goForward.bind(this)) as it registers them: no page"],
+    ['goBack', 'this', "the API's own handlers (this.goBack.bind(this)) as it registers them: no page"],
     ['reloadIgnoringCache', 'tab', 'upstream, for an app without reloadTab: Chord has it'],
     ['reload', 'tab', 'upstream, for an app without reloadTab: Chord has it'],
     ['loadURL', 'tab', 'upstream, for an app without navigateTab: Chord has it'],
@@ -339,18 +399,38 @@ const LOADS: Record<string, [string, string, string][]> = {
 };
 
 describe('page loads around the session gate (#326): every one is audited', () => {
-  it('reads each kind, and leaves comments and the tab manager’s own alone', () => {
+  it('reads each way of writing one, and leaves comments, look-alikes and the tab manager’s own alone (Opus’s SF5, N2)', () => {
     const src = [
       'void contents.loadURL(url); // page.reload()',
       'contents.navigationHistory.goToIndex(2);',
       'pageOf(view)?.loadURL(x);',
+      'views[0]!.reload();',
+      'contents',
+      '  .navigationHistory',
+      '  .goBack();',
+      "page['loadURL'](url);",
+      'page.loadURL.call(page, url);',
+      'contents.navigationHistory.restore({ entries, index });',
       'this.tabs.reload(contents);',
       'this.deps.tabMoves.go(contents, "back");',
+      'tabs.reload(contents);',
+      'win.restore();',
+      'const reload = () => 1;',
     ].join('\n');
-    expect(moves(src).map((m) => `${m.method} ${m.receiver}`)).toEqual(['loadURL contents', 'goToIndex contents.navigationHistory', 'loadURL pageOf(view)']);
+    expect(moves(src).map((m) => `${m.method} ${m.receiver}`)).toEqual([
+      'loadURL contents',
+      'goToIndex contents.navigationHistory',
+      'loadURL pageOf(view)',
+      'reload views[0]',
+      'goBack contents.navigationHistory',
+      'loadURL page',
+      'loadURL page',
+      'restore contents.navigationHistory',
+      'reload tabs',
+    ]);
   });
 
-  it('each load or history move outside tabs.ts is listed, with its reason', () => {
+  it('each load or history move is listed, with its reason', () => {
     const roots: [string, string][] = [
       ['main', MAIN],
       ['chrome-extensions/browser', join(repo, 'packages/chrome-extensions/src/browser')],
@@ -358,14 +438,12 @@ describe('page loads around the session gate (#326): every one is audited', () =
     const found: Record<string, [string, string][]> = {};
     for (const [prefix, root] of roots) {
       for (const file of files(root, (name) => name.endsWith('.ts'))) {
-        const name = `${prefix}/${rel(file, root)}`;
-        if (name === 'main/tabs.ts') continue;
         const seen = moves(readFileSync(file, 'utf8')).map((m): [string, string] => [m.method, m.receiver]);
-        if (seen.length) found[name] = seen;
+        if (seen.length) found[`${prefix}/${rel(file, root)}`] = seen;
       }
     }
     const listed = Object.fromEntries(Object.entries(LOADS).map(([file, entries]) => [file, entries.map(([method, receiver]): [string, string] => [method, receiver])]));
-    expect(found, 'a load or history move outside the gate: go through tabs (whenProxied, reload, go, navigate), or list it here with why').toEqual(listed);
+    expect(found, 'a load or history move outside the gate: go through tabs (queueLoad, load, reload, go, navigate), or list it here with why').toEqual(listed);
     for (const entries of Object.values(LOADS)) for (const [, , why] of entries) expect(why.length).toBeGreaterThan(20);
   });
 });

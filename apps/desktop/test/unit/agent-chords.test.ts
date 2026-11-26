@@ -579,7 +579,7 @@ describe('Review 1 of #77', () => {
     let allow: (grant: 'once') => void = () => undefined;
     const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
       present: () => new Promise((done) => (allow = done)),
-      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
       chords: t.chords,
       dispatch: (c) => t.store.dispatch(c),
       progressMs: 1000,
@@ -620,7 +620,7 @@ describe('Review 1 of #77', () => {
     const sent: Sent[] = [];
     const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
       present: (card) => (card.kind === 'connection' ? Promise.resolve('once') : new Promise(() => undefined)),
-      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
       chords: t.chords,
       dispatch: (c) => t.store.dispatch(c),
       progressMs: 1000,
@@ -655,7 +655,7 @@ describe('Review 1 of #77', () => {
     const answers: ((grant: 'once') => void)[] = [];
     const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Codex' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
       present: () => new Promise((done) => void answers.push(done)),
-      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
       chords: t.chords,
       dispatch: (c) => t.store.dispatch(c),
     });
@@ -681,7 +681,7 @@ describe('Review 1 of #77', () => {
       const sent: { id?: number; result?: { tools: unknown[] } }[] = [];
       const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: client } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
         present: async () => 'once',
-        browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+        browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
         chords: t.chords,
         dispatch: (c) => t.store.dispatch(c),
       });
@@ -701,7 +701,7 @@ describe('Review 1 of #77', () => {
     const sent: { id?: number; result?: { content: { text: string }[]; isError: boolean } }[] = [];
     const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, (m) => void sent.push(m as never), {
       present: async () => 'once',
-      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
       chords: t.chords,
       dispatch: (c) => t.store.dispatch(c),
     });
@@ -821,7 +821,7 @@ function connected(t: ReturnType<typeof setup>, loadMs?: number, actions = true)
   const sent: Reply[] = [];
   const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(actions)) }, (m) => void sent.push(m as never), {
     present: async () => 'once',
-    browser: { store: t.store, tabs: { get: () => (page.onGet?.(), { webContents: contents }) as never, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
+    browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => (page.onGet?.(), { webContents: contents }) as never, ensure: () => ({ webContents: contents }) as never }, readers: { viewFor: () => undefined } },
     chords: t.chords,
     dispatch: (c) => t.store.dispatch(c),
     neverSites: () => ['bank.test'],
@@ -990,7 +990,7 @@ describe('open_tab and a Never site (security review)', () => {
     const asked: { subject: string }[] = [];
     const connection = agentConnection({ type: 'hello', initialize: { clientInfo: { title: 'Claude Code' } }, bridgePid: 1, parentPid: 1, cwd: '/', toolsVersion: agentToolsVersion(agentToolList(true)) }, () => undefined, {
       present: async (card) => ((asked.push(card as never), card.kind === 'step' ? 'deny' : 'once')),
-      browser: { store: t.store, tabs: { get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
+      browser: { store: t.store, tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: () => undefined, ensure: () => undefined }, readers: { viewFor: () => undefined } },
       chords: t.chords,
       dispatch: (c) => t.store.dispatch(c),
     });

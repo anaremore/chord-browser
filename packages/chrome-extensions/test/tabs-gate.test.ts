@@ -68,11 +68,17 @@ describe('chrome.tabs moving a tab, through the app’s hooks (#326)', () => {
     expect(t.tab.navigationHistory.goForward).not.toHaveBeenCalled()
   })
 
-  it('without the hooks: the page’s own, as upstream', () => {
+  it('without the hooks: the page’s own, as upstream (Neon’s N3, round 1 of #333: each of them)', async () => {
     const t = setup({})
+    await t.handlers['tabs.update']!(t.event, 7, { url: 'https://b.test/' }).catch(() => undefined)
     t.handlers['tabs.reload']!(t.event, 7, {})
+    t.handlers['tabs.reload']!(t.event, 7, { bypassCache: true })
     t.handlers['tabs.goBack']!(t.event, 7)
+    t.handlers['tabs.goForward']!(t.event, 7)
+    expect(t.tab.loadURL).toHaveBeenCalledWith('https://b.test/')
     expect(t.tab.reload).toHaveBeenCalledOnce()
+    expect(t.tab.reloadIgnoringCache).toHaveBeenCalledOnce()
     expect(t.tab.navigationHistory.goBack).toHaveBeenCalledOnce()
+    expect(t.tab.navigationHistory.goForward).toHaveBeenCalledOnce()
   })
 })

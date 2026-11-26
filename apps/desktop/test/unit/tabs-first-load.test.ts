@@ -539,6 +539,93 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.page.reload).toHaveBeenCalledOnce();
   });
 
+  describe('a PDF citation’s page opened again (Neon’s B1, round 1 of #333): its reload', () => {
+    /** The page's loadURL answered when the test says. */
+    const answered = (t: ReturnType<typeof setup>) => {
+      let resolve!: () => void;
+      let reject!: (e: Error) => void;
+      t.page.loadURL.mockImplementationOnce(() => new Promise<void>((res, rej) => ((resolve = res), (reject = rej))));
+      return { resolve: () => resolve(), reject: () => reject(new Error('ERR_ABORTED')) };
+    };
+
+    it('not after a load that was stopped (Stop, your own navigation)', async () => {
+      const t = setup([]);
+      const load = answered(t);
+      t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+      load.reject();
+      await tick();
+      expect(t.page.reload).not.toHaveBeenCalled();
+    });
+
+    it('not once another load was asked for meanwhile (yours, another citation’s)', async () => {
+      const t = setup([]);
+      const load = answered(t);
+      t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+      t.manager.navigate(NODE, SECOND);
+      load.resolve();
+      await tick();
+      expect(t.page.reload).not.toHaveBeenCalled();
+    });
+
+    it('through the gate: the session changing while it loaded, the reload waits for it', async () => {
+      const waits: Array<ReturnType<typeof held>> = [];
+      const t = setup(waits);
+      const load = answered(t);
+      t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+      const proxy = held();
+      waits.push(proxy);
+      load.resolve();
+      await tick();
+      expect(t.page.reload).not.toHaveBeenCalled();
+      proxy.resolve();
+      await tick();
+      expect(t.page.reload).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('a crash while your navigation waits for the session (Opus’s SF1, round 1 of #333): no reload over it; yours loads', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    t.page.loadURL.mockClear();
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.navigate(NODE, SECOND);
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    proxy.resolve();
+    await tick();
+    expect(t.page.reload).not.toHaveBeenCalled();
+    expect(t.loaded()).toEqual([SECOND]);
+  });
+
+  it.each([
+    ['tabs.load (extensions’ update, a link from Peek or a mini window)', (t: ReturnType<typeof setup>) => t.manager.load(t.page as never, SECOND)],
+    ['tabs.reload', (t: ReturnType<typeof setup>) => t.manager.reload(t.page as never)],
+    ['tabs.reopenAt (a PDF citation)', (t: ReturnType<typeof setup>) => t.manager.reopenAt(t.page as never, SECOND)],
+    ['tabs.queueLoad (the agent’s navigate and back)', (t: ReturnType<typeof setup>) => t.manager.queueLoad(t.page as never, () => undefined)],
+  ])('%s waiting for the session (Neon’s SF3, Opus’s SF2, round 1 of #333): Safe Browsing hears of it', (_, ask) => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    const navigationQueued = vi.fn();
+    (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = navigationQueued;
+    waits.push(held());
+    ask(t);
+    expect(navigationQueued).toHaveBeenCalledWith(t.page);
+  });
+
+  it('a load that waited, then didn’t load after all (round 1 of #333): the tab stops showing loading', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.queueLoad(t.page as never, () => false);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    proxy.resolve();
+    await tick();
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);

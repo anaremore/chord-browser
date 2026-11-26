@@ -51,9 +51,12 @@ export interface ExtensionsDeps {
   profileSession(profileId: string): Session;
   /** What a page's first load waits for in its session (its proxy, its chord's ad-blocking rules; tabs.ts' whenProxied). */
   proxyReady?(session: Session): Promise<void> | null;
-  /** The tab manager's loads and history moves, which wait for the session (#326): what extensions' chrome.tabs use. */
+  /**
+   * The tab manager's loads and history moves, which wait for the session, Safe Browsing told when they do (#326, round 1
+   * of #333): what extensions' chrome.tabs use.
+   */
   tabMoves: {
-    whenProxied(contents: WebContents, load: () => void): void;
+    load(contents: WebContents, url: string): void;
     reload(contents: WebContents, options?: { ignoreCache?: boolean }): void;
     go(contents: WebContents, way: 'back' | 'forward'): void;
   };
@@ -216,7 +219,7 @@ export class Extensions {
       },
       // Through the tab's session gate (#326): never before its proxy is set or its rules are on, and a load already
       // waiting there (a new tab's about:blank) is dropped for it, never landing over the extension's page.
-      navigateTab: (contents, url) => this.deps.tabMoves.whenProxied(contents, () => void contents.loadURL(url).catch(() => {})),
+      navigateTab: (contents, url) => this.deps.tabMoves.load(contents, url),
       reloadTab: (contents, bypassCache) => this.deps.tabMoves.reload(contents, { ignoreCache: bypassCache }),
       goTab: (contents, way) => this.deps.tabMoves.go(contents, way),
       tabFacts: (contents) => {
