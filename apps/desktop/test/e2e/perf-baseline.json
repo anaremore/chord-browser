@@ -90,18 +90,18 @@
     }
   },
   "win32-x64": {
-    "from": "CI run 40246180234",
-    "date": "2026-10-26",
+    "from": "CI run 40246180234; popover and chord-data: the medians of 39 CI runs on main, 2026-11-25 to 2026-11-26 (#288)",
+    "date": "2026-11-26",
     "launch": 3.64,
     "memoryMb": {
       "main": 135.1,
       "shell": 51.2,
       "command bar": 36.8,
-      "popover": 31,
+      "popover": 34.3,
       "hover preview": 28.5,
       "page": 25.9,
       "GPU": 20.5,
-      "chord-data": 26
+      "chord-data": 28.9
     }
   }
 }
