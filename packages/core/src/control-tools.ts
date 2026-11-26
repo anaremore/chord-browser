@@ -17,6 +17,13 @@ declare const URL: new (url: string) => { protocol: string; host: string; hostna
 
 /** `read_tab` ranges: Claude saves text results over 50,000 characters to a file a browse thread can't open. */
 export const ASSISTANT_READ_MAX = 40_000;
+/**
+ * An outside agent's read_tab range when it asks for no length (S18 M2g-2, #206; the planner's call on the measure): half
+ * the most it may ask for. The token eval's two reading journeys: an answer near the top of a long page reads 17% less
+ * (24% cached); one deep in it reads one more range (+28% uncached, +5% cached), until read_tab(ref) (#207). The assistant
+ * keeps ASSISTANT_READ_MAX: it reads whole articles to summarize them.
+ */
+export const AGENT_READ_DEFAULT = 20_000;
 /** PDFs the assistant reads: larger files are refused, longer ones are read up to this page (with a note saying so). */
 export const ASSISTANT_PDF_MAX_BYTES = 25 * 1024 * 1024;
 export const ASSISTANT_PDF_MAX_PAGES = 200;

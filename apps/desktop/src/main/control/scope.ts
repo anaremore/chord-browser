@@ -139,6 +139,11 @@ export interface ControlScope {
    * open_tab's); the assistant behind its own flag (assistantGoOutline). Absent, the parameter does nothing.
    */
   readonly outlineOnGo?: boolean;
+  /**
+   * read_tab's range when no length is asked for (S18 M2g-2, #206): outside agents' AGENT_READ_DEFAULT; absent, the most
+   * it may be (ASSISTANT_READ_MAX), as the assistant reads.
+   */
+  readonly readDefault?: number;
   /** No diff after an action (batch's steps but its last: one diff for the whole batch, M2g-1). */
   readonly noDiff?: boolean;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */

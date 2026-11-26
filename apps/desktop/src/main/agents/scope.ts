@@ -7,7 +7,7 @@
  * one, it hears so. Never-readable pages (Chord's own, a site on your *Never*
  * list) stay refused, and a tab on a *Never* site isn't even listed.
  */
-import { ACT_REFUSALS, CONTROL_WAIT_MS, isNeverReadable, nodeOf, nodesOfChord, TabRefs, type BarDoing, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, AGENT_READ_DEFAULT, CONTROL_WAIT_MS, isNeverReadable, nodeOf, nodesOfChord, TabRefs, type BarDoing, type NodeId, type State, type TabNode } from '@chord/core';
 import type { ControlAgent } from '../control/gate';
 import type { ControlScope } from '../control/scope';
 import { siteOfUrl } from './shares';
@@ -95,6 +95,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     cardWaitMs: CONTROL_WAIT_MS,
     sendWaitMs: CONTROL_WAIT_MS,
     waits: true,
+    readDefault: AGENT_READ_DEFAULT,
     outlineOnGo: true,
     activity: async () => undefined,
   };

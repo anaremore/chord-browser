@@ -362,7 +362,8 @@ async function readTool(call: Call, tool: AssistantToolName, args: Record<string
     return { text: pageResult({ ref, url: read.url, text: read.selection, retrievedAt: Date.now(), pageId: sameId(page, pageId) }) };
   }
   const start = typeof args['start'] === 'number' ? args['start'] : 0;
-  const length = typeof args['length'] === 'number' ? args['length'] : undefined;
+  // The scope's default when none is asked for (#206: outside agents read 20000 at a time).
+  const length = typeof args['length'] === 'number' ? args['length'] : call.scope.readDefault;
   const text = pageResult({ ref, url: read.url, text: read.text, start, ...(length ? { length } : {}), retrievedAt: Date.now(), pageId: sameId(page, pageId) });
   await call.activity(tool, `Read “${node.title || safeHost(node.url)}”`, node.url);
   return { text };
@@ -378,7 +379,8 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
   const title = node.title || safeHost(node.url);
   const url = page.url();
   const start = typeof args['start'] === 'number' ? args['start'] : 0;
-  const length = typeof args['length'] === 'number' ? args['length'] : undefined;
+  // The scope's default when none is asked for (#206: outside agents read 20000 at a time).
+  const length = typeof args['length'] === 'number' ? args['length'] : call.scope.readDefault;
   let pdf = memory.pdfs.get(node.id);
   if (!pdf || pdf.url !== url || start === 0) {
     /** The download ended up somewhere the scope won't read it (a shared tab's PDF on another site): its words, not *never*. */
@@ -522,6 +524,15 @@ const emptyDiff = (changes: Record<string, unknown>): boolean => {
   const lines = (changes['page_changes'] as { lines?: unknown } | undefined)?.lines;
   return Array.isArray(lines) && lines.length === 0;
 };
+
+/**
+ * What changed, inside an action's answer (S18 M2g-2, #206): its page and address said once. `page_changes` keeps its own
+ * only where they differ from the answer's (a page that went to another address of the same document as it was read).
+ */
+function saidOnce(changes: Record<string, unknown>, pageId: string, url: string): Record<string, unknown> {
+  const { page_id: of, url: at, ...rest } = changes['page_changes'] as Record<string, unknown>;
+  return { page_changes: { ...(of !== pageId ? { page_id: of } : {}), ...(at !== url ? { url: at } : {}), ...rest } };
+}
 
 /** A diff past this many lines says to call snapshot instead (M2g-1: never more than the outline would have cost). */
 const DIFF_MAX_LINES = 60;
@@ -817,7 +828,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         ...(caught.length ? { caught } : {}),
         ...(droppedBefore ? { dropped: 'Since your last action here, the page tried to send data and it wasn’t sent (the user said no, didn’t answer, or took the tab). If something didn’t save, ask the user.' } : {}),
         // Nothing changed: nothing extra (round 2 of #145: a diff costs nothing then).
-        ...(changes && !emptyDiff(changes) ? changes : {}),
+        ...(changes && !emptyDiff(changes) ? saidOnce(changes, page.id, page.url()) : {}),
       }),
     };
   };

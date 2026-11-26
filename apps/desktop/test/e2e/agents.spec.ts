@@ -1709,10 +1709,23 @@ test('the token eval: its journeys, each as an agent would play it with the tool
       const tab = await open('/article50');
       // As an agent reads a long page: the first range, then the next, until it finds what it was asked for.
       let start = 0;
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 30; i++) {
         const read = JSON.parse((await ask('read_tab', { tab_id: tab, start })).text) as { content: string; range: { end: number; total: number } };
         const found = /The code word is (\w+)\./.exec(read.content);
         if (found) return found[1] === 'saffron';
+        if (read.range.end >= read.range.total) return false;
+        start = read.range.end;
+      }
+      return false;
+    });
+    // #206: the answer near the top of a long page (the article's lead): one range, as long as the default is.
+    await journey('reading the start of a long page', async () => {
+      const tab = await open('/article50-lead');
+      let start = 0;
+      for (let i = 0; i < 12; i++) {
+        const read = JSON.parse((await ask('read_tab', { tab_id: tab, start })).text) as { content: string; range: { end: number; total: number } };
+        const found = /The first word is (\w+)\./.exec(read.content);
+        if (found) return found[1] === 'juniper';
         if (read.range.end >= read.range.total) return false;
         start = read.range.end;
       }
@@ -2800,6 +2813,11 @@ test.beforeAll(async () => {
     '/rename': '<title>Rename</title><main><ul id=list></ul><button id=d onclick="document.getElementById(\'log\').textContent += \' clicked \' + this.textContent">Draft 1</button><button id=x>Other</button><p id=log></p></main>',
     // M2g-2 slice 1: a long article (its answer in section 37, past read_tab's first range), a page whose clicks have
     // effects the next step needs (a dialog, a row's details), and 300 orders each with View and Cancel.
+    // The same page, its answer at the top (#206: a reading journey whose answer is near the start, as an article's lead).
+    '/article50-lead':
+      '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
+      Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 1 ? 'The first word is juniper. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +
+      '</main>',
     '/article50':
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +

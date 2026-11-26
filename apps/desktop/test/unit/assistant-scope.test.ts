@@ -59,6 +59,12 @@ describe('navigate’s snapshot: true, behind its own flag (S18 M2g-2 slice 3a; 
   });
 });
 
+describe('read_tab’s range for the assistant (S18 M2g-2, #206)', () => {
+  it('no default of its own: it reads the most at a time (ASSISTANT_READ_MAX), as before', () => {
+    expect(setup().scope.readDefault).toBeUndefined();
+  });
+});
+
 describe('An outside agent’s tab, for the assistant (S18 M2e-1)', () => {
   it('left out of everything until you point at it, even with All your tabs', () => {
     const t = setup();

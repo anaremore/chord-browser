@@ -6,7 +6,7 @@
  * behaviour is covered, unchanged, by assistant.spec.ts.
  */
 import { EventEmitter } from 'node:events';
-import { ACT_REFUSALS, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
+import { ACT_REFUSALS, AGENT_READ_DEFAULT, ASSISTANT_READ_MAX, bucketOf, CONTROL_REFUSALS, CONTROL_WAIT_MS, ELEMENT_REFUSALS, TabRefs, type Grant, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
@@ -466,6 +466,29 @@ describe('The tools, through the gate', () => {
     expect((JSON.parse((await call('read_tab', { tab_id: ref })).text!) as { page_id: string }).page_id).toBe(moved.page_id);
     expect(activity).toEqual(['Read “Article”', 'Read “Article”', 'Read “Article”', 'Read “Article”']);
     expect([...scope.memory.read]).toEqual(['n1']);
+  });
+
+  it('read_tab’s range: an outside agent’s 20000 when it asks for none, the assistant’s 40000; length up to 40000; start reads on (S18 M2g-2, #206)', async () => {
+    const TEXT = 'abcdefghij'.repeat(5_000);
+    /** The range a read gives, by the scope's default and the call's arguments. */
+    const range = async (readDefault: number | undefined, args: Record<string, unknown> = {}) => {
+      const t = setup({ read: { text: TEXT } });
+      if (readDefault !== undefined) (t.scope as { readDefault?: number }).readDefault = readDefault;
+      return (JSON.parse((await t.call('read_tab', { tab_id: t.scope.refs.refFor('n1'), ...args })).text!) as { range: { start: number; end: number; total: number } }).range;
+    };
+    // [the scope, the call, the range it gives]
+    const table: [string, number | undefined, Record<string, unknown>, { start: number; end: number; total: number }][] = [
+      ['an outside agent, no length', AGENT_READ_DEFAULT, {}, { start: 0, end: 20_000, total: 50_000 }],
+      ['an outside agent, reading on', AGENT_READ_DEFAULT, { start: 20_000 }, { start: 20_000, end: 40_000, total: 50_000 }],
+      ['an outside agent, the last range', AGENT_READ_DEFAULT, { start: 40_000 }, { start: 40_000, end: 50_000, total: 50_000 }],
+      ['an outside agent, the most it may ask for', AGENT_READ_DEFAULT, { length: ASSISTANT_READ_MAX }, { start: 0, end: 40_000, total: 50_000 }],
+      ['an outside agent, more than that', AGENT_READ_DEFAULT, { length: ASSISTANT_READ_MAX + 1 }, { start: 0, end: 40_000, total: 50_000 }],
+      ['an outside agent, one character', AGENT_READ_DEFAULT, { length: 1 }, { start: 0, end: 1, total: 50_000 }],
+      ['an outside agent, past the end', AGENT_READ_DEFAULT, { start: 60_000 }, { start: 50_000, end: 50_000, total: 50_000 }],
+      ['the assistant, no length', undefined, {}, { start: 0, end: 40_000, total: 50_000 }],
+    ];
+    for (const [who, readDefault, args, expected] of table) expect(await range(readDefault, args), who).toEqual(expected);
+    expect(AGENT_READ_DEFAULT).toBe(20_000);
   });
 
   it('lists the scope’s tabs with refs that last', async () => {
@@ -1411,7 +1434,8 @@ describe('acting through the gate (S18 M2c)', () => {
     const table: [NonNullable<Twist['read']>, unknown][] = [
       [{ url: 'https://private.test/inbox' }, undefined],
       [{ url: 'https://other.test/a' }, undefined],
-      [{ cut: { elements: true } }, { page_id: expect.any(String), url: 'https://news.test/a', note: 'The page is too big to compare all of it: call snapshot to see it.' }],
+      // Its page and address are the answer's, said there once (#206).
+      [{ cut: { elements: true } }, { note: 'The page is too big to compare all of it: call snapshot to see it.' }],
     ];
     for (const [read, says] of table) {
       const twist: Twist = {};
@@ -1423,6 +1447,33 @@ describe('acting through the gate (S18 M2c)', () => {
       twist.read = {};
       expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'], JSON.stringify(read)).toBeUndefined();
     }
+  });
+
+  it('an action’s answer says its page and address once: page_changes keeps its own only where they differ (S18 M2g-2, #206)', async () => {
+    const NEWS = { depth: 0, role: 'button', name: 'Open late tonight', key: 9, sid: 10 };
+    // [what the diff's read is, what page_changes says besides its lines]
+    const table: [string, NonNullable<Twist['read']>, Record<string, unknown>][] = [
+      ['the same page and address', { extra: [NEWS] }, {}],
+      // The page went to another address of the same document (a pushState) as the diff was read: that address is its own.
+      ['another address of the same document', { extra: [NEWS], url: 'https://news.test/a#later' }, { url: 'https://news.test/a#later' }],
+    ];
+    for (const [what, read, own] of table) {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = read;
+      const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+      expect(out.data, what).toMatchObject({ page_id: expect.any(String), url: 'https://news.test/a' });
+      expect(out.data['page_changes'], what).toEqual({ ...own, lines: ['+ - button "Open late tonight" [ref=e10]'] });
+      // Nothing changed: no page_changes at all.
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes'], what).toBeUndefined();
+    }
+    // batch's answer: its last step's, the same way.
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    twist.read = { extra: [NEWS] };
+    const batched = result(await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'hover', ref: 'e1' }, { tool: 'hover', ref: 'e1' }] }, new AbortController().signal));
+    expect(batched.data).toMatchObject({ page_id: expect.any(String), url: 'https://news.test/a', page_changes: { lines: ['+ - button "Open late tonight" [ref=e10]'] } });
+    expect(Object.keys(batched.data['page_changes'] as object)).toEqual(['lines']);
   });
 
   it('after an action, what changed since the agent’s last snapshot (M2g-1: the default, never with no snapshot to compare)', async () => {
