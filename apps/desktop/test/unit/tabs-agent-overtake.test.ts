@@ -34,10 +34,14 @@ class AgentView extends FakeView {
     let attached = false;
     let url = '';
     page['getURL'] = () => url;
-    page.loadURL.mockImplementation(async (to: string) => {
+    page.loadURL.mockImplementation((to: string) => {
+      if (page.destroyed) throw new Error('Object has been destroyed');
+      return loadInto(to);
+    });
+    const loadInto = async (to: string) => {
       url = to;
       if (to === 'about:blank' && blank.held) await blank.held;
-    });
+    };
     page['debugger'] = {
       isAttached: () => attached,
       attach: () => void (attached = true),
@@ -226,6 +230,57 @@ describe('an agent tab’s first page overtaken, or stopped (#277, round 1 of #2
     await settle();
     expect(t.loaded()).toEqual(['about:blank', FIRST]);
     expect(pickers.pickersLost(t.page)).toBe(false);
+  });
+
+  it('Reload from the sidebar or the tab menu while its hold is arming (Neon’s B1, round 1 of #292): nothing loads unheld, its first page comes', async () => {
+    // The hold's interception answers only later: its arming is in flight.
+    const interception = hold('Page.setInterceptFileChooserDialog');
+    const t = setup();
+    t.manager.reload(t.page as never);
+    expect(t.loaded()).toEqual([]);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    interception();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    expect(pickers.pickersLost(t.page)).toBe(false);
+  });
+
+  it('Reload once its first page has started loading, not come yet (Neon’s B1): never a second load over it', async () => {
+    const t = setup();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    t.manager.reload(t.page as never);
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    expect(t.page.reload).not.toHaveBeenCalled();
+    expect(pickers.pickersLost(t.page)).toBe(false);
+  });
+
+  it('Stop while its hold is arming (Neon’s SF1): it’s overtaken, the hold failed, nothing loads after', async () => {
+    const interception = hold('Page.setInterceptFileChooserDialog');
+    const t = setup();
+    expect(t.manager.stopWaiting(t.page as never)).toBe(true);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    interception();
+    await settle();
+    expect(t.loaded()).toEqual([]);
+  });
+
+  it('a navigation queued behind a new gate once its first page started (Neon’s SF5): still pending until that one loads', async () => {
+    let waiting: Promise<void> | null = null;
+    const t = setup();
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => waiting;
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    let open = () => {};
+    waiting = new Promise<void>((r) => (open = () => ((waiting = null), r())));
+    t.manager.navigate(NODE, SECOND);
+    // Its first page commits while the navigation waits: a tool call still waits for the page it asked for.
+    t.page.emit('did-navigate', {}, FIRST, 200);
+    expect(pickers.firstLoadPending(t.page)).toBe(true);
+    open();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST, SECOND]);
+    expect(pickers.firstLoadPending(t.page)).toBe(false);
   });
 
   it('Stop once its first page has started loading: only the page’s own Stop, the hold stays on', async () => {

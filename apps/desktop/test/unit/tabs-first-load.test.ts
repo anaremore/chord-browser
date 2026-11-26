@@ -147,7 +147,7 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.page.reload).toHaveBeenCalledOnce();
   });
 
-  it('Reload while a navigation waits for its session (round 1 of #292, SF3): that load is dropped, then the page reloads', async () => {
+  it('Reload while a navigation waits for its session (round 1 of #292, SF3; Neon’s B2): it takes that load’s place, and reloads once the session is ready', async () => {
     const rules = held();
     const t = setup([]);
     Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
@@ -157,9 +157,10 @@ describe('a page’s load waiting for its session (#189)', () => {
     (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => waits.find((w) => !w.over)?.promise ?? null;
     t.manager.navigate(NODE, SECOND);
     t.manager.reload(t.page as never);
-    expect(t.page.reload).toHaveBeenCalledOnce();
+    expect(t.page.reload).not.toHaveBeenCalled();
     rules.resolve();
     await tick();
+    expect(t.page.reload).toHaveBeenCalledOnce();
     expect(t.loaded()).not.toContain(SECOND);
   });
 
@@ -187,6 +188,60 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.page.reload).not.toHaveBeenCalled();
   });
 
+  it.each(['reload', 'back', 'forward'] as const)('%s while its session waits again (Neon’s B2, round 1 of #292): after it’s ready, never before', async (what) => {
+    const rules = held();
+    const t = setup([]);
+    const history = t.page.navigationHistory as unknown as Record<string, unknown>;
+    Object.assign(history, { length: () => 2, getEntryAtIndex: () => ({ url: FIRST }), canGoBack: () => true, canGoForward: () => true, goBack: vi.fn(), goForward: vi.fn() });
+    const waits = [rules];
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => waits.find((w) => !w.over)?.promise ?? null;
+    if (what === 'reload') t.manager.reload(t.page as never);
+    else t.manager.go(t.page as never, what);
+    const done = () => (what === 'reload' ? t.page.reload : history[what === 'back' ? 'goBack' : 'goForward']) as ReturnType<typeof vi.fn>;
+    expect(done()).not.toHaveBeenCalled();
+    rules.resolve();
+    await tick();
+    expect(done()).toHaveBeenCalledOnce();
+  });
+
+  it('Back once its session is ready, but nothing left to go back to by then: nothing', async () => {
+    const rules = held();
+    const t = setup([]);
+    let can = true;
+    const goBack = vi.fn();
+    Object.assign(t.page.navigationHistory, { canGoBack: () => can, goBack });
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => (rules.over ? null : rules.promise);
+    t.manager.go(t.page as never, 'back');
+    can = false;
+    rules.resolve();
+    await tick();
+    expect(goBack).not.toHaveBeenCalled();
+  });
+
+  it('closed while a load waits (Neon’s SF2): the close takes a moment, and no load starts in it', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    // Electron's close isn't at once: the page is still there while it goes.
+    t.page.close.mockImplementation(() => undefined);
+    t.manager.destroy(NODE);
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([]);
+  });
+
+  it('Reload, Back or Forward on a page already gone (Neon’s SF3: its menu outlived it): nothing', () => {
+    const t = setup([]);
+    t.page.loadURL.mockClear();
+    t.page.destroyed = true;
+    const goBack = vi.fn();
+    Object.assign(t.page.navigationHistory, { goBack, canGoBack: () => true });
+    expect(() => t.manager.reload(t.page as never)).not.toThrow();
+    expect(() => t.manager.go(t.page as never, 'back')).not.toThrow();
+    expect(t.page.reload).not.toHaveBeenCalled();
+    expect(goBack).not.toHaveBeenCalled();
+    expect(t.loaded()).toEqual([]);
+  });
+
   it('Reload after Stop while it was primed (#287): a history of only the blank page is no history, so its address loads', () => {
     const t = setup([]);
     const history = t.page.navigationHistory as unknown as { length: () => number; getEntryAtIndex: (i: number) => { url: string } | null };
@@ -198,16 +253,16 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.page.reload).not.toHaveBeenCalled();
   });
 
-  it.each(['back', 'forward'] as const)('%s while a load waits for its session (#287): the waiting load is dropped, then the page goes that way', async (way) => {
+  it.each(['back', 'forward'] as const)('%s while a load waits for its session (#287; Neon’s B2): it takes that load’s place, and goes once the session is ready', async (way) => {
     const rules = held();
     const t = setup([rules]);
     const history = t.page.navigationHistory as unknown as Record<string, unknown>;
-    history['goBack'] = vi.fn();
-    history['goForward'] = vi.fn();
+    Object.assign(history, { canGoBack: () => true, canGoForward: () => true, goBack: vi.fn(), goForward: vi.fn() });
     t.manager.go(t.page as never, way);
-    expect(history[way === 'back' ? 'goBack' : 'goForward']).toHaveBeenCalledOnce();
+    expect(history[way === 'back' ? 'goBack' : 'goForward']).not.toHaveBeenCalled();
     rules.resolve();
     await tick();
+    expect(history[way === 'back' ? 'goBack' : 'goForward']).toHaveBeenCalledOnce();
     expect(t.loaded()).toEqual([]);
     expect(firstLoadPending(t.page)).toBe(false);
   });

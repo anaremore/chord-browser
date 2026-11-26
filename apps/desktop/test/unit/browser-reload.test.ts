@@ -24,7 +24,17 @@ describe('your reloads go through tabs.reload (#287)', () => {
     expect(contents.reloadIgnoringCache).not.toHaveBeenCalled();
   });
 
+  it('Reload in DevTools (round 1 of #292, Neon’s nit): tabs.reload', () => {
+    const contents = { isDestroyed: () => false, reload: vi.fn() };
+    const reload = vi.fn();
+    const self = Object.assign(Object.create(Browser.prototype) as object, { tabs: { get: () => ({ webContents: contents }), reload }, userNavigates: vi.fn(), devtools: {} });
+    (Browser.prototype as unknown as { runInDevtools(a: string, n: string, c: unknown): boolean }).runInDevtools.call(self, 'nav.reload', 'n1', contents);
+    expect(reload).toHaveBeenCalledWith(contents, {});
+    expect(contents.reload).not.toHaveBeenCalled();
+  });
+
   it.each<[string, string, unknown[]]>([
+    ['nav.reload', 'reload', [{}]],
     ['nav.back', 'go', ['back']],
     ['nav.forward', 'go', ['forward']],
     ['nav.hardReload', 'reload', [{ ignoreCache: true }]],
