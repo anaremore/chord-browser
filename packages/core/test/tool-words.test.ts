@@ -43,7 +43,7 @@ describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
 describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', () => {
   const agents = new Map(agentToolList(true).map((t) => [t.name, t.description]));
   // With every flag a build may turn on (round 1 of #232's nit): the words a session may be sent.
-  const assistant = new Map(assistantTools(true, true, true).map((t) => [t.name, t.description]));
+  const assistant = new Map(assistantTools(true, true, true, true).map((t) => [t.name, t.description]));
   // [list, tool, phrase it must keep]
   const pins: [string, string, RegExp][] = [
     ...['read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'snapshot'].map((t): [string, string, RegExp] => ['agents', t, /untrusted/i]),

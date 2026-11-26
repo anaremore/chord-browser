@@ -14,11 +14,11 @@ The plan's items 5 and 6: an agent finds a control on a big page without a full 
 ## How
 
 - **A flat find** (core: `snapshotOutline`'s `flat`, `flatFind`), where the scope asks for it (`scope.findFlat`: outside agents with M2's tools; the assistant behind `ASSISTANT_FLAT_FIND_RELEASED`, development builds until it's released):
-  - a match is a named element whose own name, with its item's, has every one of the query's words, as whole words (numbers as whole tokens: `Cancel 150` never finds order 1500; round 1 of #263);
-  - ranked: every word in its own name first, then some, then its item's alone, the page's order within each; the lines are built for the matches shown only (the cap first);
-  - at most `FIND_MAX` (20) of them, each the outline's own line, unindented, with the item it's in (`(in row "Order 150")`): its nearest row, list item, article, dialog, tab panel or region, by its name, else (unnamed, the common case: a plain `tr`, `li`, `article`) a label from its own contents: its first heading's or link's name, or its first text with the page's text (round 1 of #263);
+  - a match is a named element whose own name has the whole query in it (any case, its spaces left out too: `signin` finds "Sign in"; round 2 of #263), or whose own name and its item's have every word of the query: a word with a digit only as a whole word (`Cancel 150` never finds order 1500), any other inside its own name (`Canc` finds Cancel) or as a whole word of its item's;
+  - ranked: every word its own (as whole words) first, then some, then its item's alone, the page's order within each; capped first, and only the lines shown are built;
+  - at most `FIND_MAX` (20) of them, each the outline's own line, unindented, with the item it's in (`(in row "Order 150")`): its nearest row, list item, article, dialog, tab panel or region, by its name, else (unnamed, the common case: a plain `tr`, `li`, `article`) a label from its own contents: its first heading's name, else its texts (with the page's text) and link names in the page's order, joined and clipped to 60 characters (`(in row "Order 150 Jane Doe Details")`), looking at 40 of its nodes at most (rounds 1 and 2 of #263);
   - past 20, a line says how many more, and (when the matches have items) to narrow it by an item's words;
-  - none: the nearest names, by words in common with the query's, stop-words left out, at most `FIND_NEAREST` (5), the page's order on ties; Chord's note says so in its own words (`FIND_NEAREST_NOTE`, or `FIND_NONE_NOTE` when nothing is near);
+  - none: the nearest names, by words in common with the query's in their own names and their items', stop-words left out, at most `FIND_NEAREST` (5), the page's order on ties (`Refund 150` finds order 150's); Chord's note says so in its own words (`FIND_NEAREST_NOTE`, or `FIND_NONE_NOTE` when nothing is near);
   - without the page's text (`text: false`), a text run never matches.
 - **Never the diff's baseline:** a flat find keeps no outline (neither the full one's slot nor the outline-without-text's), builds no whole outline, gives only its own lines' part refs, and is read unpinned (never taking the agent's full snapshot's place in the page). The outline the next diff compares with stays the last whole one, and a diff's notes after it say *call snapshot without find* (round 1 of #263).
 - **A find of nothing but spaces** is no find (round 1 of #263); a no-match find on a read cut short keeps the cut note.
@@ -38,6 +38,7 @@ The plan's lines (threat-checklist.md, *For every partial view* and *`find`*):
   - *Tests:* control.test, *a collapsed row's ref is never acted on until a line shows it* (click and batch refuse it, nothing done; a find shows it; each check fails on revert); core, *only the refs shown are acted on* (shown per page, another page starts over, `forget`); control.test, *…never the diff's baseline* (a text shown since a find is new in the next diff; fails on revert).
 - **Sensitive fields:**
   - find matches names only (a label, a placeholder), never a value; a password, code or card field has its line and no ref (`snapshotKeys`).
+  - *Test:* control.test, *a flat find of a password field: its line, never a ref, never its value*.
 - **What it can see:** the snapshot's walk, exactly (find filters the same read).
 - **Whose tab, Never sites:** `snapshot`'s rules (`find` is its parameter, through its read).
 - **Nearest names:**
@@ -53,7 +54,9 @@ The token eval (Linux container, X11), fresh main (`186cbf9`) against this branc
 | Journey | Calls | Result tokens | Model input (est.) | Cached (est.) |
 |---|---|---|---|---|
 | A broad find, main | 3 | 7,254 | 45,416 | 24,628 |
-| A broad find, this PR | 4 | 929 | 43,803 (−3.6%) | 17,212 (−30%) |
+| A broad find, this PR | 4 | 929 | 43,811 (−3.5%) | 17,215 (−30%) |
+| A broad find, plain rows, main | 2 | 5,843 | fails (the tree find never says which row is order 150) | |
+| A broad find, plain rows, this PR | 4 | 915 | 43,744 | 17,192 |
 | A 300-row list, main | 3 | 448 | 31,765 | 15,436 |
 | A 300-row list, this PR | 3 | 435 | 31,790 | 15,443 |
 
@@ -63,5 +66,7 @@ The token eval (Linux container, X11), fresh main (`186cbf9`) against this branc
 
 ## Limits
 
+- **Refs counted as shown when Stop lands after a diff was built:** the diff's refs are shown as it's built; Stop after that drops the answer, not those refs.
+- **A flat find's `c` refs go stale after 4 diffs:** its read is unpinned, so the page keeps it among a diff's last 4 (`SNAPSHOT_HISTORY`).
 - **`c` refs aren't held to *shown*:** they're read-only, and a part's read is never more than the page read (#207).
 - **Past `SNAPSHOT_MAX_REFS` (2,000) keyed elements**, a match has no ref (the snapshot's own cap).

@@ -565,47 +565,66 @@ const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{
 
 /** How long an unnamed item's label from its contents may be (round 1 of #263). */
 const ITEM_LABEL_MAX = 60;
+/** How many nodes of an unnamed item's subtree its label looks at, at most (round 2 of #263: never a whole subtree). */
+const ITEM_LABEL_SCAN = 40;
 
 /**
- * A flat find (#208; round 1 of #263): elements whose own name, with their item's, has every word of the query (whole
- * words, any case; numbers as whole tokens: "Cancel 150" never finds order 1500). Ranked: every word in its own name
- * first, then some, then the item's alone; the page's order within each. At most FIND_MAX lines (built first, then
- * capped), each the outline's own line, unindented, with the item it's in: its nearest row, list item, article, dialog,
- * tab panel or region, by its name, else (unnamed, the common case: a plain tr, li or article) a label from its own
- * contents: its first heading's or link's name, or its first text (with the page's text only). Past FIND_MAX, how many
- * more, and (when they have items) to narrow by an item's words. None: the nearest names, by words in common (stop-words
- * left out), at most FIND_NEAREST. Never an unnamed node, nor a text run without the page's text (`noText`).
+ * A flat find (#208; rounds 1 and 2 of #263). A node matches when its own name has the whole query in it (any case; with
+ * its spaces left out too: "signin" finds "Sign in"), or every one of the query's words is in its own name or its item's:
+ * a word with a digit only as a whole word ("Cancel 150" never finds order 1500, "Cancel 1" never order 10), any other
+ * word inside its own name ("Canc" finds Cancel) or as a whole word of its item's. Ranked: every word its own first,
+ * then some, then its item's alone; the page's order within each. Capped at FIND_MAX first, and only the lines shown are
+ * built (building one counts its ref and gives its part's c ref). Each the outline's own line, unindented, with the item
+ * it's in: its nearest row, list item, article, dialog, tab panel or region, by its name, else (unnamed, the common case: a
+ * plain tr, li or article) a label from its own contents: its first heading's name, else its texts (with the page's text)
+ * and link names in the page's order, joined and clipped ("Order 150 Jane Doe Details"). Past FIND_MAX, how many more,
+ * and (when they have items) to narrow by an item's words. None: the nearest names, by words in common with their own and
+ * their item's (stop-words left out), at most FIND_NEAREST. Never an unnamed node, nor a text run without the page's text.
  */
 function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, lineOf: (i: number) => string | null, depthOf: (i: number) => number): { lines: string[]; nodes: number[]; matched: number; nearest: boolean } {
   const words = wordsOf(find);
+  const compact = (s: string) => s.replace(/\s+/g, '');
   const nameOf = (i: number) => clipName(nodes[i]!.name ?? '');
-  // Each item's label: its name, else from its own contents (the subtree below it, up to the next node at its depth).
+  // Each item's label: its name, else from its own contents (at most ITEM_LABEL_SCAN nodes below it).
   const labelOf = (i: number): string => {
     const own = nameOf(i);
     if (own) return own;
     const d = depthOf(i);
-    let heading = '';
-    let link = '';
-    let text = '';
-    for (let k = i + 1; k < nodes.length && depthOf(k) > d; k++) {
+    const parts: string[] = [];
+    let length = 0;
+    for (let k = i + 1, seen = 0; k < nodes.length && depthOf(k) > d && seen < ITEM_LABEL_SCAN && length < ITEM_LABEL_MAX; k++, seen++) {
       const n = nodes[k]!;
       const name = nameOf(k);
       if (!name) continue;
-      if (n.role === 'heading' && !heading) heading = name;
-      else if (n.role === 'link' && !link) link = name;
-      else if (n.role === 'text' && !text && !noText) text = name;
-      if (heading) break;
+      // Its first heading names it, whatever came before.
+      if (n.role === 'heading') return name.length > ITEM_LABEL_MAX ? `${name.slice(0, ITEM_LABEL_MAX - 1)}…` : name;
+      if (n.role === 'link' || (n.role === 'text' && !noText)) {
+        parts.push(name);
+        length += name.length + 1;
+      }
     }
-    const label = heading || link || text;
+    const label = parts.join(' ');
     return label.length > ITEM_LABEL_MAX ? `${label.slice(0, ITEM_LABEL_MAX - 1)}…` : label;
   };
-  const path: number[] = [];
-  const itemOf: (number | null)[] = new Array(nodes.length);
   const labels = new Map<number, string>();
   const label = (i: number) => {
     if (!labels.has(i)) labels.set(i, labelOf(i));
     return labels.get(i)!;
   };
+  // Each item's label in lower case, once.
+  const lowered = new Map<number, string>();
+  const labelLower = (i: number) => {
+    if (!lowered.has(i)) lowered.set(i, label(i).toLowerCase());
+    return lowered.get(i)!;
+  };
+  // Each item's words, once (round 2 of #263).
+  const itemWords = new Map<number, Set<string>>();
+  const wordsOfItem = (i: number) => {
+    if (!itemWords.has(i)) itemWords.set(i, new Set(wordsOf(label(i))));
+    return itemWords.get(i)!;
+  };
+  const path: number[] = [];
+  const itemOf: (number | null)[] = new Array(nodes.length);
   for (let i = 0; i < nodes.length; i++) {
     const d = depthOf(i);
     while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
@@ -622,19 +641,31 @@ function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, l
     const item = itemOf[i];
     return `- ${line.trimStart().slice(2)}${item !== null && item !== undefined ? ` (in ${nodes[item]!.role} ${JSON.stringify(label(item))})` : ''}`;
   };
+  const hasDigit = (w: string) => /\p{N}/u.test(w);
   // [node, rank]: 0 every word its own, 1 some, 2 its item's alone.
   const found: [number, number][] = [];
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i]!;
     if (noText && n.role === 'text') continue;
-    const name = nameOf(i);
-    if (!name || !words.length) continue;
-    const own = new Set(wordsOf(name));
+    // Never an unnamed node, nor an empty text: its name as the outline gives it (clipped).
+    const name = nameOf(i).toLowerCase();
+    if (!name) continue;
+    if (name.includes(find) || compact(name).includes(compact(find))) {
+      // Every word a whole word of its own first ("Act 1" before "Act 150").
+      found.push([i, words.length && words.every((w) => wordsOf(name).includes(w)) ? 0 : 1]);
+      continue;
+    }
+    if (!words.length) continue;
     const item = itemOf[i];
-    const theirs = item !== null && item !== undefined ? new Set(wordsOf(label(item))) : new Set<string>();
-    if (!words.every((w) => own.has(w) || theirs.has(w))) continue;
-    const mine = words.filter((w) => own.has(w)).length;
-    found.push([i, mine === words.length ? 0 : mine > 0 ? 1 : 2]);
+    // A cheap look first (round 2 of #263): each word somewhere in its name or its item's, else no words are made.
+    const hay = item !== null && item !== undefined ? `${name} ${labelLower(item)}` : name;
+    if (!words.every((w) => hay.includes(w))) continue;
+    const ownWords = new Set(wordsOf(name));
+    const theirs = item !== null && item !== undefined ? wordsOfItem(item) : new Set<string>();
+    const mine = (w: string) => ownWords.has(w) || (!hasDigit(w) && name.includes(w));
+    if (!words.every((w) => mine(w) || theirs.has(w))) continue;
+    const own = words.filter(mine).length;
+    found.push([i, own === words.length ? 0 : own > 0 ? 1 : 2]);
   }
   found.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
   // Every match has a line (unnamed nodes, and text without the page's text, never match), so the cap comes first and only
@@ -650,7 +681,8 @@ function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, l
     lineNodes.push(-1);
   }
   if (all.length) return { lines, nodes: lineNodes, matched: all.length, nearest: false };
-  // The nearest names: the most words in common with the query's (stop-words left out), the page's order on ties.
+  // The nearest names: the most words in common with the query's (stop-words left out), in their own names and their
+  // items' (round 2 of #263: "Refund 150" finds order 150's), the page's order on ties.
   const wanted = new Set(words.filter((w) => !STOP_WORDS.has(w)));
   if (!wanted.size) return { lines: [], nodes: [], matched: 0, nearest: false };
   const scored: [number, number][] = [];
@@ -658,7 +690,9 @@ function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, l
     const n = nodes[i]!;
     const name = nameOf(i);
     if (n.role === 'text' || !name) continue;
-    const common = new Set(wordsOf(name).filter((w) => wanted.has(w))).size;
+    const item = itemOf[i];
+    const theirs = item !== null && item !== undefined ? wordsOfItem(item) : new Set<string>();
+    const common = new Set([...wordsOf(name), ...theirs].filter((w) => wanted.has(w))).size;
     if (common) scored.push([i, common]);
   }
   scored.sort((a, b) => b[1] - a[1] || a[0] - b[0]);

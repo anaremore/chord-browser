@@ -542,7 +542,7 @@ describe('find, flat: round 1 of #263', () => {
     expect(snapshotOutline(read, keyed(read), { find: 'Cancel 150', flat: true }).matched).toBe(1);
   });
 
-  it('ranked: its own name’s words first, then some, then its item’s alone; built first, then capped', () => {
+  it('ranked: its own name’s words first, then some, then its item’s alone; capped first, only the shown lines built', () => {
     const read: SnapshotRead = {
       url: 'https://p.test/',
       title: '',
@@ -582,6 +582,72 @@ describe('find, flat: round 1 of #263', () => {
     const before = new Map([['s1', '- button "A" [ref=e1]'], ['s2', '- button "B" [ref=e2]']]);
     const after = new Map([['s1', '- button "A" [ref=e1] [disabled]'], ['s3', '- button "C" [ref=e3]']]);
     expect(snapshotDiffShown(before, after)).toEqual(['s1', 's3']);
+  });
+});
+
+describe('find, flat: round 2 of #263', () => {
+  const keyed = (read: SnapshotRead) => new ElementRefs().issue('p1', 't', snapshotKeys(read), new Map(read.nodes.filter((n) => n.key !== undefined).map((n) => [n.key!, n.sid!])));
+  /** Plain rows whose cells are given, then a Cancel button. */
+  const rows = (cells: (n: number) => SnapshotRead['nodes'], count = 200): SnapshotRead => ({
+    url: 'https://shop.test/',
+    title: '',
+    cut: {},
+    nodes: Array.from({ length: count }, (_, i) => [{ depth: 0, role: 'row', name: '', sid: 10_000 + 10 * i }, ...cells(i + 1), { depth: 1, role: 'button', name: 'Cancel', key: i, sid: 10_001 + 10 * i }]).flat(),
+  });
+
+  it('an unnamed row is labelled by its texts and link names in the page’s order: a link after its text, a date first', () => {
+    // "Order 150 | Jane Doe | Details | Cancel": a link after the text.
+    const linked = rows((n) => [{ depth: 1, role: 'text', name: `Order ${n}` }, { depth: 1, role: 'text', name: 'Jane Doe' }, { depth: 1, role: 'link', name: 'Details', key: 1000 + n, sid: 20_000 + n }]);
+    const out = snapshotOutline(linked, keyed(linked), { find: 'Cancel 150', flat: true });
+    expect(out.text).toMatch(/^- button "Cancel" \[ref=e\d+\] \(in row "Order 150 Jane Doe Details"\)$/);
+    // A date in the first cell.
+    const dated = rows((n) => [{ depth: 1, role: 'text', name: '2026-11-01' }, { depth: 1, role: 'text', name: `Order ${n}` }]);
+    expect(snapshotOutline(dated, keyed(dated), { find: 'Cancel 150', flat: true }).text).toMatch(/\(in row "2026-11-01 Order 150"\)$/);
+    // Its first heading names it, whatever came before.
+    const headed = rows((n) => [{ depth: 1, role: 'text', name: 'New' }, { depth: 1, role: 'heading', name: `Order ${n}`, level: 3 }]);
+    expect(snapshotOutline(headed, keyed(headed), { find: 'Cancel 150', flat: true }).text).toMatch(/\(in row "Order 150"\)$/);
+  });
+
+  it('its own name’s substrings still find it: a word begun, words run together, another script, a symbol', () => {
+    const read: SnapshotRead = {
+      url: 'https://p.test/',
+      title: '',
+      cut: {},
+      nodes: [
+        { depth: 0, role: 'button', name: 'Cancel', key: 0, sid: 1 },
+        { depth: 0, role: 'button', name: 'Subscribe', key: 1, sid: 2 },
+        { depth: 0, role: 'link', name: 'Sign in', key: 2, sid: 3 },
+        { depth: 0, role: 'button', name: 'キャンセル', key: 3, sid: 4 },
+        { depth: 0, role: 'button', name: '×', key: 4, sid: 5 },
+        { depth: 0, role: 'button', name: '+', key: 5, sid: 6 },
+      ],
+    };
+    for (const [query, name] of [['Canc', 'Cancel'], ['Subscr', 'Subscribe'], ['signin', 'Sign in'], ['キャンセル', 'キャンセル'], ['×', '×'], ['+', '+']]) {
+      const out = snapshotOutline(read, keyed(read), { find: query!, flat: true });
+      expect(out.text, query).toContain(`"${name}" [ref=`);
+      expect(out.matched, query).toBe(1);
+    }
+  });
+
+  it('exact words first: “Act 1” before “Act 10” and “Act 150”', () => {
+    const read: SnapshotRead = { url: 'https://p.test/', title: '', cut: {}, nodes: [10, 150, 1].map((n, i) => ({ depth: 0, role: 'button', name: `Act ${n}`, key: i, sid: i + 1 })) };
+    expect(snapshotOutline(read, keyed(read), { find: 'Act 1', flat: true }).text.split('\n')[0]).toMatch(/^- button "Act 1" /);
+  });
+
+  it('never an unnamed node, nor an empty text, through its item’s words; names as the outline clips them', () => {
+    const read = rows((n) => [{ depth: 1, role: 'cell', name: '', sid: 30_000 + n }, { depth: 2, role: 'text', name: `Order ${n}` }], 3);
+    const out = snapshotOutline(read, keyed(read), { find: 'Order 2', flat: true });
+    expect(out.text).not.toMatch(/- cell/);
+    // A name past the outline's clip: matched as the outline shows it (clipped), never by what it cut.
+    const long: SnapshotRead = { url: 'https://p.test/', title: '', cut: {}, nodes: [{ depth: 0, role: 'button', name: `${'a'.repeat(200)} hiddenword`, key: 0, sid: 1 }] };
+    expect(snapshotOutline(long, keyed(long), { find: 'hiddenword', flat: true }).matched).toBe(0);
+  });
+
+  it('the nearest names count their items’ words: “Refund 150” finds order 150’s', () => {
+    const read = rows((n) => [{ depth: 1, role: 'text', name: `Order ${n}` }]);
+    const out = snapshotOutline(read, keyed(read), { find: 'Refund 150', flat: true });
+    expect(out.nearest).toBe(true);
+    expect(out.text.split('\n')[0]).toMatch(/\(in row "Order 150"\)$/);
   });
 });
 
