@@ -307,8 +307,11 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // A part's container ref is read-only (#207): refused by every acting tool, at run time as by its pattern.
   if (typeof refArg === 'string' && BOX_REF.test(refArg)) return refuse(PART_REFUSALS.act);
   // An element, by its ref from the tab's latest snapshot, on the page it's on now.
-  const lookup = scope.memory.elements?.get(node.id)?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
+  const tabRefs = scope.memory.elements?.get(node.id);
+  const lookup = tabRefs?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
   if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
+  // Never one the agent wasn't shown (#208: rule 1): a collapsed row's, one past the range it read, one a find didn't list.
+  if (!tabRefs!.wasShown(refArg, page.id)) return refuse(ELEMENT_REFUSALS.notShown(String(refArg)));
   /**
    * One step in the page on the ref's element (act.ts). A ref whose node the page replaced may be found again there
    * (the owner's bug #2): the result says so.

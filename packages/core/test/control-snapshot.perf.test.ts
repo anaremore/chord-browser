@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 // Core compiles without DOM or Node types; both are globals where the tests run.
 declare const performance: { now(): number };
 declare const console: { log(...args: unknown[]): void };
-import { cleanSnapshotRead, ElementRefs, snapshotDiff, snapshotKeys, snapshotLines, snapshotOutline, snapshotResult } from '../src';
+import { cleanSnapshotRead, ElementRefs, snapshotDiff, snapshotKeys, snapshotLines, snapshotOutline, snapshotResult, type SnapshotRead } from '../src';
 
 function answer(rows: number, maxKeys: number) {
   const nodes: unknown[] = [{ depth: 0, role: 'main', name: '' }, { depth: 1, role: 'heading', name: 'Rows', level: 1 }, { depth: 1, role: 'list', name: '' }];
@@ -108,5 +108,25 @@ describe('The snapshot in main', () => {
     console.log(`[perf] the diff after an action, 16,003 nodes: before median ${before[10]!.toFixed(2)} ms, after median ${after[10]!.toFixed(2)} ms (worst ${after[20]!.toFixed(2)})`);
     // A budget, not a race between the two (timings under load can cross): CI's slower runners have room.
     expect(after[10]!).toBeLessThan(60);
+  });
+
+  it('a flat find on unnamed items nested 39 deep in 20,000 nodes: each label looks at 40 nodes at most (round 2 of #263, S2)', () => {
+    // 39 unnamed list items, one in another, then 20,000 links in the deepest: every match's items are all 39, and a
+    // label takes links' names, so an unbounded scan would take all 20,000 for each.
+    const nodes: SnapshotRead['nodes'] = [];
+    for (let d = 0; d < 39; d++) nodes.push({ depth: d, role: 'listitem', name: '', sid: d + 1 });
+    // (Names as long as real links' run: about 100 characters.)
+    for (let i = 0; i < 20_000 - 39; i++) nodes.push({ depth: 39, role: 'link', name: `Item ${i}: ${'a long link name on a busy page, as real pages have them '.repeat(2)}`, key: i, sid: 100 + i });
+    const read = { url: 'https://p.test/', title: '', cut: {}, nodes } as SnapshotRead;
+    const refs = new ElementRefs().issue('p1', 't', snapshotKeys(read), new Map(read.nodes.filter((n) => n.key !== undefined).map((n) => [n.key!, n.sid!])));
+    const times: number[] = [];
+    for (let run = 0; run < 5; run++) {
+      const began = performance.now();
+      snapshotOutline(read, refs, { find: 'Item 19000', flat: true });
+      times.push(performance.now() - began);
+    }
+    times.sort((a, b) => a - b);
+    console.log(`[perf] a flat find, 39 nested unnamed items, 20,000 nodes: median ${times[2]!.toFixed(1)} ms, worst ${times[4]!.toFixed(1)} ms`);
+    expect(times[2]!).toBeLessThan(150);
   });
 });

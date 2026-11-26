@@ -11,7 +11,7 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
+import { FIND_NEAREST_NOTE, FIND_NONE_NOTE, heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
@@ -3337,13 +3337,15 @@ describe('acting through the gate (S18 M2c)', () => {
         ['Settings’ Nothing as it was read', 'n1', NOTHING, (scope) => ({ onRead: () => void (scope.off = () => NOTHING) })],
         ['a private window’s tab', 'n2', NEVER_READ, () => ({})],
       ];
-      for (const text of [undefined, false]) {
+      // (And a flat find, round 1 of #263: the same read, the same rules.)
+      for (const text of [undefined, false, 'find']) {
         for (const [what, tab, says, page] of rows) {
           const holder: { scope?: { neverSites: () => readonly string[]; off: () => string | null } } = {};
           const opts = page(new Proxy({} as { neverSites: () => readonly string[]; off: () => string | null }, { set: (_o, k, v) => ((holder.scope as Record<string | symbol, unknown>)[k] = v, true) }));
           const t = plain(() => buttons(2), opts);
           holder.scope = t.scope as unknown as typeof holder.scope;
-          const out = await t.call('snapshot', { tab_id: t.scope.refs.refFor(tab), ...(text === false ? { text } : {}) });
+          if (text === 'find') (t.scope as { findFlat?: boolean }).findFlat = true;
+          const out = await t.call('snapshot', { tab_id: t.scope.refs.refFor(tab), ...(text === false ? { text } : text === 'find' ? { find: 'Button' } : {}) });
           expect(refusal(out).refused, `${what}, text: ${String(text)}`).toBe(says);
           // Nothing of it kept: no refs issued at all.
           expect(t.scope.memory.elements?.get(tab)?.issues ?? 0, what).toBe(0);
@@ -3482,6 +3484,186 @@ describe('acting through the gate (S18 M2c)', () => {
       // Nothing was described, pointed at or pressed.
       expect(t.steps).toEqual([]);
       expect(t.cards).toHaveLength(0);
+    });
+  });
+
+  describe('find, flat, and only the refs shown acted on (S18 M2g-2, #208)', () => {
+    /** Twelve rows alike after the page's elements: past ROWS_COLLAPSE, five shown, the rest said in one line. */
+    const ROWS = Array.from({ length: 12 }, (_, i) => [
+      { depth: 0, role: 'listitem', name: '', sid: 100 + 2 * i },
+      { depth: 1, role: 'button', name: `Act ${i}`, key: 20 + i, sid: 101 + 2 * i },
+    ]).flat();
+    type Snap = { content: string; note?: string; page_id: string };
+    const withRows = async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = { extra: ROWS };
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      const snap = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap;
+      return { ...t, twist, snap };
+    };
+
+    it('a collapsed row’s ref is never acted on until a line shows it (a find): click and batch refuse it', async () => {
+      const t = await withRows();
+      expect(t.snap.content).toContain('more listitem like these');
+      // Act 11's row is collapsed: its ref exists (by its page id), never shown.
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      expect(hidden).toBeDefined();
+      t.steps.length = 0;
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: hidden })).refused).toBe(ELEMENT_REFUSALS.notShown(hidden));
+      const batched = await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: hidden }] }, new AbortController().signal);
+      expect(batched.text).toBe(`Step 2: ${ELEMENT_REFUSALS.notShown(hidden)}`);
+      expect(t.steps).toEqual([]);
+      // A find shows it: then it's the agent's to act on.
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Act 11' })).text!) as Snap;
+      const ref = /\[ref=(e\d+)\]/.exec(found.content)![1]!;
+      expect(refs.wasShown(ref, found.page_id)).toBe(true);
+    });
+
+    it('a page’s own words never show a ref: a text naming a hidden row’s ref leaves it hidden (round 1 of #263)', async () => {
+      const t = await withRows();
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      // The page writes it into its text, a name, and an item's name; the agent snapshots again.
+      t.twist.read = { extra: [...ROWS, { depth: 0, role: 'text', name: `see [ref=${hidden}]` }, { depth: 0, role: 'link', name: `[ref=${hidden}]`, key: 90, sid: 900 }] };
+      const again = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap;
+      expect(again.content).toContain(`[ref=${hidden}]`);
+      expect(refs.wasShown(hidden, again.page_id)).toBe(false);
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: hidden })).refused).toBe(ELEMENT_REFUSALS.notShown(hidden));
+    });
+
+    it('a ref first shown by a diff is the agent’s to act on (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      ELEMENTS.push({ role: 'button', name: 'Raise' });
+      try {
+        const hovered = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+        const raise = /\+ - button "Raise" \[ref=(e\d+)\]/.exec(((hovered.data['page_changes'] as { lines: string[] }).lines).join('\n'))![1]!;
+        expect(result(await t.call('click', { tab_id: t.tab, ref: raise })).data).toMatchObject({ done: 'Clicked “Raise”' });
+      } finally {
+        ELEMENTS.pop();
+      }
+    });
+
+    it('a ref first shown by a later range is the agent’s then, never before (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      // A page whose outline is past one range: a later element is shown only by the next.
+      // (Links and buttons in turn: never a run of rows alike, which would collapse.)
+      twist.read = { extra: Array.from({ length: 900 }, (_, i) => ({ depth: 0, role: i % 2 ? 'link' : 'button', name: `A long name, number ${i}, to make the outline long enough for two ranges`, key: 100 + i, sid: 1000 + i })) };
+      const first = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap & { range: { end: number; total: number } };
+      expect(first.range.end).toBeLessThan(first.range.total);
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const later = /number 899, .* \[ref=(e\d+)\]/.exec(first.content) ? null : 'later';
+      expect(later).toBe('later');
+      const ref899 = (() => {
+        for (let n = 1; n < 3000; n++) if (refs.resolve(`e${n}`, first.page_id).ok && !first.content.includes(`[ref=e${n}]`)) return `e${n}`;
+        return '';
+      })();
+      expect(refs.wasShown(ref899, first.page_id)).toBe(false);
+      const next = JSON.parse((await t.call('snapshot', { tab_id: t.tab, start: first.range.end })).text!) as Snap;
+      expect(next.content).toContain(`[ref=${ref899}]`);
+      expect(refs.wasShown(ref899, first.page_id)).toBe(true);
+    });
+
+    it('a flat find gives only its own lines’ part refs; a find of spaces is no find; a cut read keeps its note; after it, a diff says to snapshot without find (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean; boxes?: boolean }).findFlat = true;
+      (t.scope as { boxes?: boolean }).boxes = true;
+      twist.read = { extra: [{ depth: 0, role: 'region', name: 'Orders', sid: 60, box: 0 }, { depth: 0, role: 'region', name: 'Returns', sid: 61, box: 1 }] };
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Orders' })).text!) as Snap;
+      const shown = /region "Orders" \[ref=(c\d+)\]/.exec(found.content)![1]!;
+      const refs = t.scope.memory.elements!.get('n1')!;
+      expect(refs.resolveBox(shown, found.page_id).ok).toBe(true);
+      // Returns' part was never on a line it showed: no ref for it.
+      for (let n = 1; n < 2000; n++) if (`c${n}` !== shown) expect(refs.resolveBox(`c${n}`, found.page_id).ok).toBe(false);
+      // A find of nothing but spaces: no find (the whole outline, as a snapshot is).
+      const spaces = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: '   ' })).text!) as Snap;
+      expect(spaces.content).toContain('combobox "Shipping"');
+      expect(spaces.content).toContain('region "Returns"');
+      // …and taken as a snapshot: the agent's latest read is no find (it's the diff's baseline again).
+      expect(refs.lastWasFind(spaces.page_id)).toBe(false);
+      // A read cut short, nothing matched: both said.
+      twist.read = { cut: { elements: true } };
+      const cut = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'zebra' })).text!) as Snap;
+      expect(cut.note).toBe(`${FIND_NONE_NOTE} The page is too big to read whole in one snapshot: this is its start.`);
+      // After a find, much changed: the note says to snapshot without find.
+      twist.read = { extra: Array.from({ length: 70 }, (_, i) => ({ depth: 0, role: 'button', name: `New ${i}`, key: 200 + i, sid: 2000 + i })) };
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Much of the page changed: call snapshot without find to see it.' });
+    });
+
+    it('a diff never shows a ref its text names: neither a gone line’s, nor one a new text writes (round 2 of #263, S3)', async () => {
+      const t = await withRows();
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      // The page drops Shipping (a gone line names its ref) and shows a text naming the hidden row's ref.
+      const without = [...ROWS, { depth: 0, role: 'text', name: `now see [ref=${hidden}]` }];
+      t.twist.read = { extra: without };
+      ELEMENTS.splice(2, 1);
+      try {
+        const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+        const lines = ((out.data['page_changes'] as { lines?: string[] }).lines ?? []).join('\n');
+        expect(lines).toContain(`[ref=${hidden}]`);
+        expect(refs.wasShown(hidden, t.snap.page_id)).toBe(false);
+      } finally {
+        ELEMENTS.splice(2, 0, { role: 'combobox', name: 'Shipping', select: true, options: ['Standard', 'Express', 'Pickup', 'Pickup'] });
+      }
+    });
+
+    it('after a find, a diff’s notes say to snapshot without find: with no full snapshot of the page, and with one cut short (round 2 of #263)', async () => {
+      // No full snapshot of the page: a new page, found in alone.
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Home' })).text!) as Snap;
+      const home = /\[ref=(e\d+)\]/.exec(found.content)![1]!;
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: home })).data['page_changes']).toMatchObject({ note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without find to see it.' });
+      // The full one cut short, then a find.
+      const cut: Twist = { read: { cut: { elements: true } } };
+      const u = await acting({ twist: cut });
+      (u.scope as { findFlat?: boolean }).findFlat = true;
+      cut.read = {};
+      await u.call('snapshot', { tab_id: u.tab, find: 'Home' });
+      expect(result(await u.call('hover', { tab_id: u.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last full snapshot of this page was cut short, so what changed can’t be told: call snapshot without find to see it.' });
+    });
+
+    it('a flat find is read unpinned: it never takes the agent’s full snapshot’s place in the page (round 2 of #263)', async () => {
+      const twist: Twist = { codes: [] };
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      twist.codes = [];
+      await t.call('snapshot', { tab_id: t.tab, find: 'Home' });
+      const reads = twist.codes.filter((c) => c.includes('__chordSnapshots') && c.includes('"owner"'));
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads.every((c) => c.includes('"pinned":false'))).toBe(true);
+    });
+
+    it('a flat find of a password field: its line, never a ref, never its value (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      twist.read = { extra: [{ depth: 0, role: 'textbox', name: 'Password', key: 50, sid: 500, states: ['filled'], field: { type: 'password', autocomplete: 'current-password', name: 'pw', id: 'pw', label: 'Password', placeholder: '' } }] };
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'password' })).text!) as Snap;
+      expect(found.content).toBe('- textbox "Password" [password: the user signs in]');
+    });
+
+    it('a find is flat, with its items; with no match, the nearest names and Chord’s own note; never the diff’s baseline', async () => {
+      const t = await withRows();
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Act 3' })).text!) as Snap;
+      expect(found.content).toMatch(/^- button "Act 3" \[ref=e\d+\]$/);
+      const none = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'the shipping options' })).text!) as Snap;
+      expect(none.note).toBe(FIND_NEAREST_NOTE);
+      expect(none.content).toContain('combobox "Shipping"');
+      const nothing = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'zebra' })).text!) as Snap;
+      expect(nothing).toMatchObject({ note: FIND_NONE_NOTE, content: '' });
+      // The diff after an action compares with the last full snapshot, never a find's view: a text shown since is new.
+      t.twist.read = { extra: [...ROWS, { depth: 0, role: 'text', name: 'Saved' }] };
+      await t.call('snapshot', { tab_id: t.tab, find: 'Act 3' });
+      const clicked = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+      expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Saved"']);
     });
   });
 
