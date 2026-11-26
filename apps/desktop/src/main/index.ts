@@ -185,7 +185,7 @@ const safeBrowsing = new SafeBrowsing(
  */
 const adBlockingServer = app.isPackaged ? undefined : process.env['CHORD_AD_BLOCKING_URL']?.replace(/\/+$/, '') || undefined;
 /** What a page's first load waits for in its session: its proxy being set, and its chord's ad-blocking rules being on (#189). */
-const pageReady = pageGate<Session>([(ses) => proxies.ready(ses), (ses) => adBlocking.pending(ses)]);
+const pageReady = pageGate<Session>({ proxy: (ses) => proxies.ready(ses), rules: (ses) => adBlocking.pending(ses) });
 const adBlocking = new AdBlocking(
   {
     bundledDir: join(import.meta.dirname, 'ad-blocking'),

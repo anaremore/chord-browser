@@ -126,7 +126,10 @@ export class SafeBrowsingGuard {
   private leave(contents: WebContents, watch: Watch, nodeId?: NodeId): void {
     watch.own = true;
     // A load waiting for the page's session would land over where this goes (#300): dropped first. Back to safety
-    // itself doesn't wait for the session: it leaves a flagged page at once.
+    // itself doesn't wait for the session: it leaves a flagged page at once. So if the session was changing (its proxy
+    // set again), the page it goes back to can load before the new proxy is in place, as it could before #300 (Opus's
+    // N1, round 1 of #323). Waiting instead would need Back through the gate past a blank page (goToOffset), and
+    // would keep the flagged page up meanwhile.
     this.deps.stopWaiting?.(contents);
     if (contents.navigationHistory.canGoBack()) {
       contents.navigationHistory.goBack();

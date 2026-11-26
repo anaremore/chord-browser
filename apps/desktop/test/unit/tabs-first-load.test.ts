@@ -24,6 +24,8 @@ vi.mock('../../src/main/window', async () => {
 vi.mock('../../src/main/app-icon', () => ({ windowIcon: () => undefined }));
 vi.mock('../../src/main/platform', () => ({ platform: 'linux', applyMaterial: vi.fn(), onUiScale: () => () => undefined, systemInfo: () => ({}), titleBarOverlay: () => ({}), trafficLightPosition: () => ({ x: 0, y: 0 }), windowChromeOptions: () => ({}) }));
 const { TabManager } = await import('../../src/main/tabs');
+const { pageGate } = await import('../../src/main/page-gate');
+const { SafeBrowsingGuard } = await import('../../src/main/safe-browsing/guard');
 const { firstLoadPending } = await import('../../src/main/agents/pickers');
 const NODE = 'n1' as NodeId;
 const FIRST = 'https://first.test/';
@@ -302,8 +304,8 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.manager.stopWaiting(t.page as never)).toBe(false);
   });
 
-  it('a wait that rejects (#299): over, the page loads; asked again, the same rejected wait doesn’t spin', async () => {
-    const failed = Promise.reject(new Error('the proxy couldn’t be set'));
+  it('a wait that rejects (#299; the gate never gives one since round 1 of #323, so a backstop): over, the page loads; asked again, the same rejected wait doesn’t spin', async () => {
+    const failed = Promise.reject(new Error('a wait that rejects'));
     failed.catch(() => {});
     const t = setup([]);
     t.page.loadURL.mockClear();
@@ -314,6 +316,83 @@ describe('a page’s load waiting for its session (#189)', () => {
     await tick();
     expect(t.loaded()).toEqual([SECOND]);
     expect(firstLoadPending(t.page)).toBe(false);
+  });
+
+  it('the rules’ wait failing while the proxy is still being set (Opus’s B1 on #323): nothing loads until the proxy is', async () => {
+    const proxy = held();
+    const failed = Promise.reject(new Error('the rules couldn’t be turned on'));
+    failed.catch(() => {});
+    const t = setup([]);
+    t.page.loadURL.mockClear();
+    const gate = pageGate<Session>({ proxy: () => (proxy.over ? null : proxy.promise), rules: () => failed });
+    (t.manager as unknown as { deps: { proxyReady: unknown } }).deps.proxyReady = gate;
+    t.manager.navigate(NODE, SECOND);
+    await tick();
+    await tick();
+    expect(t.loaded()).toEqual([]);
+    proxy.resolve();
+    await tick();
+    await tick();
+    expect(t.loaded()).toEqual([SECOND]);
+  });
+
+  it.each([
+    ['Reload', {}],
+    ['Hard Reload', { ignoreCache: true }],
+  ])('%s in a mini window or a Peek during its first load (Opus’s SF1 on #323): its page still loads, once', async (_, options) => {
+    const rules = held();
+    const t = setup([rules]);
+    const view = t.manager.createFloating('f1' as NodeId, { session: {} as Session, url: SECOND, private: false }) as unknown as FakeView;
+    const page = view.page as FakeContents;
+    t.manager.reload(page as never, options);
+    rules.resolve();
+    await tick();
+    expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual([SECOND]);
+    expect(page.reload).not.toHaveBeenCalled();
+  });
+
+  it('Reload in a mini window stopped before its first load (Opus’s SF1): its address loads, once the session is ready', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    const view = t.manager.createFloating('f1' as NodeId, { session: {} as Session, url: SECOND, private: false }) as unknown as FakeView;
+    const page = view.page as FakeContents;
+    t.manager.stopWaiting(page as never);
+    t.manager.reload(page as never);
+    expect(page.loadURL).not.toHaveBeenCalled();
+    rules.resolve();
+    await tick();
+    expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual([SECOND]);
+    expect(page.reload).not.toHaveBeenCalled();
+  });
+
+  it('a load waiting, then Back (a mini window’s, or the menu’s), then the session ready (Opus’s N2): back, and no stale load', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    t.page.loadURL.mockClear();
+    t.manager.navigate(NODE, SECOND);
+    rules.over = false;
+    const goBack = vi.fn();
+    Object.assign(t.page.navigationHistory, { canGoBack: () => true, goBack });
+    t.manager.go(t.page as never, 'back');
+    rules.resolve();
+    await tick();
+    expect(goBack).toHaveBeenCalledOnce();
+    expect(t.loaded()).toEqual([]);
+  });
+
+  it('a load waiting, then Back to safety (it drops the load and leaves), then the session ready (Opus’s N2): no stale load', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    t.page.loadURL.mockClear();
+    const goBack = vi.fn();
+    Object.assign(t.page.navigationHistory, { canGoBack: () => true, goBack });
+    // Safe Browsing's own guard, its stopWaiting the tab manager's (as browser.ts wires it).
+    const guard = new SafeBrowsingGuard({ state: () => ({ live: {} }), dispatch: vi.fn(), enabled: () => true, check: vi.fn(), isTab: () => true, contentsOf: () => undefined, handOver: vi.fn(), closeTab: vi.fn(), stopWaiting: (c: WebContents) => void t.manager.stopWaiting(c) } as never);
+    (guard as unknown as { leave(c: unknown, w: object): void }).leave(t.page, { own: false });
+    rules.resolve();
+    await tick();
+    expect(goBack).toHaveBeenCalledOnce();
+    expect(t.loaded()).toEqual([]);
   });
 
   it('closed during the wait: nothing loads, nothing left pending', async () => {

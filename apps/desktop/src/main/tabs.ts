@@ -78,6 +78,8 @@ const AGENT_TAB_ARG = '--chord-agent-tab';
 /** A page that isn't a tab yet: a Peek's or a mini window's (DESIGN.md §7.9). */
 interface FloatingPage {
   view: WebContentsView;
+  /** Its first page's address: what Reload loads while it has never loaded (Opus's SF1, round 1 of #323). */
+  url: string;
   /** A private window's Peek: its visits never reach history. */
   private: boolean;
 }
@@ -176,22 +178,30 @@ export class TabManager {
 
   /**
    * Your Reload (round 1 of #282): a page that never loaded (stopped while it waited for its session) has nothing to
-   * reload, so its tab's address loads, as a navigation; any other page reloads.
+   * reload, so its address loads, as a navigation; any other page reloads. A tab's, and a mini window's or a Peek's
+   * (Opus's SF1, round 1 of #323: from its window's Reload, or the page's menu).
    */
   reload(contents: WebContents, options: { ignoreCache?: boolean } = {}): void {
     // A page already gone (its menu can outlive it: Neon's SF3, round 1 of #292).
     if (contents.isDestroyed()) return;
     const nodeId = this.nodeFor(contents);
     const node = nodeId ? nodeOf(this.deps.state(), nodeId) : undefined;
+    const floatingId = nodeId ? undefined : this.floatingFor(contents);
+    const url = node?.kind === 'tab' ? node.url : floatingId ? this.floating.get(floatingId)?.url : undefined;
     const history = contents.navigationHistory;
     // An agent tab stopped while primed has only its blank page, which is never the tab's (#287).
     const never = history.length() === 0 || (history.length() === 1 && history.getEntryAtIndex(0)?.url === 'about:blank');
-    if (nodeId && node?.kind === 'tab' && never) {
+    if (url !== undefined && never) {
       // Its own first load still on its way (waiting for its session, an agent tab's hold arming or its blank page
-      // primed, or its page asked for and not come): left alone, it loads the tab's address anyway, and an agent tab
-      // keeps its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
+      // primed, or its page asked for and not come): left alone, it loads the address anyway, and an agent tab keeps
+      // its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
       if (this.waiting.has(contents) || this.priming.has(contents) || firstLoadPending(contents)) return;
-      return this.navigate(nodeId, node.url);
+      if (nodeId) return this.navigate(nodeId, url);
+      return this.whenProxied(contents, () => {
+        void contents.loadURL(url).catch(() => {
+          // Load failures show in the page itself, as they would in a tab.
+        });
+      });
     }
     // Once its session is ready, like any load (Neon's B2): never over the old connection, nor before its rules are on.
     // A load waiting already is overtaken by this one. Hard Reload too (round 1 of #292, SF2).
@@ -422,7 +432,7 @@ export class TabManager {
     const view = new WebContentsView({
       webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
     });
-    this.floating.set(nodeId, { view, private: isPrivate });
+    this.floating.set(nodeId, { view, private: isPrivate, url });
     // The page as made: the view forgets it once it's destroyed (view-page.ts), and the proxy may take a while.
     const contents = view.webContents;
     this.wire(nodeId, contents, false);
