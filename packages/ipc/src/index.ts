@@ -1857,7 +1857,7 @@ export const invokeChannels = {
   /** Ad and tracker blocking's lists (ARCHITECTURE.md §9), for Settings → Privacy. */
   'adBlocking:status': { roles: ['internal'], request: z.void(), response: z.custom<AdBlockingStatus>() },
   // Settings → Privacy's Try again, for a chord whose blocking didn't come on (#284).
-  'adBlocking:retry': { roles: ['internal'], request: z.object({ profileId: z.string().max(200) }), response: z.void() },
+  'adBlocking:retry': { roles: ['internal'], request: z.strictObject({ profileId: z.string().min(1).max(200) }), response: z.void() },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
   // Taking a screenshot (DESIGN.md §7.12), from the overlay's capture mode: the element under the pointer (UI units),
   // its parent or child, what to take, and the wheel passed on to the page.

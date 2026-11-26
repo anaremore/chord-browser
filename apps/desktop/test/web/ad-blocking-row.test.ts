@@ -48,4 +48,9 @@ describe('the row for chords whose ad blocking didn’t come on (#284)', () => {
   it('a profile no chord uses (an agent’s, a private window’s): not named, and no row for it alone', () => {
     expect(notBlockingRow([{ profileId: 'p-gone', state: 'failed' }], chords)).toBeNull();
   });
+
+  it('a profile no chord uses neither shows Trying… nor is tried again (Neon’s SF4 on #316)', () => {
+    expect(notBlockingRow([{ profileId: 'p-gone', state: 'retrying' }, { profileId: 'p-home', state: 'failed' }], chords)).toMatchObject({ trying: false, profiles: ['p-home'] });
+    expect(notBlockingRow([{ profileId: 'p-gone', state: 'failed' }, { profileId: 'p-home', state: 'retrying' }], chords)).toMatchObject({ trying: true, profiles: [] });
+  });
 });

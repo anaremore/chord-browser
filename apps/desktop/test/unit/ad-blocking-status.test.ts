@@ -18,9 +18,12 @@ const { BlockerExtension } = await import('../../src/main/ad-blocking/extension'
 const { FILTER_LISTS } = await import('../../src/main/ad-blocking/lists');
 
 const dirs: string[] = [];
-afterEach(() => {
-  vi.restoreAllMocks();
+const services: Array<InstanceType<typeof AdBlocking>> = [];
+// Every service stopped before its folder goes (Neon's N1 on #316): nothing of one test runs on into the next.
+afterEach(async () => {
   vi.useRealTimers();
+  await Promise.all(services.splice(0).map((s) => s.stop()));
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -31,8 +34,13 @@ function service(enabled: () => boolean = () => true) {
   mkdirSync(join(bundledDir, 'rules'), { recursive: true });
   writeFileSync(join(bundledDir, 'lists.json'), JSON.stringify({ versions: Object.fromEntries(FILTER_LISTS.map((l) => [l.id, '202611260000'])), refreshMs: {}, stats: {} }));
   for (const l of FILTER_LISTS) writeFileSync(join(bundledDir, 'rules', `${l.id}.json`), '[]');
-  return new AdBlocking({ bundledDir, root, workerPath: join(root, 'none.js'), listUrl: null, firstRefreshMs: 60_000 }, { enabled: () => enabled(), offSites: () => [] });
+  const blocking = new AdBlocking({ bundledDir, root, workerPath: join(root, 'none.js'), listUrl: null, firstRefreshMs: 60_000 }, { enabled: () => enabled(), offSites: () => [] });
+  services.push(blocking);
+  return blocking;
 }
+
+/** Every profile here is a chord's (Settings lists those alone: Neon's SF3 on #316). */
+const CHORDS = new Set(['default', 'work', 'home']);
 
 function held<T>() {
   let resolve!: (value: T) => void;
@@ -91,13 +99,10 @@ describe('Settings: the chords whose ad blocking didn’t come on (#284)', () =>
     const blocking = service();
     const work = chromium();
     const home = chromium();
-    // One after the other: side by side they share one staging folder on main until #281 (#274).
     blocking.attach('home', home.session, false);
-    await until(() => home.loads.length === 1);
-    home.loads[0]!.resolve({ id: 'ext' });
-    await blocking.settled();
     blocking.attach('work', work.session, false);
-    await until(() => work.loads.length === 1);
+    await until(() => home.loads.length === 1 && work.loads.length === 1);
+    home.loads[0]!.resolve({ id: 'ext' });
     work.loads[0]!.reject(new Error('no'));
     await blocking.settled();
     expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'failed' }]);
@@ -133,14 +138,14 @@ describe('Settings: the chords whose ad blocking didn’t come on (#284)', () =>
     await blocking.settled();
     expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'failed' }]);
 
-    blocking.retry('work');
+    blocking.retry('work', CHORDS);
     expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'retrying' }]);
     await until(() => loads.length === 2);
     loads[1]!.reject(new Error('still no'));
     await blocking.settled();
     expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'failed' }]);
 
-    blocking.retry('work');
+    blocking.retry('work', CHORDS);
     await until(() => loads.length === 3);
     loads[2]!.resolve({ id: 'ext' });
     await blocking.settled();
@@ -162,6 +167,7 @@ describe('Settings: the chords whose ad blocking didn’t come on (#284)', () =>
     on = false;
     blocking.sync();
     expect(blocking.status().notOn).toEqual([]);
+    await blocking.settled();
     on = true;
     blocking.detach('work');
     expect(blocking.status().notOn).toEqual([]);
@@ -174,10 +180,122 @@ describe('Settings: the chords whose ad blocking didn’t come on (#284)', () =>
     await until(() => loads.length === 1);
     loads[0]!.resolve({ id: 'ext' });
     await blocking.settled();
-    blocking.retry('work');
-    blocking.retry('nobody');
+    blocking.retry('work', CHORDS);
+    blocking.retry('nobody', CHORDS);
     await turns();
     expect(loads).toHaveLength(1);
+    expect(blocking.status().notOn).toEqual([]);
+  });
+
+  it('turned off while failed, then on again: not listed while it tries, listed again only if that fails (Neon’s SF1)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let on = true;
+    const blocking = service(() => on);
+    const { session, loads } = chromium();
+    blocking.attach('work', session, false);
+    await until(() => loads.length === 1);
+    loads[0]!.reject(new Error('no'));
+    await blocking.settled();
+    on = false;
+    blocking.sync();
+    await blocking.settled();
+    on = true;
+    blocking.sync();
+    await until(() => loads.length === 2);
+    expect(blocking.status().notOn).toEqual([]);
+    loads[1]!.reject(new Error('still no'));
+    await blocking.settled();
+    expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'failed' }]);
+  });
+
+  it('a try that fails while a newer one is still to come: still trying, and the newer one decides (Neon’s SF2)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const blocking = service();
+    const { session, loads } = chromium();
+    blocking.attach('work', session, false);
+    await until(() => loads.length === 1);
+    loads[0]!.reject(new Error('no'));
+    await blocking.settled();
+    blocking.retry('work', CHORDS);
+    // A settings change while it tries: another go queued behind it.
+    blocking.sync();
+    await until(() => loads.length === 2);
+    loads[1]!.reject(new Error('still no'));
+    await until(() => loads.length === 3);
+    expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'retrying' }]);
+    loads[2]!.resolve({ id: 'ext' });
+    await blocking.settled();
+    expect(blocking.status().notOn).toEqual([]);
+  });
+
+  it('the cap, then Try again, then the first go failing: still trying; on once the try’s go comes on (Neon’s N1, SF2)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const blocking = service();
+    const { session, loads } = chromium();
+    blocking.attach('work', session, false);
+    await until(() => loads.length === 1);
+    vi.advanceTimersByTime(RULES_WAIT_MS);
+    expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'failed' }]);
+    blocking.retry('work', CHORDS);
+    loads[0]!.reject(new Error('never answered in time'));
+    await until(() => loads.length === 2);
+    expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'retrying' }]);
+    loads[1]!.resolve({ id: 'ext' });
+    await blocking.settled();
+    expect(blocking.status().notOn).toEqual([]);
+  });
+
+  it('applying the rules failing: listed; Try again applies them again and it’s off the list (Neon’s N1)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const blocking = service();
+    const { session, loads } = chromium();
+    const apply = vi.spyOn(BlockerExtension.prototype, 'apply').mockRejectedValueOnce(new Error('no'));
+    blocking.attach('work', session, false);
+    await until(() => loads.length === 1);
+    loads[0]!.resolve({ id: 'ext' });
+    await blocking.settled();
+    expect(blocking.status().notOn).toEqual([{ profileId: 'work', state: 'failed' }]);
+    blocking.retry('work', CHORDS);
+    // Nothing was saved as applied, so the rules are written again and the extension added again.
+    await until(() => loads.length === 2);
+    loads[1]!.resolve({ id: 'ext' });
+    await blocking.settled();
+    expect(apply).toHaveBeenCalledTimes(2);
+    expect(blocking.status().notOn).toEqual([]);
+    expect(blocking.inspect().profiles['work']?.applied).toBe(true);
+  });
+
+  it('Settings asks only about chords: a profile no chord uses is neither listed nor tried again (Neon’s SF3)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const blocking = service();
+    const { session, loads } = chromium();
+    blocking.attach('agent-1', session, false);
+    await until(() => loads.length === 1);
+    loads[0]!.reject(new Error('no'));
+    await blocking.settled();
+    expect(blocking.status(CHORDS).notOn).toEqual([]);
+    blocking.retry('agent-1', CHORDS);
+    await turns();
+    expect(loads).toHaveLength(1);
+    expect(blocking.status().notOn).toEqual([{ profileId: 'agent-1', state: 'failed' }]);
+  });
+
+  it.each([
+    ['closed', (b: InstanceType<typeof AdBlocking>) => b.detach('work')],
+    ['turned off', (b: InstanceType<typeof AdBlocking>, off: () => void) => (off(), b.sync())],
+    ['quitting', (b: InstanceType<typeof AdBlocking>) => void b.stop()],
+  ] as const)('%s while the extension is being added: its rules aren’t applied, nor saved, after (Neon’s SF5)', async (_, what) => {
+    let on = true;
+    const blocking = service(() => on);
+    const { session, loads } = chromium();
+    const apply = vi.spyOn(BlockerExtension.prototype, 'apply').mockResolvedValue(undefined);
+    blocking.attach('work', session, false);
+    await until(() => loads.length === 1);
+    what(blocking, () => (on = false));
+    loads[0]!.resolve({ id: 'ext' });
+    await blocking.settled();
+    expect(apply).not.toHaveBeenCalled();
     expect(blocking.status().notOn).toEqual([]);
   });
 });
