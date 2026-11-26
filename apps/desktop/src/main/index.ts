@@ -61,6 +61,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
+import { migratePartitions } from './partitions';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -842,11 +843,14 @@ if (!app.requestSingleInstanceLock()) {
     hardenAllWebContents();
 
     const profiles = new Map<string, Session>();
+    /** Profiles whose sign-ins couldn't be moved to their partition's new folder this launch, and the old partition each runs on (#315). */
+    let partitionFallbacks = new Map<string, string>();
     profileSession = (profileId: string) => {
       let ses = profiles.get(profileId);
       if (!ses) {
         // Its proxy (its chord's own, or the one for every chord) is set as it's made.
-        ses = proxies.make(profileId, () => session.fromPartition(profilePartition(profileId)));
+        // Its old partition this launch if its sign-ins couldn't be moved to its new one (#315, partitions.ts).
+        ses = proxies.make(profileId, () => session.fromPartition(partitionFallbacks.get(profileId) ?? profilePartition(profileId)));
         // A private window's session keeps its answers and downloads to itself.
         const priv = isPrivateProfile(profileId);
         permissions.attach(ses, priv ? profileId : null);
@@ -967,11 +971,15 @@ if (!app.requestSingleInstanceLock()) {
     proxies.start({ proxyFor: (owner) => proxyFor(browser?.store.state ?? initial, owner), contents: () => webContents.getAllWebContents() });
     setDictionarySource(initial.settings.googleFree);
     const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
+    // Each profile's sign-ins in the folder its partition is named for now (#315), before any of its sessions is made:
+    // the chords' profiles and the ones extensions are installed in (extensions.start makes theirs). Chord's own ids
+    // never move, so this is a stat or two only where an id has upper case or `_`.
+    partitionFallbacks = await migratePartitions(app.getPath('userData'), [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)]);
     // Sign-ins a chord kept separately, once no chord uses them, are deleted once launch is over, with their copies of
     // the blocker extension. No session loads them meanwhile; which profiles are in use is read then, so one made since stays.
     afterLaunch.run(() => {
       const inUse = new Set([...Object.values(browser!.store.state.chords).map((c) => c.profileId), ...profiles.keys()]);
-      void removeUnusedPartitions(app.getPath('userData'), inUse);
+      void removeUnusedPartitions(app.getPath('userData'), [...inUse].map((id) => partitionFallbacks.get(id) ?? profilePartition(id)));
       void adBlocking.forgetProfiles(inUse);
     });
 

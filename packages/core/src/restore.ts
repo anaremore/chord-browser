@@ -33,6 +33,8 @@ import {
   type State,
   type WindowModel,
   cleanAgentsAllowed,
+  isId,
+  isPrivateProfile,
 } from './model';
 import { cleanOffSites } from './ad-blocking';
 import { cleanOverrides } from './bindings';
@@ -275,8 +277,11 @@ export function restoreSettings(saved: Record<string, unknown>, platform?: Platf
  * chord uses the proxy for every chord.
  */
 export function restoreChord(chord: Chord): Chord {
-  const { proxy, ...rest } = chord;
-  const usable = proxy && chord.profileId !== DEFAULT_PROFILE ? cleanProxy(proxy) : null;
+  // Sign-ins kept apart need an id as `isId` allows (its partition's folder is named from it, #315), and never a private
+  // window's (records.ts' check, the same): any other shares the default sign-ins.
+  const profileId = chord.profileId === DEFAULT_PROFILE || (isId(chord.profileId) && !isPrivateProfile(chord.profileId)) ? chord.profileId : DEFAULT_PROFILE;
+  const { proxy, ...rest } = { ...chord, profileId };
+  const usable = proxy && profileId !== DEFAULT_PROFILE ? cleanProxy(proxy) : null;
   return usable ? { ...rest, proxy: usable } : rest;
 }
 

@@ -529,6 +529,63 @@ test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are de
   }
 });
 
+test('a profile whose id has upper case keeps its sign-ins across the launch that moves them to its own folder (#315)', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const ownPartitions = () => (existsSync(join(profile, 'Partitions')) ? readdirSync(join(profile, 'Partitions')).filter((n) => n.startsWith('p-')).sort() : []);
+  let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile);
+  let shell: Page;
+  let overlay: Page;
+  const visit = async (path: string) => {
+    await openCommandBar(shell, overlay, 'new');
+    await overlay.keyboard.type(`${site.origin}${path}`);
+    await overlay.keyboard.press('Enter');
+  };
+  const whoami = () => app.windows().find((p) => p.url() === `${site.origin}/whoami`)?.title();
+  try {
+    shell = await pageWhere(app, isShell);
+    overlay = await pageWhere(app, isOverlay);
+    // Work keeps its own sign-ins, and signs in there.
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    await shell.getByRole('textbox', { name: 'Chord name' }).fill('Work');
+    await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    await runAction(shell, 'chord.separateSignIns');
+    await expect(shell.getByRole('img', { name: 'Keeps its own sign-ins' })).toBeVisible();
+    await visit('/login');
+    await expect.poll(() => app.windows().some((p) => p.url() === `${site.origin}/login`)).toBe(true);
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
+  } finally {
+    await app.close();
+  }
+
+  // As a build before #315 would have left it: the same profile with upper case in its id (as sync or import can
+  // bring), its sign-ins in the folder Electron named in lower case.
+  const [folder] = ownPartitions();
+  const id = folder!.slice('p-'.length);
+  const upper = id.toUpperCase();
+  const db = new DatabaseSync(join(profile, 'chord.db'));
+  try {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.prepare('UPDATE profile SET id = ?, partition = ? WHERE id = ?').run(upper, `persist:p-${upper.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`, id);
+    db.prepare('UPDATE chord SET profile_id = ? WHERE profile_id = ?').run(upper, id);
+  } finally {
+    db.close();
+  }
+
+  app = await launch({}, profile);
+  try {
+    shell = await pageWhere(app, isShell);
+    overlay = await pageWhere(app, isOverlay);
+    await shell.getByRole('tablist', { name: 'Chords' }).getByRole('tab', { name: 'Work' }).click();
+    await visit('/whoami');
+    await expect.poll(whoami).toBe('Alex');
+    // Moved: one folder, its new one (the old is gone, not left behind or deleted with the sign-ins in it).
+    await expect.poll(ownPartitions).toEqual([`p-${upper.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`]);
+  } finally {
+    await app.close();
+  }
+});
+
 test('first run: name, colors and pins land in the real sidebar, and it never comes back', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   let app = await launch({ CHORD_HOME_URL: `${site.origin}/` }, profile, { firstRun: true });

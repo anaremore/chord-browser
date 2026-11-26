@@ -31,13 +31,24 @@ export const isPrivateProfile = (profileId: ProfileId): boolean => profileId.sta
 /** The private window a private profile belongs to. */
 export const privateWindowOf = (profileId: ProfileId): WindowId => profileId.slice('private-'.length);
 
+/** An id as records from sync, import and export may hold one: letters, digits, `-` and `_`, at most 64. */
+export const isId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+
+/**
+ * A profile id (`isId`: letters, digits, `-`, `_`) as a partition's name, one-to-one and already in lower case (#315):
+ * `_` → `__`, an upper-case letter → `_` and its lower case. Electron keeps `persist:<name>` in a folder named in lower
+ * case on every platform, so `Work` and `work` would otherwise share one. An id with neither (all of Chord's own:
+ * uuidv7 and `default`) is unchanged. migrations.ts' 25 spells the same in SQL; a test holds them to each other.
+ */
+const partitionName = (profileId: ProfileId): string => profileId.replace(/[A-Z_]/g, (c) => (c === '_' ? '__' : `_${c.toLowerCase()}`));
+
 /**
  * The Electron session partition that holds a profile's cookies, storage and
  * cache. A private window's has no `persist:` prefix, so Electron keeps it in
  * memory only.
  */
 export const profilePartition = (profileId: ProfileId): string =>
-  profileId === DEFAULT_PROFILE ? 'persist:default' : isPrivateProfile(profileId) ? `chord-${profileId}` : `persist:p-${profileId}`;
+  profileId === DEFAULT_PROFILE ? 'persist:default' : isPrivateProfile(profileId) ? `chord-${profileId}` : `persist:p-${partitionName(profileId)}`;
 
 export interface Oklch {
   l: number;
