@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apply, MAX_FAVORITES, restoreState, seedState, nodeOf, nodeList, type Command, type DataRecord, type SegmentCursor, type State } from '@chord/core';
 import { ChordDatabase } from '@chord/data/db';
-import { opKey, opOrigin, opsForState, opsFromPatches, originOf, type DataPush, type WriteOp } from '@chord/data';
+import { opKey, opOrigin, opsForState, opsFromPatches, originOf, type DataPush, type WriteOp, type WriteSeq } from '@chord/data';
 import { SyncController, type WorkerLike } from '../../src/data/sync';
 import type { FromWorker, ToWorker } from '../../src/data/sync-worker-core';
 
@@ -80,6 +80,25 @@ let writes = 0;
 let held: Map<string, WriteOp> | null = null;
 let release: () => void = () => undefined;
 let running: { controller: SyncController; worker: FakeWorker; pushes: DataPush[] } | null = null;
+/** When chord-data last took a change of yours to each entity, by its write count (persistence's writtenAt, #276). */
+let writtenAt = new Map<string, WriteSeq>();
+
+/** A write chord-data takes, as writes.ts takes one: written, counted (tookWrite), and a change of yours remembered. */
+function written(controller: SyncController, ops: WriteOp[]): void {
+  db.write(ops);
+  const seq = controller.tookWrite();
+  for (const op of ops) if (opOrigin(op) === 'user') writtenAt.set(opKey(op), seq);
+}
+
+/**
+ * persistence.waitingHere: a change of yours to `key` still in persistence's queue (`held`), or taken by chord-data
+ * since sync planned what it pushed (`since`). Main puts off what sync pushed of it until it's planned again.
+ */
+function waiting(key: string, since?: WriteSeq): boolean {
+  if ([...(held?.values() ?? [])].some((op) => opOrigin(op) === 'user' && opKey(op) === key)) return true;
+  const at = writtenAt.get(key);
+  return since !== undefined && at !== undefined && at.run === since.run && at.n > since.n;
+}
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'chord-sync-roundtrip-'));
@@ -91,6 +110,7 @@ beforeEach(() => {
   refuse = 0;
   writes = 0;
   held = null;
+  writtenAt = new Map();
 });
 afterEach(() => {
   running?.controller.close();
@@ -118,7 +138,7 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     () => worker as unknown as WorkerLike,
   );
   const service = new SyncService({
-    data: { sync: (request) => controller.handle(request), flush: async () => undefined, unsaved: () => 0, waiting: () => false, onPush: (l) => (listener = l) },
+    data: { sync: (request) => controller.handle(request), flush: async () => undefined, unsaved: () => 0, waiting, onPush: (l) => (listener = l) },
     state: () => state,
     // The store: the reducer, then what changed written by chord-data (marked as sync's when it came from sync, as
     // persistence does), or refused, as chord-data refuses a batch on a full disk.
@@ -144,7 +164,7 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
         controller.writeRefused();
         return;
       }
-      db.write(ops);
+      written(controller, ops);
       writes++;
       controller.afterWrite();
     },
@@ -160,7 +180,7 @@ async function launch({ fromDisk = false } = {}): Promise<{ controller: SyncCont
     const ops = [...(held?.values() ?? [])];
     held = null;
     if (ops.length === 0) return;
-    db.write(ops);
+    written(controller, ops);
     writes++;
     controller.afterWrite();
   };
@@ -174,17 +194,15 @@ const cursor = (offset: number): SegmentCursor => ({ head: 'h', offset, frame: 2
 let batch = 0;
 /** One pass of the stand-in worker: a step of \`device\`'s records, merged and answered, then the pass's end. */
 /**
- * The worker reads `records` from `device`, then says its pass is done. `acked`: as the tests have it, the controller's
- * ack polled for (up to vi.waitFor's second); or `'posted'`, as soon as it's posted, however long the merge takes on a
- * busy machine (#265: 200 folders took longer than that second). (Some tests here depend on the poll's gap before
- * pass-done: #276.)
+ * The worker reads `records` from `device`, then says its pass is done as soon as the controller has acked, as a real
+ * worker can: however long the merge takes (#265), and with no gap before pass-done for a write to land in (#276; main's
+ * put-off, `waiting`, keeps the order).
  */
-async function read(worker: FakeWorker, device: string, records: DataRecord[], acked: 'polled' | 'posted' = 'polled'): Promise<void> {
+async function read(worker: FakeWorker, device: string, records: DataRecord[]): Promise<void> {
   const id = ++batch;
   worker.say({ t: 'busy', op: 'pass' });
   worker.say({ t: 'records', id, device, segment: 1, records, cursor: cursor(100 + id), refused: 0 });
-  if (acked === 'posted') await worker.posts((m) => m.t === 'ack' && m.id === id);
-  else await vi.waitFor(() => expect(worker.posted.some((m) => m.t === 'ack' && m.id === id)).toBe(true));
+  await worker.posts((m) => m.t === 'ack' && m.id === id);
   worker.say({ t: 'pass-done', look: { state: 'ok' }, seen: {}, wrote: {}, tooMany: false, cluttered: false, unfinished: false, blocked: [] });
   worker.say({ t: 'idle' });
 }
@@ -279,7 +297,7 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
     const dispatchHere = (command: Command) => {
       const result = apply(state, command, ctx);
       state = result.state;
-      db.write(opsFromPatches(result.patches, result.state));
+      written(first.controller, opsFromPatches(result.patches, result.state));
       first.controller.afterWrite();
     };
     dispatchHere({ t: 'chord.delete', chordId: 'chord-k' });
@@ -300,7 +318,7 @@ describe('what arrives before what it depends on', { timeout: 20_000 }, () => {
     expect(state.favorites['fav-99']).toBeUndefined();
     const result = apply(state, { t: 'favorite.remove', favoriteId: 'fav-0' }, ctx);
     state = result.state;
-    db.write(opsFromPatches(result.patches, result.state));
+    written(first.controller, opsFromPatches(result.patches, result.state));
     first.controller.afterWrite();
     await vi.waitFor(() => expect(state.favorites['fav-99']).toBeDefined(), { timeout: 6_000 });
   });
@@ -398,7 +416,6 @@ describe('reconciling stays cheap', { timeout: 20_000 }, () => {
         first.worker,
         A,
         Array.from({ length: 200 }, (_, i) => folderRecord(`folder-${i}`, home())),
-        'posted',
       );
       await until(() => nodeList(state).filter((n) => n.kind === 'folder').length === 200, step);
       expect(looks).not.toHaveBeenCalled();
