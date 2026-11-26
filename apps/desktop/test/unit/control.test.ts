@@ -352,6 +352,8 @@ function setup(
     read?: Answer;
     cardWaitMs?: number;
     sendWaitMs?: number;
+    /** #143: the call's own deadline (an outside agent's CALL_WAIT_MS): its answer by then, whatever card is still up. */
+    callDeadlineMs?: number;
     onCard?: (t: Meanwhile) => void;
     onEnsure?: (t: Meanwhile) => void;
     onCapture?: (t: Meanwhile) => void;
@@ -421,6 +423,7 @@ function setup(
     mayInspect: (node) => (node.id === 'n1' ? null : 'Not that one.'),
     ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
     ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
+    ...(opts.callDeadlineMs ? { callDeadlineMs: opts.callDeadlineMs } : {}),
     ...(opts.waits === false ? {} : { waits: true }),
     ...(opts.sharedOn ? { siteOk: (_node: TabNode, url: string) => siteOfUrl(url) === opts.sharedOn, whyNot: () => NOT_SHARED } : {}),
     activity: async (_tool, summary) => void activity.push(summary),
@@ -1348,7 +1351,7 @@ describe('acting through the gate (S18 M2c)', () => {
   };
   const result = (out: { text?: string }) => JSON.parse(out.text!) as { data: Record<string, unknown> };
 
-  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean } } = {}) {
+  async function acting(opts: { answer?: Grant | 'hold'; cardWaitMs?: number; sendWaitMs?: number; callDeadlineMs?: number; act?: Partial<ActHost>; onAct?: (events: EventEmitter, op: string) => void; twist?: Twist; onCard?: () => void; deep?: { hit?: unknown; closed?: boolean; picker?: boolean; unavailable?: boolean; posts?: boolean; ping?: boolean; persistent?: boolean; opens?: string[]; postsOnLoad?: boolean } } = {}) {
     const steps: string[] = [];
     const doings: unknown[] = [];
     const kept: string[] = [];
@@ -1359,6 +1362,7 @@ describe('acting through the gate (S18 M2c)', () => {
       answer: opts.answer ?? 'once',
       ...(opts.cardWaitMs ? { cardWaitMs: opts.cardWaitMs } : {}),
       ...(opts.sendWaitMs ? { sendWaitMs: opts.sendWaitMs } : {}),
+      ...(opts.callDeadlineMs ? { callDeadlineMs: opts.callDeadlineMs } : {}),
       ...(opts.onCard ? { onCard: opts.onCard } : {}),
       act: { doing: (_n, d) => void doings.push(d), keepSite: (site) => void kept.push(site), ...opts.act },
     });
@@ -2426,6 +2430,49 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(u.cards.filter((c) => c.step?.why === 'send')).toHaveLength(1);
       // Its subject a JSON tuple (N-5).
       expect(JSON.parse(u.cards.find((c) => c.step?.why === 'send')!.subject)).toEqual(['n1', 'navigate', 'sends', expect.stringMatching(/^[0-9a-f]{8}$/)]);
+    });
+
+    // #143, pinned before the build (the plan on the issue, 2026-11-26): fails on main today, where the call holds its
+    // answer for the Send data card's own full wait. Times in ms for seconds: a client that gives up at 60 (Codex's
+    // 60 s), the call's deadline 50 (CALL_WAIT_MS), a Send data card's own wait 90.
+    it('a Send data card still up at the call’s deadline: the call answers by then, the step done and what it sends waiting on the user; the card stays up, its Allow sends it, and the step ran once (#143)', async () => {
+      const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50, sendWaitMs: 90, callDeadlineMs: 50, act: { siteAllowed: () => true } });
+      vi.useFakeTimers();
+      let out: { text?: string; isError?: boolean } | undefined;
+      void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((o) => void (out = o));
+      await vi.advanceTimersByTimeAsync(60);
+      // Answered before the client gives up: the step ran, and isn't an error.
+      expect(out, 'the call answered before the client’s 60').toBeDefined();
+      expect(out!.isError).toBeFalsy();
+      expect(out!.text).toMatch(/waits for the user/i);
+      // The card stays up: the user decides at their pace.
+      expect(t.cards.filter((c) => c.step?.why === 'send')).toHaveLength(1);
+      expect(t.at.debugging).not.toContain('Fetch.continueRequest');
+      // The user allows after the call answered: what the page sent goes.
+      t.holds.at(-1)!('once');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.at.debugging).toContain('Fetch.continueRequest');
+      // The click ran once.
+      expect(t.steps.filter((s) => s === 'click')).toHaveLength(1);
+      vi.useRealTimers();
+    });
+
+    it('a Send data card still up at the call’s deadline, never answered: the call answered on time, and what it held is dropped at the card’s own wait, never before (#143)', async () => {
+      const t = await acting({ deep: { posts: true }, answer: 'hold', cardWaitMs: 50, sendWaitMs: 90, callDeadlineMs: 50, act: { siteAllowed: () => true } });
+      vi.useFakeTimers();
+      let out: { text?: string; isError?: boolean } | undefined;
+      void t.call('click', { tab_id: t.tab, ref: 'e1' }).then((o) => void (out = o));
+      await vi.advanceTimersByTimeAsync(60);
+      expect(out, 'the call answered before the client’s 60').toBeDefined();
+      // Still held at 80: the card's own wait (90) is the user's, not the call's.
+      await vi.advanceTimersByTimeAsync(20);
+      expect(t.cards.filter((c) => c.step?.why === 'send')).toHaveLength(1);
+      expect(t.at.debugging).not.toContain('Fetch.failRequest');
+      // Past it: dropped, and the card comes down.
+      await vi.advanceTimersByTimeAsync(20);
+      expect(t.at.debugging).toContain('Fetch.failRequest');
+      expect(t.agent.state('n1').cards).toEqual([]);
+      vi.useRealTimers();
     });
 
     it('a send card in an action holds live requests, so it waits CONTROL_WAIT_MS even where site and step cards wait as long as it takes (the assistant: D2, the reviews of #147)', async () => {
