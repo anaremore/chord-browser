@@ -5,6 +5,7 @@
  * get exactly the passwords they got before.
  */
 import { describe, expect, it } from 'vitest';
+import sweep from './password-generator-sweep-main.json';
 import { drawOnce, generatePassword, GENERATOR_CLASSES, isStrongPassword, LOOK_ALIKES, passwordBits, passwordRulesFor, passwordSatisfies, runsAllow, type PasswordRuleSet, type RandomInt } from '../src/password-generator';
 
 /** A seeded generator (mulberry32), as password-generator.test.ts has it. */
@@ -268,6 +269,116 @@ describe('max-sequential: 1 rules out only the neighbours in order a character h
     expect(rules.allowed).toBe('2_cxy');
     expect(passwordBits(p, rules)).toBeGreaterThan(27.5);
     expect(passwordBits(p, rules)).toBeLessThanOrEqual(20 * Math.log2(3) + 1e-9);
+  });
+});
+
+describe('round 2 of #286: the fallbacks’ regressions (Neon’s B1, B2; Opus’s weak path)', () => {
+  // 1a: only max-sequential 1 (a step in order) or max-repeating 1 (the same again) bans two neighbours outright: strong
+  // rules weren't to be cut to one character.
+  it.each([
+    'allowed: [abc]; required: [b]; max-sequential: 6;',
+    'allowed: [ab]; required: [a]; max-sequential: 5;',
+    'allowed: [abc]; required: [b]; max-sequential: 2;',
+    'allowed: [abc]; required: [b]; max-repeating: 2; max-sequential: 6;',
+  ])('1a, %s: as strong as before, never one character', (site) => {
+    const rules = rulesOf(site);
+    const p = generatePassword(rules, seeded(5))!;
+    expect(p.length).toBeGreaterThan(8);
+    expect(passwordSatisfies(p, rules)).toBe(true);
+  });
+
+  // 1b and 1c: the rules' minimum where a class can't stand beside the pool, or the pool can't fill: a password, of
+  // what the class itself allows or, failing that, what the rules allow.
+  it.each<[string, RegExp]>([
+    ['allowed: [a0]; required: [a]; required: [0]; minlength: 4; maxlength: 4; max-repeating: 1;', /^(0a0a|a0a0)$/],
+    ['allowed: [231]; required: [3]; minlength: 2; maxlength: 2; max-consecutive: 1;', /^(13|31)$/],
+    ['allowed: [kl]; required: [k]; minlength: 2; maxlength: 2; max-repeating: 1;', /^(kl|lk)$/],
+    ['allowed: [kl]; required: [l]; minlength: 4; maxlength: 4; max-repeating: 1; max-sequential: 2;', /^(klkl|lklk)$/],
+    ['allowed: [ab01]; required: [b]; max-consecutive: 1; minlength: 3;', /^[ab01]{3}$/],
+    ['allowed: [kl]; required: [l]; max-sequential: 1; minlength: 2;', /^l{2,}$/],
+    ['allowed: [klm]; required: [l]; max-sequential: 1; minlength: 2;', /^l{2,}$/],
+    ['allowed: [klm]; required: [l]; max-sequential: 1; minlength: 3;', /^l{3,}$/],
+    ['allowed: [12]; required: [1]; max-repeating: 2; max-sequential: 1; minlength: 2;', /^11$/],
+  ])('1b/1c, %s', (site, shape) => {
+    const rules = rulesOf(site);
+    const { rate, passwords } = focuses(rules, 200);
+    expect(rate).toBeGreaterThanOrEqual(0.99);
+    for (const p of passwords) {
+      expect(p).toMatch(shape);
+      expect(passwordSatisfies(p, rules)).toBe(true);
+    }
+  });
+
+  // 2: two separators never side by side where the others can go between them.
+  it.each([
+    'allowed: [a01]; required: [0]; required: [1]; max-consecutive: 1; maxlength: 3;',
+    'allowed: [ab01]; required: [0]; required: [1]; max-consecutive: 1; maxlength: 3;',
+    'allowed: [a01]; required: [0]; required: [1]; max-repeating: 2; max-sequential: 1; maxlength: 3;',
+    'allowed: [a01]; required: [0]; required: [1]; max-repeating: 2; max-sequential: 1; maxlength: 4;',
+    'allowed: [a01]; required: [0]; required: [1]; max-repeating: 3; max-sequential: 1; maxlength: 4;',
+  ])('2, %s: a password on every focus', (site) => {
+    const rules = rulesOf(site);
+    const { rate, passwords } = focuses(rules, 200);
+    expect(rate).toBe(1);
+    for (const p of passwords) expect(passwordSatisfies(p, rules)).toBe(true);
+  });
+
+  // 3: a plan whose places count nothing is never stretched to the vault's limit.
+  it.each(['allowed: [ab]; required: [4]; required: [5]; max-consecutive: 1;', 'allowed: [abcdef]; required: [b]; max-consecutive: 1;', 'allowed: [abc]; required: [!]; required: [@]; max-consecutive: 1;'])(
+    '3, %s: a password on 99% of focuses, never stretched past what adds bits',
+    (site) => {
+      const rules = rulesOf(site);
+      const { rate, passwords } = focuses(rules, 200);
+      expect(rate).toBeGreaterThanOrEqual(0.99);
+      for (const p of passwords) expect(p.length <= 20 || isStrongPassword(p, rules), `${p.length}`).toBe(true);
+    },
+  );
+
+  // 4: the term for the place before a small class being another small class (q = 22/27; 16/27 without it).
+  it('4, byOther pinned: [abcdefgh] with b and c required, max-sequential 1, 10 long', () => {
+    const rules = rulesOf('allowed: [abcdefgh]; required: [b]; required: [c]; max-sequential: 1; maxlength: 10;');
+    const p = generatePassword(rules, seeded(6))!;
+    expect(p).toHaveLength(10);
+    // Eight free places at log2(8 − 2); q = 2 · (8 · 2/6 + 1) / 9.
+    expect(passwordBits(p, rules)).toBeCloseTo(8 * Math.log2(6) + Math.log2(1 - 22 / 27), 9);
+  });
+
+  // 4: stuck certain at 20 and 21 (twelve small classes, each beside two others in order), and not once made longer.
+  it('4, grows pinned: lengthened past where the stuck chance is still 1, and strong', () => {
+    const rules = rulesOf('required: lower; required: upper; required: digit; required: [a]; required: [b]; required: [c]; required: [d]; required: [e]; required: [f]; required: [g]; required: [h]; required: [i]; required: [j]; required: [k]; required: [l]; max-sequential: 1;');
+    const p = generatePassword(rules, seeded(7))!;
+    expect(passwordSatisfies(p, rules)).toBe(true);
+    expect(p.length).toBeGreaterThan(21);
+    expect(isStrongPassword(p, rules)).toBe(true);
+  });
+});
+
+describe('a regression sweep against main (round 2 of #286)', () => {
+  /**
+   * 400 seeded rule sets (run limits, required and allowed classes, half with a maxlength), each tried on 20 seeds by
+   * main's generator before #286 (5e16d787; password-generator-sweep-main.json). Every one that made a password there
+   * still does here, never longer than main's or 40, unless it's made longer to be strong: ten of these 400 are, at 41
+   * to 43 characters, where main stopped at 20, weak (a pool the run limits leave a bit a place).
+   */
+  it('every rule set that made a password at main still makes one, as short', () => {
+    const lost: string[] = [];
+    for (const [i, { rules: site, made, length }] of (sweep as { rules: string; made: number; length: number | null }[]).entries()) {
+      if (!made) continue;
+      const rules = rulesOf(site);
+      let now = 0;
+      let longest = 0;
+      let weakLong = false;
+      for (let seed = 1; seed <= 20; seed++) {
+        const p = generatePassword(rules, seeded(seed * 7919 + i));
+        if (!p) continue;
+        now++;
+        longest = Math.max(longest, p.length);
+        if (p.length > Math.max(length ?? 0, 40) && !isStrongPassword(p, rules)) weakLong = true;
+        expect(passwordSatisfies(p, rules), site).toBe(true);
+      }
+      if (!now || (made === 20 && now < 19) || weakLong) lost.push(`${site} (main ${made}/20 at ${length}, now ${now}/20 at ${longest})`);
+    }
+    expect(lost).toEqual([]);
   });
 });
 
