@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import sweep from './password-generator-sweep-main.json';
-import { drawOnce, generatePassword, GENERATOR_CLASSES, isStrongPassword, LOOK_ALIKES, passwordBits, passwordRulesFor, passwordSatisfies, runsAllow, type PasswordRuleSet, type RandomInt } from '../src/password-generator';
+import { FILL_BUDGET, fillSteps, drawOnce, generatePassword, GENERATOR_CLASSES, isStrongPassword, LOOK_ALIKES, passwordBits, passwordRulesFor, passwordSatisfies, runsAllow, type PasswordRuleSet, type RandomInt } from '../src/password-generator';
 
 /** A seeded generator (mulberry32), as password-generator.test.ts has it. */
 function seeded(seed: number): RandomInt {
@@ -350,6 +350,46 @@ describe('round 2 of #286: the fallbacks’ regressions (Neon’s B1, B2; Opus�
     expect(passwordSatisfies(p, rules)).toBe(true);
     expect(p.length).toBeGreaterThan(21);
     expect(isStrongPassword(p, rules)).toBe(true);
+  });
+});
+
+describe('round 3 of #286: a page can’t stall main (Neon’s B1), nor stretch a weak password (Neon’s B2)', () => {
+  // Neon's inputs: a page's own passwordrules, worked out on Electron's main thread on every focus. Each stays inside its
+  // walk's budget here; how long each takes is held in password-generator.perf.test.ts (pnpm test:perf).
+  const heavy = [
+    'allowed: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
+    'allowed: [ab01IOlo|]; required: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
+    'allowed: [ab01IOlo|]; required: [ab01IOlo|]; required: [ab01IOlo|]; max-repeating: 60; max-sequential: 1; minlength: 64;',
+    `allowed: [ab01IOlo|]; ${'required: [ab01IOlo|]; '.repeat(6)}max-repeating: 60; max-sequential: 1; minlength: 64;`,
+    `allowed: [ab01IOlo|]; ${'required: [ab01IOlo|]; '.repeat(12)}max-repeating: 60; max-sequential: 1; minlength: 64;`,
+    `allowed: [ab01IOlo|]; ${'required: [a]; required: [b]; required: [0]; required: [1]; '.repeat(3)}max-repeating: 60; max-sequential: 1; minlength: 64;`,
+    // Many small required classes (each one character): the stuck chance's work grows with their square, at every
+    // length tried (7.2 s and 2.6 s before).
+    `allowed: lower, digit; ${'required: [a]; required: [b]; '.repeat(150)}max-repeating: 1; minlength: 400;`,
+    `allowed: lower, digit; ${'required: [a]; '.repeat(90)}max-consecutive: 1; minlength: 200;`,
+    `allowed: lower, digit; ${[...'abcdefghijkmnpqrstuvwxyz23456789'].map((c) => `required: [${c}];`).join(' ')} max-sequential: 1; minlength: 900;`,
+  ];
+  it.each(heavy)('B1, %s: its walk inside its budget, and a password or none (never a hang)', (site) => {
+    const rules = rulesOf(site);
+    expect(fillSteps(rules)).toBeLessThanOrEqual(FILL_BUDGET);
+    const p = generatePassword(rules, seeded(9));
+    if (p !== null) expect(passwordSatisfies(p, rules)).toBe(true);
+  });
+
+  it('B2: never stretched to where it’s weaker (Neon’s witness: 2.21 bits at 20, 3.00 at 21, 0 by 31)', () => {
+    const rules = rulesOf(`allowed: [abcd0]; required: [b]; required: [c]; ${'required: [0]; '.repeat(15)}max-sequential: 1;`);
+    const p = generatePassword(rules, seeded(10))!;
+    expect(p).not.toBeNull();
+    // Never stretched (it went to 1,000 at 0 bits). Its 15 [0]s are one class now, and its bits count as they are.
+    expect(p.length).toBeLessThan(40);
+    expect(passwordSatisfies(p, rules)).toBe(true);
+  });
+
+  it('[ab0] with a and b required, max-sequential 1: a0b (nothing at main or before)', () => {
+    const rules = rulesOf('allowed: [ab0]; required: [a]; required: [b]; max-sequential: 1;');
+    const { rate, passwords } = focuses(rules, 100);
+    expect(rate).toBeGreaterThanOrEqual(0.99);
+    for (const p of passwords) expect(passwordSatisfies(p, rules)).toBe(true);
   });
 });
 
