@@ -35,8 +35,8 @@ describe('the row for chords whose ad blocking didn’t come on (#284)', () => {
     });
   });
 
-  it('a profile two chords share: both named; three or more joined with commas', () => {
-    expect(notBlockingRow([{ profileId: 'p-work', state: 'failed' }, { profileId: 'p-home', state: 'failed' }], chords)?.label).toBe('Not blocking in Work, Side project and Home');
+  it('a profile two chords share: both named, in the switcher’s order; three or more joined with commas', () => {
+    expect(notBlockingRow([{ profileId: 'p-home', state: 'failed' }, { profileId: 'p-work', state: 'failed' }], chords)?.label).toBe('Not blocking in Work, Home and Side project');
   });
 
   it('trying again for any of them: Trying…; only the failed ones are tried again', () => {

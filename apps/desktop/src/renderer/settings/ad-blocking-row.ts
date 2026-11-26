@@ -16,7 +16,9 @@ export interface NotBlockingRow {
 
 /** The row, or null when every chord's blocking is on (or none of those listed is a chord's). */
 export function notBlockingRow(notOn: AdBlockingStatus['notOn'], chords: readonly { name: string; profileId: string }[]): NotBlockingRow | null {
-  const names = notOn.flatMap((p) => chords.filter((c) => c.profileId === p.profileId).map((c) => c.name));
+  // In the switcher's order, as Settings lists chords (Carbon's N1 on #316).
+  const listed = new Set(notOn.map((p) => p.profileId));
+  const names = chords.filter((c) => listed.has(c.profileId)).map((c) => c.name);
   if (!names.length) return null;
   const many = names.length > 1;
   const joined = many ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];

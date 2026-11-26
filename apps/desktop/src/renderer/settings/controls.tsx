@@ -83,10 +83,15 @@ function describe(control: ReactNode, id: string | undefined): ReactNode {
 
 export function Row({ label, description, control, changed, onReset, tone }: { label: string; description?: string; control: ReactNode; changed?: boolean; onReset?(): void; tone?: 'warning' }) {
   const descriptionId = useId();
+  const labelId = useId();
+  // A warning row's control (Try again) is named for what it does, and described by what's wrong: the label, then why.
+  const describedBy = tone === 'warning' ? [labelId, description ? descriptionId : null].filter(Boolean).join(' ') : description ? descriptionId : undefined;
   return (
     <div className={styles.row} data-tone={tone}>
       <div className={styles.rowText}>
-        <span className={styles.rowLabel}>{label}</span>
+        <span id={labelId} className={styles.rowLabel}>
+          {label}
+        </span>
         {description && (
           <span id={descriptionId} className={styles.rowDescription}>
             {description}
@@ -94,7 +99,7 @@ export function Row({ label, description, control, changed, onReset, tone }: { l
         )}
       </div>
       {onReset && <ResetButton visible={Boolean(changed)} onReset={onReset} label={`Reset ${label} to default`} />}
-      {describe(control, description ? descriptionId : undefined)}
+      {describe(control, describedBy)}
     </div>
   );
 }

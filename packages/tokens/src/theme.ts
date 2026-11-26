@@ -109,7 +109,8 @@ export const DANGER: Record<Appearance, Oklch> = {
 
 /**
  * Something isn't working as you set it and you might act on it (DESIGN.md §4.5, used sparingly): Settings → Privacy's
- * *Not blocking in Work* (#284). A warm amber, apart from danger's red, at ≥ 4.5:1 on every surface.
+ * *Not blocking in Work* (#284). A warm amber, apart from danger's red, at ≥ 4.5:1 on every plain surface (as danger
+ * is): text in it belongs on a surface, never on a tint or a hovered row (Carbon's N4 on #316).
  */
 export const WARNING: Record<Appearance, Oklch> = {
   light: { l: 0.53, c: 0.14, h: 50 },

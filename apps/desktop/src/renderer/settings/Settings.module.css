@@ -197,11 +197,13 @@
 
 .rowLabel {
   font: var(--text-body);
+  overflow-wrap: anywhere;
 }
 
 .rowDescription {
   color: var(--color-fg-muted);
   font: var(--text-small);
+  overflow-wrap: anywhere;
 }
 
 /* Something isn't working as set (Privacy's *Not blocking in Work*, #284): the label in warning, after a dot. */
@@ -243,15 +245,21 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .trying::before {
-    animation: none;
-  }
+/* Reduced motion as Chord reads it (Settings → Motion over the OS's): the ring holds still (Carbon's SF3). */
+:global(:root[data-reduced-motion]) .trying::before {
+  animation: none;
+  border-color: var(--color-fg-muted);
 }
 
 @media (forced-colors: active) {
   .row[data-tone='warning'] .rowLabel {
     color: CanvasText;
+  }
+
+  /* The dot and the pill's edge in system colors (Carbon's SF4). */
+  .row[data-tone='warning'] .rowLabel::before {
+    forced-color-adjust: none;
+    background: CanvasText;
   }
 }
 
@@ -472,8 +480,10 @@
 }
 
 .linkButton {
+  flex: none;
   block-size: var(--size-row);
   padding-inline: var(--space-4);
+  white-space: nowrap;
   border: 0;
   border-radius: var(--radius-full);
   background: var(--color-item-hover);
@@ -482,13 +492,21 @@
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }
 
-.linkButton:disabled {
+.linkButton:disabled,
+.linkButton[aria-disabled='true'] {
   opacity: 0.5;
 }
 
-.linkButton:hover:not(:disabled) {
+.linkButton:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--color-item-active-bg);
   box-shadow: var(--shadow-raised);
+}
+
+/* In forced colors, the pill keeps an edge (Carbon's SF4 on #316), as the switch does; after .linkButton, so it wins. */
+@media (forced-colors: active) {
+  .linkButton {
+    border: var(--size-hairline) solid ButtonText;
+  }
 }
 
 /* Settings → Assistant: adding a site it never reads. */
