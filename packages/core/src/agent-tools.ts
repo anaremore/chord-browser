@@ -69,6 +69,15 @@ export const ASSISTANT_ACTING_RELEASED = true as boolean;
 /** Whether this build lets the assistant act (ASSISTANT_ACTING_RELEASED, or any build that isn't packaged), with M2 in it. */
 export const assistantActing = (build: { packaged: boolean }, released = ASSISTANT_ACTING_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
 
+/**
+ * The assistant's `navigate` taking `snapshot: true` (S18 M2g-2 slice 3a, #204): the page's outline with its answer. Off
+ * in packaged builds until it's released; development builds have it.
+ */
+export const ASSISTANT_GO_OUTLINE_RELEASED = false as boolean;
+
+/** Whether this build offers the assistant `navigate`'s `snapshot: true` (ASSISTANT_GO_OUTLINE_RELEASED, or any build that isn't packaged). */
+export const assistantGoOutline = (build: { packaged: boolean }, released = ASSISTANT_GO_OUTLINE_RELEASED): boolean => agentActions(build) && (!build.packaged || released);
+
 /** Whether this build has M2's slices (AGENT_ACTIONS_RELEASED, or any build that isn't packaged). */
 export const agentActions = (build: { packaged: boolean }, released = AGENT_ACTIONS_RELEASED): boolean => !build.packaged || released;
 
@@ -106,6 +115,8 @@ export interface AgentToolSpec {
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const schemaOf = (name: string) => CONTROL_TOOLS.find((t) => t.name === name)!.inputSchema;
+/** A schema with `snapshot: true` too: the page's outline with the answer (S18 M2g-2 slice 3a, #204). */
+const withOutline = (schema: Record<string, unknown>) => ({ ...schema, properties: { ...(schema['properties'] as Record<string, unknown>), snapshot: { type: 'boolean' } } });
 const read = (name: string, description: string): AgentToolSpec => ({ name, level: 'read', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: true, openWorldHint: true } });
 
 /**
@@ -157,10 +168,10 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
       ['press_key', 'Press one key in an element by its ref; text goes in with type.', true],
       ['select_option', 'Choose an option of a list by its ref and the option’s label.', false],
       ['hover', 'Point at an element by its ref (menus that open on hover).', false],
-      ['navigate', 'Go to an http or https address in one of your own tabs, signed in as the user. Waits for it to load.', false],
+      ['navigate', 'Go to an http or https address in one of your own tabs, signed in as the user. Waits for it to load; with snapshot, returns its outline as snapshot gives it.', false],
       ['back', 'Go back a page in one of your own tabs. Waits for it to load.', false],
     ] as const
-  ).map(([name, description, destructive]): AgentToolSpec => ({ name, level: 'act', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: false, destructiveHint: destructive, openWorldHint: true } })),
+  ).map(([name, description, destructive]): AgentToolSpec => ({ name, level: 'act', description, inputSchema: name === 'navigate' ? withOutline(schemaOf(name)) : schemaOf(name), annotations: { readOnlyHint: false, destructiveHint: destructive, openWorldHint: true } })),
   {
     name: 'batch',
     level: 'act',
@@ -197,8 +208,18 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   ),
 ];
 
+/**
+ * `open_tab` and `navigate` with `snapshot: true` (S18 M2g-2 slice 3a, #204): the page's outline in the same answer, so the
+ * first look is no turn of its own. Only where `snapshot` is (M2's tools).
+ */
+const OPEN_TAB_WITH_OUTLINE: AgentToolSpec = {
+  ...AGENT_TOOLS.find((t) => t.name === 'open_tab')!,
+  description: 'Open an http or https address in a new tab of yours, signed in as the user. Waits for it to load (at most 30 s); returns its id and title, and with snapshot, its outline as snapshot gives it.',
+  inputSchema: object({ url: { type: 'string', maxLength: 2048 }, snapshot: { type: 'boolean' } }, ['url']),
+};
+
 /** The tools of this build: M1's, and M2's when it has them (agentActions). */
-export const agentTools = (actions: boolean): readonly AgentToolSpec[] => (actions ? [...AGENT_TOOLS, ...AGENT_ACTION_TOOLS] : AGENT_TOOLS);
+export const agentTools = (actions: boolean): readonly AgentToolSpec[] => (actions ? [...AGENT_TOOLS.map((t) => (t.name === 'open_tab' ? OPEN_TAB_WITH_OUTLINE : t)), ...AGENT_ACTION_TOOLS] : AGENT_TOOLS);
 
 /** The MCP shape of the list: what tools/list answers, for this build. */
 export const agentToolList = (actions: boolean) => agentTools(actions).map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));

@@ -56,6 +56,8 @@ interface Inner {
   actingHost(s: unknown): { lease: { going(node: { id: string }, url: string): void } };
   importChanged(removed?: unknown[]): Promise<void>;
   tailCard(s: unknown, nodeId: string, contents: unknown): (sites: string[], why: string | null, signal: AbortSignal, going?: string) => Promise<string>;
+  tools(): readonly { name: string; inputSchema: { properties: Record<string, unknown> } }[];
+  scopeOf(s: unknown): { outlineOnGo?: boolean };
 }
 
 function setup(acting = true) {
@@ -98,6 +100,13 @@ function setup(acting = true) {
 }
 
 describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () => {
+  it('navigate’s snapshot: true, in a development build: its tool takes it and its scope honours it (round 1 of #232, SF3)', async () => {
+    const t = setup();
+    const navigate = t.inner.tools().find((x) => x.name === 'navigate')!;
+    expect(Object.keys(navigate.inputSchema.properties)).toContain('snapshot');
+    expect(t.inner.scopeOf(await t.inner.stateFor('c1')).outlineOnGo).toBe(true);
+  });
+
   it('acting off (Settings): no message’s tab, and your click in the tab during a reply says nothing (Claude’s B1)', async () => {
     const t = setup(false);
     const s = await t.turn();
