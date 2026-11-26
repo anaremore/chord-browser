@@ -402,7 +402,7 @@ test('acting: what a page hides from scripts, its own capture listeners, file in
     // Chord not in front while the agent acts: nothing is focused for you then (that would bring Chord forward), and
     // coming back to Chord, your page has the focus, never the agent's, nor a view of Chord's that isn't shown (macOS
     // made the hidden popover the window's first responder as it came back, on arm64 and Intel: window.ts'
-    // keepFocusOffParked gives it to your page).
+    // checkFloatingFocus gives it back to your page, #201).
     // On macOS a window's focus() asks the OS to activate Chord, and macOS 14's cooperative activation may say no to an
     // app sent behind (CI's macOS x64 runner did, three times: nothing focused for 3 s). Coming back is what a click on
     // Chord does, which activates it: app.focus with steal (activateIgnoringOtherApps), then the window.

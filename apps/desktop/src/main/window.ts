@@ -15,7 +15,7 @@ import { AGENT_BAR_HEIGHT, clampPeekCard, DEFAULT_DEVTOOLS, devtoolsLayout, devt
 import type { OverlayOpenEvent, PeekState, Rect, Role, Toast } from '@chord/ipc';
 import type { DockWindow } from './player/dock';
 import { frameRadius, radius, size, space, springCurve, springs } from '@chord/tokens';
-import { BaseWindow, MessageChannelMain, WebContentsView, nativeTheme, webContents, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
+import { BaseWindow, MessageChannelMain, app, WebContentsView, nativeTheme, webContents, type Menu, type MessagePortMain, type Session, type WebContents } from 'electron';
 import { FrameSnapshots, offscreen } from './frame-snapshot';
 import { registerCaller, send } from './ipc';
 import { epochNow, markLaunch } from './perf';
@@ -246,7 +246,6 @@ export class AppWindow {
   /** Parked tabs a pixel taller for a moment, so they paint (`repaintParked`). */
   private readonly nudged = new Set<WebContentsView>();
   private popoverSize = { width: 0, height: 0 };
-  private focusPopoverWhenShown = false;
   /**
    * The menu under a sign-in field (S17 §9): a small view of its own, so the popover's cards stay where they are
    * (and keep what's typed in them). Made the first time a window needs it, then shown and hidden, never made again.
@@ -381,7 +380,20 @@ export class AppWindow {
     // Back in front: the OS gives the focus back to the view that had it last, which can be an agent's page parked
     // here (it took it, or a view just shown became first responder). Never a parked page: the page you see, or this
     // window's own (Claude's review 8 of #110). Within a window in front, focusing a page activates nothing.
-    this.window.on('focus', () => setTimeout(() => this.keepFocusOffParked(true), 0));
+    // And never a floating view that doesn't own the keyboard (checkFloatingFocus: agents.spec's "coming back to Chord",
+    // #201); where it was as the window went behind is where it goes back to.
+    this.window.on('focus', () => {
+      setTimeout(() => this.keepFocusOffParked(), 0);
+      this.checkFloatingFocus();
+    });
+    this.window.on('blur', () => this.noteKeysWere(true));
+    // The cards' focus is watched from the start (#200): a click in them owns it; focus they didn't ask for goes back.
+    this.watchFloating(pageOf(this.popover), () => {
+      clearTimeout(this.floatingTimer);
+      this.cardsOwner = 'you';
+    });
+    // The keyboard going to the shell or the command bar leaves the floating views (a page's: Browser, focusPage).
+    for (const view of [this.shell, this.overlay]) pageOf(view)?.on('focus', () => this.keysLeftFloating());
     if (platform === 'darwin') this.window.on('leave-full-screen', () => this.refreshPageFullScreen());
     for (const event of ['move', 'minimize', 'restore', 'show', 'hide', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'focus'] as const) {
       this.window.on(event as 'move', () => this.placementChanged());
@@ -406,6 +418,7 @@ export class AppWindow {
     });
     this.window.on('closed', () => {
       stopScale();
+      clearTimeout(this.floatingTimer);
       this.closeFloating();
       clearTimeout(this.peekTimer);
       this.pendingPeek = null;
@@ -487,6 +500,8 @@ export class AppWindow {
       return;
     }
     if (focusChanged) {
+      // Another tab: what the floating views owned was for the one you left.
+      this.keysMovedOnPurpose();
       this.closeFloating();
       // Fullscreen belonged to the page going away; Chord's frame comes back for the next one.
       if (this.pageFullScreen) this.leavePageFullScreen();
@@ -495,6 +510,7 @@ export class AppWindow {
     // A shared tab leaving the screen stays attached, out of sight (park).
     for (const view of this.panes) if (!next.includes(view) && !this.parked.includes(view)) root.removeChildView(view);
     for (const view of next) {
+      this.watchPaneFocus(view);
       view.setVisible(!this.hiddenPanes.has(view));
       // Just above the shell; or, while the shell is raised over the pages, just below it. Panes never overlap.
       if (!this.panes.includes(view)) root.addChildView(view, this.shellRaised ? 0 : 1);
@@ -606,16 +622,13 @@ export class AppWindow {
    */
   /**
    * This window in front, with the focus on a page parked here (an agent's): to the page you see, or this window's own.
-   * And as the window comes back (`comingBack`, its focus event), on the popover when it has no card: macOS can make it
-   * the window's first responder then (agents.spec's "coming back to Chord", arm64 and Intel), and your keys would go
-   * nowhere. A popover with a card keeps it, shown or hidden for a moment.
+   * (A floating view of Chord's with the keyboard it doesn't own is checkFloatingFocus's: the popover as the window comes
+   * back, agents.spec's "coming back to Chord".)
    */
-  keepFocusOffParked(comingBack = false): void {
+  keepFocusOffParked(): void {
     if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
     const now = webContents?.getFocusedWebContents?.() ?? null;
-    // macOS's alone: AppKit's choice of first responder (Windows and Linux keep the focus where it was).
-    const cardless = comingBack && platform === 'darwin' && now !== null && now === pageOf(this.popover) && (this.popoverSize.width === 0 || this.popoverSize.height === 0);
-    if (now && !this.isParkedOnly(now) && !cardless) return;
+    if (now && !this.isParkedOnly(now)) return;
     // The page of yours that had it (or the window's own), only while it's one you see (Claude's S7, round 4 of #112:
     // after a tab switch it isn't, and focusing it would put your keys in a tab you left).
     const seen = (c: WebContents) => c === this.shell.webContents || this.panes.some((v) => v.webContents === c);
@@ -625,6 +638,17 @@ export class AppWindow {
     if (!now) return void (this.parked.length > 0 && own?.focus());
     const page = this.activeTabContents;
     (own ?? (page && !page.isDestroyed() ? page : this.shell.webContents)).focus();
+  }
+
+  /** Pages whose focus ends what the floating views owned (once each). */
+  private readonly paneFocusWatched = new WeakSet<WebContents>();
+
+  /** A pane's page taking the keyboard (a click in it, find closing back to it) leaves the floating views. */
+  private watchPaneFocus(view: WebContentsView): void {
+    const contents = pageOf(view);
+    if (!contents || this.paneFocusWatched.has(contents)) return;
+    this.paneFocusWatched.add(contents);
+    contents.on('focus', () => this.keysLeftFloating());
   }
 
   /** A page parked here and not shown (an agent's tab working behind your page). */
@@ -775,6 +799,8 @@ export class AppWindow {
   /** Take Peek's page out of the window (it closes, or becomes a tab) and put the overlay away. */
   closePeek(): WebContentsView | null {
     const view = this.peekView;
+    // What a card owned over Peek (its find) goes with it.
+    if (view) this.keysMovedOnPurpose();
     this.pendingPeek = null;
     this.peekGrowing = false;
     clearTimeout(this.peekTimer);
@@ -1014,8 +1040,14 @@ export class AppWindow {
       const root = this.window.contentView;
       root.addChildView(this.menuView, root.children.indexOf(this.popover) + 1);
       const contents = this.menuView.webContents;
+      // Never given the keyboard (your keys stay in the field): only a click in it owns it (#200).
+      this.watchFloating(contents, () => {
+        clearTimeout(this.floatingTimer);
+        this.menuOwnsKeys = true;
+      });
       contents.once('destroyed', () => {
         this.menuView = null;
+        this.menuOwnsKeys = false;
         this.menuSize = { width: 0, height: 0 };
       });
       this.onMenuView?.(contents);
@@ -1074,55 +1106,184 @@ export class AppWindow {
 
   /**
    * The popover shows while it has cards, except while a frame snapshot moves
-   * (it hangs from a page that's out of sight). Shown, it takes focus if asked to.
+   * (it hangs from a page that's out of sight). Shown, a card waiting for the keyboard takes it.
    */
   private showPopover(): void {
     const visible = this.popoverSize.width > 0 && this.popoverSize.height > 0 && !this.snapshots.active;
     if (this.popover.getVisible() !== visible) {
+      if (visible) this.noteKeysWere();
       this.popover.setVisible(visible);
-      // An agent's connect card never takes the keyboard (S18): where the OS makes a view just shown the window's
-      // first responder (macOS, when nothing else in it has focus), the page or the shell gets it back.
-      if (visible && this.popoverCentered && !this.focusPopoverWhenShown) {
-        this.cardShownAt = Date.now();
-        this.watchCardFocus();
-        this.giveCardFocusBack();
-      }
+      this.noteFloatingFocus(visible ? 'shown' : 'hidden', { pending: this.pendingOwner, owner: this.cardsOwner });
+      // A card the OS made the first responder as it appeared (#200) gives the keyboard back, unless it owns it.
+      if (visible && !this.pendingOwner) this.checkFloatingFocus(true);
     }
-    if (visible && this.focusPopoverWhenShown) {
-      this.focusPopoverWhenShown = false;
-      pageOf(this.popover)?.focus();
-    }
+    this.takePendingKeys();
   }
 
-  /** When the agent's connect card last appeared, and whether its focus watch is set up (S18). */
-  private cardShownAt = 0;
-  private cardFocusWatched = false;
+  /**
+   * Who has the keyboard in Chord's floating views, on macOS (Windows and Linux never move it back): the popover's cards
+   * and the menu under a field. AppKit makes a view of the window its first responder when it's shown while nothing
+   * else in the window has the focus, or as the window comes back to the front (#200: the menu, as a sign-in's page
+   * navigated; #201: the popover, coming back to Chord). Your keys would go there, not to your page. A floating view
+   * keeps the keyboard only while it owns it; otherwise it goes back to where it was (`keysWere`).
+   *
+   * The cards' owner: `ask`, a card that asks for it (Browser's syncPopover: the sign-in box, passkey, the passwords
+   * unlock), until it's answered; `you`, given by you (a click in them, F6, find), until the keyboard leaves them. The
+   * menu owns it only after a click in it. None of it outlives the cards (Browser: setCards), the keyboard leaving
+   * them while this window is in front, or Chord sending it elsewhere (the command bar, F6, a tab switch, Peek closing).
+   */
+  private cardsOwner: 'ask' | 'you' | null = null;
+  /** Who takes the keyboard once the cards show, and nothing covers them (the command bar, a page's full screen). */
+  private pendingOwner: 'ask' | 'you' | null = null;
+  private menuOwnsKeys = false;
+  /** Where the keyboard was before a floating view took it: never a floating view, nor anything not shown here. */
+  private keysWere: WebContents | null = null;
+  private floatingTimer: ReturnType<typeof setTimeout> | undefined;
 
-  /** Focus the card got on its own, soon after it appeared (not from a click on it), goes back. */
-  private watchCardFocus(): void {
-    if (this.cardFocusWatched) return;
-    const contents = pageOf(this.popover);
+  /**
+   * Watch a floating view's focus (once per contents): a click in it owns it; focus it didn't ask for is checked; and
+   * the keyboard leaving it, while this window is in front and it's still shown, ends what it owned.
+   */
+  private watchFloating(contents: WebContents | undefined, own: () => void): void {
     if (!contents) return;
-    this.cardFocusWatched = true;
-    let clicked = 0;
     contents.on('before-mouse-event', (_event, mouse) => {
-      if (mouse.type === 'mouseDown') clicked = Date.now();
+      if (mouse.type === 'mouseDown') own();
     });
     contents.on('focus', () => {
-      if (this.popoverCentered && Date.now() - this.cardShownAt < 1000 && Date.now() - clicked > 1000) setTimeout(() => this.giveCardFocusBack(), 0);
+      this.noteFloatingFocus('focus', { menu: contents === pageOf(this.menuView) });
+      this.checkFloatingFocus();
     });
+    contents.on('blur', () => setTimeout(() => this.keysLeftFloating(), 0));
   }
 
-  private giveCardFocusBack(): void {
-    if (this.window.isDestroyed() || !this.popoverCentered || !pageOf(this.popover)?.isFocused()) return;
-    const page = this.activeTabContents;
-    (page && !page.isDestroyed() ? page : this.shell.webContents).focus();
+  /**
+   * The keyboard is elsewhere in this window (a floating view's blur; the shell's, the command bar's or a page's focus):
+   * a shown floating view without it owns nothing any more. Not when the window went behind (coming back gives it back),
+   * nor a view hidden for a moment (a frame snapshot moving).
+   */
+  keysLeftFloating(): void {
+    if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
+    const cards = pageOf(this.popover);
+    const menu = pageOf(this.menuView);
+    if (cards && this.popover.getVisible() && !cards.isFocused()) this.cardsOwner = null;
+    if (menu && this.menuView?.getVisible() && !menu.isFocused()) this.menuOwnsKeys = false;
   }
 
-  /** Give the popover keyboard focus (the find bar), now or as soon as it's shown. */
-  focusPopover(): void {
-    if (this.popover.getVisible()) pageOf(this.popover)?.focus();
-    else this.focusPopoverWhenShown = true;
+  /** Where the keyboard is now, if it's one of this window's views you see: where a floating view gives it back to. */
+  private noteKeysWere(leaving = false): void {
+    if (this.window.isDestroyed() || (!leaving && BaseWindow.getFocusedWindow?.() !== this.window)) return;
+    const now = webContents?.getFocusedWebContents?.() ?? null;
+    if (now && this.shownHere(now)) this.keysWere = now;
+  }
+
+  private isFloating(contents: WebContents): boolean {
+    return contents === pageOf(this.popover) || contents === pageOf(this.menuView);
+  }
+
+  /**
+   * On the next turn (and now, too, when `now`): a floating view with the keyboard that doesn't own it gives it back. The
+   * next turn, so a click's mouse-down, which comes in the same native event as the focus it gives, owns it first.
+   */
+  private checkFloatingFocus(now = false): void {
+    if (platform !== 'darwin') return;
+    if (now) this.giveFloatingFocusBack();
+    clearTimeout(this.floatingTimer);
+    this.floatingTimer = setTimeout(() => this.giveFloatingFocusBack(), 0);
+  }
+
+  /**
+   * Chord sent the keyboard somewhere on purpose: no give-back is pending, and the floating views own nothing. A card's
+   * ask still waiting stays (`keepAsk`: the command bar opening over it; it takes the keyboard as that closes).
+   */
+  private keysMovedOnPurpose(keepAsk = false): void {
+    clearTimeout(this.floatingTimer);
+    this.cardsOwner = null;
+    if (!keepAsk || this.pendingOwner !== 'ask') this.pendingOwner = null;
+    this.menuOwnsKeys = false;
+  }
+
+  private giveFloatingFocusBack(): void {
+    if (this.window.isDestroyed() || BaseWindow.getFocusedWindow?.() !== this.window) return;
+    const cards = pageOf(this.popover);
+    const menu = pageOf(this.menuView);
+    const stray = (cards?.isFocused() && !this.cardsOwner) || (menu?.isFocused() && !this.menuOwnsKeys);
+    if (!stray) return;
+    this.noteFloatingFocus('givenBack');
+    const was = this.keysWere && this.shownHere(this.keysWere) ? this.keysWere : null;
+    // Where it was; else the command bar, Peek, the page you see, the shell.
+    const overlay = this.overlayVisible ? pageOf(this.overlay) : undefined;
+    const page = this.tabView?.getVisible() ? pageOf(this.tabView) : undefined;
+    (was ?? overlay ?? (this.peekOnScreen ? this.peekContents : undefined) ?? page ?? pageOf(this.shell))?.focus();
+  }
+
+  /**
+   * A page of this window's that you see: the shell, a pane on screen, the command bar while it's open, Peek while it's
+   * on screen, a pane's docked DevTools. Never a floating view, a page parked or hidden here, or another window's.
+   */
+  private shownHere(contents: WebContents): boolean {
+    if (contents.isDestroyed() || this.isFloating(contents) || this.isParkedOnly(contents)) return false;
+    if (contents === pageOf(this.shell)) return true;
+    if (this.panes.some((v) => pageOf(v) === contents && v.getVisible() && !this.hiddenPanes.has(v))) return true;
+    if (contents === pageOf(this.overlay)) return this.overlayVisible;
+    if (this.peekOnScreen && contents === this.peekContents) return true;
+    return this.devtools.some((tools, i) => Boolean(tools && this.dockedDevtools(i)) && pageOf(tools?.view) === contents);
+  }
+
+  /**
+   * What happened to the floating views' focus lately, for a test that finds one focused (#200): shown, hidden, asked
+   * for, focused, given back; each with its time (ms) and whether the cards had the keyboard. Nothing typed. Only in an
+   * unpackaged build with the test hooks on.
+   */
+  private readonly floatingLog: Record<string, unknown>[] = [];
+  private noteFloatingFocus(kind: string, detail: Record<string, unknown> = {}): void {
+    if (process.env['CHORD_E2E_HOOKS'] !== '1' || app.isPackaged) return;
+    this.floatingLog.push({ kind, at: Date.now() % 100_000, cards: pageOf(this.popover)?.isFocused() ?? null, menu: pageOf(this.menuView)?.isFocused() ?? null, ...detail });
+    if (this.floatingLog.length > 20) this.floatingLog.shift();
+  }
+  cardFocusForTests() {
+    return this.floatingLog.slice();
+  }
+
+  /**
+   * Give the popover the keyboard, now or as soon as it's shown: `you` asked (find), or a card that asks (`ask`: the
+   * sign-in box, passkey, the passwords unlock), which waits while the command bar or a page's full screen covers it.
+   */
+  focusPopover(by: 'ask' | 'you' = 'you'): void {
+    this.noteFloatingFocus('asked', { by, visible: this.popover.getVisible() });
+    this.noteKeysWere();
+    clearTimeout(this.floatingTimer);
+    this.pendingOwner = by;
+    this.takePendingKeys();
+  }
+
+  /** A card waiting for the keyboard takes it: once the cards show, and (one that asks) nothing covers them. */
+  private takePendingKeys(): void {
+    const by = this.pendingOwner;
+    if (!by || this.window.isDestroyed() || !this.popover.getVisible()) return;
+    if (by === 'ask' && ((this.overlayVisible && !this.peekOnScreen) || this.pageFullScreen)) return;
+    this.pendingOwner = null;
+    this.cardsOwner = by;
+    pageOf(this.popover)?.focus();
+  }
+
+  /**
+   * Browser's word on the cards (not their size, which the popover reports late): with none, nothing is owned or
+   * waiting, so an old card's late 0 × 0 never takes a new card's keyboard away.
+   */
+  setCards(any: boolean): void {
+    if (any) return;
+    this.cardsOwner = this.pendingOwner = null;
+  }
+
+  /**
+   * The cards that asked for the keyboard are answered (Browser: none asks any more): what they owned ends, and the
+   * keyboard goes back unless something else owns it. Also when Browser has already said no card is left (setCards):
+   * the owner is gone then, and the keyboard still has to come back from the last card.
+   */
+  popoverDoneAsking(): void {
+    if (this.pendingOwner === 'ask') this.pendingOwner = null;
+    if (this.cardsOwner === 'ask') this.cardsOwner = null;
+    if (!this.cardsOwner) this.checkFloatingFocus();
   }
 
   /**
@@ -1226,7 +1387,9 @@ export class AppWindow {
       return;
     }
     this.showOverlay(true);
+    this.keysMovedOnPurpose(true);
     pageOf(this.overlay)?.focus();
+    this.keysWere = pageOf(this.overlay) ?? this.keysWere;
     send(this.overlay.webContents, 'overlay:open', { mode, anchor: mode === 'edit' ? (anchor ?? this.anchor) : anchor, url, seq: ++this.overlaySeq, requestedAt, ...(capture ? { capture } : {}) });
     this.placementChanged();
   }
@@ -1277,6 +1440,8 @@ export class AppWindow {
     this.showOverlay(false);
     const back = dismissed && this.overlayFrom === 'shell' ? this.shell : (this.tabView ?? this.shell);
     (pageOf(back) ?? pageOf(this.shell))?.focus();
+    // A card that asked for the keyboard while the command bar covered it takes it now.
+    this.takePendingKeys();
     this.placementChanged();
   }
 
@@ -1290,6 +1455,11 @@ export class AppWindow {
     const tools = this.dockedDevtools(this.focusedPane);
     const target =
       to === 'popover' && this.popover.getVisible() ? pageOf(this.popover) : to === 'devtools' && tools ? pageOf(tools.view) : to === 'page' && this.tabView?.getVisible() ? pageOf(this.tabView) : undefined;
+    // Sent on purpose: to the cards, they own it (only when they're shown); anywhere else, they own nothing.
+    this.keysMovedOnPurpose();
+    if (to === 'popover' && target) this.cardsOwner = 'you';
+    else if (target) this.keysWere = target;
+    this.noteFloatingFocus('region', { to });
     // The shell otherwise, or when the region's page is gone.
     (target ?? pageOf(this.shell))?.focus();
   }
@@ -1479,11 +1649,12 @@ export class AppWindow {
     // The menu under a field: its own view, under its field, and out of sight while the field is (or Peek covers it,
     // or a frame snapshot moves the pages).
     this.placeMenu();
-    this.showPopover();
     const { width: pw, height: ph } = this.popoverSize;
     // With Peek open, the popover (find) hangs from its card's corner, below its header, over Peek's page.
+    // Placed first, then shown: it never appears where it was last.
     if (this.peekOnScreen) {
       this.placePeek();
+      this.showPopover();
       // Its chrome, unless that's waiting for the overlay to listen again.
       if (this.peek) send(this.overlay.webContents, 'peek:state', this.peekState());
       this.placementChanged();
@@ -1494,6 +1665,7 @@ export class AppWindow {
     const pane = this.pageRectsIn(frame)[this.focusedPane] ?? frame;
     const x = this.popoverCentered ? pane.x + Math.max(0, Math.round((pane.width - pw) / 2)) : Math.max(pane.x, pane.x + pane.width - pw);
     place(this.popover, toWindowRect({ x, y: pane.y, width: pw, height: ph }));
+    this.showPopover();
     this.placementChanged();
   }
 
@@ -1508,12 +1680,17 @@ export class AppWindow {
         const root = this.window.contentView;
         root.removeChildView(view);
         root.addChildView(view, root.children.indexOf(this.popover) + 1);
+        this.noteKeysWere();
         view.setVisible(true);
+        this.noteFloatingFocus('menuShown');
+        // AppKit may make it the first responder as it appears (#200): the field keeps the keyboard.
+        this.checkFloatingFocus(true);
         // Something of Chord's is over the pages now: a docked Chord Player steps aside (player/dock.ts).
         this.placementChanged();
       }
     } else if (view.getVisible()) {
       view.setVisible(false);
+      this.menuOwnsKeys = false;
       this.placementChanged();
     }
   }

@@ -1361,6 +1361,8 @@ if (!app.requestSingleInstanceLock()) {
           return chord.name;
         },
         clearPasswordEvents: () => void (passwordEvents.length = 0),
+        /** Each window's popover focus events (#200): when, against the card's showing, a click in it and an ask. */
+        cardFocus: () => browser!.allWindows.map((w) => w.cardFocusForTests()),
         launch: () => launchTimings(),
         /** Outside agents (S18): whether the endpoint is served, its connections, and the DACL helper's exit code (Windows). */
         agents: async () => {

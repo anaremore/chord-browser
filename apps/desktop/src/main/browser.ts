@@ -446,7 +446,9 @@ export class Browser {
           if (w) this.syncPopover(w);
         },
         focusPage: (contents) => {
-          if (!contents.isDestroyed()) contents.focus();
+          if (contents.isDestroyed()) return;
+          contents.focus();
+          this.windowFor(contents)?.keysLeftFloating();
         },
         accent: (nodeId) => this.accentOf(nodeId),
         toast: (windowId, id, message) => this.windows.get(windowId)?.toast({ id, message }),
@@ -1872,6 +1874,10 @@ export class Browser {
     // The password menu counts as something else it shows (it hangs from its field, not the page's top).
     const { agentCard, theme: _theme, interface: _interface, ...others } = popover;
     w.setPopoverCentered(Boolean(agentCard) && Object.values(others).every((v) => !v));
+    // Whether it has a card at all, from here, not from the size the popover reports late (#245, Neon's B1). The
+    // password menu is the menu's own view, not a card.
+    const { passwordMenu: _menu, ...cards } = others;
+    w.setCards(Boolean(agentCard) || Object.values(cards).some(Boolean));
     const json = JSON.stringify(popover);
     if (this.popoverSent.get(w.id) === json) return;
     this.popoverSent.set(w.id, json);
@@ -1885,7 +1891,10 @@ export class Browser {
         : popover.passwordsUnlock
           ? `passwords:${popover.passwordsUnlock.id}`
           : '';
-    if (asking && this.authFocused.get(w.id) !== asking) w.focusPopover();
+    const asked = this.authFocused.get(w.id);
+    if (asking && asked !== asking) w.focusPopover('ask');
+    // It's answered: the cards left don't own the keyboard it was given (#200).
+    else if (!asking && asked) w.popoverDoneAsking();
     this.authFocused.set(w.id, asking);
   }
 
