@@ -218,9 +218,22 @@ const limitsRuns = (rules: PasswordRuleSet) => rules.maxRepeating !== null || ru
  */
 function ruledOut(rules: PasswordRuleSet, chars: string): number {
   const s = rules.maxSequential;
-  const set = [...new Set(chars)];
-  const sequential = s === null ? 0 : s <= 1 ? Math.max(0, ...set.map((c) => set.filter((d) => Math.abs(stepOf(c, d)) === 1).length)) : s < runs(longestInOrder(chars)).sequential ? 1 : 0;
+  // Linear in the characters (round 4 of #286: a page's rules gave it hundreds, squared at every length tried).
+  const set = new Set(chars);
+  const neighbours = (c: string) => [inOrderAfter(c, -1), inOrderAfter(c, 1)].filter((d) => d !== null && set.has(d)).length;
+  let sequential = 0;
+  if (s !== null && s <= 1) for (const c of set) sequential = Math.max(sequential, neighbours(c));
+  else if (s !== null) sequential = s < runs(longestInOrder(set)).sequential ? 1 : 0;
   return (rules.maxRepeating === null ? 0 : 1) + Math.min(2, sequential);
+}
+
+/** The character `step` places on in order from `c` (a-z, A-Z, 0-9), or null past a range's end or outside them. */
+function inOrderAfter(c: string, step: number): string | null {
+  for (const range of ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789']) {
+    const i = range.indexOf(c);
+    if (i >= 0) return range[i + step] ?? null;
+  }
+  return null;
 }
 
 /**
@@ -292,12 +305,13 @@ function couldBreak(p: string, c: string, rules: PasswordRuleSet): boolean {
 }
 
 /** The longest run in order (a-z, A-Z, 0-9) that `chars` can make: `abcx` makes `abc`. */
-function longestInOrder(chars: string): string {
+function longestInOrder(chars: ReadonlySet<string> | string): string {
+  const has = typeof chars === 'string' ? (c: string) => chars.includes(c) : (c: string) => chars.has(c);
   let best = '';
   for (const range of ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789']) {
     let run = '';
     for (const c of range) {
-      run = chars.includes(c) ? run + c : '';
+      run = has(c) ? run + c : '';
       if (run.length > best.length) best = run;
     }
   }
@@ -320,20 +334,64 @@ function longestInOrder(chars: string): string {
  * site's rules; each count of bits costs about its forced classes.
  */
 const PLAN_BUDGET = 500_000;
-const planWork = { units: 0 };
+/**
+ * And a clock behind it (round 4 of #286, the planning thread: a shape of rules nobody thought of must not stall the
+ * main thread either): past PLAN_MS a plan isn't made longer, the best so far kept, weak and short rather than late.
+ */
+const PLAN_MS = 25;
+const planWork = { units: 0, until: 0 };
+/** Whether a plan may still be worked on: within its work budget and its time. */
+const planTime = () => planWork.units < PLAN_BUDGET && Date.now() < planWork.until;
 
 function planBits(plan: Pick<Plan, 'pool' | 'forced'>, length: number, rules: PasswordRuleSet): number {
-  planWork.units += plan.forced.length + 1;
-  const out = limitsRuns(rules) ? ruledOut(rules, plan.pool + plan.forced.join('')) : 0;
-  const placeBits = (size: number) => (size - out > 1 ? Math.log2(size - out) : 0);
-  if (out && plan.pool.length <= out) return 0;
-  let bits = 0;
-  for (const cls of plan.forced) bits += placeBits(new Set(cls).size);
+  const counts = countsOf(plan, rules);
+  planWork.units += counts.terms.length + 1;
+  if (counts.empty) return 0;
   const free = Math.max(0, length - plan.forced.length);
-  bits += free * placeBits(plan.pool.length);
-  if (!out) return bits;
-  const stuck = stuckChance(plan, length, out, rules);
+  const bits = counts.forced + free * counts.place;
+  if (!counts.out) return bits;
+  const stuck = length >= plan.forced.length ? stuckSum(counts.terms, free, length) : stuckChance(plan, length, counts.out, rules);
   return stuck >= 1 ? 0 : Math.max(0, bits + Math.log2(1 - stuck));
+}
+
+/**
+ * What a plan's bits are made of at any length, worked out once a plan (round 4 of #286, Neon: worked out from the
+ * whole set at every length tried, a page's rules took 1.3 s a focus): what the run limits rule out at a place, the
+ * forced places' bits, a pool place's, and the stuck chance's terms.
+ */
+interface Counts {
+  readonly pool: string;
+  readonly rules: PasswordRuleSet;
+  readonly out: number;
+  /** The pool is no bigger than what the run limits rule out: it counts nothing (planFor keeps it short). */
+  readonly empty: boolean;
+  readonly forced: number;
+  readonly place: number;
+  readonly terms: readonly { pool: number; others: number }[];
+}
+const countsCache = new WeakMap<readonly string[], Counts>();
+function countsOf(plan: Pick<Plan, 'pool' | 'forced'>, rules: PasswordRuleSet): Counts {
+  const kept = countsCache.get(plan.forced);
+  if (kept && kept.pool === plan.pool && kept.rules === rules) return kept;
+  const chars = plan.pool + plan.forced.join('');
+  const out = limitsRuns(rules) ? ruledOut(rules, chars) : 0;
+  const placeBits = (size: number) => (size - out > 1 ? Math.log2(size - out) : 0);
+  let forced = 0;
+  for (const cls of plan.forced) forced += placeBits(new Set(cls).size);
+  const terms = out ? stuckTerms(plan, out, rules) : [];
+  // Charged as it cost: the characters, and the stuck terms' pairs of forced classes.
+  planWork.units += chars.length + plan.forced.length * (terms.length + 1);
+  const counts: Counts = { pool: plan.pool, rules, out, empty: out > 0 && plan.pool.length <= out, forced, place: placeBits(plan.pool.length), terms };
+  countsCache.set(plan.forced, counts);
+  return counts;
+}
+
+/** The stuck chance at `length`, `free` of its places the pool's, from a plan's terms (stuckChance). */
+function stuckSum(terms: readonly { pool: number; others: number }[], free: number, length: number): number {
+  if (length < 2) return 0;
+  let q = 0;
+  for (const { pool, others } of terms) q += (free * pool + others) / (length - 1);
+  return q;
 }
 
 /**
@@ -473,6 +531,7 @@ function planFor(rules: PasswordRuleSet): Plan | null {
 function makePlan(rules: PasswordRuleSet): Plan | null {
   fillWork.steps = 0;
   planWork.units = 0;
+  planWork.until = Date.now() + PLAN_MS;
   const minLength = Math.max(1, rules.minLength);
   const maxLength = Math.min(rules.maxLength, PASSWORD_LIMITS.password);
   if (minLength > maxLength) return null;
@@ -542,7 +601,7 @@ function makePlan(rules: PasswordRuleSet): Plan | null {
     if (!lengthen || !grows(plan)) return null;
     // The shortest length that reaches the floor, a place at a time (each adds what the run limits leave of the pool).
     const longest = Math.min(maxLength, plan.fill);
-    for (let needed = plan.length + 1; needed <= longest && planWork.units < PLAN_BUDGET; needed++) if (planBits(plan, needed, rules) >= floor) return { ...plan, length: needed };
+    for (let needed = plan.length + 1; needed <= longest && planTime(); needed++) if (planBits(plan, needed, rules) >= floor) return { ...plan, length: needed };
     return null;
   };
   const strong = reaching(preferred, false, false) ?? reaching(clean, false, true) ?? (onlyLookAlikes ? reaching(allowed, true, true) : null);
@@ -562,7 +621,7 @@ function makePlan(rules: PasswordRuleSet): Plan | null {
   // classes' stuck chance does (round 3 of #286, Neon's B2: 2.21 bits at 20, 3.00 at 21, 0 by 31, once stretched to 1,000).
   let best = plan.length;
   let most = planBits(plan, plan.length, rules);
-  for (let n = plan.length + 1, longest = Math.min(maxLength, plan.fill); n <= longest && planWork.units < PLAN_BUDGET; n++) {
+  for (let n = plan.length + 1, longest = Math.min(maxLength, plan.fill); n <= longest && planTime(); n++) {
     const bits = planBits(plan, n, rules);
     if (bits > most + 1e-9) [best, most] = [n, bits];
   }

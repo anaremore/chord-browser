@@ -393,6 +393,18 @@ describe('round 3 of #286: a page can’t stall main (Neon’s B1), nor stretch 
     expect(passwordSatisfies(p, rules)).toBe(true);
   });
 
+  it('B2 with distinct classes (round 4 of #286, Neon: the dedupe hid the first witness): never stretched past its strongest', () => {
+    // b and c, and thirteen distinct pairs of look-alikes: its bits peak at 25 characters, then fall as the small
+    // classes' stuck chance does. Stretched to 1,000 when the weak path went to the longest instead.
+    const looks = [...'01IOlo|'];
+    const pairs = looks.flatMap((a, i) => looks.slice(i + 1).map((b) => a + b)).slice(0, 13);
+    const rules = rulesOf(`allowed: [abcd01IOlo|]; required: [b]; required: [c]; ${pairs.map((pair) => `required: [${pair}];`).join(' ')} max-sequential: 1;`);
+    const p = generatePassword(rules, seeded(11))!;
+    expect(p).not.toBeNull();
+    expect(p.length).toBeLessThan(60);
+    expect(passwordSatisfies(p, rules)).toBe(true);
+  });
+
   it('[ab0] with a and b required, max-sequential 1: a0b (nothing at main or before)', () => {
     const rules = rulesOf('allowed: [ab0]; required: [a]; required: [b]; max-sequential: 1;');
     const { rate, passwords } = focuses(rules, 100);

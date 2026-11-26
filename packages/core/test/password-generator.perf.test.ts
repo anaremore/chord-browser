@@ -1,12 +1,14 @@
 /**
  * The generator on a page's rules built to be slow (round 3 of #286, Neon's B1): a page's `passwordrules` attribute is
- * untrusted, and Chord works it out on Electron's main thread at every focus. Each input is held to 50 ms (the fastest
- * of three, so a busy machine's pause isn't counted). Before the fix they took 0.8 s to well over 30 s.
+ * untrusted, and Chord works it out on Electron's main thread at every focus. Each input is held to 50 ms for a whole
+ * focus (the password, its strength, the words for a weak one), from rules read afresh each time, as a page's are: the
+ * slowest of three, never a run that found its plan already worked out (round 4 of #286, Neon). Before the fixes they
+ * took 0.8 s to well over 30 s.
  * password-generator-runs.test.ts holds each to its walk's budget in the unit suite; budgets run alone, in
  * `pnpm test:perf`.
  */
 import { describe, expect, it } from 'vitest';
-import { generatePassword, passwordBits, passwordRulesFor, type RandomInt } from '../src/password-generator';
+import { describeWeakPassword, generatePassword, isStrongPassword, passwordBits, passwordRulesFor, type RandomInt } from '../src/password-generator';
 
 // Core compiles without DOM or Node types; both are globals where the tests run.
 declare const performance: { now(): number };
@@ -27,6 +29,11 @@ function seeded(seed: number): RandomInt {
 }
 
 describe('the generator on a page’s rules built to be slow', () => {
+  // One character each (letters, then digits), two next to each other in order, and two of sixteen letters each pair.
+  const ONE = [...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ23456789'];
+  const LETTERS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const ADJACENT = [...LETTERS].slice(0, -1).map((c, i) => c + LETTERS[i + 1]).filter((pair) => pair !== 'zA');
+  const DISTINCT = [...'abcdefghijklmnop'].flatMap((a, i) => [...'abcdefghijklmnop'].slice(i + 1).map((b) => a + b));
   const SYMBOL_CLASSES = ['!@#', '$%^', '&*(', ')-_', '=+.', ',;:', '<>?', '/~!', '@#$', '%^&', '*()']
     .map((c) => `required: [${c}];`)
     .join(' ');
@@ -47,17 +54,30 @@ describe('the generator on a page’s rules built to be slow', () => {
     `allowed: [ab]; required: [a]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 64;`,
     `allowed: [ab]; required: [a]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 40;`,
     `allowed: [kl]; required: [l]; ${SYMBOL_CLASSES} max-sequential: 1; minlength: 64;`,
+    // Neon's (round 4 of #286): many small required classes beside a wide pool, each length's count of bits once
+    // worked out from the whole set again (up to 1.34 s a focus).
+    `allowed: ascii-printable; ${ONE.slice(0, 30).map((c) => `required: [${c}];`).join(' ')} required: [01IOlo|]; max-consecutive: 1; minlength: 31;`,
+    `allowed: ascii-printable; ${ONE.slice(0, 60).map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1; minlength: 61;`,
+    `allowed: ascii-printable; ${ADJACENT.slice(0, 45).map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1; minlength: 46;`,
+    `allowed: ascii-printable; ${DISTINCT.slice(0, 120).map((c) => `required: [${c}];`).join(' ')} max-sequential: 1;`,
+    `allowed: ascii-printable; ${DISTINCT.slice(0, 120).map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1;`,
+    `allowed: lower, upper; ${ONE.slice(0, 19).map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1;`,
+    `allowed: lower, digit; ${ONE.slice(0, 15).map((c) => `required: [${c}];`).join(' ')} max-consecutive: 1;`,
+    `allowed: ascii-printable; ${DISTINCT.slice(0, 120).map((c) => `required: [${c}];`).join(' ')} max-repeating: 1; max-sequential: 2; minlength: 121;`,
   ];
-  it.each(heavy)(`%s: under ${BUDGET_MS} ms`, (site) => {
-    const rules = passwordRulesFor({}, site).rules;
-    let fastest = Infinity;
+  it.each(heavy)(`%s: a focus under ${BUDGET_MS} ms`, (site) => {
+    const times: number[] = [];
     for (let i = 0; i < 3; i++) {
       const started = performance.now();
-      generatePassword(rules, seeded(9 + i));
-      passwordBits('a'.repeat(64), rules);
-      fastest = Math.min(fastest, performance.now() - started);
+      // As a focus does it (passwords/generator.ts): the rules read afresh, so nothing of an earlier run is kept.
+      const rules = passwordRulesFor({}, site).rules;
+      const password = generatePassword(rules, seeded(9 + i));
+      if (password !== null && !isStrongPassword(password, rules)) describeWeakPassword(password, rules);
+      if (password === null) passwordBits('a'.repeat(64), rules);
+      times.push(performance.now() - started);
     }
-    console.log(`${site.slice(0, 60)}…: ${fastest.toFixed(1)} ms`);
-    expect(fastest).toBeLessThan(BUDGET_MS);
+    const slowest = Math.max(...times);
+    console.log(`${site.slice(0, 60)}…: ${times.map((t) => t.toFixed(1)).join(', ')} ms`);
+    expect(slowest).toBeLessThan(BUDGET_MS);
   });
 });
