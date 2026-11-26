@@ -103,12 +103,37 @@ export class ElementRefs {
    * the last SNAPSHOT_KEPT a diff took (the page keeps the same: snapshot.ts).
    */
   private earlier: { pageId: string; token: string; keys: Map<string, number>; pinned: boolean }[] = [];
-  /** The latest snapshot's outline, for its later ranges: served as it was while the page is the same one. */
+  /**
+   * The latest FULL snapshot's outline: its later ranges (served as it was while the page is the same one), and the next
+   * diff's baseline (its lines).
+   */
   private kept: SnapshotOutline | null = null;
+  /**
+   * The latest outline without the page's text, when it's the tab's latest own read (#205, round 1 of #247): its later
+   * ranges alone, as it was. Never a baseline (no lines): plan rule 1.
+   */
+  private textless: SnapshotOutline | null = null;
+  private issued = 0;
+  /** How many snapshots' refs were issued (round 1 of #247): a diff whose read was out while another landed gives way. */
+  get issues(): number {
+    return this.issued;
+  }
 
-  /** Keep the latest snapshot's outline (its refs are this table's latest). */
+  /** Keep the latest FULL snapshot's outline (its refs are this table's latest), and the agent's latest read is it. */
   remember(outline: SnapshotOutline): void {
     this.kept = outline;
+    this.textless = null;
+  }
+
+  /** Keep an outline without the page's text for its later ranges: the agent's latest own read (never a baseline). */
+  rememberTextless(outline: SnapshotOutline): void {
+    const { lines: _lines, ...shown } = outline;
+    this.textless = shown;
+  }
+
+  /** The outline without text kept for this page, if the agent's latest own read of it was one. */
+  textlessOutline(pageId: string): SnapshotOutline | null {
+    return pageId && this.textless?.pageId === pageId && this.current?.pageId === pageId ? this.textless : null;
   }
 
   /**
@@ -119,7 +144,7 @@ export class ElementRefs {
     if (this.kept) this.kept = { ...this.kept, lines };
   }
 
-  /** The latest outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
+  /** The latest FULL outline, if it was taken of this page (a page that moved on, or one with no id, has none). */
   outline(pageId: string): SnapshotOutline | null {
     return pageId && this.kept?.pageId === pageId && this.current?.pageId === pageId ? this.kept : null;
   }
@@ -145,6 +170,7 @@ export class ElementRefs {
       this.earlier = kept;
     } else this.earlier = [];
     this.current = { pageId, token, keys: keyByRef, pinned };
+    this.issued++;
     return byKey;
   }
 
@@ -153,7 +179,7 @@ export class ElementRefs {
    * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
    */
   preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
-    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept };
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issued: this.issued };
     try {
       return this.refsFor(pageId, keys, sids).byKey;
     } finally {
@@ -172,6 +198,7 @@ export class ElementRefs {
       this.current = null;
       this.earlier = [];
       this.kept = null;
+      this.textless = null;
     }
     if (sids && pageId && (!this.base || this.base.pageId !== pageId)) this.base = { pageId, from: this.next - 1 };
     const taken = new Set<string>();
@@ -208,11 +235,20 @@ export class ElementRefs {
     return { ok: false, why: 'stale' };
   }
 
+  /**
+   * Whether this table's latest refs are of this page (S18 M2g-2 slice 3b, #205): with no outline kept for it, they came
+   * from a view that's no baseline (an outline without the page's text), so what an action changed can't be told.
+   */
+  onPage(pageId: string): boolean {
+    return Boolean(pageId) && this.current?.pageId === pageId;
+  }
+
   /** The page moved on (or the tab went to sleep): every ref is stale. */
   forget(): void {
     this.current = null;
     this.earlier = [];
     this.kept = null;
+    this.textless = null;
   }
 }
 
@@ -281,11 +317,16 @@ export const ROWS_SHOWN = 5;
 /**
  * The outline's text. With `find`, only the elements whose name has that text (any case), each with the elements it's
  * in; else runs of more than ROWS_COLLAPSE rows alike (each the same roles, the same shape) show their first ROWS_SHOWN.
+ * `text: false` (S18 M2g-2 slice 3b, #205): the page's structure without its text runs (`- text:` lines), which carry no
+ * ref: the full outline, its rows collapsed as they'd be, less its text lines (never a run the text kept apart, such as
+ * headings between paragraphs, collapsed when the text goes).
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[] } {
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[] } {
   const nodes = read.nodes;
+  const noText = opts.text === false;
   let count = 0;
   const lineOf = (node: SnapshotRead['nodes'][number]): string | null => {
+    if (noText && node.role === 'text') return null;
     const depth = Math.max(0, Math.min(40, Math.floor(node.depth)));
     const role = /^[a-z][a-z-]{0,30}$/.test(node.role) ? node.role : 'generic';
     const name = clipName(node.name ?? '');
@@ -320,7 +361,8 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
     for (let i = 0; i < nodes.length; i++) {
       const d = depthOf(i);
       while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
-      if ((nodes[i]!.name ?? '').toLowerCase().includes(find)) {
+      // Without the page's text, a text run is never a match (its words aren't shown).
+      if (!(noText && nodes[i]!.role === 'text') && (nodes[i]!.name ?? '').toLowerCase().includes(find)) {
         for (const a of [...path, i]) {
           if (shown.has(a)) continue;
           shown.add(a);
@@ -371,7 +413,8 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
         if (line) lines.push(line);
         render(r + 1, ends[r]!);
       }
-      if (shownRows.length < run.length) {
+      // A run of text said in one line goes with the text.
+      if (shownRows.length < run.length && !(noText && nodes[i]!.role === 'text')) {
         const more = run.length - shownRows.length;
         collapsed += more;
         const role = /^[a-z][a-z-]{0,30}$/.test(nodes[i]!.role) ? nodes[i]!.role : 'generic';

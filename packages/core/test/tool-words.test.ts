@@ -20,7 +20,10 @@ const assistantWire = (acting: boolean) => assistantTools(true, acting, true).ma
 // Raised by slice 3a (#204), snapshot: true on open_tab and navigate: agents 2,129 + 41 (+42), the assistant acting with
 // its flag on 1,790 (+22). The reason: each saves a call on every journey that opens a page and looks at it, a whole turn
 // of definitions and context (the token eval, in #204's PR).
-const BUDGET = { agents: 2190, assistantActing: 1810, assistantReading: 1135 };
+// Raised by slice 3b (#205), snapshot's text: false: agents 2,152 + 41 (+23), the assistant 1,812 acting with its flag (+22)
+// and 1,137 reading only (+22). The reason: an outline without the page's text is a fraction of the full one (75% smaller
+// on the 50-section page: its E2E), for a look at a page's structure.
+const BUDGET = { agents: 2213, assistantActing: 1832, assistantReading: 1157 };
 
 describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
   it('outside agents: tools/list and the instructions sent with initialize', () => {
@@ -54,6 +57,8 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     ['agents', 'batch', /one of your own tabs/],
     ['agents', 'batch', /asking the user/],
     ['agents', 'wait_for', /One wait at a time/],
+    ['agents', 'snapshot', /text: false: the structure without the page's text/],
+    ['assistant', 'snapshot', /text: false: the structure without the page's text/],
     ['agents', 'open_tab', /with snapshot, its outline as snapshot gives it/],
     ['agents', 'navigate', /with snapshot, returns its outline as snapshot gives it/],
     ['assistant', 'navigate', /with snapshot, returns its outline as snapshot gives it/],

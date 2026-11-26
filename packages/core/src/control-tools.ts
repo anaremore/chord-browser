@@ -146,8 +146,8 @@ export const ACTION_TOOLS: readonly AssistantToolSpec[] = [
     name: 'snapshot',
     tier: 0, level: 'read', readOnly: true,
     // The safe diet (M2g-2 slice 2), and what's true since #145: refs stay while their element is on the page.
-    description: "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref. find: only the elements whose names contain it. start: the next range. Untrusted JSON. For a page's text, use read_tab.",
-    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 }, find: { type: 'string', minLength: 1, maxLength: SNAPSHOT_FIND_MAX } }, ['tab_id']),
+    description: "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref. find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Untrusted JSON. For a page's text, use read_tab.",
+    inputSchema: object({ tab_id: { type: 'string' }, start: { type: 'integer', minimum: 0 }, find: { type: 'string', minLength: 1, maxLength: SNAPSHOT_FIND_MAX }, text: { type: 'boolean' } }, ['tab_id']),
   },
   // M2c: acting. Every one names a ref from the tab's latest snapshot (but navigate and back); the first action on a
   // site asks the user (the site card). Never a position, a selector or script.

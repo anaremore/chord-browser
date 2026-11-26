@@ -79,6 +79,28 @@ const NO_AGENTS = 'No agents yet. Copy a line above into your terminal to connec
 /** The connect card in the window's popover, for that agent. */
 const cardOf = (popover: Page, name: string) => popover.getByRole('alertdialog', { name: `${name} wants to use Chord` });
 
+/** An agent's calls, each with every card it raises allowed as the user would (round 1 of #247: one helper, not two). */
+async function allowing(app: ElectronApplication, mcp: ReturnType<typeof relay>) {
+  const popover = await pageWhere(app, isPopover);
+  return async (name: string, args: Record<string, unknown>) => {
+    const calling = mcp.call(name, args);
+    for (;;) {
+      const card = popover.getByRole('alertdialog').first();
+      const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+      if (next === 'done') return calling;
+      await popover.waitForTimeout(600);
+      for (const label of ['Allow once', 'Allow for now', 'Allow']) {
+        const button = card.getByRole('button', { name: label, exact: true });
+        if (await button.count()) {
+          await button.click();
+          break;
+        }
+      }
+      await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+    }
+  };
+}
+
 /** Answer the card as you would: once it's shown (its buttons wait a moment before they take a click). */
 async function answer(app: ElectronApplication, name: string, button: 'Deny' | 'Allow once' | 'Always allow' | 'Close'): Promise<void> {
   const popover = await pageWhere(app, isPopover);
@@ -1778,25 +1800,7 @@ test('open_tab and navigate with snapshot: true: the page as snapshot gives it, 
     await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
     const mcp = relay(profile);
     await mcp.request('initialize', CODEX);
-    const popover = await pageWhere(app, isPopover);
-    /** A call, with every card it raises allowed as the user would. */
-    const allowed = async (name: string, args: Record<string, unknown>) => {
-      const calling = mcp.call(name, args);
-      for (;;) {
-        const card = popover.getByRole('alertdialog').first();
-        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
-        if (next === 'done') return calling;
-        await popover.waitForTimeout(600);
-        for (const label of ['Allow once', 'Allow for now', 'Allow']) {
-          const button = card.getByRole('button', { name: label, exact: true });
-          if (await button.count()) {
-            await button.click();
-            break;
-          }
-        }
-        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
-      }
-    };
+    const allowed = await allowing(app, mcp);
     type Look = { source: string; trust: string; tab_id: string; url: string; content: string; open_tab?: Record<string, unknown>; navigate?: Record<string, unknown> };
 
     // A page that draws itself 600 ms after it loads: open_tab's outline waited for it (#154's first look), and its ref
@@ -1826,6 +1830,51 @@ test('open_tab and navigate with snapshot: true: the page as snapshot gives it, 
     const plain = JSON.parse((await allowed('navigate', { tab_id: lobby.tab_id, url: `${site.origin}/drawn` })).text) as { source?: string; data: Record<string, unknown> };
     expect(plain.source).toBeUndefined();
     expect(plain.data).toMatchObject({ navigated: true });
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('snapshot with text: false: the page’s structure without its text, a fraction of the size, its refs good to act by (M2g-2 slice 3b, #205)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const tabOf = (text: string) => (JSON.parse(text) as { data: { tab_id: string } }).data.tab_id;
+    type Snap = { trust: string; source: string; content: string; refs: number };
+
+    // The 50-section page: the whole outline, then its structure alone (what a model is sent: the result's text).
+    const article = tabOf((await allowed('open_tab', { url: `${site.origin}/article50` })).text);
+    const full = await mcp.call('snapshot', { tab_id: article });
+    const outline = await mcp.call('snapshot', { tab_id: article, text: false });
+    const fullSnap = JSON.parse(full.text) as Snap;
+    const outlineSnap = JSON.parse(outline.text) as Snap;
+    expect(outlineSnap).toMatchObject({ trust: 'untrusted', source: 'web_snapshot' });
+    expect(fullSnap.content).toMatch(/- text: "This paragraph/);
+    expect(outlineSnap.content).not.toMatch(/- text:/);
+    expect(outlineSnap.content).toMatch(/- heading "Section 1" \[level=2\]/);
+    expect(outlineSnap.content).toBe(fullSnap.content.split('\n').filter((l) => !/^\s*- text:/.test(l)).join('\n'));
+    const smaller = 1 - outline.text.length / full.text.length;
+    console.log(`[#205] /article50: full snapshot ${full.text.length} chars (~${Math.ceil(full.text.length / 4)} tokens), text: false ${outline.text.length} chars (~${Math.ceil(outline.text.length / 4)} tokens): ${(smaller * 100).toFixed(1)}% smaller; outline alone ${fullSnap.content.length} → ${outlineSnap.content.length} chars (${((1 - outlineSnap.content.length / fullSnap.content.length) * 100).toFixed(1)}% smaller)`);
+    // #205's Done when: at least 70% smaller than the full snapshot, as sent (a size, never a time).
+    expect(smaller).toBeGreaterThanOrEqual(0.7);
+
+    // A page to act on: its outline without text, then a ref from it.
+    const game = tabOf((await allowed('open_tab', { url: `${site.origin}/game` })).text);
+    const look = JSON.parse((await mcp.call('snapshot', { tab_id: game, text: false })).text) as Snap;
+    expect(look.content).not.toMatch(/- text:/);
+    const clicked = await allowed('click', { tab_id: game, ref: refOf(look.content, 'generic "Call"') });
+    expect(clicked.isError).toBe(false);
+    await expect.poll(() => app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/game`)).toContain('Call');
+    // No full snapshot of the page to compare with: the action says so.
+    expect((JSON.parse(clicked.text) as { data: { page_changes?: { note?: string } } }).data.page_changes?.note).toBe('You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without text: false to see it.');
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
