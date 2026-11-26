@@ -27,12 +27,13 @@ import {
   type ProxyScheme,
   type ProxySettings,
 } from '@chord/core';
-import type { SettingsSnapshot } from '@chord/ipc';
+import type { ProxyStatus, SettingsSnapshot } from '@chord/ipc';
 import { Check } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from './api';
 import { RadioGroup, ResetButton, Row, Segmented } from './controls';
 import local from './Proxy.module.css';
+import { proxyFailingRows, type ProxyFailingRow } from './proxy-row';
 import styles from './Settings.module.css';
 
 type Chord = SettingsSnapshot['chords'][number];
@@ -262,9 +263,68 @@ function ProxyEditor({ value, all, chord, autoFocus = false }: { value: ProxySet
   );
 }
 
+/**
+ * A proxy that can't be set (#325): the warning row, with Try again. aria-disabled while it tries, never the native
+ * disabled, which would drop the focus (as #316's ad-blocking row).
+ */
+function FailingRow({ row, trying, onTry }: { row: ProxyFailingRow; trying: boolean; onTry: () => void }) {
+  return (
+    <Row
+      tone="warning"
+      label={row.label}
+      description={row.description}
+      control={
+        <button type="button" className={trying ? `${styles.linkButton} ${styles.trying}` : styles.linkButton} aria-disabled={trying || undefined} onClick={() => !trying && onTry()}>
+          {trying ? 'Trying…' : 'Try again'}
+        </button>
+      }
+    />
+  );
+}
+
+/** The proxies that can't be set, from main: asked every second while one shows, else every few (#325). */
+function useProxyStatus(): ProxyStatus | null {
+  const [status, setStatus] = useState<ProxyStatus | null>(null);
+  const failing = Boolean(status?.failing.length);
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden) return;
+      void api.settings.proxyStatus().then((next) => setStatus((now) => (JSON.stringify(now) === JSON.stringify(next) ? now : next)));
+    };
+    refresh();
+    const timer = setInterval(refresh, failing ? 1000 : 5000);
+    return () => clearInterval(timer);
+  }, [failing]);
+  return status;
+}
+
 export function ProxySection({ snapshot, focus }: { snapshot: SettingsSnapshot; focus: ProxyFocus | null }) {
   const { settings, chords } = snapshot;
   const [open, setOpen] = useState<string | null>(focus?.chordId || null);
+  const status = useProxyStatus();
+  const failing = proxyFailingRows(status, chords);
+  // Try again clicked: Trying… until main has tried (its answer comes back as the next status).
+  const [trying, setTrying] = useState<string | null>(null);
+  const tryAgain = (row: ProxyFailingRow) => {
+    const key = row.chordId ?? 'all';
+    setTrying(key);
+    void api.settings
+      .retryProxy(row.owner)
+      .then(() => new Promise((r) => setTimeout(r, 600)))
+      .finally(() => setTrying((now) => (now === key ? null : now)));
+  };
+  // What a screen reader hears, politely: a proxy starting to fail, or working again.
+  const [said, setSaid] = useState('');
+  const before = useRef<string[]>([]);
+  // As one string, so the effect runs when the rows change, not on every poll's new objects.
+  const shown = JSON.stringify([...(failing.all ? [failing.all.label] : []), ...[...failing.own.values()].map((r) => r.label)]);
+  useEffect(() => {
+    const labels = JSON.parse(shown) as string[];
+    const added = labels.filter((l) => !before.current.includes(l));
+    if (added.length) setSaid(added.join(' '));
+    else if (!labels.length && before.current.length) setSaid('The proxy works again.');
+    before.current = labels;
+  }, [shown]);
   const title = useRef<HTMLHeadingElement>(null);
   // Opened at the proxy (or a chord's): it comes into view, with that chord's open.
   useEffect(() => {
@@ -278,7 +338,11 @@ export function ProxySection({ snapshot, focus }: { snapshot: SettingsSnapshot; 
         Proxy
         <ResetButton label="Reset Proxy to default" visible={settings.proxy.mode !== 'system'} onReset={() => void api.settings.set({ proxy: { ...settings.proxy, mode: 'system' } })} />
       </h2>
+      <span role="status" className="sr-only">
+        {said}
+      </span>
       <div className={styles.group}>
+        {failing.all && <FailingRow row={failing.all} trying={trying === 'all'} onTry={() => tryAgain(failing.all!)} />}
         {/* Keyed by what's in use, so a change (made here or elsewhere) shows as it is. */}
         <ProxyEditor key={JSON.stringify(settings.proxy)} value={settings.proxy} all={settings.proxy} />
       </div>
@@ -302,6 +366,7 @@ export function ProxySection({ snapshot, focus }: { snapshot: SettingsSnapshot; 
                   </button>
                 }
               />
+              {failing.own.has(chord.id) && <FailingRow row={failing.own.get(chord.id)!} trying={trying === chord.id} onTry={() => tryAgain(failing.own.get(chord.id)!)} />}
               {expanded && (
                 <div className={local.chordEditor}>
                   <ProxyEditor key={JSON.stringify([chord.proxy, chord.profileId])} value={chord.proxy ?? null} all={settings.proxy} chord={chord} autoFocus={focus?.chordId === chord.id} />

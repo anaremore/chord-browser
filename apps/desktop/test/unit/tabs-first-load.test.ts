@@ -32,7 +32,7 @@ const FIRST = 'https://first.test/';
 const SECOND = 'https://second.test/';
 
 /** The session's waits, in order: proxyReady answers the first not yet over (as index.ts' does), else null. */
-function setup(waits: Array<ReturnType<typeof held>>) {
+function setup(waits: Array<ReturnType<typeof held>>, nav?: { entries: { url: string; title: string }[]; index: number }) {
   const state = { nodes: nodesFrom([{ kind: 'tab', id: NODE, url: FIRST, title: '', section: 'today', chordId: 'c1' } as SidebarNode]), live: {}, windows: {}, chords: { c1: { id: 'c1' } }, settings: { tabCounts: {} } } as unknown as State;
   const commands: Command[] = [];
   const proxyReady = vi.fn(() => waits.find((w) => !w.over)?.promise ?? null);
@@ -49,6 +49,8 @@ function setup(waits: Array<ReturnType<typeof held>>) {
     onPopupCreated: vi.fn(),
     onPeek: vi.fn(),
   } as never);
+  // A tab put to sleep (or held for its proxy, #331): the history it had, loaded instead of its address.
+  if (nav) manager.restoreHistoryOnLoad(NODE, nav as never);
   const view = manager.ensure(NODE) as unknown as FakeView;
   const page = view.page as FakeContents;
   const loaded = () => page.loadURL.mock.calls.map(([url]) => url as string);
@@ -147,6 +149,34 @@ describe('a page’s load waiting for its session (#189)', () => {
     Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
     t.manager.reload(t.page as never);
     expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
+  it('held for its proxy (#331, Neon’s SF1-r2): until its page restores, its saved back/forward history is the one it had, never an empty one', async () => {
+    const rules = held();
+    const nav = { entries: [{ url: 'https://a.test/', title: 'A' }, { url: FIRST, title: 'First' }], index: 1 };
+    const t = setup([rules], nav);
+    // Waiting for its session: the page has nothing yet, and a flush (every 2 s, or at quit) saves what this says.
+    expect(t.manager.history(NODE)).toEqual(nav);
+    rules.resolve();
+    await tick();
+    expect(t.page.navigationHistory.restore).toHaveBeenCalledWith({ entries: nav.entries, index: 1 });
+    // Once the page has committed, its own history is what's saved.
+    Object.assign(t.page.navigationHistory, { length: () => 2, getAllEntries: () => nav.entries, getActiveIndex: () => 1 });
+    t.page.emit('did-navigate', {}, FIRST);
+    expect(t.manager.history(NODE)).toEqual({ entries: nav.entries.map((e) => expect.objectContaining({ url: e.url })), index: 1 });
+  });
+
+  it('Reload while its first load waits, the page having only an empty first entry (a tab held for its proxy, #331): left alone, it loads once the session is ready', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    // A page made again while its session is held can show one empty entry before anything loads.
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: '' }) });
+    t.manager.reload(t.page as never);
+    expect(t.page.reload).not.toHaveBeenCalled();
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([FIRST]);
+    expect(t.page.reload).not.toHaveBeenCalled();
   });
 
   it('Reload while a navigation waits for its session (round 1 of #292, SF3; Neon’s B2): it takes that load’s place, and reloads once the session is ready', async () => {

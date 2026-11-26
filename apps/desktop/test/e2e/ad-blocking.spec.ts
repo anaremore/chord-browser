@@ -444,3 +444,43 @@ test('the lists refresh from their own host, and the new rules apply in chords a
     await app.close();
   }
 });
+
+test('a proxy that couldn’t be set, then one that takes (#331): the held page comes back with its ads still blocked', async () => {
+  const app = await launch();
+  try {
+    const shell = await pageWhere(app, isShell);
+    await pageWhere(app, (url) => url.startsWith(newsUrl()));
+    await rulesReady(app);
+    const ad = `http://securepubads.g.doubleclick.net:${site.port}/tag/js/gpt.js`;
+    // Chromium refusing the proxy about to be set, as it refuses a config it can't use.
+    await app.evaluate(({ session }) => {
+      const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
+      const real = proto.setProxy;
+      proto.setProxy = function (this: unknown, config: { proxyRules?: string }) {
+        if (String(config?.proxyRules ?? '').includes(':9')) return Promise.reject(new Error('net::ERR_INVALID_ARGUMENT'));
+        return real.call(this, config);
+      };
+    });
+    await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
+    const settings = await pageWhere(app, isSettings);
+    await settings.getByRole('button', { name: 'Privacy' }).click();
+    const forAll = settings.getByRole('radiogroup', { name: 'Proxy for every chord' });
+    await forAll.getByRole('radio', { name: /^A proxy server/ }).click();
+    await settings.getByLabel('Proxy for every chord: address', { exact: true }).fill('127.0.0.1');
+    await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill('9');
+    await settings.getByRole('button', { name: 'Use this proxy' }).click();
+    await expect(settings.locator('[data-tone="warning"]').getByText('Can’t use this proxy.')).toBeVisible({ timeout: 10_000 });
+    // No proxy: it takes, and the news page (held meanwhile) comes back, its own script loaded, its ad still blocked by
+    // the rules (it never reaches the server): blocking applies after the session's block is gone.
+    const hits = adHits();
+    await forAll.getByRole('radio', { name: /^No proxy/ }).click();
+    await settings.getByRole('button', { name: 'Connect directly' }).click();
+    const back = await pageWhere(app, (url) => url.startsWith(newsUrl()));
+    const results = await back.evaluate(() => (window as unknown as { results: Promise<{ ad: string; own: string }> }).results);
+    expect(results).toEqual({ ad: 'blocked', own: 'loaded' });
+    expect(await back.evaluate((u) => (window as unknown as { probe(u: string): Promise<string> }).probe(u), ad)).toBe('blocked');
+    expect(adHits() - hits).toBe(0);
+  } finally {
+    await app.close();
+  }
+});

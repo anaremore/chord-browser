@@ -62,6 +62,7 @@ import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
 import { foldersInUse, launchProfiles, migratePartitions, partitionFsFailingFor } from './partitions';
+import { ProxyAlerts, proxyStatus, type ProxyChord } from './proxy-alerts';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -113,6 +114,22 @@ function devNumber(name: string): number | null {
 }
 
 let browser: Browser | undefined;
+/** Chords as #325's proxy alerts need them, in switcher order: whose sign-ins, and whether each has its own proxy. */
+const proxyChords = (): ProxyChord[] => (browser ? sortedChords(browser.store.state).map((c) => ({ id: c.id, name: c.name, profileId: c.profileId, own: Boolean(c.proxy) })) : []);
+const proxyAlerts = new ProxyAlerts();
+/** Each failing proxy's toast, in each window whose pages it holds that hasn't had it (#325; #331's N-SF5). */
+function proxyToasts(): void {
+  if (!browser) return;
+  const chords = proxyChords();
+  for (const t of proxyAlerts.due(proxyStatus(proxies.failing(), chords), chords)) {
+    const got = browser.toastWhereChords(
+      t.chordIds,
+      { id: `proxy:${t.key}`, message: t.message, action: { label: 'Settings', proxySettings: t.chordId } },
+      { privateToo: t.privateToo, skip: (windowId) => proxyAlerts.shownIn(t.key, windowId) },
+    );
+    proxyAlerts.showed(t.key, got);
+  }
+}
 let persistence: Persistence | undefined;
 let assistant: AssistantService | undefined;
 /** Outside agents (S18): null in packaged builds, which have none yet. */
@@ -398,6 +415,11 @@ function registerIpc(): void {
   const chordProfiles = () => new Set(sortedChords(browser!.store.state).map((c) => c.profileId));
   handle('adBlocking:status', () => adBlocking.status(chordProfiles()));
   handle('adBlocking:retry', ({ profileId }) => adBlocking.retry(profileId, chordProfiles()));
+  // #325: the proxies that can't be set, by chord (a chord's own) or for every chord; Try again tries now.
+  handle('proxy:status', () => proxyStatus(proxies.failing(), proxyChords()));
+  handle('proxy:settings', ({ chordId }) => browser!.openProxySettingsAt(chordId));
+  // A profile's Try again only for a chord's (Neon's N-SF3 on #331, as adBlocking:retry); null tries every one failing.
+  handle('proxy:retry', ({ owner }) => (owner === null || chordProfiles().has(owner) ? proxies.retry(owner) : undefined));
   // First run's step and the one-time offer, each with the notice on screen.
   handle('safeBrowsing:choose', ({ on }) => browser!.store.dispatch({ t: 'settings.set', settings: { safeBrowsing: on, safeBrowsingAsked: true } }));
   handle('safeBrowsing:back', ({ nodeId }, sender) => browser!.safeBrowsingAction(sender, nodeId, 'back'));
@@ -793,6 +815,8 @@ if (!app.requestSingleInstanceLock()) {
     downloads.discardHeld();
     // A password copied less than a minute ago leaves the clipboard.
     void passwords.dispose();
+    // No more proxy tries, and no word of a failure, while quitting (Neon's N-SF2 on #331).
+    proxies.stop();
     if (flushed || !persistence) return;
     event.preventDefault();
     flushed = true;
@@ -969,7 +993,21 @@ if (!app.requestSingleInstanceLock()) {
     // Proxies (ARCHITECTURE.md §9): the sessions made so far (Chord's UI, Electron's default) get theirs now, before
     // any of them can download a dictionary; every one made from here on gets its own as it's made.
     proxies.created(session.defaultSession);
-    proxies.start({ proxyFor: (owner) => proxyFor(browser?.store.state ?? initial, owner), contents: () => webContents.getAllWebContents() });
+    proxies.start({
+      proxyFor: (owner) => proxyFor(browser?.store.state ?? initial, owner),
+      contents: () => webContents.getAllWebContents(),
+      // A proxy that can't be set (#325): Settings hears, and the windows whose pages it holds get one toast.
+      // Settings → Privacy → Proxy asks for proxy:status itself, every second while it shows a failing one.
+      changed: () => proxyToasts(),
+      // A proxy that just began failing: that session's open tabs are held, their pages closed (the owner's pick on #331).
+      failed: (ses) => {
+        browser?.holdPages(ses);
+        // Its extensions' workers, already running, send around the block too: they start again under it (SF-A).
+        void browser?.extensions.restartIn(ses);
+      },
+      // A failing proxy no live chord uses isn't retried (Neon's N-SF7 on #331); Chord's own (null) always is.
+      inUse: (owner) => owner === null || owner === 'default' || Boolean(browser && Object.values(browser.store.state.chords).some((c) => c.profileId === owner)),
+    });
     setDictionarySource(initial.settings.googleFree);
     const profilesInUse = new Set(Object.values(initial.chords).map((c) => c.profileId));
     // Each listed profile's sign-ins in the folder its partition is named for now (#315), before any of its sessions is
@@ -1677,9 +1715,10 @@ if (!app.requestSingleInstanceLock()) {
         },
       };
     }
-    // Every session's proxy is in place before anything loads in it, extensions' own pages and workers too.
-    // (Nothing is pending unless a proxy is set: Electron's sessions already use the system's.)
-    const proxied = proxies.settled();
+    // Every session's proxy is in place (or, failing, its session sends nothing on the web: #331) before anything loads
+    // in it, extensions' own pages and workers too. Never waiting on one failing: the window, and Settings where it's
+    // said, open meanwhile, and the pages stay held. (Nothing is pending unless a proxy is set.)
+    const proxied = proxies.settledOrFailing();
     if (proxied) await proxied;
     // Extensions load before any page does, so their content scripts reach restored tabs; Chord's blocker
     // too, so its rules cover their first requests and no page starts loading while it's being added.
@@ -1692,6 +1731,8 @@ if (!app.requestSingleInstanceLock()) {
     if (pendingUrls.length > 0) browser.openExternalUrls(pendingUrls.splice(0));
     else browser.start();
     mark('windows opened');
+    // A proxy that failed before any window was there: its toast now (Opus's SF3 on #331).
+    proxyToasts();
     afterLaunch.opened();
     updates.start();
     browser.player.startUpdates();

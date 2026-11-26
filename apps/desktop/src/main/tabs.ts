@@ -97,6 +97,12 @@ export class TabManager {
   private readonly playing = new Set<NodeId>();
   /** History to load instead of the tab's address the next time its view is made: it slept, or came back from the archive. */
   private readonly pendingHistory = new Map<NodeId, NavState>();
+  /**
+   * The history a tab's page is restoring, from the moment its view is made until its page commits: what `history`
+   * says meanwhile, so a page still waiting for its session (held for its proxy, #331) never has its saved history
+   * written over with an empty one (Neon's SF1-r2).
+   */
+  private readonly restoring = new Map<NodeId, { contents: WebContents; nav: NavState }>();
   /** Tabs showing one of Chord's own pages, on Chord's UI session. */
   private readonly internal = new Set<NodeId>();
   /** Pages that aren't tabs yet, by the id they'll have as one. */
@@ -232,8 +238,10 @@ export class TabManager {
     const floatingId = nodeId ? undefined : this.floatingFor(contents);
     const url = node?.kind === 'tab' ? node.url : floatingId ? this.floating.get(floatingId)?.url : undefined;
     const history = contents.navigationHistory;
-    // An agent tab stopped while primed has only its blank page, which is never the tab's (#287).
-    const never = history.length() === 0 || (history.length() === 1 && history.getEntryAtIndex(0)?.url === 'about:blank');
+    // An agent tab stopped while primed has only its blank page, which is never the tab's (#287); a page made again
+    // while its session is held (#331) may have only an empty first entry, never loaded either.
+    const first = history.length() === 1 ? history.getEntryAtIndex(0)?.url : undefined;
+    const never = history.length() === 0 || first === 'about:blank' || first === '';
     if (url !== undefined && never) {
       // Its own first load still on its way (waiting for its session, an agent tab's hold arming or its blank page
       // primed, or its page asked for and not come): left alone, it loads the address anyway, and an agent tab keeps
@@ -365,6 +373,8 @@ export class TabManager {
     const contents = pageOf(this.views.get(nodeId));
     if (!contents) return this.pendingHistory.get(nodeId) ?? null;
     if (this.internal.has(nodeId)) return null;
+    const restoring = this.restoring.get(nodeId);
+    if (restoring?.contents === contents) return restoring.nav;
     return trimNavState(contents.navigationHistory.getAllEntries(), contents.navigationHistory.getActiveIndex());
   }
 
@@ -409,6 +419,13 @@ export class TabManager {
     const nav = this.pendingHistory.get(nodeId);
     this.pendingHistory.delete(nodeId);
     const contents = view.webContents;
+    if (nav) {
+      this.restoring.set(nodeId, { contents, nav });
+      // Committed (restored, or a page of its own): its own history from then on.
+      contents.once('did-navigate', () => {
+        if (this.restoring.get(nodeId)?.contents === contents) this.restoring.delete(nodeId);
+      });
+    }
     // Muted stays muted: after sleeping, a restart, or a move to other sign-ins (a new page each time).
     if (node.muted) contents.setAudioMuted(true);
     const url = node.url;
@@ -552,6 +569,14 @@ export class TabManager {
     return page.view;
   }
 
+  /** Every floating page in this session closes (its proxy began failing, #331): none is left sending around it. */
+  closeFloatingIn(ses: Session): void {
+    for (const [nodeId, page] of [...this.floating]) {
+      const contents = pageOf(page.view);
+      if (contents && !contents.isDestroyed() && contents.session === ses) this.closeFloating(nodeId);
+    }
+  }
+
   /** A floating page that won't become a tab: its page closes. */
   closeFloating(nodeId: NodeId): void {
     const page = this.floating.get(nodeId);
@@ -644,6 +669,7 @@ export class TabManager {
     this.playing.delete(nodeId);
     this.badges.delete(nodeId);
     this.pendingHistory.delete(nodeId);
+    this.restoring.delete(nodeId);
     this.internal.delete(nodeId);
     // removeChildView alone keeps the renderer alive; close() frees it (ARCHITECTURE.md §5).
     contents?.close();

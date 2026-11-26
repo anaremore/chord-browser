@@ -501,6 +501,29 @@ export class Extensions {
       });
   }
 
+  /**
+   * A session whose proxy began failing (#331, Opus's SF-A): its installed extensions are taken out and loaded again,
+   * so a worker already running (fetching on a loop, sending around the session's block) stops, and the one that
+   * starts again runs under the block (measured in Chord: 12 requests in 3 s before, none after). Chord's own ad-blocking
+   * extension in the session isn't one of these (not installed here), and loads nothing itself.
+   */
+  async restartIn(ses: Session): Promise<void> {
+    for (const [profileId, host] of this.hosts) {
+      if (host.session !== ses) continue;
+      for (const e of Object.values(this.deps.state().extensions)) {
+        if (e.profileId !== profileId || !host.get(e.id)) continue;
+        host.unload(e.id);
+        try {
+          await host.load(e.path);
+        } catch (error) {
+          console.error(`Extension ${e.name} (${e.id}) didn't load again after its proxy began failing:`, error);
+        }
+      }
+    }
+    this.sync();
+    this.deps.changed();
+  }
+
   /* ---------- Install, update, remove ---------- */
 
   /**

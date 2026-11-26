@@ -6,7 +6,7 @@
  * (--host-resolver-rules), because Chromium never sends loopback addresses
  * through a proxy. What each server saw is the proof of which way a request went.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createTcpServer, connect, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -489,3 +489,167 @@ test('a proxy that can’t be reached explains itself in the frame, with its set
   }
   rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
 });
+
+test('a proxy that can’t be set (#325): its pages wait, never direct; one toast, a row in Settings with Try again; then it takes', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_HOME_URL: url('/home') });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(titleOf(app, '/home')).toBe('Direct /home');
+    await pageWhere(app, (u) => u === url('/home'));
+    // Chromium refusing this proxy, as it refuses a config it can't use: setProxy rejects while the flag is up.
+    await app.evaluate(({ session }, port) => {
+      const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
+      const real = proto.setProxy;
+      (globalThis as { refuseProxy?: boolean }).refuseProxy = true;
+      proto.setProxy = function (this: unknown, config: { proxyRules?: string }) {
+        if ((globalThis as { refuseProxy?: boolean }).refuseProxy && String(config?.proxyRules ?? '').includes(`:${port}`)) return Promise.reject(new Error('net::ERR_INVALID_ARGUMENT'));
+        return real.call(this, config);
+      };
+    }, proxyA.port);
+    const settings = await privacy(app, shell);
+    await settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ }).click();
+    await settings.getByLabel('Proxy for every chord: address', { exact: true }).fill('127.0.0.1');
+    await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill(String(proxyA.port));
+    await settings.getByRole('button', { name: 'Use this proxy' }).click();
+
+    // Settings says so, under the proxy for every chord, with why and Try again.
+    // The row (its words are also said once in the page's status region, for screen readers).
+    const row = settings.locator('[data-tone="warning"]').getByText('Can’t use this proxy.');
+    await expect(settings.getByRole('status').filter({ hasText: 'Can’t use this proxy.' })).toHaveCount(1);
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    // One toast in the window, with Settings: checked first, as a toast goes by itself after a few seconds.
+    const toast = shell.getByRole('region', { name: 'Notifications' }).getByRole('group').filter({ hasText: 'The proxy isn’t working. Pages are waiting.' });
+    await expect(toast).toBeVisible();
+    await expect(toast.getByRole('button', { name: 'Settings' })).toBeVisible();
+    await shell.screenshot({ path: test.info().outputPath('proxy-failing-toast.png') });
+    await expect(settings.getByText(/Pages wait until Chord can, and Chord keeps trying\. Chromium said net::ERR_INVALID_ARGUMENT\./)).toBeVisible();
+    await settings.screenshot({ path: test.info().outputPath('proxy-failing-light.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'dark'));
+    await settings.waitForTimeout(400);
+    await settings.screenshot({ path: test.info().outputPath('proxy-failing-dark.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'system'));
+
+
+    // A load meanwhile waits: nothing reaches the site direct (or through the proxy).
+    clearSeen();
+    await runAction(shell, 'nav.reload');
+    await shell.waitForTimeout(2500);
+    expect(direct.seen, `direct: ${direct.seen.join(', ')}`).toEqual([]);
+    expect(proxyA.seen).toEqual([]);
+    // Held (#331): its page closed, its tab keeps its title; it loads through the proxy below.
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Direct /home');
+
+    // Chromium takes it now; Try again: the row goes, and the page loads through the proxy.
+    await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    await expect(row).toBeHidden({ timeout: 10_000 });
+    // The held page loads now, through the proxy, and never went direct.
+    await expect.poll(titleOf(app, '/home'), { timeout: 15_000 }).toBe('Via A /home');
+    expect(proxyA.seen).toContain(at('/home'));
+    expect(direct.seen).toEqual([]);
+  } finally {
+    await app.close();
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+});
+
+test('a page open when its proxy fails (#331, the owner’s pick): held, its own fetches and navigation reach neither the site nor the proxy; back once it takes', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  // An extension in the session, as a chord's always has (Chord's ad blocking): with one, a page open before the
+  // session's block sends around it (measured on #331), which is why the page is held.
+  const app = await launch(profile, { CHORD_HOME_URL: url('/home'), CHORD_LOAD_EXTENSION: resolve(appDir, 'test/fixtures/extension') });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(titleOf(app, '/home')).toBe('Direct /home');
+    const home = await pageWhere(app, (u) => u === url('/home'));
+    await app.evaluate(({ session }, port) => {
+      const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
+      const real = proto.setProxy;
+      (globalThis as { refuseProxy?: boolean }).refuseProxy = true;
+      proto.setProxy = function (this: unknown, config: { proxyRules?: string }) {
+        if ((globalThis as { refuseProxy?: boolean }).refuseProxy && String(config?.proxyRules ?? '').includes(`:${port}`)) return Promise.reject(new Error('net::ERR_INVALID_ARGUMENT'));
+        return real.call(this, config);
+      };
+    }, proxyA.port);
+    const settings = await privacy(app, shell);
+    await settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ }).click();
+    await settings.getByLabel('Proxy for every chord: address', { exact: true }).fill('127.0.0.1');
+    await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill(String(proxyA.port));
+    await settings.getByRole('button', { name: 'Use this proxy' }).click();
+    await expect(settings.locator('[data-tone="warning"]').getByText('Can’t use this proxy.')).toBeVisible({ timeout: 10_000 });
+
+    // The page as it was open before the failure, if it still is: sending on its own, a fetch every 200 ms and a
+    // navigation a second from now. Held, it isn't (its page was closed), so nothing can.
+    clearSeen();
+    await home
+      .evaluate(() => {
+        let n = 0;
+        setInterval(() => void fetch(`/tick-${n++}`, { cache: 'no-store' }).catch(() => {}), 200);
+        setTimeout(() => void (location.href = '/later'), 1000);
+      })
+      .catch(() => {});
+    // Main's own requests in that session (a favicon's, a PDF's) are cut off too: session.fetch rejects (Opus's SF-B).
+    const fetched = await app.evaluate(({ session }, u) => session.fromPartition('persist:default').fetch(u).then(() => 'reached', (e: Error) => `rejected: ${e.message}`), url('/main-fetch'));
+    expect(fetched).toMatch(/^rejected/);
+    // Nothing of the page's reaches the site or the proxy, not its fetches, not its navigation; its tab keeps its title.
+    await shell.waitForTimeout(3000);
+    const sent = [...direct.seen, ...proxyA.seen].filter((s) => /\/(tick-|later|main-fetch)/.test(s));
+    expect(sent, `sent while held: ${sent.join(', ')}`).toEqual([]);
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Direct /home');
+
+    // Chromium takes it now; Try again: the tab's page comes back, through the proxy, never direct.
+    await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
+    clearSeen();
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    await expect.poll(titleOf(app, '/home'), { timeout: 15_000 }).toBe('Via A /home');
+    expect(direct.seen.filter((s) => s.endsWith('/home'))).toEqual([]);
+  } finally {
+    await app.close();
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+});
+
+test('an extension’s worker already running when its proxy fails (#331, Opus’s SF-A): it sends nothing from then, and runs again once the proxy takes', async () => {
+  test.setTimeout(90_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  // An installed extension whose service worker fetches on a loop, as some do.
+  const ext = join(profile, 'looper');
+  mkdirSync(ext, { recursive: true });
+  writeFileSync(join(ext, 'manifest.json'), JSON.stringify({ manifest_version: 3, name: 'Looper', version: '1.0', background: { service_worker: 'bg.js' }, host_permissions: ['http://site.test/*'] }));
+  writeFileSync(join(ext, 'bg.js'), `let n = 0; setInterval(() => fetch('${url('/sw-tick')}-' + (n++)).catch(() => {}), 250);`);
+  const app = await launch(profile, { CHORD_HOME_URL: url('/home'), CHORD_LOAD_EXTENSION: ext });
+  const ticks = () => [...direct.seen, ...proxyA.seen].filter((s) => s.includes('/sw-tick')).length;
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(ticks, { timeout: 15_000 }).toBeGreaterThan(2);
+    await app.evaluate(({ session }, port) => {
+      const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
+      const real = proto.setProxy;
+      (globalThis as { refuseProxy?: boolean }).refuseProxy = true;
+      proto.setProxy = function (this: unknown, config: { proxyRules?: string }) {
+        if ((globalThis as { refuseProxy?: boolean }).refuseProxy && String(config?.proxyRules ?? '').includes(`:${port}`)) return Promise.reject(new Error('net::ERR_INVALID_ARGUMENT'));
+        return real.call(this, config);
+      };
+    }, proxyA.port);
+    const settings = await privacy(app, shell);
+    await settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ }).click();
+    await settings.getByLabel('Proxy for every chord: address', { exact: true }).fill('127.0.0.1');
+    await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill(String(proxyA.port));
+    await settings.getByRole('button', { name: 'Use this proxy' }).click();
+    await expect(settings.locator('[data-tone="warning"]').getByText('Can’t use this proxy.')).toBeVisible({ timeout: 10_000 });
+    // From a moment after it failed (its extension taken out and loaded again, under the block): nothing gets out.
+    await shell.waitForTimeout(1000);
+    clearSeen();
+    await shell.waitForTimeout(3000);
+    expect(ticks()).toBe(0);
+    // It takes: the worker's requests go again, through the proxy.
+    await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
+    await settings.getByRole('button', { name: 'Try again' }).click();
+    await expect.poll(() => proxyA.seen.filter((s) => s.includes('/sw-tick')).length, { timeout: 15_000 }).toBeGreaterThan(0);
+  } finally {
+    await app.close();
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+});
+

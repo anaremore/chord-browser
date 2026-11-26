@@ -19,6 +19,7 @@ import type { Command, Download, DownloadAction, State, ThreatKind, WindowId } f
 import { askUserTabDownload } from './control/user-watch';
 import { app, shell, type DownloadItem, type Session, type WebContents } from 'electron';
 import { safeFilename, uniquePath } from './files';
+import { proxies } from './proxy';
 
 /** At most this often per download while it's progressing. */
 const REPORT_MS = 250;
@@ -318,19 +319,25 @@ export class DownloadManager {
         if (entry?.item.getState() === 'progressing') entry.item.pause();
         return;
       case 'resume':
-        if (!held && entry?.item.canResume()) entry.item.resume();
+        // Resuming goes around the session's requests like a download from main (#331): never while its proxy holds.
+        if (!held && entry?.item.canResume() && !proxies.holding(entry.session ?? this.deps.defaultSession())) entry.item.resume();
         return;
       case 'cancel':
         if (entry?.asked === null) return this.dropAsked(id);
         if (held) return this.discard(id);
         if (entry?.item.getState() === 'progressing') entry.item.cancel();
         return;
-      case 'retry':
+      case 'retry': {
         if (!download) return;
+        const session = entry?.session ?? this.deps.defaultSession();
+        // A download started from main bypasses the session's requests (#331): never while its proxy is failing or
+        // still being set. It stays in the list, to retry once the proxy takes.
+        if (proxies.holding(session)) return;
         this.entries.delete(id);
         this.deps.dispatch({ t: 'download.remove', id });
-        (entry?.session ?? this.deps.defaultSession()).downloadURL(download.url);
+        session.downloadURL(download.url);
         return;
+      }
       case 'remove':
         if (entry?.asked === null) return this.dropAsked(id);
         if (held) return this.discard(id);

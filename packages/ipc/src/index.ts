@@ -1105,6 +1105,26 @@ export interface SafeBrowsingStatus {
   entries: number;
 }
 
+/**
+ * Settings → Privacy → Proxy: the proxies that can't be set (#325). Their pages wait, never going direct, and Chord
+ * tries again. One entry per proxy: the one for every chord (`own` false, the chords using it), or a chord's own.
+ */
+export interface ProxyStatus {
+  failing: {
+    /**
+     * What Try again tries: a chord's own proxy's profile; or null for the proxy for every chord, which tries every
+     * session failing (the default profile's, other chords' sign-ins that use it, private windows', Chord's own).
+     */
+    owner: string | null;
+    /** A chord's own proxy (named by its chord), or the one for every chord. */
+    own: boolean;
+    /** The chords whose pages wait for it, in switcher order. */
+    chordIds: string[];
+    /** Chromium's words for why (`net::ERR_…`). */
+    reason: string;
+  }[];
+}
+
 /** Ad and tracker blocking's lists on this computer (ARCHITECTURE.md §9), for Settings → Privacy. */
 export interface AdBlockingStatus {
   /** On (Settings' switch). */
@@ -1202,7 +1222,12 @@ export type ToastAction =
   | { label: string; update: 'restart' }
   | { label: string; screenshot: { id: string; do: 'save' | 'assistant' } }
   /** Undo a password *Remember* just changed: the one before it back (main allows it once, for that window's toast). */
-  | { label: string; passwordRevert: string };
+  | { label: string; passwordRevert: string }
+  /**
+   * A proxy that isn't working's *Settings* (#325): Settings → Privacy → Proxy at the proxy that's failing, a chord's own
+   * (its id) or the one for every chord (null), whatever chord is active when it's clicked (Neon's N-SF4 on #331).
+   */
+  | { label: string; proxySettings: string | null };
 
 export interface Toast {
   id: string;
@@ -1856,6 +1881,9 @@ export const invokeChannels = {
   'safeBrowsing:proceed': { roles: ['shell'], request: z.strictObject({ nodeId: id }), response: z.void() },
   /** Ad and tracker blocking's lists (ARCHITECTURE.md §9), for Settings → Privacy. */
   'adBlocking:status': { roles: ['internal'], request: z.void(), response: z.custom<AdBlockingStatus>() },
+  // #325: the proxies that can't be set, and Try again (now, not at its next try).
+  'proxy:status': { roles: ['internal'], request: z.void(), response: z.custom<ProxyStatus>() },
+  'proxy:retry': { roles: ['internal'], request: z.strictObject({ owner: z.string().min(1).max(200).nullable() }), response: z.void() },
   // Settings → Privacy's Try again, for a chord whose blocking didn't come on (#284).
   'adBlocking:retry': { roles: ['internal'], request: z.strictObject({ profileId: z.string().min(1).max(200) }), response: z.void() },
   'downloads:openFolder': { roles: ['shell', 'overlay'], request: z.void(), response: z.void() },
@@ -1961,6 +1989,8 @@ export const invokeChannels = {
   'layout:snapshotPort': { roles: ['shell'], request: z.void(), response: z.void() },
   /** Run an action from the shortcut registry, as if its keys were pressed. */
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
+  // #325: a proxy toast's Settings, at the proxy it's about (a chord's own, or null: the one for every chord).
+  'proxy:settings': { roles: ['shell'], request: z.strictObject({ chordId: z.string().min(1).max(200).nullable() }), response: z.void() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
   'extensions:state': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<ExtensionsBarState>() },
   /** Click an extension's button (or its row in the list): its popup opens under `anchor` (window coordinates). */
@@ -2263,6 +2293,8 @@ export interface ShellApi {
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   gestures: { onPhase(listener: (phase: GesturePhase) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
+  /** A proxy toast's Settings (#325): at the proxy it's about. */
+  proxy: { openSettings(chordId: string | null): Promise<void> };
   /** "Restart to update" from a toast. */
   updates: { restart(): Promise<void> };
   /** A screenshot toast's Save and Ask about it. */
@@ -2392,6 +2424,9 @@ export interface SettingsApi {
     /** Settings → Privacy → Block ads and trackers: the lists on this computer. */
     adBlocking(): Promise<AdBlockingStatus>;
     retryAdBlocking(profileId: string): Promise<void>;
+    /** Settings → Privacy → Proxy: the proxies that can't be set (#325), and Try again for one (null: the proxy for every chord, every session failing). */
+    proxyStatus(): Promise<ProxyStatus>;
+    retryProxy(owner: string | null): Promise<void>;
     /** Settings → General → Chord Player. */
     player(): Promise<PlayerStatus>;
     /** Installs Chord Player, and opens nothing; resolves once it's installed or failed. */
