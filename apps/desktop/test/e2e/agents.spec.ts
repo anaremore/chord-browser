@@ -2182,8 +2182,9 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
       console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${seen}`);
       if (rows === 300) {
         // #166: the snapshot against a plain walk of the same page, timed in turn with it from main. A slow runner slows
-        // both, so their ratio holds where milliseconds don't: reported for now, on every runner, to set the bound CI
-        // will hold (then the per-platform budgets below can go). Reported before anything is judged, so a slow run still says it; a snapshot cut for time did less work, which the line shows (cut).
+        // both, so their ratio holds where milliseconds don't: held on every runner, CI's too (SNAPSHOT_RATIO_MAX; the
+        // per-platform budgets below go in #213). Reported before anything is judged, so a slow run still says it; a
+        // snapshot cut for time did less work, which the line shows (cut), and isn't held to the ratio.
         const walk = sorted(measured.walk);
         const walkMedian = walk[Math.floor(walk.length / 2)]!;
         const ratio = median / walkMedian;
@@ -2191,6 +2192,7 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         test.info().annotations.push({ type: 'snapshot ratio', description: ratioSeen });
         console.log(`[snapshot ratio] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${ratioSeen}`);
         expect(walk.every((t) => t > 0), ratioSeen).toBe(true);
+        if (!measured.cut?.['time']) expect(ratio, ratioSeen).toBeLessThanOrEqual(SNAPSHOT_RATIO_MAX);
         // Every key, unless a shared runner was slow enough for the scan's own time bound (SNAPSHOT_SCAN_MS) to cut it:
         // that's the bound working, and reported like the times.
         if (TIMES_HELD || !measured.cut?.['time']) expect(measured.keys, seen).toBe(600);
@@ -2296,6 +2298,14 @@ function within(ms: number, budget: number, seen: string): void {
  * macOS arm64 later (#112 at 7b66028, 2026-11-23): the typical page 24.2 and 60.2 ms, again 14.5 and 43.7, and /noisy
  * 25.9 and 35.8, against 13.5 and 29.9 on #104. That runner gets its own budget too, about 1.5 times the worst seen.
  */
+/**
+ * The typical pages' snapshot against a plain walk of the same page (#166, #195): at most this many times as long, on
+ * every runner. CI's first 77 runs since #186 (2026-11-25, every runner, both pages): 0.87-1.51, while the snapshot's
+ * own median went 9.7-48.9 ms. 2 is 1.3 times the worst: a snapshot twice as costly per element as now fails, a slow
+ * runner doesn't.
+ */
+const SNAPSHOT_RATIO_MAX = 2;
+
 /** The typical page's snapshot budget by platform: its median, and its slow end (p90 of 20 runs: never one pause). */
 const SNAPSHOT_TYPICAL_MS: Record<string, { median: number; worst: number }> = {
   default: { median: 25, worst: 60 },
