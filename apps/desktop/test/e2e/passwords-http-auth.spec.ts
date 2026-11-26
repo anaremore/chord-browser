@@ -46,6 +46,11 @@ interface Router {
   host: string;
   /** Every Authorization header the site was sent, as `username:password`. */
   tried: string[];
+  /**
+   * The same, with each one's path (#199): Chromium also sends a realm's cached sign-in, unasked, to the paths under it
+   * (a favicon's, say), so the last one sent can be another path's than the sign-in a box just answered.
+   */
+  attempts: { path: string; sent: string }[];
 }
 
 const basic = (req: IncomingMessage) => {
@@ -56,6 +61,7 @@ const basic = (req: IncomingMessage) => {
 /** The router's admin pages: /admin for ada (realm *Router admin*), /staff for grace (realm *Staff*). */
 function startRouter(): Promise<Router> {
   const tried: string[] = [];
+  const attempts: Router['attempts'] = [];
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
     // A public router page, and a page of the framing site's that sends a frame there (a redirect).
@@ -78,7 +84,10 @@ function startRouter(): Promise<Router> {
     }
     const area = path === '/staff' ? { realm: 'Staff', expected: `${OTHER_USER}:${OTHER_PASSWORD}`, title: 'Staff page' } : { realm: REALM, expected: `${USER}:${PASSWORD}`, title: 'Router admin page' };
     const sent = basic(req);
-    if (sent !== null) tried.push(sent);
+    if (sent !== null) {
+      tried.push(sent);
+      attempts.push({ path, sent });
+    }
     if (sent !== area.expected) {
       res.writeHead(401, { 'www-authenticate': `Basic realm="${area.realm}"`, 'content-type': 'text/html; charset=utf-8' });
       res.end('<title>Unauthorized</title><p>No entry.</p>');
@@ -90,7 +99,7 @@ function startRouter(): Promise<Router> {
   return new Promise((done) =>
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo;
-      done({ server, origin: `http://router.test:${port}`, host: `router.test:${port}`, tried });
+      done({ server, origin: `http://router.test:${port}`, host: `router.test:${port}`, tried, attempts });
     }),
   );
 }
@@ -267,9 +276,13 @@ test('the sign-in box: a wrong password isn’t saved, Remember saves the right 
     const atClick = { box: await boxState(), main: await mainState() };
     await staff.getByRole('button', { name: 'Sign in' }).click();
     try {
-      await expect.poll(() => router.tried.at(-1)).toBe(`${OTHER_USER}:${OTHER_PASSWORD}`);
+      // Grace's sign-in reached /staff. Not `tried.at(-1)`: Admin's cached sign-in (ada's) can follow it to another path
+      // under that realm (#199: the navigation had committed, 200, while the last one sent was ada's).
+      await expect.poll(() => router.attempts.some((a) => a.path === '/staff' && a.sent === `${OTHER_USER}:${OTHER_PASSWORD}`)).toBe(true);
     } catch (error) {
-      const after = { box: (await staff.count()) === 0 ? 'gone' : await boxState(), main: await mainState().catch(() => null), tried: router.tried.length };
+      // The last attempts by path and username (no passwords).
+      const last = router.attempts.slice(-6).map((a) => `${a.path} ${a.sent.split(':')[0]}`);
+      const after = { box: (await staff.count()) === 0 ? 'gone' : await boxState(), main: await mainState().catch(() => null), tried: router.tried.length, last };
       throw new Error(`${(error as Error).message}\n[#199] at the click: ${JSON.stringify(atClick)}\n[#199] 10 s later: ${JSON.stringify(after)}`, { cause: error });
     }
     await expect(staff).toBeHidden();
