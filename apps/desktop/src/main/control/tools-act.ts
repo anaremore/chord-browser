@@ -1103,7 +1103,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     phases.lap('settle');
     if (deep) await (deep as DeepSession).close();
     // A look-alike's refusal once input had gone in: it may have worked, never "nothing was done" (#211's round 2).
-    if (refused === ACT_REFUSALS.ambiguous && inputWent) refused = INPUT_REDRAWN;
+    if ((refused === ACT_REFUSALS.ambiguous || refused === ACT_REFUSALS.rowChanged || refused === ACT_REFUSALS.rowEmpty) && inputWent) refused = INPUT_REDRAWN;
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus);

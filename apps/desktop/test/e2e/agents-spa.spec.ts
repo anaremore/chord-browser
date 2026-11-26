@@ -84,10 +84,11 @@ test('a single-page app: controlled fields, nodes replaced under a ref, a portal
     expect(await page()).toContain('saved Ada, 12345');
 
     // A list the page re-keys every 300 ms: the button asked for is a new element by now. Refused, or (once the
-    // element can be found again) clicked; never its neighbor.
+    // element can be found again) clicked; never its neighbor. Its list item says nothing but the button, so it's
+    // never looked for again once redrawn (#268's review, S5: the planner's call): refused as such, one extra snapshot.
     const apples = await act('click', { ref: refOf(home, 'button "Pick apples"') });
     if (apples.startsWith('{')) expect(await page()).toContain('picked apples');
-    else expect(apples).toBe(ACT_REFUSALS.changed);
+    else expect([ACT_REFUSALS.changed, ACT_REFUSALS.rowEmpty]).toContain(apples);
     expect(await page()).not.toContain('picked pears');
 
     // A button the page replaces as the pointer arrives (a hover card): the new one is where the click would land.

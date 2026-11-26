@@ -150,7 +150,7 @@ export const reached: string[] = [];
 
 /** Each slot's Delete button, replaced by a new node every 100 ms (a redraw): a ref's node is gone soon after the snapshot. */
 const TWIN_SCRIPT =
-  '<script>const draw = () => { for (const slot of document.querySelectorAll(".slot")) { const b = document.createElement("button"); b.textContent = "Delete"; b.onclick = () => { document.getElementById("log").textContent += " deleted " + slot.dataset.n; }; slot.replaceChildren(b); } }; draw(); setInterval(draw, 100);</script>';
+  '<script>const draw = () => { for (const slot of document.querySelectorAll(".slot")) { const b = document.createElement("button"); b.textContent = "Delete"; b.onclick = () => { document.getElementById("log").textContent += " deleted " + slot.dataset.n; }; slot.replaceChildren(b); } }; draw(); window.redraw = draw; if (!location.search.includes("once")) setInterval(draw, 100);</script>';
 
 export async function startAgentSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
@@ -421,7 +421,7 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       Array.from({ length: 300 }, (_, i) => `<tr><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
       '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
     // #211: a control drawn late (1.5 s after the page loads), and look-alikes the page redraws every 100 ms: two Delete
-    // buttons in named sections (told apart by their item), and in unnamed list items (they can't be).
+    // buttons in named sections (told apart by their item), and in unnamed list items (told apart by what each says: #268).
     '/late':
       '<title>Lobby</title><main><h1>Lobby</h1><p>Waiting for a seat.</p><p id=log></p></main>' +
       '<script>setTimeout(() => { const b = document.createElement("button"); b.textContent = "Join table"; b.onclick = () => { document.getElementById("log").textContent += " joined"; }; document.querySelector("main").append(b); }, 1500);' +
@@ -438,11 +438,51 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li></ul><p id=log></p></main>' +
       '<script>window.twin = () => { const li = document.createElement("li"); li.innerHTML = "Draft A <span class=slot data-n=A2></span>"; document.querySelector("ul").append(li); };</script>' +
       TWIN_SCRIPT,
-    // Look-alikes in unnamed list items, then more than the snapshot reads (it's cut short): twins it saw are still twins.
+    // #268: unnamed rows a page redraws from its data, as a list app does: ids by position (act-0, act-1), a row replaced
+    // by another, a row's text patched in place (the same nodes, index keys). Cancel logs the row it's in.
+    '/rows':
+      '<title>Orders</title><main><ul id=rows></ul><p id=log></p></main>' +
+      '<script>const ul = document.getElementById("rows");' +
+      'window.rows = (names) => { ul.innerHTML = names.map((n, i) => `<li id=act-${i}><span>Order ${n}</span> <button id=cancel-${i}>Cancel</button></li>`).join(""); };' +
+      'window.patch = (n) => { ul.querySelector("span").textContent = "Order " + n; };' +
+      // The same rows with no ids: only what each row says tells their buttons apart (#268's review, N2).
+      'window.plain = (names) => { ul.innerHTML = names.map((n) => `<li><span>Order ${n}</span> <button>Cancel</button></li>`).join(""); };' +
+      'ul.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) document.getElementById("log").textContent += " cancel " + b.parentElement.querySelector("span").textContent; });' +
+      'rows(["A", "B"]);</script>',
+    // Look-alikes in unnamed list items that say the same, then more than the snapshot reads (it's cut short): twins it
+    // saw are still twins.
     '/twins-cut':
-      '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li><li>Draft B <span class=slot data-n=B></span></li></ul><p id=log></p><div id=big></div></main>' +
+      '<title>Drafts</title><main><ul><li>Draft <span class=slot data-n=A></span></li><li>Draft <span class=slot data-n=B></span></li></ul><p id=log></p><div id=big></div></main>' +
       '<script>{ const big = document.getElementById("big"); for (let i = 0; i < 20500; i++) big.append(document.createElement("span")); }</script>' +
       TWIN_SCRIPT,
+    // #268's review (Fable, round 1 of #273): rows drawn from data, each row's HTML the test's (its words, and what's
+    // before and after its Cancel: an inner item, a section, deep divs). Cancel logs the row's data-n.
+    '/p-rows':
+      '<title>Rows</title><main><ul id=rows></ul><p id=log></p></main>' +
+      '<script>const ul = document.getElementById("rows");' +
+      'const row = (r, i) => `<li id=act-${i} data-n="${r.n}"><span class=label>${r.html}</span> ${r.pre || ""}<button id=cancel-${i}>Cancel</button>${r.post || ""}</li>`;' +
+      'window.rows = (rs) => { ul.innerHTML = rs.map(row).join(""); };' +
+      // The same with no ids: rows told apart only by what they say, and their buttons' names.
+      'window.plainRows = (rs) => { ul.innerHTML = rs.map((r) => `<li data-n="${r.n}"><span class=label>${r.html}</span> <button>Cancel</button></li>`).join(""); };' +
+      'window.patch = (i, r) => { const li = ul.children[i]; li.dataset.n = r.n; li.querySelector(".label").innerHTML = r.html; };' +
+      'ul.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) document.getElementById("log").textContent += " cancel:" + b.closest("#rows > li").dataset.n; });' +
+      '</script>',
+    // Index keys: Cancel takes the order out of the data, and the same nodes are patched in place.
+    '/p-index':
+      '<title>Orders</title><main><ul id=rows></ul><p id=log></p></main>' +
+      '<script>const ul = document.getElementById("rows"); let data = ["A", "B", "C"];' +
+      'const li = () => { const l = document.createElement("li"); l.innerHTML = "<span></span> <button>Cancel</button>"; l.querySelector("button").onclick = () => { document.getElementById("log").textContent += " cancel:" + l.querySelector("span").textContent; data.splice([...ul.children].indexOf(l), 1); render(); }; return l; };' +
+      'const render = () => { while (ul.children.length < data.length) ul.append(li()); while (ul.children.length > data.length) ul.lastChild.remove(); data.forEach((n, i) => { ul.children[i].querySelector("span").textContent = "Order " + n; }); };' +
+      'window.setData = (d) => { data = d; render(); }; render();</script>',
+    // A row whose own words tick: a session dialog, an auction lot. ?mark=timer or ?mark=live marks the ticking words
+    // (role=timer, aria-live): those are left out of a row's words (#273's round 1, S1).
+    '/p-timer':
+      '<title>Session</title><main><div role=dialog><p>Your session ends in <span id=t>900</span> seconds</p><button>Stay signed in</button></div><ul><li><span>Lot 7 ends in <b id=u>900</b> s</span> <button>Bid</button></li></ul><p id=log></p></main>' +
+      '<script>const mark = new URLSearchParams(location.search).get("mark"); for (const id of ["t", "u"]) { const e = document.getElementById(id); if (mark === "timer") e.setAttribute("role", "timer"); if (mark === "live") e.setAttribute("aria-live", "polite"); }' +
+      'let n = 900; const every = Number(new URLSearchParams(location.search).get("ms") || 1000); const replace = new URLSearchParams(location.search).get("replace");' +
+      'if (new URLSearchParams(location.search).get("twins")) document.querySelector("ul").append(document.querySelector("ul li").cloneNode(true));' +
+      'setInterval(() => { n--; if (replace) { for (const li of document.querySelectorAll("ul li")) li.innerHTML = "<span>Lot 7 ends in <b>" + n + "</b> s</span> <button>Bid</button>"; return; } document.getElementById("t").textContent = n; document.getElementById("u").textContent = n; }, every);' +
+      'document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) document.getElementById("log").textContent += " " + b.textContent; });</script>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',

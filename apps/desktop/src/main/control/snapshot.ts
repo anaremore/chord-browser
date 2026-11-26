@@ -266,6 +266,157 @@ export const SNAPSHOT_LIB = String.raw`
     }
     return JSON.stringify(parts);
   };
+  // Which row it's in, when that row has no name (#268): the words of each unnamed item on the way up, nearest first, at
+  // most 3, stopping at the first named one (its items say it: itemsOf), within the 64 ancestors itemsOf climbs. An
+  // item's words: its first heading that says something, then its text, a picture's alt and a link's aria-label in
+  // order, through open shadow roots, from at most 100 nodes that give words or hold them and 240 characters; never a
+  // control's (a button, a field, a summary), an editor's (what's typed) or a ticker's (role=timer or progressbar,
+  // aria-live, a progress bar or a meter; <time> counts). The nearest item reads all it holds; the items above it never
+  // read into a row nested in them (li, tr, role=row or listitem; rounds 3 and 4 of #273). Past 60 characters the rest is kept as a short hash. Read from
+  // tags and attributes only (no style or computed role: every unnamed row's, once per snapshot), and the same at every
+  // step, so the two always agree. The same control in another unnamed row (ids by position, a row replaced or patched
+  // in place) is another element.
+  const ROW_LABEL_MAX = 60;
+  // Raw words kept, at most (one clip at the end), and the nodes that count toward the look: kept elements and text
+  // that isn't only spaces (a pretty-printed row's whitespace never uses it up).
+  const ROW_LABEL_RAW = 240;
+  const ROW_LABEL_VISIT = 100;
+  const ROW_ITEMS = 3;
+  const ROW_CONTROLS = new Set(['button', 'input', 'select', 'textarea', 'option', 'optgroup', 'datalist', 'summary', 'progress', 'meter']);
+  const ROW_TICKERS = new Set(['timer', 'progressbar']);
+  const rowHash = (t) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(36);
+  };
+  // A row nested in an item above the control's nearest (round 2 of #273, N4; narrowed in round 4): a list's rows and a
+  // table's are their own, never their container's, so a row going never changes the others' keys. Only rows (li, tr,
+  // role=row, role=listitem): a nested section, article or div may hold the row's own words, or ones every row shares
+  // beside the control, and is read (round 4: the planner's call, Fable's option 2).
+  const ROW_ITEM_TAGS = new Set(['li', 'tr']);
+  const ROW_ITEM_ROLES = new Set(['row', 'listitem']);
+  const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+  // An element of a row passed over (and all it holds): null; else its role from its attribute, '' for none (none read
+  // for an element with no attributes: most of a row's). No object made per element, the tag's set lookups first
+  // (round 3 of #273: the row's share of the snapshot). An editor is passed over where its attribute is (never the
+  // computed isContentEditable, which can make the page work out its styles); contenteditable="false" isn't one.
+  // outer: an item above the row's nearest, which never reads into a row nested in it (N4: li, tr, role=row or listitem).
+  const rowRole = (c, tag, outer) => {
+    if (SKIP.has(tag) || ROW_CONTROLS.has(tag)) return null;
+    if (!c.attributes.length) return outer && ROW_ITEM_TAGS.has(tag) ? null : '';
+    const editable = c.getAttribute('contenteditable');
+    if (c.hidden || c.hasAttribute('inert') || (editable !== null && editable.toLowerCase() !== 'false') || String(c.getAttribute('aria-hidden')).toLowerCase() === 'true') return null;
+    const r = String(c.getAttribute('role') || '').trim().split(/\s+/)[0].toLowerCase();
+    const live = c.getAttribute('aria-live');
+    if (ROW_TICKERS.has(r) || (live && live.toLowerCase() !== 'off')) return null;
+    if (r && r !== 'link' && r !== 'heading' && ACTED.has(r)) return null;
+    if (outer && (r ? ROW_ITEM_ROLES.has(r) : ROW_ITEM_TAGS.has(tag))) return null;
+    return r;
+  };
+  // Its words in order (text, a picture's alt, a link's aria-label, through open shadow roots), under their own budget
+  // (counted nodes, raw characters): a heading's, read on its own.
+  const rowWords = (root, outer) => {
+    const out = [];
+    let raw = 0;
+    let looked = 0;
+    const visit = (n) => {
+      for (let c = n.firstChild; c && raw < ROW_LABEL_RAW && looked < ROW_LABEL_VISIT; c = c.nextSibling) {
+        if (c.nodeType === 3) {
+          const t = c.nodeValue.trim();
+          if (!t) continue;
+          looked++;
+          out.push(t.slice(0, ROW_LABEL_RAW - raw));
+          raw += t.length + 1;
+          continue;
+        }
+        if (c.nodeType !== 1) continue;
+        const tag = c.localName;
+        const r = rowRole(c, tag, outer);
+        if (r === null) continue;
+        looked++;
+        if (tag === 'img') {
+          const alt = (c.getAttribute('alt') || '').trim();
+          if (alt) { out.push(alt.slice(0, ROW_LABEL_RAW)); raw += alt.length + 1; }
+          continue;
+        }
+        const label = (tag === 'a' || r === 'link') && (c.getAttribute('aria-label') || '').trim();
+        if (label) { out.push(label.slice(0, ROW_LABEL_RAW)); raw += label.length + 1; continue; }
+        if (c.shadowRoot) visit(c.shadowRoot);
+        visit(c);
+      }
+    };
+    if (root.shadowRoot) visit(root.shadowRoot);
+    visit(root);
+    return out;
+  };
+  // An item's words, in one look: its first heading that says something first (its words read on their own budget:
+  // every row can share a heading, and text before it never uses up what reads it, round 2 of #273), then the rest
+  // in order. Once the rest's characters are spent, the look goes on only to find that heading. From its own open
+  // shadow root (a web-component row) and its children; past 60 characters, the rest as a short hash (never shown).
+  const rowLabel = (item, outer) => {
+    const rest = [];
+    let heading = null;
+    let raw = 0;
+    let looked = 0;
+    const visit = (n) => {
+      for (let c = n.firstChild; c && looked < ROW_LABEL_VISIT; c = c.nextSibling) {
+        const full = raw >= ROW_LABEL_RAW;
+        if (full && heading) return;
+        if (c.nodeType === 3) {
+          if (full) continue;
+          const t = c.nodeValue.trim();
+          if (!t) continue;
+          looked++;
+          rest.push(t.slice(0, ROW_LABEL_RAW - raw));
+          raw += t.length + 1;
+          continue;
+        }
+        if (c.nodeType !== 1) continue;
+        const tag = c.localName;
+        const r = rowRole(c, tag, outer);
+        if (r === null) continue;
+        looked++;
+        if (heading === null && (r === 'heading' || (!r && HEADING_TAGS.has(tag)))) {
+          const own = rowWords(c, outer);
+          if (own.length) heading = own;
+          continue;
+        }
+        if (!full) {
+          if (tag === 'img') {
+            const alt = (c.getAttribute('alt') || '').trim();
+            if (alt) { rest.push(alt.slice(0, ROW_LABEL_RAW)); raw += alt.length + 1; }
+            continue;
+          }
+          const label = (tag === 'a' || r === 'link') && (c.getAttribute('aria-label') || '').trim();
+          if (label) { rest.push(label.slice(0, ROW_LABEL_RAW)); raw += label.length + 1; continue; }
+        }
+        if (c.shadowRoot) visit(c.shadowRoot);
+        visit(c);
+      }
+    };
+    if (item.shadowRoot) visit(item.shadowRoot);
+    visit(item);
+    const all = clip((heading ? heading.concat(rest) : rest).join(' '), 2 * ROW_LABEL_RAW);
+    return all.length > ROW_LABEL_MAX ? all.slice(0, ROW_LABEL_MAX) + ' #' + rowHash(all) : all;
+  };
+  // Climbing as itemsOf does (as the walk: rowAt): '' when the nearest item is named, or there is none.
+  const rowOf = (el) => {
+    const labels = [];
+    let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
+    for (let i = 0; node && i < 64 && labels.length < ROW_ITEMS; i++) {
+      const role = roleNow(node);
+      if (itemRole(node, role)) {
+        if (itemOf(node, role)) break;
+        labels.push(rowLabel(node, labels.some(Boolean)));
+      }
+      node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
+    }
+    return labels.length ? JSON.stringify(labels) : '';
+  };
+  // A row that says nothing at all (#268's review, S5): never found again by it.
+  // The nearest item saying nothing is enough (round 3 of #273): an item above it that says something (a count, a total)
+  // tells groups apart, never the rows in them.
+  const rowSaysNothing = (row) => Boolean(row) && JSON.parse(row)[0] === '';
 `;
 
 /**
@@ -288,7 +439,7 @@ export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => {
  * item (`items`); or, as before #166, each element's place's part built in the walk (`eagerPart`). A snapshot with a
  * probe is never an agent's: only measured.
  */
-export type SnapshotProbe = Partial<Record<'shape' | 'near' | 'items' | 'eagerPart', true>>;
+export type SnapshotProbe = Partial<Record<'shape' | 'near' | 'items' | 'eagerPart' | 'row', true>>;
 
 function snapshotScript(owner: string, token: string, pinned = true, boxes = false, probe: SnapshotProbe = {}): string {
   const args = { owner, token, pinned, boxes, probe, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
@@ -314,10 +465,12 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   sidsAll.set(args.owner, sidsMine);
   while (sidsAll.size > args.owners) sidsAll.delete(sidsAll.keys().next().value);
   // Compared field by field, no string built per node (round 2 of #145: Neon measured it at 4 to 6.5 ms on 16k nodes).
-  const sidOf = (el, role, name, items) => {
+  // A kept ref's row too (#268's review): a node patched in place into another unnamed row gets a new id, so a later
+  // snapshot (an action's diff, a find) never gives the old ref to the other row's control.
+  const sidOf = (el, role, name, items, row) => {
     let had = sidsMine.ids.get(el);
-    if (!had || had.role !== role || had.name !== name || had.items !== items) {
-      had = { id: sidsMine.next++, role, name, items };
+    if (!had || had.role !== role || had.name !== name || had.items !== items || had.row !== row) {
+      had = { id: sidsMine.next++, role, name, items, row };
       sidsMine.ids.set(el, had);
       if (sidsMine.next > (globalThis.__chordSidNext || 1)) globalThis.__chordSidNext = sidsMine.next;
     }
@@ -359,7 +512,31 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     const at = { tag: el.localName, role: el.getAttribute('role') || '', up, n, items: part ? { part, n, up: items } : items, near: nearHere(el, up) };
     // (As main did before #166, for agentSnapshotParts' comparison: measured only.)
     if (args.probe.eagerPart) at.part = [at.tag, at.role];
+    // The nearest item, named or not, and the ones above it (rowAt): the unnamed ones' words are the row a ref is in
+    // (#268). Its element is live, so a row's words are read in the walk (rowAt), never in the task after (#270's B1).
+    // Left out with the items (agentSnapshotParts), or on its own (probe.row).
+    if (!args.probe.items && !args.probe.row) at.item = itemRole(el, role) ? { el, named: Boolean(part), n, up: up ? up.item : null } : up ? up.item : null;
     return at;
+  };
+  // A kept ref's row (rowOf's, the same), from the walk's chain: each unnamed item's label once per snapshot, within the
+  // 64 ancestors rowOf climbs (as itemsAt).
+  const rowLabels = [new Map(), new Map()];
+  const rowAt = (chain) => {
+    if (chain && chain.rowKey !== undefined) return chain.rowKey;
+    const labels = [];
+    for (let it = chain && chain.item; it && chain.n - it.n < 64 && labels.length < ROW_ITEMS; it = it.up) {
+      if (it.named) break;
+      // An item above never reads into nested rows once an inner level has found words (round 4 of #273, Carbon: a
+      // shared section around the list would read every row again); while none has, it reads all it holds (the row's
+      // words may be in a sibling item: words in one nested item, the control in another, round 3).
+      const outer = labels.some(Boolean);
+      const seen = rowLabels[outer ? 1 : 0];
+      if (!seen.has(it.el)) seen.set(it.el, rowLabel(it.el, outer));
+      labels.push(seen.get(it.el));
+    }
+    const key = labels.length ? JSON.stringify(labels) : '';
+    if (chain) chain.rowKey = key;
+    return key;
   };
   const placeOf = (chain) => {
     const parts = [];
@@ -405,7 +582,8 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
       // An acted-on element must be on screen to be acted on (forms' rule: at least a few pixels, not put off the page).
       const actable = acted && !opensFiles(el) && (isField(el) ? visibleField(el, typeOf(el)) : shown(el));
       const name = nameOf(el, role);
-      const node = { depth, role, name, sid: sidOf(el, role, name, itemsAt(chain)) };
+      const row = actable ? rowAt(chain) : '';
+      const node = { depth, role, name, sid: sidOf(el, role, name, itemsAt(chain), row) };
       if (role === 'heading') node.level = Number(el.getAttribute('aria-level')) || Number((el.localName.match(/^h([1-6])$/) || [])[1]) || 2;
       const states = statesOf(el, role);
       // A frame of another site: its contents can't be read from here (#112: said so, never an empty node).
@@ -421,7 +599,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
       if (isField(el) || TYPED.has(role)) node.field = fieldOf(el);
       if (actable) {
         if (keep.length >= args.maxRefs) cut.refs = true;
-        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: args.probe.shape ? null : shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
+        else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, row, parts: args.probe.shape ? null : shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
       }
       // A part's ref only where its read would go (round 2 of #260, N1: never one always refused as changed).
       if (args.boxes && CONTAINERS.has(role) && boxes.length < args.maxRefs && !partBlocked(el)) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
@@ -441,11 +619,11 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   const start = document.body || document.documentElement;
   if (document.designMode === 'on' || start.isContentEditable || document.documentElement.isContentEditable) {
     const startName = nameOf(start, 'textbox');
-    const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, 'textbox', startName, itemsOf(start)) };
+    const node = { depth: 0, role: 'textbox', name: startName, sid: sidOf(start, 'textbox', startName, itemsOf(start), shown(start) ? rowOf(start) : '') };
     const states = statesOf(start, 'textbox');
     if (states.length) node.states = states;
     node.field = fieldOf(start);
-    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name, items: itemsOf(start), path: refPath(start), shape: refShape(start) }); }
+    if (shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name: node.name, items: itemsOf(start), row: rowOf(start), path: refPath(start), shape: refShape(start) }); }
     nodes.push(node);
   } else {
     // The start's own ancestors, and itself, as its children's place.
@@ -483,7 +661,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     // snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin). Its items stay
     // either way: every step checks them (act.ts).
     const counts = new Map();
-    for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
+    for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.row, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
     for (const k of keep) {
       // Twins (#211): two or more alike among the snapshot's own, cut short or not. Their place and shape stay, so a
       // look finds whether any is still there (none: changed); an action on one is never taken, and says why.

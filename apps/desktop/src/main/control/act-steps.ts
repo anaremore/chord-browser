@@ -57,13 +57,13 @@ export const PRESS_TRIES = 5;
 export const KEY_SEEN_MS = 500;
 
 /** The element gone or replaced by the page, or a look-alike in its place now (#211's review): the same for a key's checks. */
-export const redrawn = (refusal: string | null): boolean => refusal === ACT_REFUSALS.changed || refusal === ACT_REFUSALS.ambiguous;
+export const redrawn = (refusal: string | null): boolean => refusal === ACT_REFUSALS.changed || refusal === ACT_REFUSALS.ambiguous || refusal === ACT_REFUSALS.rowChanged || refusal === ACT_REFUSALS.rowEmpty;
 
 /**
  * A look-alike in the element's place once input had reached the page (a key, a press, text, a value, a choice): what
  * went in may have worked, so never "nothing was done" (#211's round 2: a comment box that sends on Enter and redraws).
  */
-export const INPUT_REDRAWN = 'The page redrew that element after the input went in, and it has a look-alike now, so it may or may not have worked. Call snapshot and check before doing it again.';
+export const INPUT_REDRAWN = 'The page redrew that element, or changed the row it’s in, after the input went in, so it may or may not have worked. Call snapshot and check before doing it again.';
 
 /** A key whose element the page redrew between its keydown and the rest: maybe nothing happened. */
 export const KEY_REDRAWN = 'The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.';
@@ -182,7 +182,7 @@ export function allowedBy(element: Extract<ActAnswer, { ok: true }>, submits: bo
 export function stepShape(element: Extract<ActAnswer, { ok: true }>): string {
   const risk = element.risk;
   const form = risk?.form;
-  return JSON.stringify([element.name, element.items ?? '', element.path ?? '', !risk ? null : [risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]]);
+  return JSON.stringify([element.name, element.items ?? '', element.row ?? '', element.path ?? '', !risk ? null : [risk.tag, risk.type, risk.submits, risk.href, risk.hrefUrl, risk.hrefUnknown === true, risk.text, form ? [form.hidden, form.overflow] : null, form ? [form.method, form.url, form.search, form.fields.map((f) => [f.type, f.autocomplete, f.name, f.label])] : null]]);
 }
 
 
@@ -195,6 +195,9 @@ export function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'replaced') return ACT_REFUSALS.changed;
   // Two or more alike, redrawn (#211): how to choose, never a guess.
   if (answer.why === 'ambiguous') return ACT_REFUSALS.ambiguous;
+  // The same node, its unnamed row saying something else now (#268's review): maybe another row's, never pressed.
+  if (answer.why === 'row') return ACT_REFUSALS.rowChanged;
+  if (answer.why === 'row-empty') return ACT_REFUSALS.rowEmpty;
   if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';

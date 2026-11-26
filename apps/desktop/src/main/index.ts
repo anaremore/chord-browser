@@ -1498,7 +1498,7 @@ if (!app.requestSingleInstanceLock()) {
           const [{ snapshotPage }, { ASSISTANT_WORLD }] = await Promise.all([import('./control/snapshot'), import('./control/extract')]);
           const contents = [...browser!.tabs.entries()].find(([, c]) => c.getURL() === url)?.[1];
           if (!contents) return null;
-          const variants = { full: {}, eagerPart: { eagerPart: true }, shape: { shape: true }, near: { near: true }, items: { items: true } } as const;
+          const variants = { full: {}, eagerPart: { eagerPart: true }, shape: { shape: true }, near: { near: true }, items: { items: true }, row: { row: true } } as const;
           const times: Record<string, number[]> = {};
           // An owner per variant, so no variant's ids (sidOf's cache) are another's (round 1 of #270, SF1); all of them
           // let go of afterwards, as no agent's.
