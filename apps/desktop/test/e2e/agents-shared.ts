@@ -364,6 +364,21 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 1 ? 'The first word is juniper. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +
       '</main>',
+    // #205's measure, on the page as it was then (#207 makes a section named by aria-label a region, which collapses as
+    // rows alike): its sections plain, never regions.
+    '/article50-plain':
+      '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
+      Array.from({ length: 50 }, (_, i) => `<section><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +
+      '</main>',
+    // #207: parts read by their container refs, and what a part's read never gives.
+    '/parts':
+      '<title>Parts</title><main><nav aria-label="Site"><a href="/">Home</a></nav>' +
+      '<section aria-label="Orders"><h2>Orders</h2><p>Shown words: order 12 shipped.</p>' +
+      '<p style="display:none">hidden-display</p><p style="visibility:hidden">hidden-visibility</p><p style="opacity:0">hidden-opacity</p><p hidden>hidden-attribute</p><div inert><p>hidden-inert</p></div>' +
+      '<input aria-label="Note" value="field-value-secret"><textarea aria-label="Message">textarea-secret</textarea>' +
+      '<div contenteditable="true">editor-secret</div><div role="textbox">aria-textbox-secret</div><span role="searchbox">aria-searchbox-secret</span><div role="combobox">aria-combobox-secret</div>' +
+      '<iframe title="Chat" srcdoc="<p>frame-inside-secret</p>"></iframe><button>Cancel order</button></section>' +
+      '<article aria-label="Story"><p>Story words.</p></article><table aria-label="Prices"><tr><td>Tea</td><td>3</td></tr></table></main>',
     '/article50':
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +

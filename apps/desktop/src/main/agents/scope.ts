@@ -96,6 +96,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     sendWaitMs: CONTROL_WAIT_MS,
     waits: true,
     readDefault: AGENT_READ_DEFAULT,
+    boxes: true,
     outlineOnGo: true,
     activity: async () => undefined,
   };

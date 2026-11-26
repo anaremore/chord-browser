@@ -22,7 +22,7 @@ import { takeDroppedAfter, watchSends, type Allowed, type SendWatch } from './se
 import { userLeaseLost } from './user-watch';
 import { pageCall } from '../page-call';
 import { sendAgentInput, type AgentInputEvent } from './input';
-import { pageShows, snapshotPage, waitInPage, type WaitAnswer, type WaitFor } from './snapshot';
+import { pageShows, readBoxPage, snapshotPage, waitInPage, type BoxAnswer, type WaitAnswer, type WaitFor } from './snapshot';
 
 export interface ControlPage {
   /** The page id now (see above). */
@@ -41,7 +41,9 @@ export interface ControlPage {
   readForm(token: string): Promise<FormPage | null>;
   /** The page's accessibility outline (S18 M2b), its acted-on elements kept in the page as `owner`'s latest, under `token`. */
   /** `pinned`: the agent's own (it reads it), kept until its next; false for a diff's (M2g-1). */
-  snapshot(owner: string, token: string, pinned?: boolean): Promise<SnapshotRead | null>;
+  snapshot(owner: string, token: string, pinned?: boolean, boxes?: boolean): Promise<SnapshotRead | null>;
+  /** One part's shown text by its container ref (#207: snapshot.ts' boxTextScript); null if the page didn't answer. */
+  readBox(owner: string, token: string, box: number): Promise<BoxAnswer | null>;
   /** wait_for in the page, at most `ms` (snapshot.ts' waitScript); null if the page didn't answer. */
   waitFor(want: WaitFor, ms: number): Promise<WaitAnswer | null>;
   /** Whether the page shows anything yet, waiting for it at most `waitMs` (snapshot.ts' pageShows). */
@@ -235,7 +237,8 @@ export function controlPage(contents: WebContents): ControlPage {
     screenshot: () => screenshot(contents),
     diagnostics: () => readDiagnostics(contents),
     readForm: (token) => readFormPage(contents, token),
-    snapshot: (owner, token, pinned) => snapshotPage(contents, owner, token, pinned),
+    snapshot: (owner, token, pinned, boxes) => snapshotPage(contents, owner, token, pinned, boxes),
+    readBox: (owner, token, box) => readBoxPage(contents, owner, token, box),
     waitFor: (want, ms) => waitInPage(contents, want, ms),
     shows: (waitMs) => pageShows(contents, waitMs),
     fillForm: (args) => fillFormPage(contents, args),

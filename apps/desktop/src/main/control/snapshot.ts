@@ -32,7 +32,7 @@
 import { ASSISTANT_FORM_MAX_OPTIONS, cleanSnapshotRead, SNAPSHOT_MAX_REFS, SNAPSHOT_NAME_MAX, SNAPSHOT_OWNERS, SNAPSHOT_SCAN, SNAPSHOT_SCAN_MS, type SnapshotRead } from '@chord/core';
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
-import { ASSISTANT_WORLD } from './extract';
+import { ASSISTANT_WORLD, TEXT_LIB } from './extract';
 import { FORM_LIB } from './forms';
 
 /** How long a snapshot may take to come back: a busy page answers within it, a hung one is a refusal. */
@@ -49,6 +49,8 @@ export const SNAPSHOT_LIB = String.raw`
   ${FORM_LIB}
   // Roles an agent can act on: each gets a key (an element, kept by a WeakRef for M2c).
   const ACTED = new Set(['link', 'button', 'textbox', 'searchbox', 'spinbutton', 'combobox', 'listbox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem']);
+  // Parts of a page read by their container ref (S18 M2g-2, #207: read_tab's ref): read-only, in their own table.
+  const CONTAINERS = new Set(['region', 'article', 'main', 'navigation', 'complementary', 'banner', 'contentinfo', 'search', 'form', 'table']);
   // Roles shown for orientation, without a key.
   const SHOWN = new Set(['heading', 'list', 'listitem', 'navigation', 'main', 'banner', 'contentinfo', 'complementary', 'region', 'form', 'search', 'dialog', 'alertdialog', 'table', 'row', 'cell', 'columnheader', 'rowheader', 'img', 'figure', 'article', 'group', 'radiogroup', 'tablist', 'tabpanel', 'menu', 'menubar', 'tree', 'toolbar', 'alert', 'status', 'iframe', 'separator', 'progressbar', 'slider']);
   const TEXT_TYPES = new Set(['text', 'email', 'tel', 'url', 'password', 'search', 'number', 'date', 'datetime-local', 'month', 'week', 'time', '']);
@@ -92,6 +94,8 @@ export const SNAPSHOT_LIB = String.raw`
       case 'img': return (el.getAttribute('alt') || '').trim() ? 'img' : null;
       case 'figure': return 'figure';
       case 'article': return 'article';
+      // A section named by aria-label or aria-labelledby is a region (#207), as ARIA maps it and itemRole reads it.
+      case 'section': return el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') ? 'region' : null;
       case 'fieldset': return 'group';
       case 'iframe': case 'frame': return 'iframe';
       case 'hr': return 'separator';
@@ -276,13 +280,16 @@ const SNAPSHOT_HISTORY = 4;
 export const SNAPSHOT_FIND = String.raw`const snapshotFind = (owner, token) => { let r = globalThis.__chordSnapshots && globalThis.__chordSnapshots.get(owner); while (r && r.token !== token) r = r.prev; return r || null; };`;
 
 /** `owner`: whose snapshot it is (the agent's gate id), so each keeps its own latest one; `token`: this read's. */
-export function snapshotScript(owner: string, token: string, pinned = true): string {
-  const args = { owner, token, pinned, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
+/** `boxes`: the parts it may read by their container refs (#207), kept as its keyed elements are, in their own list. */
+export function snapshotScript(owner: string, token: string, pinned = true, boxes = false): string {
+  const args = { owner, token, pinned, boxes, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   const started = performance.now();
   const nodes = [];
   const keep = [];
+  // The parts read by their container refs (#207): each by a WeakRef, with the role and name the outline gave it.
+  const boxes = [];
   // Each element's own id in this document, for this agent (M2g-1): the same element, the same id, from one snapshot to
   // the next; a replaced one gets another. Refs are made from it (core's ElementRefs), so an action's diff can name them.
   // Only while it's the same element as the agent knows it (round 1 of #145, B1): its role, its name and the items it's
@@ -399,6 +406,7 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
         if (keep.length >= args.maxRefs) cut.refs = true;
         else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
       }
+      if (args.boxes && CONTAINERS.has(role) && boxes.length < args.maxRefs) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
       // element's words are its name.
@@ -436,7 +444,7 @@ export function snapshotScript(owner: string, token: string, pinned = true): str
   // page that redraws before that task can't take it away (round 6). If anything here throws, none is found again.
   let pending = true;
   const reads = (globalThis.__chordSnapshots = globalThis.__chordSnapshots || new Map());
-  const read = { token: args.token, url: location.href, keep, finish: null, finishMs: 0 };
+  const read = { token: args.token, url: location.href, keep, boxes, finish: null, finishMs: 0 };
   const finish = () => {
     if (!pending) return;
     pending = false;
@@ -621,7 +629,45 @@ export async function pageShows(contents: WebContents, waitMs: number): Promise<
 }
 
 /** A snapshot of the page for `owner`, or null if it couldn't be taken (gone, hung, or not a page). */
-export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true): Promise<SnapshotRead | null> {
+export async function snapshotPage(contents: WebContents, owner: string, token: string, pinned = true, boxes = false): Promise<SnapshotRead | null> {
   if (contents.isDestroyed()) return null;
-  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned) }]), null, SNAPSHOT_MS));
+  return cleanSnapshotRead(await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: snapshotScript(owner, token, pinned, boxes) }]), null, SNAPSHOT_MS));
+}
+
+/** One part's shown text by its container ref (#207), or why not: changed since the snapshot, or the page an editor. */
+export type BoxAnswer = { ok: true; url: string; role: string; name: string; text: string } | { ok: false; why: 'stale' | 'editor' };
+
+/**
+ * read_tab by a container ref (S18 M2g-2, #207): the part `owner`'s snapshot `token` kept as `box`, checked again as an
+ * action checks its element (still in the page, the same role and name the outline gave it, shown), then its text, by
+ * the page read's own walk (extract.ts' TEXT_LIB), strict: never a field's value, an editing host's contents or an ARIA
+ * text field's. A page that's all editor (designMode, an editable body) is never read this way (#145's B-3).
+ */
+export function boxTextScript(owner: string, token: string, box: number): string {
+  return String.raw`((args) => {
+  ${SNAPSHOT_LIB}
+  ${TEXT_LIB}
+  ${SNAPSHOT_FIND}
+  if (document.designMode === 'on' || (document.body && document.body.isContentEditable) || document.documentElement.isContentEditable) return { ok: false, why: 'editor' };
+  const read = snapshotFind(args.owner, args.token);
+  const b = read && read.boxes ? read.boxes[args.box] : null;
+  const el = b ? b.ref.deref() : null;
+  if (!el || !el.isConnected || !textVisible(el)) return { ok: false, why: 'stale' };
+  if (el.isContentEditable) return { ok: false, why: 'editor' };
+  const role = roleNow(el);
+  if (role !== b.role || nameOf(el, role) !== b.name) return { ok: false, why: 'stale' };
+  return { ok: true, url: location.href, role: b.role, name: b.name, text: readText(el, true) };
+})(${JSON.stringify({ owner, token, box })})`;
+}
+
+/** How long a part's read may take: as a page's. */
+const BOX_MS = 8000;
+
+export async function readBoxPage(contents: WebContents, owner: string, token: string, box: number): Promise<BoxAnswer | null> {
+  if (contents.isDestroyed()) return null;
+  const a = (await pageCall(contents.executeJavaScriptInIsolatedWorld(ASSISTANT_WORLD, [{ code: boxTextScript(owner, token, box) }]), null, BOX_MS)) as BoxAnswer | null;
+  if (!a || typeof a !== 'object') return null;
+  if (a.ok === true && typeof a.text === 'string' && typeof a.url === 'string' && typeof a.role === 'string' && typeof a.name === 'string') return { ok: true, url: a.url, role: a.role.slice(0, 40), name: a.name.slice(0, 2000), text: a.text };
+  if (a.ok === false && (a.why === 'stale' || a.why === 'editor')) return { ok: false, why: a.why };
+  return null;
 }

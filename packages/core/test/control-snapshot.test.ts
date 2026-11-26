@@ -359,6 +359,71 @@ describe('the outline without the page’s text: snapshot’s text: false (S18 M
   });
 });
 
+describe('parts of a page by their container refs (S18 M2g-2, #207)', () => {
+  const page = (rows = 3): SnapshotRead => ({
+    url: 'https://pages.test/',
+    title: 'Page',
+    nodes: [
+      { depth: 0, role: 'main', name: '', sid: 1, box: 0 },
+      { depth: 1, role: 'region', name: 'Orders', sid: 2, box: 1 },
+      { depth: 2, role: 'button', name: 'Cancel', key: 0, sid: 3 },
+      { depth: 1, role: 'list', name: '', sid: 4 },
+      ...Array.from({ length: rows }, (_, i) => [{ depth: 2, role: 'listitem', name: '', sid: 100 + 2 * i }, { depth: 3, role: 'article', name: `Story ${i}`, sid: 101 + 2 * i, box: 2 + i }]).flat(),
+    ],
+    cut: {},
+  });
+
+  it('a c ref on each container line shown, its page id its number; none without the scope’s parts, and never on an element', () => {
+    const read = page();
+    const refs = new ElementRefs().issue('p1', 't', snapshotKeys(read), new Map([[0, 3]]));
+    const outline = snapshotOutline(read, refs, { boxes: true });
+    expect(outline.text).toContain('- main [ref=c1]');
+    expect(outline.text).toContain('  - region "Orders" [ref=c2]');
+    expect(outline.text).toMatch(/- button "Cancel" \[ref=e\d+\]$/m);
+    expect([...outline.boxes!.keys()]).toEqual(['c1', 'c2', 'c101', 'c103', 'c105']);
+    expect(outline.boxes!.get('c2')).toEqual({ box: 1, role: 'region', name: 'Orders' });
+    // Without the scope's parts: no c refs at all.
+    const plain = snapshotOutline(read, refs);
+    expect(plain.text).not.toMatch(/ref=c/);
+    expect(plain.boxes).toBeUndefined();
+  });
+
+  it('only the lines shown give c refs: a collapsed run’s parts, and a find’s others, aren’t in the table', () => {
+    const read = page(20);
+    const refs = new ElementRefs().issue('p1', 't', snapshotKeys(read), new Map([[0, 3]]));
+    const outline = snapshotOutline(read, refs, { boxes: true });
+    // Five rows of twenty shown: their five articles' refs, never the fifteen collapsed.
+    expect([...outline.boxes!.keys()].filter((r) => Number(r.slice(1)) > 100)).toHaveLength(5);
+    expect(outline.boxes!.has('c139')).toBe(false);
+    const found = snapshotOutline(read, refs, { boxes: true, find: 'Story 19' });
+    expect([...found.boxes!.keys()]).toEqual(['c1', 'c139']);
+  });
+
+  it('the page script’s box is kept only with a page id, once, as a whole number', () => {
+    const clean = cleanSnapshotRead({ url: 'https://pages.test/', title: '', cut: {}, nodes: [{ depth: 0, role: 'region', name: 'A', sid: 5, box: 0 }, { depth: 0, role: 'region', name: 'B', sid: 6, box: 0 }, { depth: 0, role: 'region', name: 'C', box: 1 }, { depth: 0, role: 'region', name: 'D', sid: 7, box: 1.5 }] })!;
+    expect(clean.nodes.map((n) => n.box)).toEqual([0, undefined, undefined, undefined]);
+  });
+
+  it('ElementRefs keeps them in their own table: never an element ref, gone with the page, a stale ref for another page', () => {
+    const refs = new ElementRefs();
+    refs.issue('p1', 't1', [0], new Map([[0, 3]]));
+    refs.issueBoxes('p1', 't1', new Map([['c2', { box: 1, role: 'region', name: 'Orders' }]]));
+    expect(refs.resolveBox('c2', 'p1')).toEqual({ ok: true, token: 't1', box: 1, role: 'region', name: 'Orders' });
+    // Another page now: stale; a ref never shown, or not a c ref: unknown.
+    expect(refs.resolveBox('c2', 'p2')).toEqual({ ok: false, why: 'stale' });
+    expect(refs.resolveBox('c9', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    expect(refs.resolveBox('e3', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    // Never an element's: a c ref isn't one, and the element's stays its own.
+    expect(refs.resolve('c2', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    expect(refs.resolve('e3', 'p1')).toMatchObject({ ok: true, key: 0 });
+    // A later outline's replace them; forget() takes them.
+    refs.issueBoxes('p1', 't2', new Map([['c4', { box: 0, role: 'article', name: 'A' }]]));
+    expect(refs.resolveBox('c2', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    refs.forget();
+    expect(refs.resolveBox('c4', 'p1')).toEqual({ ok: false, why: 'unknown' });
+  });
+});
+
 describe('refs that stay, and the diff after an action (M2g-1)', () => {
   it('a ref given in turn (an id past the cap) never takes a number a later id of the page maps to (round 2 of #145)', () => {
     const refs = new ElementRefs();

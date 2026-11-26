@@ -144,6 +144,11 @@ export interface ControlScope {
    * it may be (ASSISTANT_READ_MAX), as the assistant reads.
    */
   readonly readDefault?: number;
+  /**
+   * Parts of a page read by their container refs (S18 M2g-2, #207): snapshot gives regions, articles, landmarks, forms
+   * and tables a `c` ref, and read_tab reads one by it. Outside agents; absent, none are given.
+   */
+  readonly boxes?: boolean;
   /** No diff after an action (batch's steps but its last: one diff for the whole batch, M2g-1). */
   readonly noDiff?: boolean;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */

@@ -34,7 +34,8 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     expect(snap).toMatchObject({ source: 'web_snapshot', trust: 'untrusted' });
     const lines = snap.content.split('\n').map((l) => l.trim());
     const has = (pattern: RegExp) => expect(lines.some((l) => pattern.test(l)), `${pattern} in\n${snap.content}`).toBe(true);
-    has(/^- navigation "Site"$/);
+    // An outside agent gets a container its c ref (#207): read-only, read_tab reads it.
+    has(/^- navigation "Site" \[ref=c\d+\]$/);
     has(/^- link "Home" \[ref=e\d+\]$/);
     has(/^- heading "Your orders" \[ref=e\d+\]|^- heading "Your orders" \[level=1\]$/);
     has(/^- text: "Returns are free within 30 days\."$/);
