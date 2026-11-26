@@ -22,7 +22,7 @@ import { isBlockingOff } from '@chord/core';
 import type { AdBlockingStatus } from '@chord/ipc';
 import { session as electronSession, type OnBeforeRequestListenerDetails, type Session, type WebContents } from 'electron';
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { mark } from '../launch-timeline';
 import { proxies } from '../proxy';
@@ -350,11 +350,15 @@ export class AdBlocking {
       .finally(() => profile.release('off'));
   }
 
-  /** The newest set's rules into a profile's extension (read here, so a bundled set inside the asar works too). */
+  /**
+   * The newest set's rules into a profile's extension (read here, so a bundled set inside the asar works too). Each
+   * profile stages its own copy (#274): profiles update side by side, and one removing a shared folder while another
+   * still copied out of it left that one with no rules (Windows: EPERM rmdir).
+   */
   private async writeRules(blocker: BlockerExtension): Promise<void> {
     const set = this.current!;
     if (set.dir !== this.config.bundledDir) return await blocker.write(set.dir);
-    const staging = join(this.config.root, 'Staging');
+    const staging = join(this.config.root, 'Staging', basename(blocker.folder));
     await mkdir(join(staging, 'rules'), { recursive: true });
     for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
     await blocker.write(staging);
