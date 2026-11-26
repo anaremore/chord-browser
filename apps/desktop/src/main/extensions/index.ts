@@ -818,13 +818,16 @@ export class Extensions {
   private async splitShared(): Promise<void> {
     const seen: InstalledExtension[] = [];
     for (const e of Object.values(this.deps.state().extensions).sort((a, b) => (extensionKey(a.profileId, a.id) < extensionKey(b.profileId, b.id) ? -1 : 1))) {
-      if (e.source !== 'store' || !seen.some((s) => samePath(s.path, e.path))) {
+      const keeper = e.source === 'store' ? seen.find((s) => samePath(s.path, e.path)) : undefined;
+      if (!keeper) {
         seen.push(e);
         continue;
       }
       const to = extensionFolder(this.deps.root, e.profileId, e.id, e.version, (p) => this.usedBy(p) !== null);
       try {
-        await cp(e.path, to, { recursive: true, errorOnExist: true, force: false });
+        // From the path the keeper's record spells (the folder as it's on disk): on a file system that ignores case,
+        // this one's own spelling names the same folder; where case counts, only the keeper's is sure to be there.
+        await cp(keeper.path, to, { recursive: true, errorOnExist: true, force: false });
         this.deps.dispatch({ t: 'extension.record', extension: { ...e, path: to } });
       } catch (error) {
         await this.removeFolder(to);
