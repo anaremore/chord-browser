@@ -41,13 +41,13 @@ describe('window-owner.exe’s chain (Windows, #107): its answer read as given, 
   it('reads each process’s fields, in order, and stops at one without a pid', async () => {
     const { parseChain } = await import('../../src/main/agents/parent');
     const given = JSON.stringify([
-      { pid: 40, name: 'chord.exe', path: 'C:\Chord\chord.exe', cwd: null, ppid: 30 },
+      { pid: 40, name: 'chord.exe', path: 'C:/Chord/chord.exe', cwd: null, ppid: 30 },
       { pid: 30, name: 'claude.exe', path: null, cwd: null, ppid: 20 },
       { name: 'no pid' },
       { pid: 20, name: 'explorer.exe', path: null, cwd: null, ppid: 4 },
     ]);
     expect(parseChain(given)).toEqual([
-      { pid: 40, name: 'chord.exe', path: 'C:\Chord\chord.exe', cwd: null, ppid: 30 },
+      { pid: 40, name: 'chord.exe', path: 'C:/Chord/chord.exe', cwd: null, ppid: 30 },
       { pid: 30, name: 'claude.exe', path: null, cwd: null, ppid: 20 },
     ]);
   });
