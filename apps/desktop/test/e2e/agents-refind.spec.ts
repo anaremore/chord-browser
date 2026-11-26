@@ -921,27 +921,28 @@ test('a control drawn late is waited for, then its ref acts; look-alikes are tol
 
     // Look-alikes in named sections, redrawn every 100 ms: a find by the section's words names the one meant, and its
     // ref acts on that one, found again after the redraw.
-    const drafts = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins`, snapshot: true })).text) as Look;
+    const drafts = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins?once`, snapshot: true })).text) as Look;
     const found = JSON.parse((await mcp.call('snapshot', { tab_id: drafts.tab_id, find: 'Delete Draft B' })).text) as Look;
     const draftB = /button "Delete" \[ref=(e\d+)\] \(in region "Draft B"\)/.exec(found.content)?.[1];
     expect(draftB, found.content).toBeDefined();
-    await new Promise((r) => setTimeout(r, 300));
+    // One redraw, from the test (never a race with a timer on one slow CPU).
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('window.redraw()'), `${site.origin}/twins?once`);
     const deleted = await allowed('click', { tab_id: drafts.tab_id, ref: draftB! });
     expect(deleted.isError, deleted.text).toBe(false);
-    await expect.poll(() => logOf('/twins')).toBe(' deleted B');
+    await expect.poll(() => logOf('/twins?once')).toBe(' deleted B');
 
-    // In unnamed list items, the two are alike in every way the page keeps: after a redraw, which one was meant can't be
-    // told. Refused, saying how to choose; nothing deleted.
-    const plain = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins-plain`, snapshot: true })).text) as Look;
+    // In unnamed list items, told apart by what each row says (#268): B's ref, found again after a redraw (one, from
+    // the test: never a race with a timer on one slow CPU), deletes B.
+    const plain = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins-plain?once`, snapshot: true })).text) as Look;
     const second = [...plain.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)][1]?.[1];
     expect(second, plain.content).toBeDefined();
-    await new Promise((r) => setTimeout(r, 300));
-    const refused = await allowed('click', { tab_id: plain.tab_id, ref: second! });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toBe(ACT_REFUSALS.ambiguous);
-    expect(await logOf('/twins-plain')).toBe('');
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('window.redraw()'), `${site.origin}/twins-plain?once`);
+    const plainDeleted = await allowed('click', { tab_id: plain.tab_id, ref: second! });
+    expect(plainDeleted.isError, plainDeleted.text).toBe(false);
+    await expect.poll(() => logOf('/twins-plain?once')).toBe(' deleted B');
 
-    // The same in a snapshot cut short (more on the page than it reads): the twins it saw are still twins.
+    // Rows that say the same (alike in every way the page keeps), in a snapshot cut short (more on the page than it
+    // reads): after a redraw, which one was meant can't be told. Refused, saying how to choose; nothing deleted.
     const cut = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins-cut`, snapshot: true })).text) as Look;
     const cutSecond = [...cut.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)][1]?.[1];
     expect(cutSecond, cut.content.slice(0, 400)).toBeDefined();
@@ -961,6 +962,479 @@ test('a control drawn late is waited for, then its ref acts; look-alikes are tol
     expect(twice.isError).toBe(true);
     expect(twice.text).toBe(ACT_REFUSALS.ambiguous);
     expect(await logOf('/twin-later')).toBe('');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a stale ref never acts on another row: ids by position, a row replaced by another, a row patched in place (#268)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const inPage = (js: string) => app.evaluate(({ webContents }, [url, code]) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript(code), [`${site.origin}/rows`, js] as const) as Promise<unknown>;
+    const log = async () => String(await inPage('document.getElementById("log").textContent'));
+    type Look = { tab_id: string; content: string };
+    const tab = (JSON.parse((await allowed('open_tab', { url: `${site.origin}/rows`, snapshot: true })).text) as Look).tab_id;
+    /** The page as `draw` leaves it, a snapshot, then the Cancel in the row that says `order`: its ref. */
+    const cancelIn = async (draw: string, order: string) => {
+      await inPage(draw);
+      const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab, find: `Cancel Order ${order}` })).text) as Look).content;
+      const ref = new RegExp(`button "Cancel" \\[ref=(e\\d+)\\] \\(in listitem "Order ${order}"\\)`).exec(content)?.[1];
+      expect(ref, content).toBeDefined();
+      return ref!;
+    };
+
+    // Ids by position: A removed, B takes act-0 and cancel-0. A's ref never cancels B.
+    let ref = await cancelIn('rows(["A", "B"])', 'A');
+    await inPage('rows(["B"])');
+    let out = await allowed('click', { tab_id: tab, ref });
+    // Found again only in a row that says something else (B's, in A's old place): that, with its way out.
+    expect([out.isError, out.text, await log()], 'ids by position').toEqual([true, ACT_REFUSALS.rowChanged, '']);
+
+    // The only row, replaced by another: A's ref never cancels B.
+    ref = await cancelIn('rows(["A"])', 'A');
+    await inPage('rows(["B"])');
+    out = await allowed('click', { tab_id: tab, ref });
+    expect([out.isError, out.text, await log()], 'a row replaced').toEqual([true, ACT_REFUSALS.rowChanged, '']);
+
+    // The same nodes, the row's text patched (index keys): caught at the action, never a refind's to catch.
+    ref = await cancelIn('rows(["A"])', 'A');
+    await inPage('patch("B")');
+    out = await allowed('click', { tab_id: tab, ref });
+    // The same node, its row saying something else now: its own refusal (#268's review).
+    expect([out.isError, out.text, await log()], 'a row patched in place').toEqual([true, ACT_REFUSALS.rowChanged, '']);
+
+    // Rows with no ids, reordered: the buttons are alike in place and shape, and only what each row says finds A's again
+    // (#268's review, N2): it cancels A, never B.
+    ref = await cancelIn('plain(["A", "B"])', 'A');
+    await inPage('plain(["B", "A"])');
+    out = await allowed('click', { tab_id: tab, ref });
+    expect(out.isError, out.text).toBe(false);
+    expect(await log(), 'rows with no ids, reordered').toBe(' cancel Order A');
+    await inPage('document.getElementById("log").textContent = ""');
+
+    // And the row the ref was shown in, redrawn just the same: still found again, and acted on.
+    ref = await cancelIn('rows(["A", "B"])', 'B');
+    await inPage('rows(["A", "B"])');
+    out = await allowed('click', { tab_id: tab, ref });
+    expect(out.isError, out.text).toBe(false);
+    expect(await log()).toBe(' cancel Order B');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('#268’s review: a later snapshot never rebinds an old ref to a patched row (an action’s diff, a find)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const url = `${site.origin}/p-index`;
+    const inPage = (js: string) => app.evaluate(({ webContents }, [u, code]) => webContents.getAllWebContents().find((c) => c.getURL() === u)!.executeJavaScript(code), [url, js] as const) as Promise<unknown>;
+    const log = async () => String(await inPage('document.getElementById("log").textContent'));
+    type Look = { tab_id: string; content: string };
+    const first = JSON.parse((await allowed('open_tab', { url, snapshot: true })).text) as Look;
+    const tab = first.tab_id;
+    const refsIn = (content: string) => [...content.matchAll(/button "Cancel" \[ref=(e\d+)\]/g)].map((m) => m[1]!);
+    // The agent's own action patches the list (index keys): its diff names the patched nodes; the ref shown in Order B's
+    // row, its node now Order C's, never cancels C.
+    let refs = refsIn(first.content);
+    expect((await allowed('click', { tab_id: tab, ref: refs[0]! })).isError).toBe(false);
+    expect(await log()).toBe(' cancel:Order A');
+    const b = await allowed('click', { tab_id: tab, ref: refs[1]! });
+    expect([b.isError, b.text, await log()], 'after the action’s diff').toEqual([true, ACT_REFUSALS.rowChanged, ' cancel:Order A']);
+    // The page patches by itself; the agent runs a find for something else; its old ref, shown in Order A's row, never
+    // cancels B.
+    await inPage('document.getElementById("log").textContent = ""; setData(["A", "B", "C"])');
+    refs = refsIn((JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content);
+    await inPage('setData(["B", "C"])');
+    await mcp.call('snapshot', { tab_id: tab, find: 'Cancel Order C' });
+    const c = await allowed('click', { tab_id: tab, ref: refs[0]! });
+    expect([c.isError, c.text, await log()], 'after a find').toEqual([true, ACT_REFUSALS.rowChanged, '']);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('#268’s review: what a row says, case by case: an item inside an item, deep, in a shadow root, pictures, links, long, hidden, empty, a ticker, an editor', async () => {
+  test.setTimeout(300_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const url = `${site.origin}/p-rows`;
+    const inPage = (js: string) => app.evaluate(({ webContents }, [u, code]) => webContents.getAllWebContents().find((c) => c.getURL() === u)!.executeJavaScript(code), [url, js] as const) as Promise<unknown>;
+    const log = async () => String(await inPage('document.getElementById("log").textContent'));
+    type Look = { tab_id: string; content: string };
+    const tab = (JSON.parse((await allowed('open_tab', { url, snapshot: true })).text) as Look).tab_id;
+    const R = (n: string, html: string, pre = '', post = '') => ({ n, html, pre, post });
+    type Row = ReturnType<typeof R>;
+    const draws = (rs: Row[]) => `rows(${JSON.stringify(rs)})`;
+    const linkLi = ['<ul><li><a href="#d">Details</a> ', '</li></ul>'] as const;
+    const plainLi = ['<ul><li>', '</li></ul>'] as const;
+    const sec = ['<section>', '</section>'] as const;
+    const deep = (n: number) => ['<div>'.repeat(n), '</div>'.repeat(n)] as const;
+    const SHADOW = 'document.querySelectorAll(".sh").forEach((s) => { if (!s.shadowRoot) s.attachShadow({ mode: "open" }); s.shadowRoot.textContent = s.dataset.t; })';
+    const sh = (t: string) => `<span class=sh data-t="${t}"></span>`;
+    const img = (alt: string) => `<img alt="${alt}" width=40 height=40>`;
+    const LONG = 'GitHub [acme/widgets] Re: Fix the flaky login test on Windows runners';
+    // (Longer than the 240 characters a row reads: if it were read, it alone would be the row's words.)
+    const HIDDEN = `<span hidden>${'Select this row to archive, delete, move or share it with a teammate. '.repeat(4)}</span>`;
+    // Text before the heading (round 2 of #273, Carbon): never what decides whether the heading is read.
+    const BEFORE = (n: number) => `<p>${'w'.repeat(n)}</p>`;
+    const EMPTIES = '<span></span>'.repeat(45);
+    // [what, rows drawn, extra script, the row whose Cancel is picked, what the page does then, what's expected: the
+    // refusal, or the row it cancels].
+    const cases: [string, Row[], string, number, string, string][] = [
+      ['an inner item with a link every row has, ids by position', [R('A', 'Order A', ...linkLi), R('B', 'Order B', ...linkLi)], '', 0, draws([R('B', 'Order B', ...linkLi)]), 'refused'],
+      ['an inner item with a link every row has, patched in place', [R('A', 'Order A', ...linkLi)], '', 0, 'patch(0, { n: "B", html: "Order B" })', 'refused'],
+      ['an inner item that says nothing, ids by position', [R('A', 'Order A', ...plainLi), R('B', 'Order B', ...plainLi)], '', 0, draws([R('B', 'Order B', ...plainLi)]), 'refused'],
+      ['an unnamed section in the row, patched in place', [R('A', 'Order A', ...sec)], '', 0, 'patch(0, { n: "B", html: "Order B" })', 'refused'],
+      ['words in an open shadow root, patched in place', [R('A', sh('Order A'))], SHADOW, 0, 'document.getElementById("rows").children[0].dataset.n = "B"; document.querySelector(".sh").shadowRoot.textContent = "Order B"', 'refused'],
+      ['a picture’s words, ids by position', [R('A', img('Ada Lovelace')), R('B', img('Bob Moog'))], '', 0, draws([R('B', img('Bob Moog'))]), 'refused'],
+      ['a link’s aria-label, ids by position', [R('A', '<a href="#a" aria-label="Order A">…</a>'), R('B', '<a href="#b" aria-label="Order B">…</a>')], '', 0, draws([R('B', '<a href="#b" aria-label="Order B">…</a>')]), 'refused'],
+      ['alike in their first 60 characters, ids by position', [R('A', `${LONG} A`), R('B', `${LONG} B`)], '', 0, draws([R('B', `${LONG} B`)]), 'refused'],
+      ['45 empty spans first, ids by position', [R('A', `${EMPTIES}Order A`), R('B', `${EMPTIES}Order B`)], '', 0, draws([R('B', `${EMPTIES}Order B`)]), 'refused'],
+      ['60 hidden characters first, ids by position', [R('A', `${HIDDEN}Order A`), R('B', `${HIDDEN}Order B`)], '', 0, draws([R('B', `${HIDDEN}Order B`)]), 'refused'],
+      // Rows that say nothing but their button (#268's review, S5): same-named, never looked for again; called by a name
+      // nothing else has, looked for and acted on; that name given a twin since, never acted on.
+      ['rows that say nothing, same-named buttons, ids by position', [R('A', ''), R('B', '')], '', 0, draws([R('B', '')]), 'empty'],
+      ['a row that says nothing, redrawn the same (S5: never looked for, a new snapshot shows the row)', [R('A', '')], '', 0, draws([R('A', '')]), 'empty'],
+      ['a row that says nothing, its button named like nothing else, then a twin drawn beside it (no ids)', [R('A', '')], 'plainRows([{ n: "A", html: "" }])', 0, 'plainRows([{ n: "A", html: "" }, { n: "B", html: "" }])', 'refused'],
+      // A same-named row drawn since, ids by position: the new one first (B takes cancel-0, the old place and shape),
+      // or after. Never acted on (round 2: S5, no exemption by name).
+      ['a row that says nothing, named like nothing else; then a same-named row drawn first, ids by position', [R('A', '')], '', 0, draws([R('B', ''), R('A', '')]), 'refused'],
+      ['a row that says nothing, named like nothing else; then a same-named row drawn after, ids by position', [R('A', '')], '', 0, draws([R('A', ''), R('B', '')]), 'refused'],
+      // Round 2 (Fable's N3): contenteditable="false" isn't an editor; a heading every row has, then what differs.
+      ['words in contenteditable="false", patched in place', [R('A', '<span contenteditable="false">Order A</span>')], '', 0, 'patch(0, { n: "B", html: "<span contenteditable=\\"false\\">Order B</span>" })', 'refused'],
+      ['the same heading on every row, the text differs, patched in place', [R('A', '<h3>Order</h3><span>Alice, 2 shirts</span>')], '', 0, 'patch(0, { n: "B", html: "<h3>Order</h3><span>Bob, 1 hat</span>" })', 'refused'],
+      ['the same heading on every row, the text differs, ids by position', [R('A', '<h3>Order</h3><span>Alice</span>'), R('B', '<h3>Order</h3><span>Bob</span>')], '', 0, draws([R('B', '<h3>Order</h3><span>Bob</span>')]), 'refused'],
+      // Round 2 (Carbon): 233 characters, and more than 240, of text before the heading that tells the rows apart.
+      ['233 characters before the heading, ids by position', [R('A', `${BEFORE(233)}<h3>Order A</h3>`), R('B', `${BEFORE(233)}<h3>Order B</h3>`)], '', 0, draws([R('B', `${BEFORE(233)}<h3>Order B</h3>`)]), 'refused'],
+      ['300 characters before the heading, ids by position', [R('A', `${BEFORE(300)}<h3>Order A</h3>`), R('B', `${BEFORE(300)}<h3>Order B</h3>`)], '', 0, draws([R('B', `${BEFORE(300)}<h3>Order B</h3>`)]), 'refused'],
+      ['a heading of only an icon (its title never the words), ids by position', [R('A', '<h3><svg width=10 height=10><title>Star</title></svg></h3><span>Order A</span>'), R('B', '<h3><svg width=10 height=10><title>Star</title></svg></h3><span>Order B</span>')], '', 0, draws([R('B', '<h3><svg width=10 height=10><title>Star</title></svg></h3><span>Order B</span>')]), 'refused'],
+      ['a progress bar in the row moves on', [R('A', 'Order A <span role=progressbar>40%</span>')], '', 0, 'document.querySelector("[role=progressbar]").textContent = "41%"', 'A'],
+      ['60 divs deep, nothing changed', [R('A', 'Order A', ...deep(60))], '', 0, '0', 'A'],
+      ['70 divs deep, nothing changed', [R('A', 'Order A', ...deep(70))], '', 0, '0', 'A'],
+      ['70 divs deep, nothing changed, again', [R('A', 'Order A', ...deep(70))], '', 0, '0', 'A'],
+      ['the same row redrawn just the same', [R('A', 'Order A'), R('B', 'Order B')], '', 1, draws([R('A', 'Order A'), R('B', 'Order B')]), 'B'],
+    ];
+    for (const [what, drawn, extra, pick, then, expected] of cases) {
+      await inPage(`document.getElementById("log").textContent = ""; ${draws(drawn)}; ${extra || '0'}`);
+      const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+      const ref = [...content.matchAll(/button "Cancel" \[ref=(e\d+)\]/g)].map((m) => m[1]!)[pick];
+      expect(ref, `${what}: ${content}`).toBeDefined();
+      await inPage(then);
+      const out = await allowed('click', { tab_id: tab, ref: ref! });
+      if (expected === 'refused') {
+        expect(out.isError, `${what}: ${out.text}`).toBe(true);
+        expect([ACT_REFUSALS.changed, ACT_REFUSALS.rowChanged, ACT_REFUSALS.ambiguous, ACT_REFUSALS.rowEmpty], what).toContain(out.text);
+        expect(await log(), what).toBe('');
+      } else if (expected === 'empty') {
+        expect([out.isError, out.text, await log()], what).toEqual([true, ACT_REFUSALS.rowEmpty, '']);
+      } else {
+        expect(out.isError, `${what}: ${out.text}`).toBe(false);
+        expect(await log(), what).toBe(` cancel:${expected}`);
+      }
+    }
+
+    // Round 2 (Fable's N3): the item itself hosts the open shadow root (a web-component row), its words in there.
+    await inPage('(() => { const ul = document.getElementById("rows"); ul.innerHTML = ""; document.getElementById("log").textContent = ""; const h = document.createElement("x-row"); h.setAttribute("role", "listitem"); h.dataset.n = "A"; h.id = "host"; const r = h.attachShadow({ mode: "open" }); r.innerHTML = "<span>Order A</span> <button>Cancel</button>"; r.querySelector("button").onclick = () => { document.getElementById("log").textContent += " cancel:" + h.dataset.n; }; ul.append(h); })()');
+    const hosted = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const hostRef = /button "Cancel" \[ref=(e\d+)\]/.exec(hosted)?.[1];
+    expect(hostRef, hosted).toBeDefined();
+    await inPage('(() => { const h = document.getElementById("host"); h.dataset.n = "B"; h.shadowRoot.querySelector("span").textContent = "Order B"; })()');
+    const hostOut = await allowed('click', { tab_id: tab, ref: hostRef! });
+    expect(hostOut.isError, `a web-component row, patched: ${hostOut.text}`).toBe(true);
+    expect(await log()).toBe('');
+
+    // Round 2 (Fable's N4): a keyed list inside an unnamed section. Cancelling row 1 leaves the others' nodes, and
+    // their refs: the section's words never read into the rows (an item nested in it is its own), so its other rows'
+    // refs still act, and the action's diff stays small.
+    await inPage('(() => { const ul = document.getElementById("rows"); const sct = document.createElement("section"); ul.replaceWith(sct); sct.append(ul); ul.innerHTML = ""; for (let i = 1; i <= 30; i++) { const li = document.createElement("li"); li.dataset.n = String(i); li.innerHTML = "<span>Order " + i + "</span> <button>Cancel</button>"; li.querySelector("button").addEventListener("click", (e) => { e.stopPropagation(); document.getElementById("log").textContent += " cancel:" + li.dataset.n; li.remove(); }); ul.append(li); } document.getElementById("log").textContent = ""; })()');
+    const listed = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const keyed = [...listed.matchAll(/button "Cancel" \[ref=(e\d+)\]/g)].map((m) => m[1]!);
+    expect(keyed.length, listed).toBeGreaterThan(0);
+    // (The outline folds rows alike: row 30's ref by a find.)
+    const found30 = (JSON.parse((await mcp.call('snapshot', { tab_id: tab, find: 'Cancel Order 30' })).text) as Look).content;
+    const ref30 = /button "Cancel" \[ref=(e\d+)\] \(in listitem "Order 30"\)/.exec(found30)?.[1];
+    expect(ref30, found30).toBeDefined();
+    const first = await allowed('click', { tab_id: tab, ref: keyed[0]! });
+    expect(first.isError, first.text).toBe(false);
+    const changes = (JSON.parse(first.text) as { data: { page_changes?: { lines?: string[]; changed?: number } } }).data.page_changes;
+    expect(changes?.lines?.length ?? 99, JSON.stringify(changes).slice(0, 300)).toBeLessThan(8);
+    const last = await allowed('click', { tab_id: tab, ref: ref30! });
+    expect(last.isError, `row 30's ref after row 1 went: ${last.text}`).toBe(false);
+    expect(await log()).toBe(' cancel:1 cancel:30');
+    await inPage('(() => { const ul = document.getElementById("rows"); const sct = ul.parentElement; if (sct.localName === "section") sct.replaceWith(ul); })()');
+    // Carbon's round 4: rows whose own words are in a nested section and whose button is in another, in a list in an
+    // unnamed section. Cancelling row 1 leaves the others' keys: the section never reads its rows again once an inner
+    // level found the row's words.
+    await inPage('(() => { const sct = document.createElement("section"); sct.id = "csec"; const ul = document.createElement("ul"); sct.append(ul); document.querySelector("main").append(sct); for (let i = 1; i <= 30; i++) { const li = document.createElement("li"); li.dataset.n = String(i); li.innerHTML = "<section>Order " + i + "</section><section><button>Drop</button></section>"; li.querySelector("button").addEventListener("click", (e) => { e.stopPropagation(); document.getElementById("log").textContent += " drop:" + li.dataset.n; li.remove(); }); ul.append(li); } document.getElementById("log").textContent = ""; })()');
+    const carbonLook = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const drops = [...carbonLook.matchAll(/button "Drop" \[ref=(e\d+)\]/g)].map((m) => m[1]!);
+    expect(drops.length, carbonLook).toBeGreaterThan(0);
+    const dropped = await allowed('click', { tab_id: tab, ref: drops[0]! });
+    expect(dropped.isError, dropped.text).toBe(false);
+    const dropChanges = (JSON.parse(dropped.text) as { data: { page_changes?: { lines?: string[]; changed?: number } } }).data.page_changes;
+    expect(dropChanges?.lines?.length ?? 99, JSON.stringify(dropChanges).slice(0, 300)).toBeLessThan(8);
+    await inPage('document.getElementById("csec")?.remove()');
+    // The same with a keyed table's rows (tr) in an unnamed section.
+    await inPage('(() => { const sct = document.createElement("section"); sct.id = "tsec"; const tb = document.createElement("table"); sct.append(tb); document.querySelector("main").append(sct); for (let i = 1; i <= 30; i++) { const tr = tb.insertRow(); tr.dataset.n = String(i); tr.innerHTML = "<td>Line " + i + "</td><td><button>Remove</button></td>"; tr.querySelector("button").addEventListener("click", (e) => { e.stopPropagation(); document.getElementById("log").textContent += " remove:" + tr.dataset.n; tr.remove(); }); } document.getElementById("log").textContent = ""; })()');
+    const tableLook = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const removes = [...tableLook.matchAll(/button "Remove" \[ref=(e\d+)\]/g)].map((m) => m[1]!);
+    expect(removes.length, tableLook).toBeGreaterThan(0);
+    const firstRemoved = await allowed('click', { tab_id: tab, ref: removes[0]! });
+    expect(firstRemoved.isError, firstRemoved.text).toBe(false);
+    const tableChanges = (JSON.parse(firstRemoved.text) as { data: { page_changes?: { lines?: string[] } } }).data.page_changes;
+    expect(tableChanges?.lines?.length ?? 99, JSON.stringify(tableChanges).slice(0, 300)).toBeLessThan(8);
+    await inPage('document.getElementById("tsec")?.remove()');
+
+    // Typing in an editor in an unnamed row: what's typed is never the row's words; its button still acts after.
+    for (const [what, html] of [
+      ['a plain contenteditable', 'Note <div class=ed contenteditable aria-label="Note text" style="min-height:20px;min-width:120px;border:1px solid"></div>'],
+      ['an editable cell with words in it', '<span class=ed contenteditable aria-label="Name" style="display:inline-block;min-width:120px;border:1px solid">Alice</span>'],
+    ] as const) {
+      await inPage(`document.getElementById("log").textContent = ""; ${draws([R('A', html)])}`);
+      for (const attempt of [1, 2]) {
+        const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+        const box = /textbox "(?:Note text|Name)" \[ref=(e\d+)\]/.exec(content)?.[1];
+        const press = /button "Cancel" \[ref=(e\d+)\]/.exec(content)?.[1];
+        expect([box, press].every(Boolean), content).toBe(true);
+        const typed = await allowed('type', { tab_id: tab, ref: box!, text: `hello ${attempt}` });
+        expect(typed.isError, `${what}, try ${attempt}: ${typed.text}`).toBe(false);
+        if (attempt === 2) {
+          const pressed = await allowed('click', { tab_id: tab, ref: press! });
+          expect(pressed.isError, `${what}: ${pressed.text}`).toBe(false);
+          expect(await log()).toBe(' cancel:A');
+        }
+      }
+    }
+    // A row that counts what's typed into its field: the text went in, so never "changed": it may have worked.
+    await inPage(`document.getElementById("log").textContent = ""; ${draws([R('A', '<span class=count>0 characters</span> <textarea class=ed aria-label="Note text" oninput="this.closest(&quot;li&quot;).querySelector(&quot;.count&quot;).textContent = this.value.length + &quot; characters&quot;"></textarea>')])}`);
+    const counted = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const note = /textbox "Note text" \[ref=(e\d+)\]/.exec(counted)?.[1];
+    const typed = await allowed('type', { tab_id: tab, ref: note!, text: 'hello' });
+    expect(await inPage('document.querySelector(".ed").value')).toBe('hello');
+    expect(typed.text, 'a counter in the row').not.toBe(ACT_REFUSALS.changed);
+    if (typed.isError) expect(typed.text).toMatch(/may or may not have worked/);
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('#268’s review, round 3: a row’s words in an item nested in it are its own; a row whose nearest item says nothing is never looked for', async () => {
+  test.setTimeout(300_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const url = `${site.origin}/p-rows`;
+    const inPage = (js: string) => app.evaluate(({ webContents }, [u, code]) => webContents.getAllWebContents().find((c) => c.getURL() === u)!.executeJavaScript(code), [url, js] as const) as Promise<unknown>;
+    const log = async () => String(await inPage('document.getElementById("log").textContent'));
+    type Look = { tab_id: string; content: string };
+    const tab = (JSON.parse((await allowed('open_tab', { url, snapshot: true })).text) as Look).tab_id;
+    const R = (n: string, html: string, pre = '', post = '') => ({ n, html, pre, post });
+    type Row = ReturnType<typeof R>;
+    const draws = (rs: Row[]) => `rows(${JSON.stringify(rs)})`;
+    const one = async (drawn: string, pick: number, then: string) => {
+      await inPage(`document.getElementById("log").textContent = ""; ${drawn}`);
+      const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+      const ref = [...content.matchAll(/button "Cancel" \[ref=(e\d+)\]/g)].map((m) => m[1]!)[pick];
+      expect(ref, content).toBeDefined();
+      await inPage(then);
+      const out = await allowed('click', { tab_id: tab, ref: ref! });
+      return { out, logged: await log() };
+    };
+    const REFUSED = [ACT_REFUSALS.changed, ACT_REFUSALS.rowChanged, ACT_REFUSALS.ambiguous, ACT_REFUSALS.rowEmpty];
+    // The row's own words in an item nested in it (Fable, round 3): read by its nearest item, never skipped.
+    const shapes: [string, (o: string) => string][] = [
+      ['<section>words</section> beside the button', (o) => `<section>Order ${o}</section>`],
+      ['a card body <section><h3>words</h3><p>…</p></section>', (o) => `<section><h3>Order ${o}</h3><p>2 shirts</p></section>`],
+      ['<article>words</article>', (o) => `<article>Order ${o}</article>`],
+      ['a nested list of the row’s details', (o) => `<ul><li>Order ${o}</li><li>2 shirts</li></ul>`],
+      ['a nested layout table', (o) => `<table><tr><td>Order ${o}</td></tr></table>`],
+      ['<div role=row>words</div>', (o) => `<div role="row">Order ${o}</div>`],
+      ['some words outside, the telling ones in a nested section', (o) => `Order <section>${o}</section>`],
+    ];
+    for (const [what, html] of shapes) {
+      let r = await one(draws([R('A', html('A'))]), 0, `patch(0, ${JSON.stringify({ n: 'B', html: html('B') })})`);
+      expect([r.out.isError, r.logged], `${what}, patched in place: ${r.out.text}`).toEqual([true, '']);
+      expect(REFUSED, what).toContain(r.out.text);
+      r = await one(draws([R('A', html('A')), R('B', html('B'))]), 0, draws([R('B', html('B'))]));
+      expect([r.out.isError, r.logged], `${what}, ids by position: ${r.out.text}`).toEqual([true, '']);
+      r = await one(draws([R('A', html('A')), R('B', html('B'))]), 1, draws([R('A', html('A')), R('B', html('B'))]));
+      expect([r.out.isError, r.logged], `${what}, the same rows redrawn (B's ref): ${r.out.text}`).toEqual([false, ' cancel:B']);
+    }
+    // Words every row shares beside the button, the row's own in a sibling item (Fable's round 4): the items above read
+    // sections, articles and divs (only nested rows are skipped), so the row's words count.
+    const SHARED: [string, (o: string) => Row][] = [
+      ['<section>words</section> <section>Actions <button>', (o) => R(o, `<section>Order ${o}</section>`, '<section><span>Actions</span> ', '</section>')],
+      ['<section>words</section> <section><a>Details</a> <button>', (o) => R(o, `<section>Order ${o}</section>`, '<section><a href="#d">Details</a> ', '</section>')],
+      ['a card: <section><h3>words</h3><p>…</p></section> <section><a>View</a> <button>', (o) => R(o, `<section><h3>Order ${o}</h3><p>2 shirts</p></section>`, '<section><a href="#v">View</a> ', '</section>')],
+      ['<section>words</section> <ul><li>Danger zone <button>', (o) => R(o, `<section>Order ${o}</section>`, '<ul><li><span>Danger zone</span> ', '</li></ul>')],
+      ['three levels: <section>words</section> <section><ul><li><a>Details</a> <button>', (o) => R(o, `<section>Order ${o}</section>`, '<section><ul><li><a href="#d">Details</a> ', '</li></ul></section>')],
+      ['<article>words</article> <div role=row><img alt="Actions"> <button>', (o) => R(o, `<article>Order ${o}</article>`, '<div role="row"><img alt="Actions" width=8 height=8> ', '</div>')],
+    ];
+    for (const [what, row] of SHARED) {
+      let r = await one(draws([row('A')]), 0, `patch(0, ${JSON.stringify({ n: 'B', html: row('B').html })})`);
+      expect([r.out.isError, r.logged], `${what}, patched in place: ${r.out.text}`).toEqual([true, '']);
+      r = await one(draws([row('A'), row('B')]), 0, draws([row('B')]));
+      expect([r.out.isError, r.logged], `${what}, ids by position: ${r.out.text}`).toEqual([true, '']);
+      r = await one(draws([row('A')]), 0, draws([row('B')]));
+      expect([r.out.isError, r.logged], `${what}, the lone row replaced: ${r.out.text}`).toEqual([true, '']);
+    }
+    // The words in one nested item, the button in another: the button's nearest item says nothing, so never looked for.
+    for (const [what, pre, post] of [
+      ['<section>words</section> <section><button>', '<section>', '</section>'],
+      ['<section>words</section> <div><ul><li><button>', '<div><ul><li>', '</li></ul></div>'],
+    ] as const) {
+      const html = (o: string) => `<section>Order ${o}</section>`;
+      let r = await one(draws([R('A', html('A'), pre, post)]), 0, `patch(0, ${JSON.stringify({ n: 'B', html: html('B') })})`);
+      expect([r.out.isError, r.logged], `${what}, patched in place: ${r.out.text}`).toEqual([true, '']);
+      r = await one(draws([R('A', html('A'), pre, post), R('B', html('B'), pre, post)]), 0, draws([R('B', html('B'), pre, post)]));
+      expect([r.out.isError, r.logged], `${what}, ids by position: ${r.out.text}`).toEqual([true, '']);
+    }
+    // Rows that say nothing in a group that says something (a count, a section's heading; an article, a dialog): the
+    // group never tells its rows apart, so the rows are never looked for (S5 by the nearest item: Carbon's round 3).
+    for (const [what, wrap] of [
+      ['a section with a count', '<section><p>2 orders</p></section>'],
+      ['a section with a heading', '<section><h2>Orders</h2></section>'],
+      ['an unnamed article', '<article><p>Your orders</p></article>'],
+      ['an unnamed dialog', '<div role="dialog"><p>Pick an order</p></div>'],
+    ] as const) {
+      await inPage(`(() => { const ul = document.getElementById("rows"); const t = document.createElement("template"); t.innerHTML = ${JSON.stringify(wrap)}; const w = t.content.firstElementChild; w.id = "wrap"; ul.replaceWith(w); w.append(ul); })()`);
+      let r = await one(draws([R('A', ''), R('B', '')]), 0, draws([R('B', '')]));
+      expect([r.out.isError, r.out.text, r.logged], `${what}: ids by position`).toEqual([true, ACT_REFUSALS.rowEmpty, '']);
+      r = await one(draws([R('A', '')]), 0, draws([R('B', '')]));
+      expect([r.out.isError, r.out.text, r.logged], `${what}: a lone row replaced`).toEqual([true, ACT_REFUSALS.rowEmpty, '']);
+      r = await one(draws([R('A', '')]), 0, draws([R('B', ''), R('A', '')]));
+      expect([r.out.isError, r.out.text, r.logged], `${what}: a same-named row drawn first`).toEqual([true, ACT_REFUSALS.rowEmpty, '']);
+      await inPage('(() => { const w = document.getElementById("wrap"); w.replaceWith(document.getElementById("rows")); })()');
+    }
+    // Input that went in, then its row redrawn with nothing to tell it by (Carbon's round 3): never "nothing was done".
+    // Enter in a reply box that sends and redraws its row; a date that saves on change and redraws its row.
+    await inPage('(() => { const ul = document.getElementById("rows"); const draw = () => { ul.innerHTML = "<li><textarea aria-label=\\"Reply\\"></textarea></li><li><input type=date aria-label=\\"Due\\"></li>"; const t = ul.querySelector("textarea"); t.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("log").textContent += " sent: " + t.value; setTimeout(draw, 0); } }); const d = ul.querySelector("input"); d.addEventListener("change", () => { document.getElementById("log").textContent += " due: " + d.value; draw(); }); }; draw(); document.getElementById("log").textContent = ""; })()');
+    let boxes = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const reply = /textbox "Reply" \[ref=(e\d+)\]/.exec(boxes)?.[1];
+    expect(reply, boxes).toBeDefined();
+    expect((await allowed('type', { tab_id: tab, ref: reply!, text: 'ship it' })).isError).toBe(false);
+    const sent = await allowed('press_key', { tab_id: tab, ref: reply!, key: 'Enter' });
+    expect(await log()).toContain('sent: ship it');
+    expect([sent.isError, sent.text], 'Enter that sent, its row redrawn').toEqual([true, expect.stringMatching(/may not have worked|may or may not have worked/)]);
+    boxes = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const due = /textbox "Due" \[ref=(e\d+)\]/.exec(boxes)?.[1] ?? /"Due" \[ref=(e\d+)\]/.exec(boxes)?.[1];
+    expect(due, boxes).toBeDefined();
+    const dated = await allowed('type', { tab_id: tab, ref: due!, text: '2026-11-26' });
+    expect(await log()).toContain('due: 2026-11-26');
+    expect([dated.isError, dated.text], 'a date that saved, its row redrawn').toEqual([true, expect.stringMatching(/may or may not have worked/)]);
+    // An unnamed dialog reused for another order: its words in a section, its button in a footer.
+    await inPage('(() => { document.getElementById("rows").innerHTML = ""; document.getElementById("log").textContent = ""; const d = document.createElement("div"); d.id = "dlg"; d.setAttribute("role", "dialog"); d.dataset.n = "A"; d.innerHTML = "<section><p id=q>Delete Order A?</p></section><footer><button>Delete</button></footer>"; d.querySelector("button").onclick = () => { document.getElementById("log").textContent += " delete:" + d.dataset.n; }; document.querySelector("main").append(d); })()');
+    const dialog = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const del = /button "Delete" \[ref=(e\d+)\]/.exec(dialog)?.[1];
+    expect(del, dialog).toBeDefined();
+    await inPage('(() => { const d = document.getElementById("dlg"); d.dataset.n = "B"; document.getElementById("q").textContent = "Delete Order B?"; })()');
+    const reused = await allowed('click', { tab_id: tab, ref: del! });
+    expect([reused.isError, await log()], `a reused dialog: ${reused.text}`).toEqual([true, '']);
+    await inPage('document.getElementById("dlg")?.remove()');
+    // The same, its button in a second section that says what every such dialog says (Fable's round 4).
+    await inPage('(() => { document.getElementById("log").textContent = ""; const d = document.createElement("div"); d.id = "dlg"; d.setAttribute("role", "dialog"); d.dataset.n = "A"; d.innerHTML = "<section><p id=q>Delete Order A?</p></section><section><p>This can’t be undone.</p><button>Delete</button></section>"; d.querySelector("button").onclick = () => { document.getElementById("log").textContent += " delete:" + d.dataset.n; }; document.querySelector("main").append(d); })()');
+    const dialog2 = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+    const del2 = /button "Delete" \[ref=(e\d+)\]/.exec(dialog2)?.[1];
+    expect(del2, dialog2).toBeDefined();
+    await inPage('(() => { const d = document.getElementById("dlg"); d.dataset.n = "B"; document.getElementById("q").textContent = "Delete Order B?"; })()');
+    const reused2 = await allowed('click', { tab_id: tab, ref: del2! });
+    expect([reused2.isError, await log()], `a reused dialog, its button beside shared words: ${reused2.text}`).toEqual([true, '']);
+    await inPage('document.getElementById("dlg")?.remove()');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('#268’s review: rows whose words tick: marked tickers (role=timer, aria-live) left out; an unmarked one refused, saying to tell the user', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    type Look = { tab_id: string; content: string };
+    const refOfButton = (content: string, name: string) => new RegExp(`button "${name}" \\[ref=(e\\d+)\\]`).exec(content)?.[1];
+    // A ticker that replaces its row's nodes (round 2 of #273, Carbon): found again only in a row that says something
+    // else now: rowChanged, with its way out (never just changed).
+    {
+      const url = `${site.origin}/p-timer?replace=1&ms=300`;
+      const tab = (JSON.parse((await allowed('open_tab', { url, snapshot: true })).text) as Look).tab_id;
+      const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+      const ref = refOfButton(content, 'Bid');
+      expect(ref, content).toBeDefined();
+      await new Promise((r) => setTimeout(r, 1000));
+      const out = await allowed('click', { tab_id: tab, ref: ref! });
+      expect([out.isError, out.text], 'a ticker that replaces its nodes').toEqual([true, ACT_REFUSALS.rowChanged]);
+    }
+    // Twins (two rows alike) that tick by replacing their nodes (Carbon, round 4): found again only in rows that say
+    // something else now, so rowChanged with its way out, never just changed.
+    {
+      const url = `${site.origin}/p-timer?replace=1&twins=1&ms=300`;
+      const tab = (JSON.parse((await allowed('open_tab', { url, snapshot: true })).text) as Look).tab_id;
+      const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+      const ref = refOfButton(content, 'Bid');
+      expect(ref, content).toBeDefined();
+      await new Promise((r) => setTimeout(r, 1000));
+      const out = await allowed('click', { tab_id: tab, ref: ref! });
+      expect([out.isError, out.text], 'twins that tick by replacing their nodes').toEqual([true, ACT_REFUSALS.rowChanged]);
+    }
+    for (const mark of ['timer', 'live', '']) {
+      const url = `${site.origin}/p-timer?mark=${mark}&ms=300`;
+      const tab = (JSON.parse((await allowed('open_tab', { url, snapshot: true })).text) as Look).tab_id;
+      const log = async () => String(await app.evaluate(({ webContents }, u) => webContents.getAllWebContents().find((c) => c.getURL() === u)!.executeJavaScript('document.getElementById("log").textContent'), url));
+      for (const name of ['Stay signed in', 'Bid']) {
+        const content = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as Look).content;
+        const ref = refOfButton(content, name);
+        expect(ref, content).toBeDefined();
+        await new Promise((r) => setTimeout(r, 1000));
+        const out = await allowed('click', { tab_id: tab, ref: ref! });
+        if (mark) {
+          expect(out.isError, `${mark} ${name}: ${out.text}`).toBe(false);
+          expect(await log()).toContain(name);
+        } else {
+          expect([out.isError, out.text], `unmarked ${name}`).toEqual([true, ACT_REFUSALS.rowChanged]);
+          expect(ACT_REFUSALS.rowChanged).toMatch(/tell the user/);
+        }
+      }
+    }
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {
@@ -1184,10 +1658,11 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
     expect(JSON.parse((await folding).text)).toMatchObject({ data: { done: 'Clicked “Fold”' } });
     const refused = async (what: string, call: Promise<{ text: string }>, says = STALE) => expect((await call).text, what).toBe(says);
-    // Duplicates (two Deletes, one per row): never found again, whichever is gone; said to have a look-alike (#211).
+    // Two Deletes, one per unnamed row, told apart by what each row says (#268): Row one's, gone, is found only in
+    // Row two's place, whose row says something else: rowChanged.
     o = await snap();
     await mode('gone1');
-    await refused('a Delete of two', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }), ACT_REFUSALS.ambiguous);
+    await refused('a Delete of two', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }), ACT_REFUSALS.rowChanged);
     // Both gone: no look-alike left, so changed, never "it has a look-alike" (#211's review).
     await mode('');
     o = await snap();
@@ -1240,21 +1715,33 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     o = await snap();
     await mode('other');
     await refused('another table', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Sit out"') }));
-    // Each item kind, found again in the same item as the page redraws: a row in a section named by aria-labelledby, a
-    // row in a region, a list item in a dialog (the walk's items and the act's are the same).
+    // Each item kind, found again in the same item as the page redraws: a named row in a region (the walk's items and
+    // the act's are the same).
     await mode('');
     o = await snap();
-    for (const name of ['Fold here', 'Take seat', 'Show cards']) {
+    await new Promise((r) => setTimeout(r, 400));
+    const seat = await mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Take seat"') });
+    expect(JSON.parse(seat.text), 'Take seat').toMatchObject({ data: { done: 'Clicked “Take seat”', refound: expect.any(String) } });
+    // A row in a section named by aria-labelledby, and a list item in a named dialog, each unnamed and saying nothing
+    // but its button (#268's review, S5: the planner's call, no exemption by name): nothing of its own tells it from
+    // another row's (a swap of ids by position, a lone row replaced), so once redrawn it's never looked for. The refusal
+    // says to take a new snapshot and use its ref at once, which acts (one extra snapshot, the cost), or to tell the user
+    // if it's refused again.
+    for (const name of ['Fold here', 'Show cards']) {
+      await mode('');
+      o = await snap();
       await new Promise((r) => setTimeout(r, 400));
-      const clicked = await mcp.call('click', { tab_id: 'a1', ref: refOf(o, `button "${name}"`) });
-      expect(JSON.parse(clicked.text), name).toMatchObject({ data: { done: `Clicked “${name}”`, refound: expect.any(String) } });
+      await refused(`${name}, its row saying nothing`, mcp.call('click', { tab_id: 'a1', ref: refOf(o, `button "${name}"`) }), ACT_REFUSALS.rowEmpty);
+      await mode('!');
+      const fresh = await mcp.call('click', { tab_id: 'a1', ref: refOf(await snap(), `button "${name}"`) });
+      expect(JSON.parse(fresh.text), `${name}, its new ref`).toMatchObject({ data: { done: `Clicked “${name}”` } });
     }
     // And in another (a section's heading, a row's or a dialog's name changed): refused, the nearest named item or not.
-    for (const [m2, name] of [['lab', 'Fold here'], ['seat', 'Take seat'], ['hand', 'Show cards']] as const) {
+    for (const [m2, name, says] of [['lab', 'Fold here', ACT_REFUSALS.rowEmpty], ['seat', 'Take seat', STALE], ['hand', 'Show cards', ACT_REFUSALS.rowEmpty]] as const) {
       await mode('');
       o = await snap();
       await mode(m2);
-      await refused(`${name} in another item`, mcp.call('click', { tab_id: 'a1', ref: refOf(o, `button "${name}"`) }));
+      await refused(`${name} in another item`, mcp.call('click', { tab_id: 'a1', ref: refOf(o, `button "${name}"`) }), says);
     }
     // A node patched in place into another table (still connected, never looked for again; two Mucks: no re-finding
     // either): refused on its items, at every step.

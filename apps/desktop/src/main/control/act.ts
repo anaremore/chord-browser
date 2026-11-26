@@ -72,8 +72,8 @@ interface ActRisk {
 }
 
 export type ActAnswer =
-  | { ok: true; role: string; name: string; items?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; items?: string; row?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'row' | 'row-empty' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -106,12 +106,19 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     // there a node replaced since is said so (replaced, when it could be found again), and the action starts over from
     // its pointer's move, which looks again (tools.ts; the owner's retest of #117).
     if (entry.path === undefined) return { ok: false, why: 'changed' };
+    // In an unnamed row that says nothing (#268's review, S5): nothing tells it from another such row's control (ids by
+    // position would swap them, a lone row replaced by another, a twin drawn first), so never looked for: refused, and
+    // the agent's next snapshot shows it the row as it is now (round 2 of #273: no exemption by name).
+    if (rowSaysNothing(entry.row)) return { ok: false, why: 'row-empty' };
     // Twins in the snapshot (#211): which one can't be told once the page replaced it; never looked for to act on.
     if (!(args.refind || args.op === 'point')) return { ok: false, why: entry.twins ? 'ambiguous' : 'replaced' };
     const started = performance.now();
     let looked = 0;
     let over = false;
     const found = [];
+    // Alike in every way but the row (round 2 of #273, Carbon): its row says something else now (a ticker that
+    // replaces its nodes), said so, with its way out.
+    let rowOnly = 0;
     // Depth first, as the snapshot walks: never into what it skips, what's hidden from assistive tech or not shown, at
     // most 4 shadow roots deep; the cheap checks (its tag, place and shape) before its name; the clock from the start.
     const visit = (parent, shadows) => {
@@ -122,7 +129,10 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
         if (SKIP.has(c.localName) || String(c.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(c)) continue;
         if (refPath(c) === entry.path && refShape(c) === entry.shape) {
           const r = entry.role === 'generic' ? (!roleNow(c) && pointerGeneric(c) ? 'generic' : null) : roleNow(c);
-          if (r === entry.role && nameOf(c, r) === entry.name && itemsOf(c) === entry.items && (isField(c) ? visibleField(c, typeOf(c)) : shown(c))) found.push(c);
+          if (r === entry.role && nameOf(c, r) === entry.name && itemsOf(c) === entry.items && (isField(c) ? visibleField(c, typeOf(c)) : shown(c))) {
+            if (entry.row === undefined || rowOf(c) === entry.row) found.push(c);
+            else rowOnly++;
+          }
         }
         if (c.shadowRoot && shadows < 4) visit(c.shadowRoot, shadows + 1);
         visit(c, shadows);
@@ -130,9 +140,11 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     };
     visit(document.body || document.documentElement, 0);
     // Twins in the snapshot (#211): never acted on. Any of them still here: which one can't be told; none: changed.
-    if (entry.twins) return { ok: false, why: found.length ? 'ambiguous' : 'changed' };
+    if (entry.twins) return { ok: false, why: found.length ? 'ambiguous' : rowOnly ? 'row' : 'changed' };
+    // Found nowhere but in a row that says something else now: that, with its way out (never just changed).
     // More than one alike now (#211): never a guess, and said so.
     if (!over && found.length > 1) return { ok: false, why: 'ambiguous' };
+    if (!over && !found.length && rowOnly) return { ok: false, why: 'row' };
     if (over || found.length !== 1) return { ok: false, why: 'changed' };
     el = found[0];
     refound = true;
@@ -147,6 +159,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // And in the same items (the owner, 2026-11-24): a node the page patched in place to be another table's Sit out, or
   // moved to another row, is another element, for every step and every ref (one found again or not).
   if (entry.items !== undefined && itemsOf(el) !== entry.items) return { ok: false, why: 'changed' };
+  // And in the same unnamed row, by its contents as shown (#268): ids by position, a row replaced by another, a row's
+  // text patched in place (the same nodes) are another row's control, for every step.
+  if (entry.row !== undefined && rowOf(el) !== entry.row) return { ok: false, why: 'row' };
   if (!(isField(el) ? visibleField(el, typeOf(el)) : shown(el))) return { ok: false, why: 'changed' };
   // One that opens a file picker now (the page made it one since): never acted on.
   if (opensFiles(el)) return { ok: false, why: 'file' };
@@ -157,7 +172,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const select = el.localName === 'select';
   // A field as it is now, for main's sensitiveField: a page can turn a field into a password field after the snapshot.
   // Its items and place too (Neon's round 1 of M2g-1, B-2): part of the step a card asks about and a late Allow covers.
-  const said = { role: entry.role, name: entry.name, items: itemsOf(el), path: refPath(el), ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
+  const said = { role: entry.role, name: entry.name, items: itemsOf(el), row: rowOf(el), path: refPath(el), ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
   // What has the focus now, through open shadow roots: text and keys go to it, so it must be this element.
   const deepFocus = () => {
     let f = document.activeElement;

@@ -37,23 +37,24 @@ What this adds: **that refusal says what it is and how to choose.** It was *That
 
 `ACT_REFUSALS.ambiguousPlain`, for one without it (the packaged assistant: its find can't name a row by its words): the same, with *Call snapshot and use the ref of the one you mean.*
 
-The last sentence is the way out. Unnamed rows a page keeps redrawing can't be told apart today: a find gives a new ref, and it's refused again. The agent stops and tells the user, never loops.
+The last sentence is the way out. Rows that say the same thing, which a page keeps redrawing, can't be told apart: a find gives a new ref, and it's refused again. The agent stops and tells the user, never loops.
 
-### Limits (#268)
+### Since #268
 
-Unnamed rows are told apart by nothing but their place, so these are #268's, not this change's:
-- telling unnamed rows apart by their contents when a ref is found again;
-- the wrong-row cases: positional ids, a row replaced or patched in place, two unnamed rows swapped.
+Unnamed rows are now told apart by what they say: their first heading, their text, pictures' alt text and links' labels, on the way up to the nearest named item (`wrong-row.md`).
+- Rows that say different things are no longer twins: each ref is found again in its own row.
+- Rows that say the same are still twins, refused as ambiguous.
+- A row that says nothing but its control is never found again once redrawn (*rowEmpty*), whatever its name. The cost: one extra snapshot after a redraw.
 
 ## Threat checklist
 
 - **Never a guess between look-alikes:** exactly one match acts, as before (#117). Two or more are refused, and nothing is pressed. Twins in the snapshot are never acted on once redrawn, even if one is found.
   - *Tests:* agents-refind.spec:
-    - twins in unnamed list items, redrawn every 100 ms (refused, nothing deleted);
-    - the same in a snapshot cut short (more on the page than it reads);
+    - unnamed list items that say different things, redrawn every 100 ms: since #268 told apart, so B's ref deletes B;
+    - unnamed list items that say the same, in a snapshot cut short (more on the page than it reads): refused, nothing deleted;
     - one at the first look, the test drawing a second (refused, nothing deleted);
     - twins redrawn as the pointer arrives (refused, nothing clicked);
-    - a Delete of two (one left: ambiguous); both gone (changed).
+    - a Delete of two (since #268: Row one's ref, its row gone, is changed); both gone (changed).
   - *Tests:* control.test: the words with and without the flat find; nothing pressed; the debugger's look says so; a batch stops there.
 - **Input that went in, then a look-alike:** never "nothing was done".
   - *Test:* control.test: Enter in a field, then a look-alike at its check; typed text, then a look-alike where it went; a value set, the same: each `INPUT_REDRAWN`.
