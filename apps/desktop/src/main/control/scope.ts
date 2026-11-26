@@ -168,6 +168,11 @@ export interface ControlScope {
    * and tables a `c` ref, and read_tab reads one by it. Outside agents; absent, none are given.
    */
   readonly boxes?: boolean;
+  /**
+   * find, flat (S18 M2g-2, #208): at most 20 matches, one line each with the item it's in; none, the nearest names; never
+   * a baseline. Outside agents with M2's tools; the assistant behind its own flag (assistantFlatFind). Absent: find as it was.
+   */
+  readonly findFlat?: boolean;
   /** No diff after an action (batch's steps but its last: one diff for the whole batch, M2g-1). */
   readonly noDiff?: boolean;
   /** A line in what the agent did (the assistant's chat). Not called once the call was stopped. */

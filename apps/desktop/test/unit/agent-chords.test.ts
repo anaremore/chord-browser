@@ -1006,9 +1006,9 @@ describe('open_tab and a Never site (security review)', () => {
   it('parts’ refs and navigate’s outline only where M2’s tools are (round 1 of #260)', () => {
     const t = setup();
     const scope = (actions?: boolean) => agentScope(t.agent, { ...(actions === undefined ? {} : { actions }), state: () => t.store.state, chordId: () => t.chordId, neverSites: () => [] });
-    expect([scope(true).boxes, scope(true).outlineOnGo]).toEqual([true, true]);
-    expect([scope(false).boxes, scope(false).outlineOnGo]).toEqual([undefined, undefined]);
-    expect([scope().boxes, scope().outlineOnGo]).toEqual([undefined, undefined]);
+    expect([scope(true).boxes, scope(true).outlineOnGo, scope(true).findFlat]).toEqual([true, true, true]);
+    expect([scope(false).boxes, scope(false).outlineOnGo, scope(false).findFlat]).toEqual([undefined, undefined, undefined]);
+    expect([scope().boxes, scope().outlineOnGo, scope().findFlat]).toEqual([undefined, undefined, undefined]);
   });
 
   it('an outside agent reads 20000 at a time when it asks for no length (S18 M2g-2, #206)', () => {

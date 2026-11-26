@@ -56,6 +56,15 @@ export const PRESS_TRIES = 5;
 /** How long a key's check waits for its keydown to have been handled in the page (the guard's count), at most. */
 export const KEY_SEEN_MS = 500;
 
+/** The element gone or replaced by the page, or a look-alike in its place now (#211's review): the same for a key's checks. */
+export const redrawn = (refusal: string | null): boolean => refusal === ACT_REFUSALS.changed || refusal === ACT_REFUSALS.ambiguous;
+
+/**
+ * A look-alike in the element's place once input had reached the page (a key, a press, text, a value, a choice): what
+ * went in may have worked, so never "nothing was done" (#211's round 2: a comment box that sends on Enter and redraws).
+ */
+export const INPUT_REDRAWN = 'The page redrew that element after the input went in, and it has a look-alike now, so it may or may not have worked. Call snapshot and check before doing it again.';
+
 /** A key whose element the page redrew between its keydown and the rest: maybe nothing happened. */
 export const KEY_REDRAWN = 'The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.';
 
@@ -184,6 +193,8 @@ export function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'stale') return ELEMENT_REFUSALS.stale;
   // Replaced again and again (the press's tries ran out): changed, as it always was.
   if (answer.why === 'replaced') return ACT_REFUSALS.changed;
+  // Two or more alike, redrawn (#211): how to choose, never a guess.
+  if (answer.why === 'ambiguous') return ACT_REFUSALS.ambiguous;
   if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';

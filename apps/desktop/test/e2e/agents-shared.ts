@@ -148,6 +148,10 @@ export async function agentsSettings(app: ElectronApplication, shell: Page): Pro
 /** What reached the test site that changes something (S18 M2d): each form posted, each delete address asked for. */
 export const reached: string[] = [];
 
+/** Each slot's Delete button, replaced by a new node every 100 ms (a redraw): a ref's node is gone soon after the snapshot. */
+const TWIN_SCRIPT =
+  '<script>const draw = () => { for (const slot of document.querySelectorAll(".slot")) { const b = document.createElement("button"); b.textContent = "Delete"; b.onclick = () => { document.getElementById("log").textContent += " deleted " + slot.dataset.n; }; slot.replaceChildren(b); } }; draw(); setInterval(draw, 100);</script>';
+
 export async function startAgentSite(): Promise<{ server: Server; origin: string }> {
   const pages: Record<string, string> = {
     '/notes': '<title>Release notes</title><h1>Notes</h1><p>Electron 46 brings a faster start.</p>',
@@ -411,6 +415,34 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Orders</title><main><table><tbody>' +
       Array.from({ length: 300 }, (_, i) => `<tr aria-label="Order ${i + 1}"><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
       '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
+    // The same orders as most pages write them (round 1 of #263): plain rows, no name of their own.
+    '/orders300-plain':
+      '<title>Orders</title><main><table><tbody>' +
+      Array.from({ length: 300 }, (_, i) => `<tr><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
+      '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
+    // #211: a control drawn late (1.5 s after the page loads), and look-alikes the page redraws every 100 ms: two Delete
+    // buttons in named sections (told apart by their item), and in unnamed list items (they can't be).
+    '/late':
+      '<title>Lobby</title><main><h1>Lobby</h1><p>Waiting for a seat.</p><p id=log></p></main>' +
+      '<script>setTimeout(() => { const b = document.createElement("button"); b.textContent = "Join table"; b.onclick = () => { document.getElementById("log").textContent += " joined"; }; document.querySelector("main").append(b); }, 1500);' +
+      // A styled checkbox drawn late too: the box itself visually hidden (1 px, clipped), its label what shows (#211's review).
+      'setTimeout(() => { const l = document.createElement("label"); const c = document.createElement("input"); c.type = "checkbox"; c.style.cssText = "position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"; l.append(c, " Agree to the rules"); document.querySelector("main").append(l); }, 1500);</script>',
+    '/twins':
+      '<title>Drafts</title><main><section aria-label="Draft A"><h2>Draft A</h2><span class=slot data-n=A></span></section><section aria-label="Draft B"><h2>Draft B</h2><span class=slot data-n=B></span></section><p id=log></p></main>' +
+      TWIN_SCRIPT,
+    '/twins-plain':
+      '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li><li>Draft B <span class=slot data-n=B></span></li></ul><p id=log></p></main>' +
+      TWIN_SCRIPT,
+    // One alike at the first look; then (window.twin(), from the test) a second just like it (the same name, in the same place).
+    '/twin-later':
+      '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li></ul><p id=log></p></main>' +
+      '<script>window.twin = () => { const li = document.createElement("li"); li.innerHTML = "Draft A <span class=slot data-n=A2></span>"; document.querySelector("ul").append(li); };</script>' +
+      TWIN_SCRIPT,
+    // Look-alikes in unnamed list items, then more than the snapshot reads (it's cut short): twins it saw are still twins.
+    '/twins-cut':
+      '<title>Drafts</title><main><ul><li>Draft A <span class=slot data-n=A></span></li><li>Draft B <span class=slot data-n=B></span></li></ul><p id=log></p><div id=big></div></main>' +
+      '<script>{ const big = document.getElementById("big"); for (let i = 0; i < 20500; i++) big.append(document.createElement("span")); }</script>' +
+      TWIN_SCRIPT,
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
@@ -503,7 +535,8 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
         const kind = new URLSearchParams(location.search).get('m') || 'once';
         // (A closed root takes a div with a button's role: a button can't have a shadow root.)
         const go = kind === 'closed' ? '<div class=row><div role=button tabindex=0>Go</div></div>' : '<div class=row><button>Go</button></div>';
-        m.innerHTML = go;
+        // Twins at the snapshot already (#211's review), redrawn as the pointer arrives.
+        m.innerHTML = kind === 'twins' ? go + go : go;
         let armed = false;
         window.arm = () => { armed = true; };
         // On the pointer's (trusted) move: once (the second try finds it), every time (never), a decoy where it was and
@@ -514,7 +547,7 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
           if (kind === 'once' || kind === 'every') m.innerHTML = go;
           if (kind === 'decoy') m.innerHTML = '<div class=row><button>Fold</button></div>' + go;
           if (kind === 'closed') { m.innerHTML = go; m.querySelector('[role=button]').attachShadow({ mode: 'closed' }).innerHTML = '<span>Go</span>'; }
-          if (kind === 'twin') m.innerHTML = go + go;
+          if (kind === 'twin' || kind === 'twins') m.innerHTML = go + go;
           if (kind === 'form') m.innerHTML = '<form method=post action=/wipe>' + go + '</form>';
         }, true);
         m.addEventListener('click', (e) => { const b = e.target.closest('button, [role=button]'); if (b) { e.preventDefault(); document.getElementById('log').textContent += ' ' + b.textContent; } });
@@ -529,7 +562,7 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
           const md = window.mode.replace('!', '');
           let h = '';
           h += md === 'framed' ? '<div class=row><iframe srcdoc="<button>Fold</button>"></iframe> <button>Call</button></div>' : '<div class=row><button>Fold</button> ' + (md === 'nocall' ? '' : '<button>Call</button>') + '</div>';
-          h += '<ul>' + (md === 'gone1' ? '' : '<li><span>Row one</span> <button>Delete</button></li>') + '<li><span>Row two</span> <button>Delete</button></li></ul>';
+          h += '<ul>' + (md === 'gone1' || md === 'gone2' ? '' : '<li><span>Row one</span> <button>Delete</button></li>') + (md === 'gone2' ? '' : '<li><span>Row two</span> <button>Delete</button></li>') + '</ul>';
           h += md === 'swapdel' ? '<form method=post action=/wipe><div class=danger><button>Delete row</button></div></form>' : '<div class=danger><button>Delete row</button></div>';
           h += '<label>Nickname <input type=' + (md === 'pw' ? 'password' : 'text') + '></label>';
           h += '<label>Code <input type=text' + (md === 'otp' ? ' autocomplete=one-time-code' : '') + '></label>';

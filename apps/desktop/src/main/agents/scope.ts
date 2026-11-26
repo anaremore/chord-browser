@@ -98,7 +98,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     waits: true,
     readDefault: AGENT_READ_DEFAULT,
     // Only where snapshot is (M2's tools: round 1 of #260): parts' refs, and navigate's and open_tab's outline.
-    ...(deps.actions ? { boxes: true, outlineOnGo: true } : {}),
+    ...(deps.actions ? { boxes: true, outlineOnGo: true, findFlat: true } : {}),
     activity: async () => undefined,
   };
 }

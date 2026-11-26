@@ -4,12 +4,12 @@
  * can't drop one unseen.
  */
 import { describe, expect, it } from 'vitest';
-import { ACTING_LINES_GO_OUTLINE, AGENT_INSTRUCTIONS, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantInstructions, assistantTools } from '../src';
+import { ACTING_LINES_GO_OUTLINE, AGENT_INSTRUCTIONS, ASSISTANT_FLAT_FIND_RELEASED, assistantFlatFind, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantInstructions, assistantTools } from '../src';
 
 /** Tokens, as the eval counts them: characters ÷ 4. */
 const tokens = (v: unknown) => Math.ceil((typeof v === 'string' ? v : JSON.stringify(v)).length / 4);
 /** The assistant's list as claude.ts sends it (Codex's shape is smaller), with every flag a build may turn on. */
-const assistantWire = (acting: boolean) => assistantTools(true, acting, true).map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.readOnly } }));
+const assistantWire = (acting: boolean) => assistantTools(true, acting, true, true).map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.readOnly } }));
 
 /**
  * What each list may cost, in tokens, with some room. A change that grows one past it fails here, and raises it in
@@ -43,7 +43,7 @@ describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
 describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', () => {
   const agents = new Map(agentToolList(true).map((t) => [t.name, t.description]));
   // With every flag a build may turn on (round 1 of #232's nit): the words a session may be sent.
-  const assistant = new Map(assistantTools(true, true, true).map((t) => [t.name, t.description]));
+  const assistant = new Map(assistantTools(true, true, true, true).map((t) => [t.name, t.description]));
   // [list, tool, phrase it must keep]
   const pins: [string, string, RegExp][] = [
     ...['read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'snapshot'].map((t): [string, string, RegExp] => ['agents', t, /untrusted/i]),
@@ -60,6 +60,7 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     ['agents', 'batch', /one of your own tabs/],
     ['agents', 'batch', /asking the user/],
     ['agents', 'wait_for', /One wait at a time/],
+    ['agents', 'snapshot', /find: up to 20 elements whose names \(with their item's\) have its words, as lines with their items; none: the nearest names/],
     // read_tab's ranges (#206, round 1 of #252): an outside agent's default and most, the assistant's most.
     ['agents', 'read_tab', /ranges of 20000 characters \(length: up to 40000\)/],
     ['assistant', 'read_tab', /ranges of up to 40000 characters/],
@@ -105,6 +106,12 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     expect(assistantTools(true, true).find((t) => t.name === 'navigate')!.description).not.toMatch(/snapshot/);
     expect(props(assistantTools(true, true, true), 'navigate')).toEqual(['tab_id', 'url', 'snapshot']);
     expect(assistantTools(true, true, true).find((t) => t.name === 'navigate')!.description).toMatch(/with snapshot, returns its outline as snapshot gives it/);
+    // The flat find's flag (#208): development builds, not packaged ones until it's released (or told it is).
+    expect([assistantFlatFind({ packaged: false }), assistantFlatFind({ packaged: true }), assistantFlatFind({ packaged: true }, true)]).toEqual([true, ASSISTANT_FLAT_FIND_RELEASED, true]);
+    // Its words with it (round 1 of #263): the flat find's where the flag is, find's as it was where not.
+    const snapshotWords = (flat: boolean) => assistantTools(true, true, false, flat).find((t) => t.name === 'snapshot')!.description;
+    expect(snapshotWords(false)).toMatch(/find: only the elements whose names contain it\./);
+    expect(snapshotWords(true)).toMatch(/find: up to 20 elements whose names \(with their item's\) have its words, as lines with their items; none: the nearest names\./);
     // The flag: development builds have it; packaged ones not until it's released; only with M2 in the build.
     expect([assistantGoOutline({ packaged: false }), assistantGoOutline({ packaged: true }), assistantGoOutline({ packaged: true }, true)]).toEqual([true, ASSISTANT_GO_OUTLINE_RELEASED, true]);
     // Its instructions say so, only when it's on.

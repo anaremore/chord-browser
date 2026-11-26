@@ -9,7 +9,7 @@ import type { AgentInputEvent } from './input';
 import type { ToolOutput } from './scope';
 import { PART_REFUSALS } from './tools-read';
 import { byDeadline, countAllows, HandedOver, OpenCards } from './handed-over';
-import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
+import { INPUT_REDRAWN, KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, redrawn, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
 import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
 
@@ -32,6 +32,8 @@ export async function actTool(call: Call, tool: ActTool, args: Record<string, un
   } finally {
     if (leased.node) call.scope.act?.lease?.end(leased.node);
   }
+  // A look-alike's refusal, for a client whose find can't name a row by its words: never told to (#211's review).
+  if (out.isError && !call.scope.findFlat && refusalOf(out) === ACT_REFUSALS.ambiguous) out = refuse(ACT_REFUSALS.ambiguousPlain);
   // With snapshot: true, the page it went to, as snapshot gives it (S18 M2g-2 slice 3a, #204): once the action is over
   // and its hold let go of, by snapshot's own call, every read rule with it.
   if (tool !== 'navigate' || args['snapshot'] !== true || !call.scope.outlineOnGo || out.isError) return out;
@@ -396,8 +398,11 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   // A part's container ref is read-only (#207): refused by every acting tool, at run time as by its pattern.
   if (typeof refArg === 'string' && BOX_REF.test(refArg)) return refuse(PART_REFUSALS.act);
   // An element, by its ref from the tab's latest snapshot, on the page it's on now.
-  const lookup = scope.memory.elements?.get(node.id)?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
+  const tabRefs = scope.memory.elements?.get(node.id);
+  const lookup = tabRefs?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
   if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
+  // Never one the agent wasn't shown (#208: rule 1): a collapsed row's, one past the range it read, one a find didn't list.
+  if (!tabRefs!.wasShown(refArg, page.id)) return refuse(ELEMENT_REFUSALS.notShown(String(refArg)));
   /**
    * One step in the page on the ref's element (act.ts). A ref whose node the page replaced may be found again there
    * (the owner's bug #2): the result says so.
@@ -629,6 +634,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
      * on a timer, on a slow machine). Then it's tried again, the element focused again (guardedTries).
      */
     let nothingWent = false;
+    /** Input reached the page (a key, a press: typing's click comes first, a value): a look-alike's refusal after it says it may have worked. */
+    let inputWent = false;
     /**
      * A keydown sent that the page's guard hadn't seen by KEY_SEEN_MS: late, maybe still coming. Then nothing is ever
      * tried again, as it could land twice (Claude's review 5 of #117).
@@ -689,7 +696,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // found again and checked again by the retry (refocus), as for the focus taken.
         nothingWent =
           (failed === ACT_REFUSALS.focusMoved && (!inputBegan || (typeof down === 'object' && down.moved && down.passed === 0 && !down.lost && !keyUnseen))) ||
-          (failed === ACT_REFUSALS.changed && !inputBegan);
+          (redrawn(failed) && !inputBegan);
         return false;
       }
       // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
@@ -790,6 +797,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (!typesInto(pressed)) {
         // No character at all (Tab, an arrow): in at once.
         if (!rest.some((e) => e.type === 'char')) {
+          inputWent = true;
           page.keys([down!, ...rest]);
           return null;
         }
@@ -797,6 +805,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // the focus is no longer the element's or a closed root came in (Neon's review 7 of #110), no character, only
         // the key let go of. The keydown did what it does (a link went, a menu opened): that's done.
         const documentAtKey = page.mark.document;
+        inputWent = true;
         page.keys([down!]);
         // Its keydown handled first (its handlers have run), then the check: never the check before it.
         if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
@@ -807,7 +816,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // The element itself gone, in the same document (a page that redraws it: the table on a slow runner, #117): a
         // button's click comes with the character, so the key may have done nothing. Never said done; never tried again
         // either (its keydown reached the page).
-        if (again === ACT_REFUSALS.changed && page.mark.document === documentAtKey) return KEY_REDRAWN;
+        if (redrawn(again) && page.mark.document === documentAtKey) return KEY_REDRAWN;
         // The hold lost, Stop, or the user taking the tab meanwhile: a no, not done (Neon's review 4), asked of each
         // directly. The focus gone elsewhere, or the page gone on (Enter on a link: its element's checks fail as its
         // document goes): the keydown did its work.
@@ -817,6 +826,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         return null;
       }
       enterOneLine = pressed === 'Enter' && element.risk?.multiline === false;
+      inputWent = true;
       page.keys([down!]);
       // Its keydown handled first (its handlers have run), then the check: never the check before it.
       if (!(await page.keySeen(1, KEY_SEEN_MS))) keyUnseen = true;
@@ -913,6 +923,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         if ((refused = halt())) return;
         if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         const set = await actOn({ op: 'setValue', value: value as string });
+        if (set.ok) inputWent = true;
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;
         if (args['submit'] !== true) return;
@@ -989,6 +1000,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if ((refused = halt())) return;
       if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
       phases.lap('checks');
+      inputWent = true;
       page.press(at.x!, at.y!);
       if (tool !== 'type') return;
       // Typing waits for the page to have seen its click (the caret goes where the click put it): only then the select
@@ -1090,6 +1102,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     const { navigated, loading } = await acting;
     phases.lap('settle');
     if (deep) await (deep as DeepSession).close();
+    // A look-alike's refusal once input had gone in: it may have worked, never "nothing was done" (#211's round 2).
+    if (refused === ACT_REFUSALS.ambiguous && inputWent) refused = INPUT_REDRAWN;
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus);

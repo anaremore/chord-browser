@@ -11,9 +11,10 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
+import { FIND_NEAREST_NOTE, FIND_NONE_NOTE, heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
 import { byDeadline, HandedOver, laterContent, OpenCards, takeLater } from '../../src/main/control/handed-over';
+import { INPUT_REDRAWN } from '../../src/main/control/act-steps';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
 import { endUntil, holdSends, sendHoldDeps, failHeld, type SendAnswer, type SendWatch } from '../../src/main/control/sends';
@@ -1296,7 +1297,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
+  type Twist = { ambiguous?: boolean; ambiguousAt?: Record<string, number>; ambiguousCompare?: boolean; goneWhy?: 'changed' | 'ambiguous'; part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1347,6 +1348,14 @@ describe('acting through the gate (S18 M2c)', () => {
       const f = twist.field ?? el.field;
       const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}), ...(twist.place ? twist.place(args.op) : {}) };
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
+      // Look-alikes the page redrew (#211): which one can't be told.
+      if (twist.ambiguous) return { ok: false, why: 'ambiguous' };
+      // Where the text went, checked after it went in (#211's round 2: Fable's probe).
+      if (args.op === 'values' && args.mode === 'compare' && twist.ambiguousCompare) return { ok: false, why: 'ambiguous' };
+      if (twist.ambiguousAt?.[args.op]) {
+        twist.ambiguousAt[args.op]!--;
+        return { ok: false, why: 'ambiguous' };
+      }
       if (twist.replaced?.[args.op] && !(args as { refind?: boolean }).refind) {
         twist.replaced[args.op]!--;
         return { ok: false, why: 'replaced' };
@@ -1369,7 +1378,7 @@ describe('acting through the gate (S18 M2c)', () => {
         if (hits === 2) return twist.noMoveOff ? { ok: false, why: 'no-move' } : { ok: true, ...said };
       }
       if (args.op === 'hit') return twist.hit ? { ok: false, why: 'covered', cover: twist.hit } : { ok: true, ...said };
-      if (args.op === 'focused' && twist.goneAfterKey && (twist.sent?.() ?? []).some((e) => e.type === 'keyDown')) return { ok: false, why: 'changed' };
+      if (args.op === 'focused' && twist.goneAfterKey && (twist.sent?.() ?? []).some((e) => e.type === 'keyDown')) return { ok: false, why: twist.goneWhy ?? 'changed' };
       if (args.op === 'focus' || args.op === 'focused') return { ok: true, ...said, focused: twist.focused ?? true };
       // Where typing went (#112): this field changed, and others (a twist's count) did too.
       if (args.op === 'values') return args.mode === 'compare' ? { ok: true, ...said, changed: !twist.unchanged, has: Boolean(twist.has), others: twist.others ?? 0 } : { ok: true, ...said };
@@ -1837,6 +1846,7 @@ describe('acting through the gate (S18 M2c)', () => {
     ['type', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['click', 'a closed shadow root in the element (#112)', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
     ['press_key', 'a closed shadow root in the field', { closed: true }, 'Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.'],
+    ['click', 'a look-alike in its place under the point (#211)', { hit: { ok: false, why: 'ambiguous' } }, ACT_REFUSALS.ambiguousPlain],
     ['click', 'the debugger taken (DevTools busy)', { unavailable: true }, 'Chord couldn’t check that page right now (is its DevTools window busy?). The step may have gone in: call snapshot before you try it again.'],
   ];
   it.each(deepRows)('%s, when the debugger finds %s: refused, nothing sent', async (tool, _what, deep, says) => {
@@ -1974,12 +1984,46 @@ describe('acting through the gate (S18 M2c)', () => {
   });
 
   it('Enter on a button the page redrew between its keydown and the rest: said it may not have worked, never done, never pressed again (#117)', async () => {
-    const twist: Twist = { goneAfterKey: true };
+    // Gone, or a look-alike now in its place (#211's review: the reason, never one refusal's words, decides).
+    for (const goneWhy of ['changed', 'ambiguous'] as const) {
+      const twist: Twist = { goneAfterKey: true, goneWhy };
+      const t = await acting({ twist });
+      twist.sent = () => t.at.input as { type: string }[];
+      expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused, goneWhy).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
+      // Its keydown, then only the key let go of; once.
+      expect((t.at.input as { type: string }[]).map((e) => e.type), goneWhy).toEqual(['keyDown', 'keyUp']);
+    }
+  });
+
+  it('a look-alike in its place after input went in: never “nothing was done”, said it may not have worked (#211’s round 2)', async () => {
+    // Enter in a field (a comment box that sends on Enter, then redraws): its keydown went in.
+    const twist: Twist = { goneAfterKey: true, goneWhy: 'ambiguous' };
     const t = await acting({ twist });
     twist.sent = () => t.at.input as { type: string }[];
-    expect(refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e1', key: 'Enter' })).refused).toBe('The page redrew that element while the key went in, so it may not have worked. Call snapshot and check before pressing it again.');
-    // Its keydown, then only the key let go of; once.
-    expect((t.at.input as { type: string }[]).map((e) => e.type)).toEqual(['keyDown', 'keyUp']);
+    const keyed = refusal(await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Enter' })).refused;
+    expect((t.at.input as { type: string }[]).map((e) => e.type)).toContain('keyDown');
+    expect(keyed).toBe(INPUT_REDRAWN);
+    // Typed text, then where it went answered by a look-alike: the text went in.
+    const u = await acting({ twist: { ambiguousCompare: true } });
+    const typed = refusal(await u.call('type', { tab_id: u.tab, ref: 'e2', text: 'wool' })).refused;
+    expect(u.at.text).toEqual(['wool']);
+    expect(typed).toBe(INPUT_REDRAWN);
+    // A value set (a time field: never clicked), then where it went answered by a look-alike: the value went in.
+    ELEMENTS.push({ role: 'textbox', name: 'Delivery time', editable: true, field: field({ type: 'time' }), risk: { tag: 'input', type: 'time' } });
+    try {
+      const v = await acting({ twist: { ambiguousCompare: true } });
+      expect(refusal(await v.call('type', { tab_id: v.tab, ref: `e${ELEMENTS.length}`, text: '18:30' })).refused).toBe(INPUT_REDRAWN);
+      expect(v.steps).toContain('setValue');
+      expect((v.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toEqual([]);
+    } finally {
+      ELEMENTS.pop();
+    }
+  });
+
+  it('a look-alike redrawn before a key went in (nothing sent): as a node gone, found again and checked again by the retry (#211’s review)', async () => {
+    const t = await acting({ twist: { ambiguousAt: { focused: 1 } } });
+    expect(result(await t.call('press_key', { tab_id: t.tab, ref: 'e2', key: 'Tab' })).data['done']).toBe('Pressed Tab in “Search”');
+    expect(t.steps.filter((x) => x === 'guard')).toHaveLength(2);
   });
 
   it('round 5 of #117 (Claude and Neon): a lost input is never tried again; Enter is done only if its keydown went through; tries end on Stop or a step that changed', async () => {
@@ -3122,6 +3166,21 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(clicks(u)).toBe(0);
     });
 
+    it('a step refused for a look-alike stops the batch there, saying how to choose (#211)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist, act: { siteAllowed: () => true } });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      const line = t.scope.activity;
+      (t.scope as { activity: typeof line }).activity = async (...a) => {
+        await line(...a);
+        twist.ambiguous = true;
+      };
+      const out = await batch(t, [{ tool: 'hover', ref: 'e1' }, { tool: 'click', ref: 'e1' }, { tool: 'hover', ref: 'e1' }]);
+      expect(out.isError).toBe(true);
+      expect(ok(out)).toEqual({ refused: 'Step 2 (click) was refused.', step: 2, tool: 'click', why: ACT_REFUSALS.ambiguous, done: ['Pointed at “Home”'] });
+      expect(clicks(t)).toBe(0);
+    });
+
     it('what a step sends is held and asked about, as for its own call', async () => {
       const t = await acting({ deep: { posts: true }, answer: 'deny', act: { siteAllowed: () => true } });
       const out = await batch(t, [{ tool: 'click', ref: 'e1' }, { tool: 'hover', ref: 'e1' }]);
@@ -3814,13 +3873,15 @@ describe('acting through the gate (S18 M2c)', () => {
         ['Settings’ Nothing as it was read', 'n1', NOTHING, (scope) => ({ onRead: () => void (scope.off = () => NOTHING) })],
         ['a private window’s tab', 'n2', NEVER_READ, () => ({})],
       ];
-      for (const text of [undefined, false]) {
+      // (And a flat find, round 1 of #263: the same read, the same rules.)
+      for (const text of [undefined, false, 'find']) {
         for (const [what, tab, says, page] of rows) {
           const holder: { scope?: { neverSites: () => readonly string[]; off: () => string | null } } = {};
           const opts = page(new Proxy({} as { neverSites: () => readonly string[]; off: () => string | null }, { set: (_o, k, v) => ((holder.scope as Record<string | symbol, unknown>)[k] = v, true) }));
           const t = plain(() => buttons(2), opts);
           holder.scope = t.scope as unknown as typeof holder.scope;
-          const out = await t.call('snapshot', { tab_id: t.scope.refs.refFor(tab), ...(text === false ? { text } : {}) });
+          if (text === 'find') (t.scope as { findFlat?: boolean }).findFlat = true;
+          const out = await t.call('snapshot', { tab_id: t.scope.refs.refFor(tab), ...(text === false ? { text } : text === 'find' ? { find: 'Button' } : {}) });
           expect(refusal(out).refused, `${what}, text: ${String(text)}`).toBe(says);
           // Nothing of it kept: no refs issued at all.
           expect(t.scope.memory.elements?.get(tab)?.issues ?? 0, what).toBe(0);
@@ -3960,6 +4021,205 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(t.steps).toEqual([]);
       expect(t.cards).toHaveLength(0);
     });
+  });
+
+  describe('find, flat, and only the refs shown acted on (S18 M2g-2, #208)', () => {
+    /** Twelve rows alike after the page's elements: past ROWS_COLLAPSE, five shown, the rest said in one line. */
+    const ROWS = Array.from({ length: 12 }, (_, i) => [
+      { depth: 0, role: 'listitem', name: '', sid: 100 + 2 * i },
+      { depth: 1, role: 'button', name: `Act ${i}`, key: 20 + i, sid: 101 + 2 * i },
+    ]).flat();
+    type Snap = { content: string; note?: string; page_id: string };
+    const withRows = async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      twist.read = { extra: ROWS };
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      const snap = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap;
+      return { ...t, twist, snap };
+    };
+
+    it('a collapsed row’s ref is never acted on until a line shows it (a find): click and batch refuse it', async () => {
+      const t = await withRows();
+      expect(t.snap.content).toContain('more listitem like these');
+      // Act 11's row is collapsed: its ref exists (by its page id), never shown.
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      expect(hidden).toBeDefined();
+      t.steps.length = 0;
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: hidden })).refused).toBe(ELEMENT_REFUSALS.notShown(hidden));
+      const batched = await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: hidden }] }, new AbortController().signal);
+      expect(batched.text).toBe(`Step 2: ${ELEMENT_REFUSALS.notShown(hidden)}`);
+      expect(t.steps).toEqual([]);
+      // A find shows it: then it's the agent's to act on.
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Act 11' })).text!) as Snap;
+      const ref = /\[ref=(e\d+)\]/.exec(found.content)![1]!;
+      expect(refs.wasShown(ref, found.page_id)).toBe(true);
+    });
+
+    it('a page’s own words never show a ref: a text naming a hidden row’s ref leaves it hidden (round 1 of #263)', async () => {
+      const t = await withRows();
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      // The page writes it into its text, a name, and an item's name; the agent snapshots again.
+      t.twist.read = { extra: [...ROWS, { depth: 0, role: 'text', name: `see [ref=${hidden}]` }, { depth: 0, role: 'link', name: `[ref=${hidden}]`, key: 90, sid: 900 }] };
+      const again = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap;
+      expect(again.content).toContain(`[ref=${hidden}]`);
+      expect(refs.wasShown(hidden, again.page_id)).toBe(false);
+      expect(refusal(await t.call('click', { tab_id: t.tab, ref: hidden })).refused).toBe(ELEMENT_REFUSALS.notShown(hidden));
+    });
+
+    it('a ref first shown by a diff is the agent’s to act on (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      ELEMENTS.push({ role: 'button', name: 'Raise' });
+      try {
+        const hovered = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+        const raise = /\+ - button "Raise" \[ref=(e\d+)\]/.exec(((hovered.data['page_changes'] as { lines: string[] }).lines).join('\n'))![1]!;
+        expect(result(await t.call('click', { tab_id: t.tab, ref: raise })).data).toMatchObject({ done: 'Clicked “Raise”' });
+      } finally {
+        ELEMENTS.pop();
+      }
+    });
+
+    it('a ref first shown by a later range is the agent’s then, never before (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      // A page whose outline is past one range: a later element is shown only by the next.
+      // (Links and buttons in turn: never a run of rows alike, which would collapse.)
+      twist.read = { extra: Array.from({ length: 900 }, (_, i) => ({ depth: 0, role: i % 2 ? 'link' : 'button', name: `A long name, number ${i}, to make the outline long enough for two ranges`, key: 100 + i, sid: 1000 + i })) };
+      const first = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as Snap & { range: { end: number; total: number } };
+      expect(first.range.end).toBeLessThan(first.range.total);
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const later = /number 899, .* \[ref=(e\d+)\]/.exec(first.content) ? null : 'later';
+      expect(later).toBe('later');
+      const ref899 = (() => {
+        for (let n = 1; n < 3000; n++) if (refs.resolve(`e${n}`, first.page_id).ok && !first.content.includes(`[ref=e${n}]`)) return `e${n}`;
+        return '';
+      })();
+      expect(refs.wasShown(ref899, first.page_id)).toBe(false);
+      const next = JSON.parse((await t.call('snapshot', { tab_id: t.tab, start: first.range.end })).text!) as Snap;
+      expect(next.content).toContain(`[ref=${ref899}]`);
+      expect(refs.wasShown(ref899, first.page_id)).toBe(true);
+    });
+
+    it('a flat find gives only its own lines’ part refs; a find of spaces is no find; a cut read keeps its note; after it, a diff says to snapshot without find (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean; boxes?: boolean }).findFlat = true;
+      (t.scope as { boxes?: boolean }).boxes = true;
+      twist.read = { extra: [{ depth: 0, role: 'region', name: 'Orders', sid: 60, box: 0 }, { depth: 0, role: 'region', name: 'Returns', sid: 61, box: 1 }] };
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Orders' })).text!) as Snap;
+      const shown = /region "Orders" \[ref=(c\d+)\]/.exec(found.content)![1]!;
+      const refs = t.scope.memory.elements!.get('n1')!;
+      expect(refs.resolveBox(shown, found.page_id).ok).toBe(true);
+      // Returns' part was never on a line it showed: no ref for it.
+      for (let n = 1; n < 2000; n++) if (`c${n}` !== shown) expect(refs.resolveBox(`c${n}`, found.page_id).ok).toBe(false);
+      // A find of nothing but spaces: no find (the whole outline, as a snapshot is).
+      const spaces = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: '   ' })).text!) as Snap;
+      expect(spaces.content).toContain('combobox "Shipping"');
+      expect(spaces.content).toContain('region "Returns"');
+      // …and taken as a snapshot: the agent's latest read is no find (it's the diff's baseline again).
+      expect(refs.lastWasFind(spaces.page_id)).toBe(false);
+      // A read cut short, nothing matched: both said.
+      twist.read = { cut: { elements: true } };
+      const cut = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'zebra' })).text!) as Snap;
+      expect(cut.note).toBe(`${FIND_NONE_NOTE} The page is too big to read whole in one snapshot: this is its start.`);
+      // After a find, much changed: the note says to snapshot without find.
+      twist.read = { extra: Array.from({ length: 70 }, (_, i) => ({ depth: 0, role: 'button', name: `New ${i}`, key: 200 + i, sid: 2000 + i })) };
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Much of the page changed: call snapshot without find to see it.' });
+    });
+
+    it('a diff never shows a ref its text names: neither a gone line’s, nor one a new text writes (round 2 of #263, S3)', async () => {
+      const t = await withRows();
+      const refs = t.scope.memory.elements!.get('n1')!;
+      const hidden = [...Array(400).keys()].map((n) => `e${n + 1}`).find((r) => refs.resolve(r, t.snap.page_id).ok && !t.snap.content.includes(`[ref=${r}]`))!;
+      // The page drops Shipping (a gone line names its ref) and shows a text naming the hidden row's ref.
+      const without = [...ROWS, { depth: 0, role: 'text', name: `now see [ref=${hidden}]` }];
+      t.twist.read = { extra: without };
+      ELEMENTS.splice(2, 1);
+      try {
+        const out = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+        const lines = ((out.data['page_changes'] as { lines?: string[] }).lines ?? []).join('\n');
+        expect(lines).toContain(`[ref=${hidden}]`);
+        expect(refs.wasShown(hidden, t.snap.page_id)).toBe(false);
+      } finally {
+        ELEMENTS.splice(2, 0, { role: 'combobox', name: 'Shipping', select: true, options: ['Standard', 'Express', 'Pickup', 'Pickup'] });
+      }
+    });
+
+    it('after a find, a diff’s notes say to snapshot without find: with no full snapshot of the page, and with one cut short (round 2 of #263)', async () => {
+      // No full snapshot of the page: a new page, found in alone.
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Home' })).text!) as Snap;
+      const home = /\[ref=(e\d+)\]/.exec(found.content)![1]!;
+      expect(result(await t.call('hover', { tab_id: t.tab, ref: home })).data['page_changes']).toMatchObject({ note: 'You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without find to see it.' });
+      // The full one cut short, then a find.
+      const cut: Twist = { read: { cut: { elements: true } } };
+      const u = await acting({ twist: cut });
+      (u.scope as { findFlat?: boolean }).findFlat = true;
+      cut.read = {};
+      await u.call('snapshot', { tab_id: u.tab, find: 'Home' });
+      expect(result(await u.call('hover', { tab_id: u.tab, ref: 'e1' })).data['page_changes']).toMatchObject({ note: 'Your last full snapshot of this page was cut short, so what changed can’t be told: call snapshot without find to see it.' });
+    });
+
+    it('a flat find is read unpinned: it never takes the agent’s full snapshot’s place in the page (round 2 of #263)', async () => {
+      const twist: Twist = { codes: [] };
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      twist.codes = [];
+      await t.call('snapshot', { tab_id: t.tab, find: 'Home' });
+      const reads = twist.codes.filter((c) => c.includes('__chordSnapshots') && c.includes('"owner"'));
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads.every((c) => c.includes('"pinned":false'))).toBe(true);
+    });
+
+    it('a flat find of a password field: its line, never a ref, never its value (round 1 of #263)', async () => {
+      const twist: Twist = {};
+      const t = await acting({ twist });
+      (t.scope as { findFlat?: boolean }).findFlat = true;
+      twist.read = { extra: [{ depth: 0, role: 'textbox', name: 'Password', key: 50, sid: 500, states: ['filled'], field: { type: 'password', autocomplete: 'current-password', name: 'pw', id: 'pw', label: 'Password', placeholder: '' } }] };
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'password' })).text!) as Snap;
+      expect(found.content).toBe('- textbox "Password" [password: the user signs in]');
+    });
+
+    it('a find is flat, with its items; with no match, the nearest names and Chord’s own note; never the diff’s baseline', async () => {
+      const t = await withRows();
+      const found = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'Act 3' })).text!) as Snap;
+      expect(found.content).toMatch(/^- button "Act 3" \[ref=e\d+\]$/);
+      const none = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'the shipping options' })).text!) as Snap;
+      expect(none.note).toBe(FIND_NEAREST_NOTE);
+      expect(none.content).toContain('combobox "Shipping"');
+      const nothing = JSON.parse((await t.call('snapshot', { tab_id: t.tab, find: 'zebra' })).text!) as Snap;
+      expect(nothing).toMatchObject({ note: FIND_NONE_NOTE, content: '' });
+      // The diff after an action compares with the last full snapshot, never a find's view: a text shown since is new.
+      t.twist.read = { extra: [...ROWS, { depth: 0, role: 'text', name: 'Saved' }] };
+      await t.call('snapshot', { tab_id: t.tab, find: 'Act 3' });
+      const clicked = result(await t.call('hover', { tab_id: t.tab, ref: 'e1' }));
+      expect((clicked.data['page_changes'] as { lines: string[] }).lines).toEqual(['+ - text: "Saved"']);
+    });
+  });
+
+  it('look-alikes the page redrew: refused, saying how to choose, and nothing pressed (#211)', async () => {
+    const twist: Twist = {};
+    const t = await acting({ twist });
+    twist.ambiguous = true;
+    t.steps.length = 0;
+    // Without the flat find (the packaged assistant's): never told to find by the row's words, which it can't.
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguousPlain);
+    expect(t.steps).toEqual(['describe']);
+    (t.scope as { findFlat?: boolean }).findFlat = true;
+    t.steps.length = 0;
+    expect(refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguous);
+    expect(t.steps).toEqual(['describe']);
+    // The debugger's look at the element (deep.open) says so too, never "no check" (#211's review).
+    const u = await acting({ twist: { replaced: { describe: 1 } }, deep: { opens: ['ambiguous'] } });
+    (u.scope as { findFlat?: boolean }).findFlat = true;
+    expect(refusal(await u.call('click', { tab_id: u.tab, ref: 'e1' })).refused).toBe(ACT_REFUSALS.ambiguous);
+    expect((u.at.input as { type: string }[]).filter((e) => e.type === 'mouseDown')).toEqual([]);
   });
 
   it('navigate and back: its own tabs, http and https, never a site kept private; the site card once, as any action', async () => {

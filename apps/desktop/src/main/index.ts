@@ -1145,7 +1145,9 @@ if (!app.requestSingleInstanceLock()) {
       devSwitch: devEnv('CHORD_AGENTS'),
       make: async () => {
         const [{ AgentService }, { ConnectCards }, { SiteCards }] = await Promise.all([import('./agents/service'), import('./agents/connect'), import('./agents/site-cards')]);
-        const helper = process.platform === 'win32' ? join(app.getAppPath(), 'out/window-owner/window-owner.exe') : null;
+        // window-owner.exe: beside the app's archive in a packaged build (electron-builder's extraResources: a program
+        // can't run from inside the archive), in out/ in a development one (#107).
+        const helper = process.platform !== 'win32' ? null : app.isPackaged ? join(process.resourcesPath, 'window-owner.exe') : join(app.getAppPath(), 'out/window-owner/window-owner.exe');
         const waitMs = Number(devEnv('CHORD_AGENT_WAIT_MS')) || undefined;
         // #143's journey: a call's whole deadline (CALL_WAIT_MS), shorter (development builds only).
         const callWaitMs = Number(devEnv('CHORD_AGENT_CALL_WAIT_MS')) || undefined;

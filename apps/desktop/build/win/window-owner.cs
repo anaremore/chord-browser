@@ -21,6 +21,11 @@
 //     the user, and denies network logons. Chord runs it once, on the first connection.
 //   window-owner pipe-dacl <pipe>
 //     Prints that pipe's DACL as SDDL (tests).
+//   window-owner chain <process id> <depth>
+//     Prints, as one line of JSON, that process and up to depth - 1 of its ancestors (at most 4 in
+//     all), from one process snapshot: who started an agent's bridge (S18; parent.ts's ancestry).
+//     A PowerShell query of each took more than its 10 s on a busy CI runner (#107); this is
+//     a few milliseconds.
 //   window-owner pipe-clients <pipe> <server's process id>
 //     Prints, as one line of JSON, the process ids of the clients connected to that pipe's
 //     instances, which the server (Chord) holds, and each one's chain: itself, its parent and
@@ -338,20 +343,22 @@ static class WindowOwner
     /**
      * The client and its ancestors as JSON ({pid, name, path, ppid}, as parent.ts's ProcessInfo), from one process
      * snapshot. Windows never reparents, so an exited parent's PID can be another process's: an ancestor that started
-     * after its child (a reused PID) ends the chain, as does one Chord can't see when it started.
+     * after its child (a reused PID) ends the chain, as does any process Chord can't see when it started (its parent
+     * couldn't be checked against it, #264), and one met twice (a cycle of reused PIDs).
      */
-    static string Chain(uint pid, Dictionary<uint, ProcessEntry> processes)
+    static string Chain(uint pid, Dictionary<uint, ProcessEntry> processes, int depth = CHAIN_MAX)
     {
         var items = new List<string>();
+        var seen = new HashSet<uint>();
         long childCreated = long.MaxValue;
-        for (int i = 0; i < CHAIN_MAX && pid > 4; i++)
+        for (int i = 0; i < depth && pid > 4 && seen.Add(pid); i++)
         {
             ProcessEntry entry;
             if (!processes.TryGetValue(pid, out entry)) break;
             long created;
             string path = ImagePath(pid, out created);
-            if (i > 0 && (created == 0 || created > childCreated)) break;
-            childCreated = created == 0 ? long.MaxValue : created;
+            if (created == 0 || created > childCreated) break;
+            childCreated = created;
             items.Add("{\"pid\":" + pid + ",\"name\":" + Json(entry.szExeFile) + ",\"path\":" + Json(path) + ",\"cwd\":null,\"ppid\":" + entry.th32ParentProcessID + "}");
             pid = entry.th32ParentProcessID;
         }
@@ -534,11 +541,23 @@ static class WindowOwner
 
     static int Main(string[] args)
     {
+        // UTF-8 (no BOM), never the console's code page: a path in a profile folder like José's must reach Chord as it
+        // is, whatever started this (#264). Its own writer on standard output: setting the console's encoding throws
+        // where there's no console (a detached start), and every verb, restrict-pipe too, would fail.
+        Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
         IntPtr window, owner;
         if (args.Length == 2 && (args[0] == "restrict-pipe" || args[0] == "pipe-dacl"))
         {
             if (!AgentPipe.IsMatch(args[1])) return 2;
             return args[0] == "restrict-pipe" ? RestrictPipe(args[1]) : PipeDacl(args[1]);
+        }
+        if (args.Length == 3 && args[0] == "chain")
+        {
+            uint pid;
+            int depth;
+            if (!uint.TryParse(args[1], out pid) || pid <= 4 || !int.TryParse(args[2], out depth) || depth < 1 || depth > CHAIN_MAX) return 2;
+            Console.WriteLine(Chain(pid, Processes(), depth));
+            return 0;
         }
         if (args.Length == 3 && args[0] == "pipe-clients")
         {

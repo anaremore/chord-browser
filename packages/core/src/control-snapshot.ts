@@ -142,6 +142,39 @@ export class ElementRefs {
     return out;
   }
 
+  /**
+   * The element refs the agent was shown on this page (S18 M2g-2, #208; plan rule 1): only these are acted on. Refs are
+   * still issued for every element (numbered by the page's ids, so none is ever rebound), but one on a line the agent was
+   * never shown (a collapsed run's row, a line past the range it read, an element a find didn't list) is never acted on:
+   * the acting tools ask `wasShown`. Gathered from each answer's own text, on the page it's of; another page starts over.
+   */
+  private shown: { pageId: string; refs: Set<string> } | null = null;
+
+  /**
+   * The element refs on the lines an answer showed, for this page: given by the outline itself (each line's own element,
+   * `lineRefs` within the answer's range) and a diff's new and changed lines (by their ids), never read out of the text,
+   * where a page's own words could say anything (round 1 of #263).
+   */
+  showRefs(pageId: string, refs: Iterable<string>): void {
+    if (!pageId) return;
+    if (!this.shown || this.shown.pageId !== pageId) this.shown = { pageId, refs: new Set() };
+    for (const ref of refs) this.shown.refs.add(ref);
+  }
+
+  /** The page whose latest own read was a flat find (round 1 of #263): a diff's notes then say to snapshot without it. */
+  private found: string | null = null;
+  markFind(pageId: string): void {
+    this.found = pageId || null;
+  }
+  lastWasFind(pageId: string): boolean {
+    return Boolean(pageId) && this.found === pageId && this.current?.pageId === pageId;
+  }
+
+  /** Whether the agent was shown this ref on this page (#208): an acting tool's check before `resolve`. */
+  wasShown(ref: unknown, pageId: string): boolean {
+    return typeof ref === 'string' && Boolean(pageId) && this.shown?.pageId === pageId && this.shown.refs.has(ref);
+  }
+
   /** The container refs an outline showed (#207): this page's, under its read's token, in place of the last ones. */
   issueBoxes(pageId: string, token: string, shown: ReadonlyMap<string, ShownBox>): void {
     this.boxes = pageId ? { pageId, token, byRef: new Map(shown) } : null;
@@ -164,12 +197,14 @@ export class ElementRefs {
   remember(outline: SnapshotOutline): void {
     this.kept = outline;
     this.textless = null;
+    this.found = null;
   }
 
   /** Keep an outline without the page's text for its later ranges: the agent's latest own read (never a baseline). */
   rememberTextless(outline: SnapshotOutline): void {
     const { lines: _lines, ...shown } = outline;
     this.textless = shown;
+    this.found = null;
   }
 
   /** The outline without text kept for this page, if the agent's latest own read of it was one. */
@@ -220,7 +255,7 @@ export class ElementRefs {
    * big) is never taken as seen. Nothing changes here; `issue` with the same read gives the same refs.
    */
   preview(pageId: string, keys: readonly number[], sids?: ReadonlyMap<number, number>): Map<number, string> {
-    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issued: this.issued, boxes: this.boxes };
+    const saved = { next: this.next, base: this.base, current: this.current, earlier: this.earlier, kept: this.kept, textless: this.textless, issued: this.issued, boxes: this.boxes, shown: this.shown };
     try {
       return this.refsFor(pageId, keys, sids).byKey;
     } finally {
@@ -241,6 +276,7 @@ export class ElementRefs {
       this.kept = null;
       this.textless = null;
       this.boxes = null;
+      this.shown = null;
     }
     if (sids && pageId && (!this.base || this.base.pageId !== pageId)) this.base = { pageId, from: this.next - 1 };
     const taken = new Set<string>();
@@ -292,6 +328,7 @@ export class ElementRefs {
     this.kept = null;
     this.textless = null;
     this.boxes = null;
+    this.shown = null;
   }
 }
 
@@ -305,6 +342,8 @@ export interface SnapshotOutline {
   text: string;
   refs: number;
   note?: string;
+  /** Each line's element ref and where it starts (round 1 of #263): a later range shows its own. */
+  lineRefs?: readonly LineRef[];
   /** Its lines by the page's ids (snapshotLines), for the diff after the agent's next action (M2g-1). */
   lines?: ReadonlyMap<string, string>;
   /** The read was cut short (too many elements, refs, or too slow): no baseline for a diff (round 1 of #145). */
@@ -315,6 +354,8 @@ export interface SnapshotOutline {
 export const ELEMENT_REFUSALS = {
   unknown: (ref: string) => `There’s no element ${ref.slice(0, 12)} in that tab. Call snapshot for the page’s elements.`,
   stale: 'That ref is from an earlier snapshot. Call snapshot again, then use its refs.',
+  // A ref on no line the agent was shown (#208; round 1 of #263): where to get it.
+  notShown: (ref: string) => `You weren’t shown ${ref.slice(0, 12)} on this page: a snapshot shows it, or find with its words.`,
 } as const;
 
 /* ---------- The outline ---------- */
@@ -364,7 +405,7 @@ export const ROWS_SHOWN = 5;
  * ref: the full outline, its rows collapsed as they'd be, less its text lines (never a run the text kept apart, such as
  * headings between paragraphs, collapsed when the text goes).
  */
-export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean; boxes?: ReadonlyMap<number, string> } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[]; boxes?: Map<string, ShownBox> } {
+export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, string>, opts: { find?: string; whole?: boolean; text?: boolean; boxes?: ReadonlyMap<number, string>; flat?: boolean } = {}): { text: string; refs: number; collapsed?: number; lines?: (string | null)[]; boxes?: Map<string, ShownBox>; matched?: number; nearest?: boolean; lineRefs: LineRef[] } {
   const nodes = read.nodes;
   const noText = opts.text === false;
   let count = 0;
@@ -400,10 +441,37 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
   };
   const depthOf = (i: number) => Math.max(0, Math.min(40, Math.floor(nodes[i]!.depth)));
   // Every node's own line, uncollapsed (snapshotLines).
-  if (opts.whole) return { text: '', refs: 0, lines: nodes.map((n) => lineOf(n)) };
+  if (opts.whole) return { text: '', refs: 0, lines: nodes.map((n) => lineOf(n)), lineRefs: [] };
   const lines: string[] = [];
+  // Each line's own node (-1 for Chord's: a run said in one line, how many more): its ref, structurally (round 1 of #263).
+  const emitted: number[] = [];
+  const emit = (line: string, i: number) => {
+    lines.push(line);
+    emitted.push(i);
+  };
+  const refOfNode = (i: number): string | undefined => {
+    const n = nodes[i];
+    if (!n || n.key === undefined || (n.field && sensitiveField(n.field))) return undefined;
+    return refs.get(n.key);
+  };
+  const lineRefs = (): LineRef[] => {
+    const out: LineRef[] = [];
+    let at = 0;
+    lines.forEach((line, k) => {
+      const ref = emitted[k]! >= 0 ? refOfNode(emitted[k]!) : undefined;
+      if (ref) out.push({ at, ref });
+      at += line.length + 1;
+    });
+    return out;
+  };
   // find: the matches, each with the elements it's in (those not shown yet).
   const find = opts.find?.trim().toLowerCase();
+  // find, flat (S18 M2g-2, #208): at most FIND_MAX matches, one line each with the item it's in; none, the nearest names.
+  if (find && opts.flat) {
+    const out = flatFind(nodes, find, noText, (i) => lineOf(nodes[i]!), depthOf);
+    out.lines.forEach((line, k) => emit(line, out.nodes[k]!));
+    return { text: lines.join('\n'), refs: count, matched: out.matched, ...(out.nearest ? { nearest: true } : {}), ...(shownBoxes.size ? { boxes: shownBoxes } : {}), lineRefs: lineRefs() };
+  }
   if (find) {
     const path: number[] = [];
     const shown = new Set<number>();
@@ -416,12 +484,12 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
           if (shown.has(a)) continue;
           shown.add(a);
           const line = lineOf(nodes[a]!);
-          if (line) lines.push(line);
+          if (line) emit(line, a);
         }
       }
       path.push(i);
     }
-    return { text: lines.join('\n'), refs: count, ...(shownBoxes.size ? { boxes: shownBoxes } : {}) };
+    return { text: lines.join('\n'), refs: count, ...(shownBoxes.size ? { boxes: shownBoxes } : {}), lineRefs: lineRefs() };
   }
   // Each node's subtree ends where the next node at its depth or above begins.
   const ends: number[] = new Array(nodes.length);
@@ -459,7 +527,7 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
       const shownRows = run.length > ROWS_COLLAPSE ? run.slice(0, ROWS_SHOWN) : run;
       for (const r of shownRows) {
         const line = lineOf(nodes[r]!);
-        if (line) lines.push(line);
+        if (line) emit(line, r);
         render(r + 1, ends[r]!);
       }
       // A run of text said in one line goes with the text.
@@ -467,13 +535,169 @@ export function snapshotOutline(read: SnapshotRead, refs: ReadonlyMap<number, st
         const more = run.length - shownRows.length;
         collapsed += more;
         const role = /^[a-z][a-z-]{0,30}$/.test(nodes[i]!.role) ? nodes[i]!.role : 'generic';
-        lines.push(`${'  '.repeat(d)}- … ${more} more ${role === 'text' ? 'lines' : role} like these (call snapshot with find to see one by its name)`);
+        emit(`${'  '.repeat(d)}- … ${more} more ${role === 'text' ? 'lines' : role} like these (call snapshot with find to see one by its name)`, -1);
       }
       i = k;
     }
   };
   render(0, nodes.length);
-  return { text: lines.join('\n'), refs: count, ...(collapsed ? { collapsed } : {}), ...(shownBoxes.size ? { boxes: shownBoxes } : {}) };
+  return { text: lines.join('\n'), refs: count, ...(collapsed ? { collapsed } : {}), ...(shownBoxes.size ? { boxes: shownBoxes } : {}), lineRefs: lineRefs() };
+}
+
+/** An outline line's element ref and where the line starts in the outline's text (round 1 of #263). */
+export interface LineRef {
+  at: number;
+  ref: string;
+}
+
+/** The refs on the lines within an answer's range of its outline ([start, end)): the lines it showed. */
+export const refsInRange = (lineRefs: readonly LineRef[], range: { start: number; end: number }): string[] => lineRefs.filter((l) => l.at >= range.start && l.at < range.end).map((l) => l.ref);
+
+/** How many matches a find shows (#208): past it, how many more, and a narrower find. */
+export const FIND_MAX = 20;
+/** How many nearest names a find with no match shows (#208). */
+export const FIND_NEAREST = 5;
+/** The roles an element's item is (the outline's names for them, as the page's itemsOf reads them). */
+const FIND_ITEMS = new Set(['row', 'listitem', 'article', 'dialog', 'alertdialog', 'tabpanel', 'region']);
+/** Words a find's nearest names never count (#208). */
+const STOP_WORDS = new Set(['a', 'an', 'the', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'and', 'or', 'with', 'from', 'is', 'it', 'this', 'that', 'my', 'your', 'our']);
+const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/** How long an unnamed item's label from its contents may be (round 1 of #263). */
+const ITEM_LABEL_MAX = 60;
+/** How many nodes of an unnamed item's subtree its label looks at, at most (round 2 of #263: never a whole subtree). */
+const ITEM_LABEL_SCAN = 40;
+
+/**
+ * A flat find (#208; rounds 1 and 2 of #263). A node matches when its own name has the whole query in it (any case; with
+ * its spaces left out too: "signin" finds "Sign in"), or every one of the query's words is in its own name or its item's:
+ * a word with a digit only as a whole word ("Cancel 150" never finds order 1500, "Cancel 1" never order 10), any other
+ * word inside its own name ("Canc" finds Cancel) or as a whole word of its item's. Ranked: every word its own first,
+ * then some, then its item's alone; the page's order within each. Capped at FIND_MAX first, and only the lines shown are
+ * built (building one counts its ref and gives its part's c ref). Each the outline's own line, unindented, with the item
+ * it's in: its nearest row, list item, article, dialog, tab panel or region, by its name, else (unnamed, the common case: a
+ * plain tr, li or article) a label from its own contents: its first heading's name, else its texts (with the page's text)
+ * and link names in the page's order, joined and clipped ("Order 150 Jane Doe Details"). Past FIND_MAX, how many more,
+ * and (when they have items) to narrow by an item's words. None: the nearest names, by words in common with their own and
+ * their item's (stop-words left out), at most FIND_NEAREST. Never an unnamed node, nor a text run without the page's text.
+ */
+function flatFind(nodes: SnapshotRead['nodes'], find: string, noText: boolean, lineOf: (i: number) => string | null, depthOf: (i: number) => number): { lines: string[]; nodes: number[]; matched: number; nearest: boolean } {
+  const words = wordsOf(find);
+  const compact = (s: string) => s.replace(/\s+/g, '');
+  const nameOf = (i: number) => clipName(nodes[i]!.name ?? '');
+  // Each item's label: its name, else from its own contents (at most ITEM_LABEL_SCAN nodes below it).
+  const labelOf = (i: number): string => {
+    const own = nameOf(i);
+    if (own) return own;
+    const d = depthOf(i);
+    const parts: string[] = [];
+    let length = 0;
+    for (let k = i + 1, seen = 0; k < nodes.length && depthOf(k) > d && seen < ITEM_LABEL_SCAN && length < ITEM_LABEL_MAX; k++, seen++) {
+      const n = nodes[k]!;
+      const name = nameOf(k);
+      if (!name) continue;
+      // Its first heading names it, whatever came before.
+      if (n.role === 'heading') return name.length > ITEM_LABEL_MAX ? `${name.slice(0, ITEM_LABEL_MAX - 1)}…` : name;
+      if (n.role === 'link' || (n.role === 'text' && !noText)) {
+        parts.push(name);
+        length += name.length + 1;
+      }
+    }
+    const label = parts.join(' ');
+    return label.length > ITEM_LABEL_MAX ? `${label.slice(0, ITEM_LABEL_MAX - 1)}…` : label;
+  };
+  const labels = new Map<number, string>();
+  const label = (i: number) => {
+    if (!labels.has(i)) labels.set(i, labelOf(i));
+    return labels.get(i)!;
+  };
+  // Each item's label in lower case, once.
+  const lowered = new Map<number, string>();
+  const labelLower = (i: number) => {
+    if (!lowered.has(i)) lowered.set(i, label(i).toLowerCase());
+    return lowered.get(i)!;
+  };
+  // Each item's words, once (round 2 of #263).
+  const itemWords = new Map<number, Set<string>>();
+  const wordsOfItem = (i: number) => {
+    if (!itemWords.has(i)) itemWords.set(i, new Set(wordsOf(label(i))));
+    return itemWords.get(i)!;
+  };
+  const path: number[] = [];
+  const itemOf: (number | null)[] = new Array(nodes.length);
+  for (let i = 0; i < nodes.length; i++) {
+    const d = depthOf(i);
+    while (path.length && depthOf(path[path.length - 1]!) >= d) path.pop();
+    let item: number | null = null;
+    for (let k = path.length - 1; k >= 0; k--) {
+      if (FIND_ITEMS.has(nodes[path[k]!]!.role) && label(path[k]!)) { item = path[k]!; break; }
+    }
+    itemOf[i] = item;
+    path.push(i);
+  }
+  const withItem = (i: number): string | null => {
+    const line = lineOf(i);
+    if (line === null) return null;
+    const item = itemOf[i];
+    return `- ${line.trimStart().slice(2)}${item !== null && item !== undefined ? ` (in ${nodes[item]!.role} ${JSON.stringify(label(item))})` : ''}`;
+  };
+  const hasDigit = (w: string) => /\p{N}/u.test(w);
+  // [node, rank]: 0 every word its own, 1 some, 2 its item's alone.
+  const found: [number, number][] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    if (noText && n.role === 'text') continue;
+    // Never an unnamed node, nor an empty text: its name as the outline gives it (clipped).
+    const name = nameOf(i).toLowerCase();
+    if (!name) continue;
+    if (name.includes(find) || compact(name).includes(compact(find))) {
+      // Every word a whole word of its own first ("Act 1" before "Act 150").
+      found.push([i, words.length && words.every((w) => wordsOf(name).includes(w)) ? 0 : 1]);
+      continue;
+    }
+    if (!words.length) continue;
+    const item = itemOf[i];
+    // A cheap look first (round 2 of #263): each word somewhere in its name or its item's, else no words are made.
+    const hay = item !== null && item !== undefined ? `${name} ${labelLower(item)}` : name;
+    if (!words.every((w) => hay.includes(w))) continue;
+    const ownWords = new Set(wordsOf(name));
+    const theirs = item !== null && item !== undefined ? wordsOfItem(item) : new Set<string>();
+    const mine = (w: string) => ownWords.has(w) || (!hasDigit(w) && name.includes(w));
+    if (!words.every((w) => mine(w) || theirs.has(w))) continue;
+    const own = words.filter(mine).length;
+    found.push([i, own === words.length ? 0 : own > 0 ? 1 : 2]);
+  }
+  found.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  // Every match has a line (unnamed nodes, and text without the page's text, never match), so the cap comes first and only
+  // the lines shown are built: building one counts its ref and gives its part's c ref (round 1 of #263).
+  const all = found.map(([i]) => i);
+  const shown = all.slice(0, FIND_MAX).map((i) => [i, withItem(i)] as const).filter((x): x is readonly [number, string] => x[1] !== null);
+  const lines = shown.map(([, l]) => l);
+  const lineNodes = shown.map(([i]) => i);
+  if (all.length > FIND_MAX) {
+    const more = all.length - FIND_MAX;
+    const items = all.some((i) => itemOf[i] !== null && itemOf[i] !== undefined);
+    lines.push(`- … ${more} more match${more === 1 ? '' : 'es'}: make find narrower${items ? ' (an item’s words help: Cancel 150)' : ''}`);
+    lineNodes.push(-1);
+  }
+  if (all.length) return { lines, nodes: lineNodes, matched: all.length, nearest: false };
+  // The nearest names: the most words in common with the query's (stop-words left out), in their own names and their
+  // items' (round 2 of #263: "Refund 150" finds order 150's), the page's order on ties.
+  const wanted = new Set(words.filter((w) => !STOP_WORDS.has(w)));
+  if (!wanted.size) return { lines: [], nodes: [], matched: 0, nearest: false };
+  const scored: [number, number][] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    const name = nameOf(i);
+    if (n.role === 'text' || !name) continue;
+    const item = itemOf[i];
+    const theirs = item !== null && item !== undefined ? wordsOfItem(item) : new Set<string>();
+    const common = new Set([...wordsOf(name), ...theirs].filter((w) => wanted.has(w))).size;
+    if (common) scored.push([i, common]);
+  }
+  scored.sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+  const near = scored.slice(0, FIND_NEAREST).map(([i]) => [i, withItem(i)] as const).filter((x): x is readonly [number, string] => x[1] !== null);
+  return { lines: near.map(([, l]) => l), nodes: near.map(([i]) => i), matched: 0, nearest: near.length > 0 };
 }
 
 /** A container ref's part (#207): its place in the read (the page checks its role and name again before reading it). */
@@ -489,7 +713,16 @@ export const BOX_REF = /^c[1-9][0-9]{0,8}$/;
  * the element it's in and its place there; each line as the outline gives it, without its indent.
  */
 export function snapshotLines(read: SnapshotRead, refs: ReadonlyMap<number, string>): Map<string, string> {
+  return snapshotLinesWithRefs(read, refs).lines;
+}
+
+/**
+ * snapshotLines, with each line's element ref by its id (round 1 of #263): a diff's new and changed lines show their
+ * refs by these, never by reading the line's text.
+ */
+export function snapshotLinesWithRefs(read: SnapshotRead, refs: ReadonlyMap<number, string>): { lines: Map<string, string>; refs: Map<string, string> } {
   const lines = new Map<string, string>();
+  const byId = new Map<string, string>();
   const text = snapshotOutline({ ...read, nodes: read.nodes }, refs, { whole: true }).lines!;
   const parents: { depth: number; id: string }[] = [];
   const texts = new Map<string, number>();
@@ -505,9 +738,20 @@ export function snapshotLines(read: SnapshotRead, refs: ReadonlyMap<number, stri
       id = `${parent}/${node.role}${k}`;
     }
     if (node.sid !== undefined) parents.push({ depth: node.depth, id });
-    if (line !== null && line !== undefined && !lines.has(id)) lines.set(id, line.trimStart());
+    if (line !== null && line !== undefined && !lines.has(id)) {
+      lines.set(id, line.trimStart());
+      const ref = node.key !== undefined && !(node.field && sensitiveField(node.field)) ? refs.get(node.key) : undefined;
+      if (ref) byId.set(id, ref);
+    }
   });
-  return lines;
+  return { lines, refs: byId };
+}
+
+/** A diff's new and changed lines' ids (round 1 of #263): the lines it shows that name an element as it is now. */
+export function snapshotDiffShown(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string[] {
+  const out: string[] = [];
+  for (const [id, line] of after) if (before.get(id) !== line) out.push(id);
+  return out;
 }
 
 /** What changed between two outlines' lines (snapshotLines): new ones (+), changed ones as they are now (~), gone ones (-). */
@@ -535,17 +779,26 @@ export function snapshotNote(cut: SnapshotRead['cut']): string | undefined {
  * The snapshot as a tool result: untrusted JSON with provenance (as pageResult), its outline in ranges of
  * ASSISTANT_READ_MAX characters (`start` to continue), cut at a line.
  */
-export function snapshotResult(snap: { ref: string; url: string; title: string; outline: string; refs: number; start?: number; retrievedAt: number; pageId?: string; note?: string }): string {
-  const total = snap.outline.length;
-  let start = Math.max(0, Math.min(Math.floor(snap.start ?? 0), total));
-  // A range starts at a line (a start inside one moves back to its beginning) and ends at one. At or past the end it's
-  // empty: never the last line again.
-  if (start > 0 && start < total && snap.outline[start - 1] !== '\n') start = snap.outline.lastIndexOf('\n', start) + 1;
+/**
+ * The range of an outline an answer gives from `start` (ASSISTANT_READ_MAX at most): it starts at a line (a start inside
+ * one moves back to its beginning) and ends at one. At or past the end it's empty: never the last line again. Shared by
+ * snapshotResult and what it shows (refsInRange: round 1 of #263).
+ */
+export function snapshotRange(outline: string, from = 0): { start: number; end: number } {
+  const total = outline.length;
+  let start = Math.max(0, Math.min(Math.floor(from), total));
+  if (start > 0 && start < total && outline[start - 1] !== '\n') start = outline.lastIndexOf('\n', start) + 1;
   let end = Math.min(total, start + ASSISTANT_READ_MAX);
   if (end < total) {
-    const cut = snap.outline.lastIndexOf('\n', end);
+    const cut = outline.lastIndexOf('\n', end);
     if (cut > start) end = cut + 1;
   }
+  return { start, end };
+}
+
+export function snapshotResult(snap: { ref: string; url: string; title: string; outline: string; refs: number; start?: number; retrievedAt: number; pageId?: string; note?: string }): string {
+  const total = snap.outline.length;
+  const { start, end } = snapshotRange(snap.outline, snap.start ?? 0);
   let origin = '';
   try {
     origin = new URL(snap.url).origin;

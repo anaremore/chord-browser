@@ -5,11 +5,11 @@
  * with Agents off, the Windows DACL (window-owner.exe's restrict-pipe) and, on
  * Linux, another user refused.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
   AGENT_ENDPOINT_FILE,
@@ -556,14 +556,25 @@ describe('Zero cost, and off in packaged builds', () => {
     ['unknown: nobody, so no program and no Always allow', null, true, 'none'],
     ['a packaged build before M2: the hello’s word, as in M1', null, false, 'hello'],
   ];
+  // On Windows the chain comes from window-owner.exe's `chain` (the build's, as Chord runs it), never PowerShell's query
+  // of each process, which took more than its 10 s on CI's busy Windows runners (#107). Built here when it isn't yet
+  // (a clean checkout), so these never fall back to PowerShell and pass without the fix.
+  const windowsHelper = resolve(import.meta.dirname, '../../out/window-owner/window-owner.exe');
+  const builtHelper = () => {
+    if (process.platform !== 'win32') return null;
+    if (!existsSync(windowsHelper)) execFileSync(process.execPath, [resolve(import.meta.dirname, '../../scripts/build-window-owner.mjs')], { stdio: 'ignore' });
+    expect(existsSync(windowsHelper), 'window-owner.exe built').toBe(true);
+    return windowsHelper;
+  };
   it.each(started)('who started it: %s', async (_name, peerPid, actions, want) => {
     const ud = profile();
     let asked: { claimed: number; endpoint: string } | null = null;
+    const helper = builtHelper();
     const service = new AgentService({
       userData: ud,
       browser,
       ask: answering('once'),
-      helper: null,
+      helper,
       waitMs: 2000,
       actions,
       peer: async (_socket, endpoint, claimed) => {
@@ -578,14 +589,70 @@ describe('Zero cost, and off in packaged builds', () => {
     expect((await c.call('list_tabs')).error).toBe(false);
     const [held] = [...service.connections];
     const chain = await held!.parent!;
+    // The right process, on every OS: never the wrong one, and never none where there is one.
     if (want === 'none') expect(chain).toEqual([]);
-    // Never the wrong process. Where the parent chain comes from the OS's own lookup (PowerShell's on Windows), CI's
-    // Windows arm64 runner has had it come back empty (issue #107): nobody is a right answer there, a wrong one never.
-    else if (chain.length > 0 || !(process.platform === 'win32' && process.arch === 'arm64')) expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
+    else expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
     if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
     else expect(asked).toBeNull();
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
   }, 20_000);
+
+  // #264, Carbon's B1: .NET wrote the helper's answer in the console's code page (OEM), so a profile folder like José's
+  // came back mangled ("Jos� M�ller ??"), the card named Chord.exe, and Always allow could keep it. UTF-8 now.
+  it.runIf(process.platform === 'win32')('window-owner.exe’s chain: a folder like José’s, as the OS has it', async () => {
+    const helper = builtHelper()!;
+    const dir = mkdtempSync(join(tmpdir(), 'José Müller 太郎 '));
+    const copied = join(dir, 'window-owner.exe');
+    // A small program that stays a while: Windows' own ping, copied into that folder.
+    const program = join(dir, 'PING.EXE');
+    copyFileSync(helper, copied);
+    copyFileSync(join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'PING.EXE'), program);
+    const child = spawn(program, ['-n', '30', '127.0.0.1'], { windowsHide: true, stdio: 'ignore' });
+    // Gone before its folder is: a running program's file can't be removed (and removing it under one took the test's
+    // worker down).
+    cleanup.push(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise((done) => child.once('exit', done));
+        child.kill();
+        await exited;
+      }
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    // Its answer through a pipe, as Chord reads it (execFile).
+    const answer = await new Promise<string>((done, fail) => {
+      const run = spawn(copied, ['chain', String(child.pid), '1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      let out = '';
+      run.stdout.setEncoding('utf8');
+      run.stdout.on('data', (d: string) => (out += d));
+      run.on('error', fail);
+      run.on('close', () => done(out));
+    });
+    const { parseChain } = await import('../../src/main/agents/parent');
+    const [first] = parseChain(answer);
+    expect(first?.pid).toBe(child.pid);
+    // The folder's name exactly, and the same file: Windows gives the path as it was started (a runner's TEMP has 8.3
+    // names, RUNNER~1), so both are resolved, as sameProgram does. A mangled path resolves to nothing.
+    expect(first?.path).toContain(basename(dir));
+    expect(realpathSync.native(first!.path!)).toBe(realpathSync.native(program));
+  }, 30_000);
+
+  // #264 (Opus's SF1): with no console of its own (a detached start), the helper still answers, in UTF-8 with no BOM:
+  // setting the console's encoding threw there, and every verb, restrict-pipe too, failed.
+  it.runIf(process.platform === 'win32')('window-owner.exe started with no console: it answers, and its answer starts with its JSON', async () => {
+    const helper = builtHelper()!;
+    const { code, out } = await new Promise<{ code: number | null; out: string }>((done, fail) => {
+      const run = spawn(helper, ['chain', String(process.pid), '2'], { detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      let text = '';
+      run.stdout.setEncoding('utf8');
+      run.stdout.on('data', (d: string) => (text += d));
+      run.on('error', fail);
+      run.on('close', (exit) => done({ code: exit, out: text }));
+    });
+    expect(code).toBe(0);
+    expect(out[0]).toBe('[');
+    const { parseChain } = await import('../../src/main/agents/parent');
+    expect(parseChain(out).map((p) => p.pid)).toEqual([process.pid, process.ppid]);
+  }, 30_000);
 
   it('who started it, from a chain the lookup gave (Windows’ helper): used as given, no second lookup', async () => {
     const ud = profile();
