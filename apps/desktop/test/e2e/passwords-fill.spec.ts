@@ -149,7 +149,17 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await expect(firstSave.getByText('Choose a passphrase to lock your passwords. Chord can’t get it back for you.')).toBeVisible();
     // The card never takes focus: the page keeps it.
     // (Asked of main: Playwright emulates focus in each page it drives, so `document.hasFocus()` there says nothing.)
-    expect(await app.evaluate(({ webContents }) => webContents.getAllWebContents().find((w) => w.getURL().includes('popover'))!.isFocused())).toBe(false);
+    // Polled: focus the OS gave the card on its own goes back on main's next turn, which a check can run ahead of. The
+    // popover's focus events, if it keeps it (#200).
+    const cardFocused = () => app.evaluate(({ webContents }) => webContents.getAllWebContents().find((w) => w.getURL().includes('popover'))!.isFocused());
+    await expect
+      .poll(cardFocused, { timeout: 3_000, message: 'the save card kept the keyboard' })
+      .toBe(false)
+      .catch(async (error: unknown) => {
+        const log = await app.evaluate(() => (globalThis as unknown as { chordTestHooks: { cardFocus(): unknown } }).chordTestHooks.cardFocus());
+        throw new Error(`${String(error)}
+the popover's focus events: ${JSON.stringify(log)}`, { cause: error });
+      });
     findings.push(...(await audit(popover, 'the first save card', { appearance: 'light' })));
     await firstSave.screenshot({ path: resolve(capturesDir, 'passwords-save-first-light.png') });
     await firstSave.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);

@@ -1102,6 +1102,11 @@ export class AppWindow {
   /** When a card last appeared without asking for the keyboard, and whether the popover's focus watch is set up. */
   private cardShownAt = 0;
   private cardFocusWatched = false;
+  /** The popover's last focus events, for a test that finds the card focused (#200): times in ms, nothing typed. */
+  private readonly cardFocusLog: { sinceShown: number; sinceClick: number; sinceAsked: number; givenBack: boolean }[] = [];
+  cardFocusForTests() {
+    return this.cardFocusLog.slice();
+  }
 
   /** Focus the card got on its own, soon after it appeared (not from a click on it), goes back. */
   private watchCardFocus(): void {
@@ -1115,7 +1120,10 @@ export class AppWindow {
     });
     contents.on('focus', () => {
       const now = Date.now();
-      if (now - this.cardShownAt < 1000 && now - clicked > 1000 && now - this.popoverFocusAskedAt > 1000) setTimeout(() => this.giveCardFocusBack(), 0);
+      const givenBack = now - this.cardShownAt < 1000 && now - clicked > 1000 && now - this.popoverFocusAskedAt > 1000;
+      this.cardFocusLog.push({ sinceShown: now - this.cardShownAt, sinceClick: now - clicked, sinceAsked: now - this.popoverFocusAskedAt, givenBack });
+      if (this.cardFocusLog.length > 10) this.cardFocusLog.shift();
+      if (givenBack) setTimeout(() => this.giveCardFocusBack(), 0);
     });
   }
 
