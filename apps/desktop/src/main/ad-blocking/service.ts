@@ -28,6 +28,7 @@ import { mark } from '../launch-timeline';
 import { proxies } from '../proxy';
 import { requestDispatcher } from '../requests';
 import { BlockerExtension } from './extension';
+import { folderName, stays } from './folders';
 import { backoffMs, DEFAULT_REFRESH_MS, FILTER_LISTS, isNewer, setVersion, type CompiledInfo, type ListId } from './lists';
 import type { CompileResult, WorkerReply, WorkerRequest } from './protocol';
 
@@ -84,7 +85,6 @@ const emptySaved = (): Saved => ({ lists: {}, failures: 0, notBefore: 0, profile
 /** Whether a file is there (main never checks synchronously). */
 const exists = (path: string) => access(path).then(() => true, () => false);
 const sameSites = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((s, i) => s === b[i]);
-const folderName = (profileId: string) => profileId.replace(/[^\w-]/g, '_');
 
 interface Profile {
   session: Session;
@@ -269,7 +269,7 @@ export class AdBlocking {
     await this.ready;
     const keep = new Set([...inUse].map(folderName));
     for (const dir of [join(this.config.root, 'Extension'), join(this.config.root, 'Staging')]) {
-      for (const folder of await readdir(dir).catch(() => [])) if (!keep.has(folder)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
+      for (const folder of await readdir(dir).catch(() => [])) if (!stays(folder, keep)) await rm(join(dir, folder), { recursive: true, force: true }).catch(() => {});
     }
     for (const profileId of Object.keys(this.saved.profiles)) if (!inUse.has(profileId)) delete this.saved.profiles[profileId];
     this.save();
