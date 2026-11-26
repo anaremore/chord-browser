@@ -66,7 +66,8 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
           },
         }
       : {}),
-    memory: { pdfs: new Map(), form: null, nextField: 1, read: new Set() },
+    // #143: sends a step's call answered before its card did, and what became of them, for the next result.
+    memory: { pdfs: new Map(), form: null, nextField: 1, read: new Set(), sendsWaiting: new Set(), later: [] },
     off: () => null,
     tabs: () => {
       const state = deps.state();

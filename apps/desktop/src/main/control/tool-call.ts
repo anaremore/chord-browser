@@ -37,6 +37,8 @@ export interface Call {
   stopped(): boolean;
   /** The scope's activity line, unless the call was stopped. */
   activity(tool: string, summary: string, detail?: string, ok?: boolean): Promise<void>;
+  /** #143: when this call answers by (Date.now() time; scope.callDeadlineMs from its start), or null: no deadline. */
+  deadline: number | null;
 }
 
 

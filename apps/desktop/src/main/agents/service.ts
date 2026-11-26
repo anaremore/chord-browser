@@ -43,6 +43,8 @@ export interface AgentServiceDeps {
   restrict?(path: string): Promise<number>;
   /** How long a call waits on a card (CONTROL_WAIT_MS unless a test says). */
   waitMs?: number;
+  /** #143: a call's whole deadline, Send data cards included (connection.ts' CALL_WAIT_MS); tests shorten it. */
+  callWaitMs?: number;
   /** How often a call that asked for progress hears it (connection.ts; tests shorten it). */
   progressMs?: number;
   log?(...args: unknown[]): void;
@@ -145,6 +147,7 @@ export class AgentService {
             const connection = agentConnection(hello, send, {
               browser: this.deps.browser,
               waitMs: this.deps.waitMs,
+              ...(this.deps.callWaitMs ? { callWaitMs: this.deps.callWaitMs } : {}),
               ...(this.deps.progressMs ? { progressMs: this.deps.progressMs } : {}),
               actions: this.deps.actions !== false,
               log: this.deps.log,
