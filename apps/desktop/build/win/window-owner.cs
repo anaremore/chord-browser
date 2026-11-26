@@ -542,8 +542,9 @@ static class WindowOwner
     static int Main(string[] args)
     {
         // UTF-8 (no BOM), never the console's code page: a path in a profile folder like José's must reach Chord as it
-        // is, whatever started this (GUI Chord.exe gives it no console of its own; #264).
-        Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        // is, whatever started this (#264). Its own writer on standard output: setting the console's encoding throws
+        // where there's no console (a detached start), and every verb, restrict-pipe too, would fail.
+        Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
         IntPtr window, owner;
         if (args.Length == 2 && (args[0] == "restrict-pipe" || args[0] == "pipe-dacl"))
         {

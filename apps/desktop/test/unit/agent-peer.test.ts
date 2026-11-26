@@ -149,6 +149,14 @@ describe('Windows: the helper’s answer, wired through peerOf (stood in for, so
     ['{"clients":[10,20],"stuck":3,"truncated":0,"skipped":0}', 20, [10], 20],
   ];
   it.each(rows)('%s, claiming %i, held %j: %s', async (answer, claimed, held, peer) => expect((await peerOf(socket, '', claimed, new Set(held), windows(answer))).pid).toBe(peer));
+
+  it('a client’s chain as the helper gave it, an empty one too (gone, or its start unknown): never looked up again (#264)', async () => {
+    const empty = await peerOf(socket, '', 99, new Set(), windows('{"clients":[10],"chains":{"10":[]},"stuck":0,"truncated":0,"skipped":0}'));
+    expect(empty).toMatchObject({ pid: 10, chain: [] });
+    const none = await peerOf(socket, '', 99, new Set(), windows('{"clients":[10],"stuck":0,"truncated":0,"skipped":0}'));
+    expect(none.pid).toBe(10);
+    expect(none).not.toHaveProperty('chain');
+  });
 });
 
 describe('The lookup, when the OS can’t say', () => {

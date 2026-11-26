@@ -209,7 +209,7 @@ export async function peerOf(socket: Socket, pipe: string, claimed: number, held
       if (!answer) return { pid: null };
       const pid = choosePeer(answer.clients, claimed, held, answer.complete);
       const chain = pid === null ? undefined : answer.chains.get(pid);
-      return { pid, ...(chain ? { chain } : {}), timings: answer.timings };
+      return { pid, ...(chain !== undefined ? { chain } : {}), timings: answer.timings };
     }
     const fd = socketFd(socket);
     if (fd === null) return { pid: null };

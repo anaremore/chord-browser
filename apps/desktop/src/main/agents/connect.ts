@@ -23,11 +23,12 @@ import { sameProgram, type ProcessInfo } from './parent';
 
 /**
  * A program an allowance can be kept by: not Chord itself (anything that starts `Chord.exe mcp` would be it), nor a
- * path the lookup couldn't read right (U+FFFD or `?`: a profile folder like José's read in another code page, #264),
- * which could be anyone's.
+ * path the lookup couldn't read right (U+FFFD; on Windows also `?`, which no Windows path holds: a profile folder like
+ * José's read in another code page, #264), which could be anyone's.
  */
-export function keepable(path: string | null | undefined): path is string {
-  return Boolean(path) && !/[\uFFFD?]/.test(path!) && !sameProgram(path!, process.execPath);
+export function keepable(path: string | null | undefined, platform: NodeJS.Platform = process.platform): path is string {
+  if (!path || path.includes('\uFFFD') || (platform === 'win32' && path.includes('?'))) return false;
+  return !sameProgram(path, process.execPath);
 }
 
 /** Who's asking: what its connection says, and the lookup of who started it (running while the card shows). */
@@ -183,7 +184,8 @@ export class ConnectCards {
   async ask(who: ConnectingAgent, signal: AbortSignal): Promise<ConnectAnswer> {
     const known = this.deps.store.state.settings.agentsAllowed.some((a) => a.name === who.name);
     const looked = firstOf(who.parent);
-    // An agent you've let in for good by that name: who started it decides, so Chord looks first (about 1 s on Windows).
+    // An agent you've let in for good by that name: who started it decides, so Chord looks first (a few ms on Windows,
+    // window-owner.exe's process snapshot; ps and lsof, or /proc, elsewhere).
     if (known) {
       const path = (await looked)?.path;
       const allowed = keepable(path) ? this.allowance(who.name, path) : null;

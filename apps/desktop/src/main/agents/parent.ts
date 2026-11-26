@@ -3,10 +3,11 @@
  * and two more ancestors (shims: codex.cmd → node → codex.exe). Everything here is
  * what the OS says about a process of the same user, so it's a hint for the connect
  * card, never an identity. Looked up while the card shows, never inside a call. On
- * Windows, window-owner.exe's `chain` reads it from one process snapshot (a few ms);
- * without the helper, one PowerShell queries each process (about 1 s, and more than
- * its 10 s on a busy CI runner: #107). Never a process's command line, which can hold
- * tokens.
+ * Windows, window-owner.exe's `chain` reads it from one process snapshot (a few ms).
+ * Chord always has the helper there (a missing one fails its run: no chain); PowerShell,
+ * querying each process (about 1 s, more than its 10 s on a busy CI runner: #107), is
+ * only for a caller given none (tools, units). Never a process's command line, which
+ * can hold tokens.
  */
 import { execFile } from 'node:child_process';
 import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
@@ -72,7 +73,7 @@ export const text = (v: unknown): string | null => (typeof v === 'string' && v ?
 
 /**
  * window-owner.exe's `chain` answer: its processes as given (each `ProcessInfo`'s fields, read as pipe-clients' chains
- * are, peer.ts), up to the first that isn't one; or nothing.
+ * are, peer.ts), up to the first that isn't one, or isn't the parent the one before it names; or nothing.
  */
 export function parseChain(stdout: string): ProcessInfo[] {
   const parsed = attempt(() => JSON.parse(stdout.trim() || '[]') as unknown);
@@ -80,6 +81,7 @@ export function parseChain(stdout: string): ProcessInfo[] {
   const chain: ProcessInfo[] = [];
   for (const p of parsed as Record<string, unknown>[]) {
     if (!p || !isPid(p['pid'])) break;
+    if (chain.length > 0 && chain.at(-1)!.ppid !== p['pid']) break;
     chain.push({ pid: p['pid'], name: text(p['name']), path: text(p['path']), cwd: null, ppid: isPid(p['ppid']) ? p['ppid'] : null });
   }
   return chain;

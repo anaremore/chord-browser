@@ -9,7 +9,7 @@
  */
 import { AGENTS_ALLOWED_MAX, cleanAgentsAllowed, emptyState, type State } from '@chord/core';
 import { describe, expect, it } from 'vitest';
-import { cardFolder, ConnectCards, plain, signInsExist, startedByOf, unversioned, type ConnectAnswer } from '../../src/main/agents/connect';
+import { cardFolder, ConnectCards, keepable, plain, signInsExist, startedByOf, unversioned, type ConnectAnswer } from '../../src/main/agents/connect';
 import { clientName } from '../../src/main/agents/connection';
 import type { ProcessInfo } from '../../src/main/agents/parent';
 import { agentsView, mcpCommand, quote, setupLines, signInsName, type SetupWhere } from '../../src/main/agents/settings';
@@ -91,6 +91,19 @@ describe('The connect card', () => {
     expect(await asked).toEqual<ConnectAnswer>({ grant: 'once', profileId: 'default' });
     expect(t.store.state.settings.agentsAllowed).toEqual([]);
   });
+
+  // [the path, the OS, keepable?]: U+FFFD is a mangled path everywhere; ? only on Windows, where no path holds one.
+  const paths: [string | null, NodeJS.Platform, boolean][] = [
+    ['C:/Tools/claude.exe', 'win32', true],
+    ['C:/Users/Jos?/claude.exe', 'win32', false],
+    ['/home/me/what?/claude', 'linux', true],
+    ['/Users/me/what?/claude', 'darwin', true],
+    ['/home/jos\uFFFD/claude', 'linux', false],
+    ['C:/Users/Jos\uFFFD/claude.exe', 'win32', false],
+    [process.execPath, process.platform, false],
+    [null, 'win32', false],
+  ];
+  it.each(paths)('keepable(%s) on %s: %s', (path, platform, want) => expect(keepable(path, platform)).toBe(want));
 
   it('an allowance kept by a mangled path (before #264) never lets an agent in without a card', async () => {
     const t = setup();

@@ -603,10 +603,11 @@ describe('Zero cost, and off in packaged builds', () => {
     const helper = builtHelper()!;
     const dir = mkdtempSync(join(tmpdir(), 'José Müller 太郎 '));
     const copied = join(dir, 'window-owner.exe');
-    const program = join(dir, 'node.exe');
+    // A small program that stays a while: Windows' own ping, copied into that folder.
+    const program = join(dir, 'PING.EXE');
     copyFileSync(helper, copied);
-    copyFileSync(process.execPath, program);
-    const child = spawn(program, ['-e', 'setTimeout(() => {}, 30000)'], { windowsHide: true, stdio: 'ignore' });
+    copyFileSync(join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'PING.EXE'), program);
+    const child = spawn(program, ['-n', '30', '127.0.0.1'], { windowsHide: true, stdio: 'ignore' });
     // Gone before its folder is: a running program's file can't be removed (and removing it under one took the test's
     // worker down).
     cleanup.push(async () => {
@@ -628,6 +629,24 @@ describe('Zero cost, and off in packaged builds', () => {
     });
     const { parseChain } = await import('../../src/main/agents/parent');
     expect(parseChain(answer)[0]).toMatchObject({ pid: child.pid, path: realpathSync.native(program) });
+  }, 30_000);
+
+  // #264 (Opus's SF1): with no console of its own (a detached start), the helper still answers, in UTF-8 with no BOM:
+  // setting the console's encoding threw there, and every verb, restrict-pipe too, failed.
+  it.runIf(process.platform === 'win32')('window-owner.exe started with no console: it answers, and its answer starts with its JSON', async () => {
+    const helper = builtHelper()!;
+    const { code, out } = await new Promise<{ code: number | null; out: string }>((done, fail) => {
+      const run = spawn(helper, ['chain', String(process.pid), '2'], { detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      let text = '';
+      run.stdout.setEncoding('utf8');
+      run.stdout.on('data', (d: string) => (text += d));
+      run.on('error', fail);
+      run.on('close', (exit) => done({ code: exit, out: text }));
+    });
+    expect(code).toBe(0);
+    expect(out[0]).toBe('[');
+    const { parseChain } = await import('../../src/main/agents/parent');
+    expect(parseChain(out).map((p) => p.pid)).toEqual([process.pid, process.ppid]);
   }, 30_000);
 
   it('who started it, from a chain the lookup gave (Windows’ helper): used as given, no second lookup', async () => {
