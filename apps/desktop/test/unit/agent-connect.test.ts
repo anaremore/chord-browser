@@ -71,7 +71,8 @@ describe('The connect card', () => {
     // #264, Carbon's B1: a path the lookup mangled (a profile folder like José's, read in the wrong code page) or Chord
     // itself is no program to keep an allowance by: anything that starts Chord could claim it.
     ['a path with U+FFFD in it', [{ ...claude, path: 'C:/Users/Jos\uFFFD/AppData/Local/Programs/Chord/Chord.exe' }], false],
-    ['a path with ? in it, Always pressed first', [{ ...claude, path: 'C:/Users/Jos?/AppData/Local/Programs/Chord/Chord.exe' }], true],
+    // (? marks one only on Windows: keepable's own table below.)
+    ['a path with U+FFFD in it, Always pressed first', [{ ...claude, path: 'C:/Users/M\uFFFDller/AppData/Local/Programs/Chord/Chord.exe' }], true],
     ['Chord itself', [{ ...claude, path: process.execPath }], false],
   ];
   it.each(unknown)('can’t tell who started it (%s): no Always allow, nothing kept', async (_what, chain, early) => {
@@ -107,7 +108,7 @@ describe('The connect card', () => {
 
   it('an allowance kept by a mangled path (before #264) never lets an agent in without a card', async () => {
     const t = setup();
-    const mangled = 'C:/Users/Jos?/AppData/Local/Programs/Chord/Chord.exe';
+    const mangled = 'C:/Users/Jos\uFFFD/AppData/Local/Programs/Chord/Chord.exe';
     t.store.dispatch({ t: 'settings.set', settings: { agentsAllowed: [{ name: 'Claude Code', parent: mangled, profileId: 'default', allowedAt: 0, lastUsedAt: 0 }] } });
     const asked = t.cards.ask(t.who(Promise.resolve([{ ...claude, path: mangled }])), new AbortController().signal);
     await tick();
