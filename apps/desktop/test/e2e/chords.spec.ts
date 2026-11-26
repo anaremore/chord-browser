@@ -10,6 +10,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { setReducedMotion } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -178,6 +179,47 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     await swipe(app, shell, steps(32, -6), 16, { phases: false });
     await selected('Personal');
     await expect.poll(() => paneCount(shell)).toBe(1);
+
+    // The chord changes under a swipe (the switcher, a key, another window): the swipe lets go, and the new chord's pane
+    // is in place, never left where the swipe had the old one's neighbors (#250).
+    const paneX = () =>
+      shell.evaluate(() => {
+        const pane = document.querySelector('[aria-label="Sidebar"] [aria-label="Unpinned tabs"]')!.closest('[class*="chordPane"]')!;
+        return new DOMMatrix(getComputedStyle(pane).transform).m41;
+      });
+    // The fingers rest a second mid-swipe, while the switcher goes to Work (the middle chord), then go on past half the
+    // width. The rest of the touch is held off until the OS's end: never a new swipe from Work on to Play (Carbon's B2).
+    const underIt = swipe(app, shell, [...steps(10, 6), pause(1_000), ...steps(22, 6)], 16);
+    await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
+    await chords.getByRole('tab', { name: 'Work' }).click();
+    await underIt;
+    // Long enough for a commit the swipe would have made of its own to land: it makes none, and Work stays.
+    await shell.waitForTimeout(800);
+    await selected('Work');
+    await expect.poll(() => paneCount(shell)).toBe(1);
+    await expect.poll(paneX).toBe(0);
+
+    // A chord picked while a commit settles: the pane leaving leaves, the new one is in place (Carbon's B1).
+    await swipe(app, shell, steps(32, 6), 16);
+    await selected('Play');
+    await chords.getByRole('tab', { name: 'Personal' }).click();
+    await selected('Personal');
+    await expect.poll(() => paneCount(shell)).toBe(1);
+    await expect.poll(paneX).toBe(0);
+
+    // The neighbor the swipe moves toward is deleted mid-swipe: it lets go at once, its pane in place, never sliding
+    // toward a chord that's gone (Carbon's SF3).
+    const workId = await shell.evaluate(async () => {
+      const { state } = await (window as unknown as { chord: { state: { snapshot(): Promise<{ state: { chords: Record<string, { name: string }> } }> } } }).chord.state.snapshot();
+      return Object.entries(state.chords).find(([, c]) => c.name === 'Work')![0];
+    });
+    const overGone = swipe(app, shell, [...steps(10, 6), pause(600), ...steps(22, 6)], 16);
+    await expect.poll(() => paneCount(shell)).toBeGreaterThan(1);
+    await app.evaluate((_, chordId) => (globalThis as unknown as { chordTestHooks: { deleteChord(id: string): void } }).chordTestHooks.deleteChord(chordId), workId);
+    await overGone;
+    expect(await paneX(), 'in place as the swipe ends').toBe(0);
+    await selected('Personal');
+    await expect.poll(() => paneCount(shell)).toBe(1);
   } finally {
     await app.close();
   }
@@ -215,6 +257,80 @@ test("a mouse's tilt wheel steps one chord per notch, and the minimal bar swipes
   }
 });
 
+
+test('motion settings: with reduced motion a swipe’s commit crossfades; with “Slide between chords” off it switches with no animation (#250)', async () => {
+  const app = await launch();
+  try {
+    const shell = await pageWhere(app, isShell);
+    const chords = await threeChords(shell);
+    const selected = (name: string) => expect(chords.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+    // Every frame as painted (sampled just after each paint) from `record` until `read`: the chord selected, and each
+    // chord pane's x, opacity, and whether it's the one coming in (not hidden from assistive tech).
+    type Pane = { x: number; opacity: number; coming: boolean };
+    type Frame = { selected: string | null; panes: Pane[] };
+    type Recorder = { frames: Frame[]; frame: number };
+    const record = () =>
+      shell.evaluate(() => {
+        const w = window as unknown as { recorder: Recorder };
+        w.recorder = { frames: [], frame: 0 };
+        const sample = () =>
+          w.recorder.frames.push({
+            selected: document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label') ?? null,
+            panes: [...document.querySelectorAll('[class*="chordPane"]')].map((pane) => {
+              const style = getComputedStyle(pane);
+              return { x: new DOMMatrix(style.transform).m41, opacity: Number(style.opacity), coming: !pane.hasAttribute('aria-hidden') };
+            }),
+          });
+        const tick = () => {
+          setTimeout(sample, 0);
+          w.recorder.frame = requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    const read = () =>
+      shell.evaluate(() => {
+        const w = window as unknown as { recorder: Recorder };
+        cancelAnimationFrame(w.recorder.frame);
+        return w.recorder.frames;
+      });
+    const fading = (f: Frame) => f.panes.some((p) => p.opacity > 0.05 && p.opacity < 0.95);
+
+    // Reduced motion: no slide, a 120 ms crossfade to the chord the swipe commits to (DESIGN.md §6.6), every pane where
+    // it belongs while it fades, not where the fingers left it (Carbon's SF1). As the OS has it, for motion too.
+    await shell.emulateMedia({ reducedMotion: 'reduce' });
+    await setReducedMotion(app, shell, true);
+    // The last click's slide over first: only the swipe's frames count.
+    await expect
+      .poll(() => shell.evaluate(() => [...document.querySelectorAll('[class*="chordPane"]')].map((p) => `${new DOMMatrix(getComputedStyle(p).transform).m41}/${getComputedStyle(p).opacity}`)))
+      .toEqual(['0/1']);
+    await record();
+    await swipe(app, shell, steps(32, 6), 16);
+    await selected('Work');
+    await shell.waitForTimeout(400);
+    const crossfade = (await read()).filter(fading);
+    expect(crossfade.length, 'a crossfade').toBeGreaterThan(0);
+    expect(crossfade.flatMap((f) => f.panes.map((p) => Math.round(p.x))), 'every pane in place while it fades').toEqual(crossfade.flatMap((f) => f.panes.map(() => 0)));
+
+    // "Slide between chords" off: no animation at all, not even the crossfade (§6.8), reduced motion or not; the chord
+    // coming in is in place in the first frame that shows it (Carbon's SF2).
+    await runAction(shell, 'app.settings');
+    const settings = await pageWhere(app, isSettings);
+    await settings.evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ motion: { chordSlide: false } }));
+    await settings.close();
+    await shell.bringToFront();
+    await record();
+    await swipe(app, shell, steps(32, -6), 16);
+    await selected('Personal');
+    await shell.waitForTimeout(400);
+    const frames = await read();
+    expect(frames.filter(fading).length, 'no crossfade').toBe(0);
+    const switched = frames.filter((f) => f.selected === 'Personal');
+    expect(switched.length).toBeGreaterThan(0);
+    expect(switched.flatMap((f) => f.panes.filter((p) => p.coming).map((p) => Math.round(p.x))), 'in place from its first frame').toEqual(switched.flatMap((f) => f.panes.filter((p) => p.coming).map(() => 0)));
+  } finally {
+    await app.close();
+  }
+});
 
 test('the color wheel: keys turn the hue, a click moves the nearest color, and a color dragged off goes', async () => {
   const app = await launch();

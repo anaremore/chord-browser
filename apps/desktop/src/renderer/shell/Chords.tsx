@@ -72,7 +72,8 @@ const PANE_VARIANTS = {
   enter: (m: PaneMotion) => (m.kind === 'swipe' ? { opacity: 1 } : m.kind === 'fade' ? { opacity: 0 } : { opacity: 0, x: m.dir * 24 }),
   center: (m: PaneMotion) => (m.kind === 'swipe' ? { opacity: 1 } : m.kind === 'fade' ? { opacity: 1, transition: m.transition } : { opacity: 1, x: 0 }),
   exit: (m: PaneMotion) =>
-    m.kind === 'swipe' ? { x: m.exitTo, transition: m.transition } : m.kind === 'fade' ? { opacity: 0, transition: m.transition } : { opacity: 0, x: m.dir * -24 },
+    // A crossfade (reduced motion) fades the pane where it belongs, not where the fingers left it: its x at once.
+    m.kind === 'swipe' ? { x: m.exitTo, transition: m.transition } : m.kind === 'fade' ? { opacity: 0, x: 0, transition: { ...m.transition, x: { duration: 0 } } } : { opacity: 0, x: m.dir * -24 },
 };
 
 /**

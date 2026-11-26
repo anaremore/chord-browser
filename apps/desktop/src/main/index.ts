@@ -1345,6 +1345,8 @@ if (!app.requestSingleInstanceLock()) {
         passwordEvents: () => passwordEvents.slice(),
         /** A trackpad's gesture phase to each window's shell, as macOS sends with a two-finger swipe (#198). */
         gesturePhase: (phase: 'begin' | 'end' | 'fling') => browser!.gesturePhaseForTests(phase),
+        /** A chord deleted from elsewhere (another window, the store), as the shell may not (#250: a swipe's neighbor). */
+        deleteChord: (chordId: string) => browser!.store.dispatch({ t: 'chord.delete', chordId }),
         /** HTTP sign-in boxes (S17 §10): the ones waiting, and what became of the last answers (#199). No secrets. */
         httpAuth: () => httpAuth.forTests(),
         /** The vault's state and how many sign-ins it holds (no usernames, no passwords): what a test can say was saved. */
