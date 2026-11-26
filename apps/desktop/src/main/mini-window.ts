@@ -279,7 +279,8 @@ export class MiniWindows {
   /** A shortcut pressed in a mini window: the few that make sense there. Returns whether it was handled. */
   run(action: string, contents: WebContents): boolean {
     const mini = this.forContents(contents);
-    if (!mini) return false;
+    // Fading out after Open in: its page is a tab's now (Neon's NN1, round 1 of #323).
+    if (!mini || mini.promoted) return false;
     const page = pageOf(mini.page);
     if (!page) return false;
     switch (action) {

@@ -369,6 +369,7 @@ export class Browser {
     setShortcutOverrides(this.store.state.settings.shortcuts);
     this.safeBrowsing = new SafeBrowsingGuard({
       stopWaiting: (contents) => void this.tabs.stopWaiting(contents),
+      navigate: (nodeId, url) => this.tabs.navigate(nodeId, url),
       state: () => this.store.state,
       dispatch: (command) => this.store.dispatch(command),
       enabled: () => options.safeBrowsing.enabled(),
@@ -469,6 +470,7 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       sessionFor: (node) => options.profileSession(this.store.state.chords[node.chordId]?.profileId ?? 'default'),
       proxyReady: (session) => options.proxyReady(session),
+      navigationQueued: (contents) => this.safeBrowsing.navigationQueued(contents),
       // The archive is Chord's only page shown as a tab so far.
       createInternalView: () => createUiView(options.uiSession, 'archive'),
       windowFor: (nodeId) => this.windowShowing(nodeId),
@@ -2203,7 +2205,8 @@ export class Browser {
     const state = this.store.state;
     const chord = state.chords[chordId];
     if (!chord || chord.private) return;
-    const url = page.getURL();
+    // Before its first page came, its address is where it's going (Neon's NSF2, round 1 of #323).
+    const url = this.tabs.floatingAddress(nodeId) ?? page.getURL();
     const onChord = [...this.windows.values()].find((x) => !x.isPrivate && state.windows[x.id]?.activeChordId === chordId);
     const w = onChord ?? this.normalWindowForLinks({ quiet: true });
     if (!w) return;

@@ -67,6 +67,8 @@ export interface TabManagerDeps {
   agentTab?(nodeId: NodeId): boolean;
   /** Something an agent's tab tried that Chord refused (a popup or a new tab), for the agent's next result. */
   onAgentRefused?(nodeId: NodeId, what: AgentHeld, detail: string): void;
+  /** A navigation asked of a tab waits for its session (Safe Browsing's guard: Neon's NSF1b, round 1 of #323). */
+  navigationQueued?(contents: WebContents): void;
 }
 
 /** What an agent's tab held or refused: a page dialog, a file picker, a popup or new tab, a download. */
@@ -355,7 +357,9 @@ export class TabManager {
       if (nav) {
         // Back where it was: same page, same back/forward list, same scroll position.
         contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
-          if (!contents.isDestroyed() && contents.navigationHistory.length() === 0) void contents.loadURL(url).catch(() => {});
+          // Its address instead, once the session is ready (Neon's NN2, round 1 of #323); not over a load already waiting.
+          if (contents.isDestroyed() || contents.navigationHistory.length() > 0 || this.waiting.has(contents)) return;
+          this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
         });
       } else {
         void contents.loadURL(url).catch(() => {
@@ -395,8 +399,18 @@ export class TabManager {
       };
       contents.once('did-navigate', arrived);
       contents.once('did-fail-load', arrived);
-      started = true;
-      load();
+      // Through the gate again: the session may have started changing while the hold armed or the page primed (Neon's
+      // NB2, round 1 of #323). This turn replaces the one that ran `due` without overtaking it, and a load asked for
+      // over it before it starts still overtakes it.
+      this.loadTurns.set(contents, {});
+      this.whenProxied(
+        contents,
+        () => {
+          started = true;
+          load();
+        },
+        overtake,
+      );
     };
     // Its first page is on its way from now (a read or open_tab waits for it, never the blank page before it).
     if (armed) setFirstLoadPending(contents, true);
@@ -445,6 +459,17 @@ export class TabManager {
     return view;
   }
 
+  /**
+   * A floating page's address: where it is, or, before its first page came (waiting for the session), where it's going
+   * (Neon's NSF2, round 1 of #323: Open in, or Peek's Open in Today, never opens a blank tab).
+   */
+  floatingAddress(nodeId: NodeId): string | undefined {
+    const page = this.floating.get(nodeId);
+    if (!page) return undefined;
+    const contents = pageOf(page.view);
+    return contents?.getURL() || page.url;
+  }
+
   /** The floating page with this contents, if it is one. */
   floatingFor(contents: WebContents): NodeId | undefined {
     for (const [id, page] of this.floating) if (page.view.webContents === contents) return id;
@@ -485,7 +510,9 @@ export class TabManager {
       return;
     }
     const contents = pageOf(view);
-    if (contents && !isInternalUrl(url)) this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
+    if (!contents || isInternalUrl(url)) return;
+    this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
+    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
   }
 
   /** Silence the tab's page, or let it be heard. A tab without a page is silenced when it gets one (ensure). */

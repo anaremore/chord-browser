@@ -395,6 +395,28 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.loaded()).toEqual([]);
   });
 
+  it('a restored history that fails while the session changes (Neon’s NN2 on #323): its address loads once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    t.manager.destroy(NODE);
+    t.manager.restoreHistoryOnLoad(NODE, { entries: [{ url: FIRST, title: '' }], index: 0 } as never);
+    const rules = held();
+    waits.push(rules);
+    const page = (t.manager.ensure(NODE) as unknown as FakeView).page as FakeContents;
+    let fail!: (e: Error) => void;
+    (page.navigationHistory as unknown as { restore: unknown }).restore = vi.fn(() => new Promise((_r, reject) => (fail = reject)));
+    rules.resolve();
+    await tick();
+    const proxy = held();
+    waits.push(proxy);
+    fail(new Error('no'));
+    await tick();
+    expect(page.loadURL).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual([FIRST]);
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);
