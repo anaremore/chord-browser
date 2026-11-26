@@ -8,11 +8,11 @@
  * Pause, Change passphrase and Turn off. A problem that needs you shows one
  * card at a time. Main and chord-data do the work; this page only asks.
  */
-import { passphraseProblem, suggestPassphrase, type FolderInspection, type SyncComputer } from '@chord/core';
+import { passphraseProblem, plural, suggestPassphrase, type FolderInspection, type SyncComputer } from '@chord/core';
 import type { SyncStepResult, SyncView } from '@chord/ipc';
 import { Check } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
-import { plural, ProblemCard } from '../shared/ImportPanel';
+import { ProblemCard } from '../shared/ImportPanel';
 import { api } from './api';
 import { RadioGroup, Row, Switch } from './controls';
 import styles from './Settings.module.css';

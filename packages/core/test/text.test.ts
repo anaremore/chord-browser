@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeDownload, firstGrapheme, formatBytes, openedAgo, parseThemeCode, themeCode, type Download } from '../src';
+import { describeDownload, firstGrapheme, formatBytes, openedAgo, parseThemeCode, plural, themeCode, titleCase, type Download } from '../src';
 
 describe('firstGrapheme', () => {
   it('keeps whole emoji, including skin tones, families and flags', () => {
@@ -79,5 +79,19 @@ describe('openedAgo', () => {
 
   it('treats a time in the future as now', () => {
     expect(openedAgo(now + 10 * min, now)).toBe('Opened just now');
+  });
+});
+
+describe('plural and titleCase: the one of each (#291)', () => {
+  it('plural: the count, grouped, and the noun as many needs it', () => {
+    expect(plural(1, 'tab')).toBe('1 tab');
+    expect(plural(0, 'tab')).toBe('0 tabs');
+    expect(plural(1204, 'page')).toBe('1,204 pages');
+    expect(plural(2, 'person', 'people')).toBe('2 people');
+  });
+
+  it('titleCase: a camelCase id as words', () => {
+    expect(titleCase('deepSea')).toBe('Deep Sea');
+    expect(titleCase('ocean')).toBe('Ocean');
   });
 });

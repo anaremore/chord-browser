@@ -5,7 +5,7 @@
  * it come in. First run's step and Settings → Your data share it; each puts its
  * own buttons around it. Main does the reading, off main's own thread.
  */
-import { IMPORT_BROWSER_NAMES, type ImportChoices, type ImportTarget } from '@chord/core';
+import { IMPORT_BROWSER_NAMES, plural, type ImportChoices, type ImportTarget } from '@chord/core';
 import type { ImportApi, ImportProblem, ImportProgress, ImportSource, ImportSummary } from '@chord/ipc';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRoving } from './a11y';
@@ -37,7 +37,6 @@ export interface ImportFlow {
 }
 
 const numbers = new Intl.NumberFormat('en-US');
-export const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 
 /**
  * The import's state, start to finish. With `autoPick`, the first browser
