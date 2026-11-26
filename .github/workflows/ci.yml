@@ -65,10 +65,14 @@ permissions:
 
 concurrency:
   # One group per pull request, and one per merge group's ref (gh-readonly-queue/main/pr-<n>-<sha>): a new push,
-  # or the group run again, cancels the run it replaces. Every other run (main, a run by hand) has a group of its
-  # own, so it's never cancelled, and never waits behind or replaces another run.
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.ref) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+  # or the group run again, cancels the run it replaces. A push to main does too (#308): the newer merge's run tests
+  # everything the older one did, and each pull request's merge tier already tested it against main, so the only loss
+  # is which merge of the few in between broke main. Those runs were overtaken 64 times in 89 and held the macOS
+  # runners `ready` pull requests wait for. A cancelled run is `cancelled`, not `failure`, so ci-main-failed.yml stays
+  # quiet. Every other run (nightly, a run by hand) has a group of its own, so it's never cancelled, and never waits
+  # behind or replaces another run.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.ref) || github.event_name == 'push' && format('push-{0}', github.ref) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push' }}
 
 jobs:
   # Whether anything but docs changed. Only a pull request can skip anything: the website (site/) is built and
