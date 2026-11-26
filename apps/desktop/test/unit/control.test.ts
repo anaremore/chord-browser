@@ -11,7 +11,7 @@ import type { WebContents, WebContentsView } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ControlAgent, type ControlCard } from '../../src/main/control/gate';
 import type { ActHost, ControlScope, ToolMemory } from '../../src/main/control/scope';
-import { heldStep, ONLY_TEXT, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
+import { heldStep, ONLY_TEXT, PART_REFUSALS, runControlTool, STILL_LOADING, stepSubmits, withOutline, type ControlBrowser } from '../../src/main/control/tools';
 import { runBatch } from '../../src/main/control/batch';
 import { focusToGiveBack } from '../../src/main/control/page';
 import { imageTokens } from '../../src/main/control/extract';
@@ -1262,7 +1262,7 @@ describe('acting through the gate (S18 M2c)', () => {
   ];
   /** A page answering the snapshot script with ELEMENTS, and each act step; `steps` records them. */
   /** How a test changes the page's answers: a field turned sensitive, the focus elsewhere, something over the point. */
-  type Twist = { field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
+  type Twist = { part?: (events: EventEmitter) => unknown; field?: Field; focused?: boolean; hit?: { role: string; name: string }; moved?: boolean; lost?: boolean; noMove?: boolean; there?: boolean; noMoveOff?: boolean; stray?: boolean; unguard?: 'timeout' | 'gone' | 'expired'; noRisk?: boolean; keydownPassed?: boolean; passed?: number; movedTimes?: number; unseen?: boolean; goneAfterKey?: boolean; pressUnseen?: boolean; watchedAt?: number; sent?: () => { type: string }[]; multiline?: boolean; codes?: string[]; replaced?: Record<string, number>; others?: number; unchanged?: boolean; has?: boolean; place?: (op: string) => { items: string; path: string }; read?: { url?: string; cut?: Record<string, boolean>; meanwhile?: (events: EventEmitter) => void; extra?: unknown[] }; at?: { url: string } };
   const page = (steps: string[], onAct?: (events: EventEmitter, op: string) => void, twist: Twist = {}) => async (code: string, events: EventEmitter) => {
     // The page preload's guard (preload/agent-guard.ts): what it stopped, as if the focus moved between the check and the input.
     twist.codes?.push(code);
@@ -1295,6 +1295,11 @@ describe('acting through the gate (S18 M2c)', () => {
       // Stopped the first movedTimes inputs only (the page took the focus, then let it be).
       if (twist.movedTimes !== undefined) return { moved: twist.movedTimes-- > 0, lost: false, keydownPassed: false, passed: 0 };
       return { moved: Boolean(twist.moved), lost: Boolean(twist.lost), keydownPassed: Boolean(twist.keydownPassed), passed: twist.passed ?? (twist.keydownPassed ? 1 : 0) };
+    }
+    // read_tab by a part's ref (#207): the part's script, as the test says it answers.
+    if (code.includes('readText(el, true)')) {
+      twist.codes?.push('part');
+      return twist.part ? twist.part(events) : { ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'Order 12 shipped. Order 15 is on its way.' };
     }
     if (code.includes('new MutationObserver(() =>')) {
       onAct?.(events, 'settle');
@@ -3357,6 +3362,126 @@ describe('acting through the gate (S18 M2c)', () => {
         expect(refusal(await t.call('snapshot', { tab_id: t.tab, text: false, start: 1 })).refused, what).toBe(says);
         expect(t.reads(), what).toBe(1);
       }
+    });
+  });
+
+
+  describe('read_tab by a part’s container ref (S18 M2g-2, #207)', () => {
+    const ORDERS = { depth: 0, role: 'region', name: 'Orders', sid: 50, box: 0 };
+    const NEVER_READ = 'This page can never be read (a private window, a Chord page, or a site the user keeps private).';
+    /** An agent's tab whose page has a part (Orders), snapshot taken: the scope reads parts. */
+    const withParts = async (opts: { boxes?: boolean } = {}) => {
+      const twist: Twist = { read: { extra: [ORDERS] } };
+      const t = await acting({ twist });
+      if (opts.boxes !== false) (t.scope as { boxes?: boolean }).boxes = true;
+      const snap = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { content: string; page_id: string };
+      // Its c ref, numbered as element refs are (round 1 of #260): read from the outline.
+      const part = /region "Orders" \[ref=(c\d+)\]/.exec(snap.content)?.[1] ?? 'c0';
+      return { ...t, twist, snap, part };
+    };
+    type Part = { trust: string; source: string; content: string; part: { ref: string; role: string; name: string }; range: { start: number; end: number; total: number } };
+
+    it('the outline gives the part a c ref, and read_tab reads just its text: untrusted, which part, in ranges', async () => {
+      const t = await withParts();
+      expect(t.snap.content).toMatch(/- region "Orders" \[ref=c\d+\]/);
+      const out = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: t.part })).text!) as Part;
+      expect(out).toMatchObject({ trust: 'untrusted', source: 'web_page', content: 'Order 12 shipped. Order 15 is on its way.', part: { ref: t.part, role: 'region', name: 'Orders' } });
+      // Capped and in ranges, as read_tab is.
+      const range = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: t.part, start: 9, length: 7 })).text!) as Part;
+      expect(range.content).toBe('shipped');
+      expect(range.range).toEqual({ start: 9, end: 16, total: 41 });
+    });
+
+    it('never given where the scope doesn’t read parts (the assistant): no c refs in its outline', async () => {
+      const t = await withParts({ boxes: false });
+      expect(t.snap.content).toContain('- region "Orders"');
+      expect(t.snap.content).not.toMatch(/ref=c/);
+    });
+
+    it('refused, and never read, when it isn’t the part the outline showed, or the page may not be read', async () => {
+      // [the case, what happens, what it says]
+      const table: [string, (t: Awaited<ReturnType<typeof withParts>>) => Promise<unknown> | void, string][] = [
+        ['a ref never given', () => undefined, PART_REFUSALS.unknown],
+        ['the part changed in the page (its role, name, or gone)', (t) => void (t.twist.part = () => ({ ok: false, why: 'stale' })), PART_REFUSALS.stale],
+        ['the page went to another document since the snapshot', (t) => void t.pages.get('n1')!.events.emit('did-navigate'), PART_REFUSALS.stale],
+        ['the page went to another document as it was read', (t) => void (t.twist.part = (events) => (events.emit('did-navigate'), { ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'x' })), PART_REFUSALS.stale],
+        ['the page an editor', (t) => void (t.twist.part = () => ({ ok: false, why: 'editor' })), PART_REFUSALS.editor],
+        ['the site made Never since', (t) => void ((t.scope as { neverSites: () => readonly string[] }).neverSites = () => ['private.test', 'news.test']), NEVER_READ],
+        ['the read from a Never address', (t) => void (t.twist.part = () => ({ ok: true, url: 'https://private.test/inbox', role: 'region', name: 'Orders', text: 'secret' })), NEVER_READ],
+        ['Settings’ Nothing as it was read', (t) => void (t.twist.part = () => (((t.scope as { off: () => string | null }).off = () => 'The user set you to read nothing, in Settings → Assistant.'), { ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'x' })), 'The user set you to read nothing, in Settings → Assistant.'],
+      ];
+      for (const [what, arrange, says] of table) {
+        const t = await withParts();
+        await arrange(t);
+        const out = await t.call('read_tab', { tab_id: t.tab, ref: what === 'a ref never given' ? 'c999999' : t.part });
+        expect(out.isError, what).toBe(true);
+        expect(refusal(out).refused, what).toBe(says);
+        expect(out.text, what).not.toMatch(/secret|Order 12/);
+      }
+    });
+
+    it('a c ref from the page before never reads one of this page: the page’s own ids start over, refs never do (round 1 of #260)', async () => {
+      const t = await withParts();
+      // The tab goes to another document with a part the page script numbers the same.
+      await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+      const b = JSON.parse((await t.call('snapshot', { tab_id: t.tab })).text!) as { content: string };
+      expect(b.content).toMatch(/- region "Orders" \[ref=c\d+\]/);
+      expect(b.content).not.toContain(`[ref=${t.part}]`);
+      t.twist.part = () => ({ ok: true, url: 'https://news.test/b', role: 'region', name: 'Orders', text: 'Page B’s orders.' });
+      const old = await t.call('read_tab', { tab_id: t.tab, ref: t.part });
+      expect(old.isError).toBe(true);
+      expect(refusal(old).refused).toBe(PART_REFUSALS.unknown);
+      expect(old.text).not.toContain('Page B');
+    });
+
+    it('Stop as it was read: stopped, and nothing of it kept (round 1 of #260)', async () => {
+      const t = await withParts();
+      (t.scope.memory as { readFrom?: Set<string> }).readFrom = new Set();
+      t.twist.part = () => (t.agent.stop(), { ok: true, url: 'https://elsewhere.test/a', role: 'region', name: 'Orders', text: 'x' });
+      expect(refusal(await t.call('read_tab', { tab_id: t.tab, ref: t.part })).refused).toBe(CONTROL_REFUSALS.stopped);
+      // Never marked as read from where it was (what typing in a page checks), nor in the activity.
+      expect([...t.scope.memory.readFrom!]).toEqual([]);
+      expect(t.activity).not.toContain('Read a part of “Article”');
+    });
+
+    it('read, it’s marked as read from where it was, as any read is (round 1 of #260)', async () => {
+      const t = await withParts();
+      (t.scope.memory as { readFrom?: Set<string> }).readFrom = new Set();
+      t.twist.part = () => ({ ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'x' });
+      await t.call('read_tab', { tab_id: t.tab, ref: t.part });
+      expect([...t.scope.memory.readFrom!]).toEqual(['https://news.test']);
+    });
+
+    it('an outside agent’s part over 20000 characters reads 20000 when it asks for no length, or one that isn’t a number (round 1 of #260)', async () => {
+      const t = await withParts();
+      (t.scope as { readDefault?: number }).readDefault = AGENT_READ_DEFAULT;
+      t.twist.part = () => ({ ok: true, url: 'https://news.test/a', role: 'region', name: 'Orders', text: 'abcdefghij'.repeat(5_000) });
+      for (const length of [undefined, Number.NaN]) {
+        const out = JSON.parse((await t.call('read_tab', { tab_id: t.tab, ref: t.part, ...(length === undefined ? {} : { length }) })).text!) as Part;
+        expect(out.range, String(length)).toEqual({ start: 0, end: 20_000, total: 50_000 });
+      }
+    });
+
+    it('a c ref is read-only: every acting tool, and batch, refuses it before anything is pressed', async () => {
+      const t = await withParts();
+      const calls: [string, Record<string, unknown>][] = [
+        ['click', {}],
+        ['type', { text: 'hello' }],
+        ['press_key', { key: 'Enter' }],
+        ['select_option', { option: 'Express' }],
+        ['hover', {}],
+      ];
+      t.steps.length = 0;
+      for (const [tool, args] of calls) {
+        const out = await t.call(tool, { tab_id: t.tab, ref: t.part, ...args });
+        expect(refusal(out).refused, tool).toBe(PART_REFUSALS.act);
+      }
+      const batched = await runBatch(t.scope, t.browser, { tab_id: t.tab, steps: [{ tool: 'click', ref: 'e1' }, { tool: 'click', ref: t.part }] }, new AbortController().signal);
+      expect(batched.isError).toBe(true);
+      expect(batched.text).toContain(PART_REFUSALS.act);
+      // Nothing was described, pointed at or pressed.
+      expect(t.steps).toEqual([]);
+      expect(t.cards).toHaveLength(0);
     });
   });
 

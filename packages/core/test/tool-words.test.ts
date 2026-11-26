@@ -23,7 +23,10 @@ const assistantWire = (acting: boolean) => assistantTools(true, acting, true).ma
 // Raised by slice 3b (#205), snapshot's text: false: agents 2,152 + 41 (+23), the assistant 1,812 acting with its flag (+22)
 // and 1,137 reading only (+22). The reason: an outline without the page's text is a fraction of the full one (75% smaller
 // on the 50-section page: its E2E), for a look at a page's structure.
-const BUDGET = { agents: 2213, assistantActing: 1832, assistantReading: 1157 };
+// Raised by #207, read_tab by a part's container ref: agents 2,212 + 41 (+56: the ref and its words, and c refs'
+// lifetime said on snapshot and read_tab, round 1 of #260). The reason: one part of a long page read by its ref, never
+// the page in ranges (its E2E measures the 50-section journey).
+const BUDGET = { agents: 2273, assistantActing: 1832, assistantReading: 1157 };
 
 describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
   it('outside agents: tools/list and the instructions sent with initialize', () => {
@@ -60,6 +63,9 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     // read_tab's ranges (#206, round 1 of #252): an outside agent's default and most, the assistant's most.
     ['agents', 'read_tab', /ranges of 20000 characters \(length: up to 40000\)/],
     ['assistant', 'read_tab', /ranges of up to 40000 characters/],
+    ['agents', 'read_tab', /ref: a part's ref \(c1, c2…\) from your latest snapshot only, to read just its text/],
+    // c refs' lifetime said plainly (round 1 of #260): the latest snapshot's only.
+    ['agents', 'snapshot', /Parts \(regions, articles…\) have c refs, from your latest snapshot only, for read_tab/],
     ['agents', 'snapshot', /text: false: the structure without the page's text/],
     ['assistant', 'snapshot', /text: false: the structure without the page's text/],
     ['agents', 'open_tab', /with snapshot, its outline as snapshot gives it/],

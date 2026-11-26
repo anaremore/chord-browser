@@ -50,6 +50,8 @@ export async function readTool(call: Call, tool: AssistantToolName, args: Record
   // The page read, taken before reading (which starts following its navigations): one that moved on meanwhile has no id.
   const pageId = page.id;
   const ref = scope.refs.refFor(node.id);
+  // One part, by its container ref (#207): where the scope reads parts.
+  if (tool === 'read_tab' && args['ref'] !== undefined && scope.boxes) return readPart(call, node, page, pageId, ref, args);
   if (tool === 'tab_screenshot') {
     // What's on screen: a tab in reader view shows its article (its page waits, detached, where no picture can be taken).
     const reader = pageOf(browser.readers.viewFor(node.id));
@@ -95,6 +97,41 @@ export async function readTool(call: Call, tool: AssistantToolName, args: Record
 
 /** A number argument as a whole number, or none (NaN, Infinity, anything else): round 1 of #252, SF-1. */
 const wholeArg = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : undefined);
+
+/** read_tab by a part's ref (#207): Chord's words, never the page's. */
+export const PART_REFUSALS = {
+  unknown: 'That isn’t a ref of a part of that tab. Parts’ refs (c1, c2…) come from your latest snapshot of it.',
+  stale: 'That part has changed since your snapshot, or the page moved on: call snapshot again.',
+  editor: 'That part is an editor: what shows in it is what’s typed there, so it isn’t read.',
+  act: 'A c ref names a part of a page to read with read_tab, never one to act on: use an element’s ref (e1, e2…).',
+} as const;
+
+/**
+ * read_tab by a part's container ref (S18 M2g-2, #207): the part the agent's latest snapshot showed, found again in the
+ * page and checked as an action checks its element (still there, its role and name as the outline gave them, shown), on
+ * the page it's on now. Read under read_tab's rules (its card, the scope, Never sites before and after, on the read's own
+ * address), by the page read's own walk, strict (never a field's value, an editor's contents, an ARIA text field's).
+ * Changed means refused as stale, never read. Capped and in ranges as read_tab is, with which part it is.
+ */
+async function readPart(call: Call, node: TabNode, page: ControlPage, pageId: string, tabRef: string, args: Record<string, unknown>): Promise<ToolOutput> {
+  const refs = call.scope.memory.elements?.get(node.id);
+  const found = refs?.resolveBox(args['ref'], page.id) ?? { ok: false as const, why: 'unknown' as const };
+  if (!found.ok) return refuse(found.why === 'unknown' ? PART_REFUSALS.unknown : PART_REFUSALS.stale);
+  const answer = await page.readBox(call.scope.agent.id, found.token, found.box);
+  if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
+  const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(answer?.ok ? [answer.url] : []));
+  if (after) return refuse(after);
+  if (!answer) return refuse('That page could not be read.');
+  if (!answer.ok) return refuse(answer.why === 'editor' ? PART_REFUSALS.editor : PART_REFUSALS.stale);
+  // The page moved on as it was read: what was read may be another page's.
+  if (!sameId(page, pageId)) return refuse(PART_REFUSALS.stale);
+  markRead(call.scope.memory, node.id, answer.url);
+  const start = wholeArg(args['start']) ?? 0;
+  const length = wholeArg(args['length']) ?? call.scope.readDefault;
+  const text = pageResult({ ref: tabRef, url: answer.url, text: answer.text, start, ...(length !== undefined ? { length } : {}), retrievedAt: Date.now(), pageId, part: { ref: String(args['ref']), role: answer.role, name: answer.name } });
+  await call.activity('read_tab', `Read a part of “${node.title || safeHost(node.url)}”`, node.url);
+  return { text };
+}
 
 /**
  * A PDF in Chromium's viewer: its bytes through the tab's own session, its

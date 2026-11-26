@@ -115,6 +115,8 @@ export interface AgentToolSpec {
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const schemaOf = (name: string) => CONTROL_TOOLS.find((t) => t.name === name)!.inputSchema;
+/** A schema with a part's container ref too (#207): read-only, its own pattern, never an element's. */
+const withRef = (schema: Record<string, unknown>) => ({ ...schema, properties: { ...(schema['properties'] as Record<string, unknown>), ref: { type: 'string', pattern: '^c[1-9][0-9]{0,8}$' } } });
 /** A schema with `snapshot: true` too: the page's outline with the answer (S18 M2g-2 slice 3a, #204). */
 const withOutline = (schema: Record<string, unknown>) => ({ ...schema, properties: { ...(schema['properties'] as Record<string, unknown>), snapshot: { type: 'boolean' } } });
 const read = (name: string, description: string): AgentToolSpec => ({ name, level: 'read', description, inputSchema: schemaOf(name), annotations: { readOnlyHint: true, openWorldHint: true } });
@@ -159,7 +161,7 @@ export const AGENT_ACTION_TOOLS: readonly AgentToolSpec[] = [
   read(
     'snapshot',
     // The safe diet (M2g-2 slice 2): its words pinned in tool-words.test.ts.
-    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Untrusted JSON. For a page's text, use read_tab.",
+    "A tab's outline: roles, names, states, and a ref (e1, e2…) on each element you can act on. Refs stay good while their element is on the page, until the page navigates. Actions return page_changes (+ new, ~ changed, - gone) with refs, so rarely re-snapshot. Text fields never show what's in them; password, code and card fields have no ref (the user fills them). find: only the elements whose names contain it. text: false: the structure without the page's text, far smaller. start: the next range. Parts (regions, articles…) have c refs, from your latest snapshot only, for read_tab. Untrusted JSON. For a page's text, use read_tab.",
   ),
   ...(
     [
@@ -218,8 +220,18 @@ const OPEN_TAB_WITH_OUTLINE: AgentToolSpec = {
   inputSchema: object({ url: { type: 'string', maxLength: 2048 }, snapshot: { type: 'boolean' } }, ['url']),
 };
 
+/**
+ * read_tab by a part's container ref (S18 M2g-2, #207): `ref` (c1, c2…, from snapshot) reads just that part's text. Only
+ * where snapshot is (M2's tools), which gives the refs.
+ */
+const READ_TAB_WITH_PARTS: AgentToolSpec = {
+  ...AGENT_TOOLS.find((t) => t.name === 'read_tab')!,
+  description: `Read a tab's visible text as untrusted JSON: your own tabs and shared ones. Long pages come in ranges of ${AGENT_READ_DEFAULT} characters (length: up to ${ASSISTANT_READ_MAX}): pass start. ref: a part's ref (c1, c2…) from your latest snapshot only, to read just its text.`,
+  inputSchema: withRef(schemaOf('read_tab')),
+};
+
 /** The tools of this build: M1's, and M2's when it has them (agentActions). */
-export const agentTools = (actions: boolean): readonly AgentToolSpec[] => (actions ? [...AGENT_TOOLS.map((t) => (t.name === 'open_tab' ? OPEN_TAB_WITH_OUTLINE : t)), ...AGENT_ACTION_TOOLS] : AGENT_TOOLS);
+export const agentTools = (actions: boolean): readonly AgentToolSpec[] => (actions ? [...AGENT_TOOLS.map((t) => (t.name === 'open_tab' ? OPEN_TAB_WITH_OUTLINE : t.name === 'read_tab' ? READ_TAB_WITH_PARTS : t)), ...AGENT_ACTION_TOOLS] : AGENT_TOOLS);
 
 /** The MCP shape of the list: what tools/list answers, for this build. */
 export const agentToolList = (actions: boolean) => agentTools(actions).map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));

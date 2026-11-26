@@ -364,6 +364,40 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 1 ? 'The first word is juniper. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +
       '</main>',
+    // #205's measure, on the page as it was then (#207 makes a section named by aria-label a region, which collapses as
+    // rows alike): its sections plain, never regions.
+    '/article50-plain':
+      '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
+      Array.from({ length: 50 }, (_, i) => `<section><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +
+      '</main>',
+    // #207: parts read by their container refs, and what a part's read never gives.
+    '/parts':
+      '<title>Parts</title><main><nav aria-label="Site"><a href="/">Home</a></nav>' +
+      '<section aria-label="Orders"><h2>Orders</h2><p>Shown words: order 12 shipped.</p>' +
+      '<p style="display:none">hidden-display</p><p style="visibility:hidden">hidden-visibility</p><p style="opacity:0">hidden-opacity</p><p hidden>hidden-attribute</p><div inert><p>hidden-inert</p></div>' +
+      '<input aria-label="Note" value="field-value-secret"><textarea aria-label="Message">textarea-secret</textarea>' +
+      '<div contenteditable="true">editor-secret</div><div role="textbox">aria-textbox-secret</div><span role="searchbox">aria-searchbox-secret</span><div role="combobox">aria-combobox-secret</div>' +
+      '<iframe title="Chat" srcdoc="<p>frame-inside-secret</p>"></iframe><button>Cancel order</button></section>' +
+      '<article aria-label="Story"><p>Story words.</p></article><table aria-label="Prices"><tr><td>Tea</td><td>3</td></tr></table>' +
+      // Parts the page read never enters (round 1 of #260): an off-screen wrapper, a button, a hidden wrapper shown by CSS,
+      // an ARIA text field, an inert wrapper, a display: contents part that's hidden; a part that is a shadow host; and
+      // sections whose label is empty or names nothing (no region).
+      '<div style="position:absolute;left:-10000px;top:-10000px"><section aria-label="Offscreen"><p>offscreen-secret</p></section></div>' +
+      '<button><section aria-label="In a button"><p>button-secret</p></section></button>' +
+      '<div hidden style="display:block"><section aria-label="Hidden shown"><p>hiddenshown-secret</p></section></div>' +
+      '<div role="combobox"><section aria-label="In a combobox"><p>combobox-part-secret</p></section></div>' +
+      '<div inert><section aria-label="Inert part"><p>inert-part-secret</p></section></div>' +
+      '<section aria-label="Contents hidden" style="display:contents;visibility:hidden"><p>contents-secret</p></section>' +
+      '<div id="shadowhost" role="region" aria-label="Shadowed"></div><script>document.getElementById("shadowhost").attachShadow({ mode: "open" }).innerHTML = "<p>shadow-words</p>";</script>' +
+      '<section aria-label=""><p>empty-label-words</p></section><section aria-labelledby="no-such-id"><p>dangling-label-words</p></section>' +
+      // Parts the test changes after the snapshot (round 2 of #260): each wrapper made inert, hidden but shown by CSS, an
+      // editor; a shadow host made inert; a part adopted into the frame; a part made inert itself.
+      '<div id="w-inert"><section aria-label="Inert later"><p>inertlater-secret</p></section></div>' +
+      '<div id="w-hidden"><section aria-label="Hidden later"><p>hiddenlater-secret</p></section></div>' +
+      '<div id="w-editor"><section aria-label="Editor later"><p>editorlater-secret</p></section></div>' +
+      '<div id="w-shadow"></div><script>document.getElementById("w-shadow").attachShadow({ mode: "open" }).innerHTML = "<section aria-label=\\"In a shadow\\"><p>shadowpart-secret</p></section>";</script>' +
+      '<section id="adopted" aria-label="Adopted"><p>adopted-secret</p></section>' +
+      '<section id="self-inert" aria-label="Self inert"><p>selfinert-secret</p></section></main>',
     '/article50':
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +

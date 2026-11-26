@@ -62,7 +62,7 @@ export async function snapshotTool(call: Call, args: Record<string, unknown>, se
   if (loaded) return refuse(loaded);
   const pageId = page.id;
   let token = randomBytes(12).toString('hex');
-  let read = await page.snapshot(scope.agent.id, token);
+  let read = await page.snapshot(scope.agent.id, token, true, Boolean(scope.boxes));
   // Nothing in it: a page that draws itself after it loads (the owner, 2026-11-24: a new tab's first look came back
   // empty). Taken once more when the page shows something, at most FIRST_LOOK_MS later; still nothing, the result says so.
   // Not for a page that went somewhere it may not be read, or (for an action's answer) began loading or went elsewhere:
@@ -70,7 +70,7 @@ export async function snapshotTool(call: Call, args: Record<string, unknown>, se
   const movedOn = () => (read ? blockedNow(call, node.id, page, 'That page could not be read.', read.url) !== null : false) || (settled && (loadingNow() || !sameId(page, pageId)));
   if (read && read.nodes.length === 0 && !call.stopped() && !movedOn() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped() && !movedOn()) {
     token = randomBytes(12).toString('hex');
-    read = await page.snapshot(scope.agent.id, token);
+    read = await page.snapshot(scope.agent.id, token, true, Boolean(scope.boxes));
   }
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read ? [read.url] : []));
@@ -85,14 +85,19 @@ export async function snapshotTool(call: Call, args: Record<string, unknown>, se
   // Never a ref for a sensitive field (snapshotKeys): not one shown, and not one that could be guessed.
   // Refs from the page's own ids (M2g-1): an element still there keeps its ref, for the diff after the agent's actions.
   const issued = refs.issue(samePage ?? '', token, snapshotKeys(read), sidsOf(read));
-  const outline = snapshotOutline(read, issued, { ...(find ? { find } : {}), ...(outlineOnly ? { text: false } : {}) });
+  // Container refs (#207), where the scope reads parts: on the lines shown, numbered as element refs are (round 1 of #260).
+  const boxes = scope.boxes && samePage ? { boxes: refs.boxRefsFor(samePage, new Map(read.nodes.filter((n) => n.box !== undefined && n.sid !== undefined).map((n) => [n.box!, n.sid!]))) } : {};
+  const outline = snapshotOutline(read, issued, { ...(find ? { find } : {}), ...(outlineOnly ? { text: false } : {}), ...boxes });
   // A page of nothing but text: said, with where its text is (#205). Decided from the read, never from an empty outline
   // (round 1 of #247): a find that matched nothing, or a read cut before it reached the page's structure, isn't one.
   const onlyText = outlineOnly && !find && !read.cut.elements && !read.cut.time && read.nodes.length > 0 && !read.nodes.some((n) => n.role !== 'text');
   const note = read.nodes.length === 0 ? NOTHING_SHOWN('Call snapshot') : onlyText ? ONLY_TEXT : snapshotNote(read.cut);
   const retrievedAt = Date.now();
   // Its later ranges are of the page's whole outline (of its kind), never a find's (N-3).
-  const whole = find ? snapshotOutline(read, issued, outlineOnly ? { text: false } : {}) : outline;
+  const whole = find ? snapshotOutline(read, issued, { ...(outlineOnly ? { text: false } : {}), ...boxes }) : outline;
+  // The container refs it gave (#207), in their own table: the outline's, and its whole's (its later ranges). A part read
+  // by one is never more than read_tab reads of the whole page; never an element ref's table, and never an action's.
+  if (scope.boxes) refs.issueBoxes(samePage ?? '', token, new Map([...(whole.boxes ?? []), ...(outline.boxes ?? [])]));
   // An outline without the page's text is no baseline for the diff (plan rule 1: a view that shows part of the page
   // never commits one): its refs are issued, and the outline the next diff compares with stays the last whole one. It's
   // kept in a slot of its own for its later ranges (round 1 of #247), with no lines.

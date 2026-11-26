@@ -11,14 +11,16 @@
  * - It stops at the first refusal, or after a step that took the page elsewhere, saying which steps went.
  * - One diff, at the last step (each step's own would repeat what the next changes).
  */
-import { ACT_REFUSALS, BATCH_STEPS_MAX, BATCH_TOOLS, CONTROL_REFUSALS, ELEMENT_REFUSALS, isPressKey, TYPE_TEXT_MAX, toolResult, type NodeId } from '@chord/core';
+import { ACT_REFUSALS, BATCH_STEPS_MAX, BATCH_TOOLS, CONTROL_REFUSALS, ELEMENT_REFUSALS, isPressKey, TYPE_TEXT_MAX, toolResult, type NodeId, BOX_REF } from '@chord/core';
 import { pageOf } from '../view-page';
 import { pageIdOf } from './page';
 import type { ControlScope, ToolOutput } from './scope';
-import { runControlTool, type ControlBrowser } from './tools';
+import { runControlTool, type ControlBrowser, PART_REFUSALS } from './tools';
 
 /** A step's own arguments, as its tool takes them: null, or what's wrong (checked before any step runs: SF6). */
 function stepWrong(tool: string, a: Record<string, unknown>): string | null {
+  // A part's container ref is read-only (#207): its own words, as each acting tool's.
+  if (typeof a['ref'] === 'string' && BOX_REF.test(a['ref'])) return PART_REFUSALS.act;
   if (typeof a['ref'] !== 'string' || !/^e[1-9][0-9]{0,8}$/.test(a['ref'])) return 'ref is an element’s ref from a snapshot (e1, e2…).';
   if (tool === 'type' && (typeof a['text'] !== 'string' || a['text'].length > TYPE_TEXT_MAX)) return `type takes text, at most ${TYPE_TEXT_MAX} characters.`;
   if (tool === 'type' && [a['submit'], a['replace']].some((v) => v !== undefined && typeof v !== 'boolean')) return 'submit and replace are true or false.';

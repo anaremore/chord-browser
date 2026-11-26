@@ -359,6 +359,87 @@ describe('the outline without the page’s text: snapshot’s text: false (S18 M
   });
 });
 
+describe('parts of a page by their container refs (S18 M2g-2, #207)', () => {
+  const page = (rows = 3): SnapshotRead => ({
+    url: 'https://pages.test/',
+    title: 'Page',
+    nodes: [
+      { depth: 0, role: 'main', name: '', sid: 1, box: 0 },
+      { depth: 1, role: 'region', name: 'Orders', sid: 2, box: 1 },
+      { depth: 2, role: 'button', name: 'Cancel', key: 0, sid: 3 },
+      { depth: 1, role: 'list', name: '', sid: 4 },
+      ...Array.from({ length: rows }, (_, i) => [{ depth: 2, role: 'listitem', name: '', sid: 100 + 2 * i }, { depth: 3, role: 'article', name: `Story ${i}`, sid: 101 + 2 * i, box: 2 + i }]).flat(),
+    ],
+    cut: {},
+  });
+  const boxSids = (read: SnapshotRead) => new Map(read.nodes.filter((n) => n.box !== undefined).map((n) => [n.box!, n.sid!]));
+  /** A page's refs as a snapshot issues them: its elements', then its parts'. */
+  const issued = (read: SnapshotRead, refs = new ElementRefs(), pageId = 'p1') => {
+    const keys = refs.issue(pageId, 't', snapshotKeys(read), new Map(read.nodes.filter((n) => n.key !== undefined).map((n) => [n.key!, n.sid!])));
+    return { refs, keys, boxes: refs.boxRefsFor(pageId, boxSids(read)) };
+  };
+
+  it('a c ref on each container line shown, numbered as element refs are; none without the scope’s parts, and never on an element', () => {
+    const read = page();
+    const { keys, boxes } = issued(read);
+    const outline = snapshotOutline(read, keys, { boxes });
+    expect(outline.text).toContain('- main [ref=c1]');
+    expect(outline.text).toContain('  - region "Orders" [ref=c2]');
+    expect(outline.text).toMatch(/- button "Cancel" \[ref=e3\]$/m);
+    expect([...outline.boxes!.keys()]).toEqual(['c1', 'c2', 'c101', 'c103', 'c105']);
+    // Without the scope's parts: no c refs at all.
+    const plain = snapshotOutline(read, keys);
+    expect(plain.text).not.toMatch(/ref=c/);
+    expect(plain.boxes).toBeUndefined();
+  });
+
+  it('another page’s parts never take a ref the tab had: a c ref from the page before never names one of this page (round 1 of #260)', () => {
+    const read = page();
+    const first = issued(read);
+    // The tab goes to another document; its page's own ids start over, the same numbers.
+    const second = issued(read, first.refs, 'p2');
+    const before = new Set(first.boxes.values());
+    for (const ref of second.boxes.values()) expect(before.has(ref), ref).toBe(false);
+    // Nor an element ref's number of the page before.
+    for (const ref of second.boxes.values()) expect([...first.keys.values()]).not.toContain(`e${ref.slice(1)}`);
+  });
+
+  it('only the lines shown give c refs: a collapsed run’s parts, and those a find doesn’t show, aren’t in the table', () => {
+    const read = page(20);
+    const { keys, boxes } = issued(read);
+    const outline = snapshotOutline(read, keys, { boxes });
+    // Five rows of twenty shown: their five articles' refs, never the fifteen collapsed.
+    expect([...outline.boxes!.keys()].filter((r) => Number(r.slice(1)) > 100)).toHaveLength(5);
+    expect(outline.boxes!.has('c139')).toBe(false);
+    const found = snapshotOutline(read, keys, { boxes, find: 'Story 19' });
+    expect([...found.boxes!.keys()]).toEqual(['c1', 'c139']);
+  });
+
+  it('the page script’s box is kept only with a page id, once, as a whole number', () => {
+    const clean = cleanSnapshotRead({ url: 'https://pages.test/', title: '', cut: {}, nodes: [{ depth: 0, role: 'region', name: 'A', sid: 5, box: 0 }, { depth: 0, role: 'region', name: 'B', sid: 6, box: 0 }, { depth: 0, role: 'region', name: 'C', box: 1 }, { depth: 0, role: 'region', name: 'D', sid: 7, box: 1.5 }] })!;
+    expect(clean.nodes.map((n) => n.box)).toEqual([0, undefined, undefined, undefined]);
+  });
+
+  it('ElementRefs keeps them in their own table: never an element ref, gone with the page, a stale ref for another page', () => {
+    const refs = new ElementRefs();
+    refs.issue('p1', 't1', [0], new Map([[0, 3]]));
+    refs.issueBoxes('p1', 't1', new Map([['c2', { box: 1 }]]));
+    expect(refs.resolveBox('c2', 'p1')).toEqual({ ok: true, token: 't1', box: 1 });
+    // Another page now: stale; a ref never shown, or not a c ref: unknown.
+    expect(refs.resolveBox('c2', 'p2')).toEqual({ ok: false, why: 'stale' });
+    expect(refs.resolveBox('c9', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    expect(refs.resolveBox('e3', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    // Never an element's: a c ref isn't one, and the element's stays its own.
+    expect(refs.resolve('c2', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    expect(refs.resolve('e3', 'p1')).toMatchObject({ ok: true, key: 0 });
+    // A later outline's replace them; forget() takes them.
+    refs.issueBoxes('p1', 't2', new Map([['c4', { box: 0 }]]));
+    expect(refs.resolveBox('c2', 'p1')).toEqual({ ok: false, why: 'unknown' });
+    refs.forget();
+    expect(refs.resolveBox('c4', 'p1')).toEqual({ ok: false, why: 'unknown' });
+  });
+});
+
 describe('refs that stay, and the diff after an action (M2g-1)', () => {
   it('a ref given in turn (an id past the cap) never takes a number a later id of the page maps to (round 2 of #145)', () => {
     const refs = new ElementRefs();

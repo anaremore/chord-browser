@@ -186,3 +186,10 @@ describe('read_tab’s ranges never split a character (round 1 of #252, N-1)', (
     expect(range('😀z', 0, 1).content).toBe('😀');
   });
 });
+
+describe('a part’s name in read_tab’s answer is cleaned as page text is (round 2 of #260, N2)', () => {
+  it('never a hidden or reordering character from the page, as its text never has one', () => {
+    const out = JSON.parse(pageResult({ ref: 't1', url: 'https://e.test/', text: 'x', retrievedAt: 0, part: { ref: 'c5', role: 'region', name: 'Or​ders‮ \u{E0041}tagged­' } })) as { part: { name: string } };
+    expect(out.part.name).toBe('Orders tagged');
+  });
+});

@@ -346,6 +346,8 @@ export function pageResult(page: {
   note?: string;
   /** The page it was read from (pageIdField): changes with each main-frame navigation. */
   pageId?: string;
+  /** One part of the page, read by its container ref (#207): which, by its role and its name as the outline gave them. */
+  part?: { ref: string; role: string; name: string };
 }): string {
   const clean = cleanPageText(page.text);
   const start = Math.max(0, Math.min(page.start ?? 0, clean.length));
@@ -371,6 +373,7 @@ export function pageResult(page: {
     retrieved_at: new Date(page.retrievedAt).toISOString(),
     trust: 'untrusted',
     range: { start, end: start + content.length, total: clean.length },
+    ...(page.part ? { part: { ref: page.part.ref, role: page.part.role, name: cleanPageText(page.part.name).slice(0, 200) } } : {}),
     ...(page.pdf ? { pages: { total: page.pdf.pages, read: page.pdf.read } } : {}),
     ...(page.note ? { note: page.note } : {}),
     content,

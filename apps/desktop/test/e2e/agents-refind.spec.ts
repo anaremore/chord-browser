@@ -306,6 +306,8 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     // refs, polling). The same spec measures both (on main's build, a copy of it).
     const lean = tools.some((t) => t.name === 'wait_for') && tools.some((t) => t.name === 'batch');
     // open_tab's snapshot: true (M2g-2 slice 3a, #204): the first look comes with the tab, no call of its own.
+    // read_tab by a part's ref (#207).
+    const readsParts = Boolean((tools as unknown as { name: string; inputSchema: { properties: Record<string, unknown> } }[]).find((t) => t.name === 'read_tab')?.inputSchema.properties['ref']);
     const opensLooking = Boolean((tools as unknown as { name: string; inputSchema: { properties: Record<string, unknown> } }[]).find((t) => t.name === 'open_tab')?.inputSchema.properties['snapshot']);
     /** What the model gets back from each call: every result's content, counted (tokens, call by call). */
     let meter = { calls: 0, chars: 0, results: [] as number[], pictures: [] as { width: number; height: number }[] };
@@ -551,6 +553,16 @@ test('the token eval: its journeys, each as an agent would play it with the tool
     });
     // M2g-2 slice 1: the honest baseline's new journeys. Every one looks first.
     await journey('reading one section of 50', async () => {
+      // #207: asked about section 37, an agent looks at the page as it opens, finds the section by its words, and reads
+      // just it by its ref; where read_tab takes no ref, it reads the page in ranges until it finds it.
+      if (lean && readsParts) {
+        const { tab: opened } = await look('/article50');
+        const found = outlineOf((await ask('snapshot', { tab_id: opened, find: 'Section 37', text: false })).text);
+        const part = /region "Section 37" \[ref=(c\d+)\]/.exec(found)?.[1];
+        if (!part) throw new Error(`no ref for section 37 in ${found}`);
+        const read = JSON.parse((await ask('read_tab', { tab_id: opened, ref: part })).text) as { content: string };
+        return /The code word is (\w+)\./.exec(read.content)?.[1] === 'saffron';
+      }
       const tab = await open('/article50');
       // As an agent reads a long page: the first range, then the next, until it finds what it was asked for.
       let start = 0;
@@ -709,7 +721,8 @@ test('snapshot with text: false: the page’s structure without its text, a frac
     type Snap = { trust: string; source: string; content: string; refs: number };
 
     // The 50-section page: the whole outline, then its structure alone (what a model is sent: the result's text).
-    const article = tabOf((await allowed('open_tab', { url: `${site.origin}/article50` })).text);
+    // (The page as #205 measured it: its sections plain. #207 makes named ones regions, which collapse as rows alike.)
+    const article = tabOf((await allowed('open_tab', { url: `${site.origin}/article50-plain` })).text);
     const full = await mcp.call('snapshot', { tab_id: article });
     const outline = await mcp.call('snapshot', { tab_id: article, text: false });
     const fullSnap = JSON.parse(full.text) as Snap;
@@ -720,7 +733,7 @@ test('snapshot with text: false: the page’s structure without its text, a frac
     expect(outlineSnap.content).toMatch(/- heading "Section 1" \[level=2\]/);
     expect(outlineSnap.content).toBe(fullSnap.content.split('\n').filter((l) => !/^\s*- text:/.test(l)).join('\n'));
     const smaller = 1 - outline.text.length / full.text.length;
-    console.log(`[#205] /article50: full snapshot ${full.text.length} chars (~${Math.ceil(full.text.length / 4)} tokens), text: false ${outline.text.length} chars (~${Math.ceil(outline.text.length / 4)} tokens): ${(smaller * 100).toFixed(1)}% smaller; outline alone ${fullSnap.content.length} → ${outlineSnap.content.length} chars (${((1 - outlineSnap.content.length / fullSnap.content.length) * 100).toFixed(1)}% smaller)`);
+    console.log(`[#205] /article50-plain: full snapshot ${full.text.length} chars (~${Math.ceil(full.text.length / 4)} tokens), text: false ${outline.text.length} chars (~${Math.ceil(outline.text.length / 4)} tokens): ${(smaller * 100).toFixed(1)}% smaller; outline alone ${fullSnap.content.length} → ${outlineSnap.content.length} chars (${((1 - outlineSnap.content.length / fullSnap.content.length) * 100).toFixed(1)}% smaller)`);
     // #205's Done when: at least 70% smaller than the full snapshot, as sent (a size, never a time).
     expect(smaller).toBeGreaterThanOrEqual(0.7);
 
@@ -733,6 +746,112 @@ test('snapshot with text: false: the page’s structure without its text, a frac
     await expect.poll(() => app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}/game`)).toContain('Call');
     // No full snapshot of the page to compare with: the action says so.
     expect((JSON.parse(clicked.text) as { data: { page_changes?: { note?: string } } }).data.page_changes?.note).toBe('You have no full snapshot of this page to compare with, so what changed can’t be told: call snapshot without text: false to see it.');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('read_tab by a part’s container ref: just its shown text, as the page read leaves things out, never a field, an editor or a frame; refused when the part changed, and by every acting tool (M2g-2, #207)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const tab = (JSON.parse((await allowed('open_tab', { url: `${site.origin}/parts` })).text) as { data: { tab_id: string } }).data.tab_id;
+    const inPage = (code: string) => app.evaluate(({ webContents }, [url, js]) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript(js), [`${site.origin}/parts`, code] as const);
+    const outline = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as { content: string }).content;
+    // Each container its c ref: a named section (a region), a navigation, an article, a table.
+    const partRef = (line: string) => new RegExp(`${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\[ref=(c\\d+)\\]`).exec(outline)?.[1];
+    for (const line of ['region "Orders"', 'navigation "Site"', 'article "Story"', 'table "Prices"']) expect(partRef(line), line).toMatch(/^c\d+$/);
+    const orders = partRef('region "Orders"')!;
+
+    // Just its shown text, with which part it is, untrusted.
+    const part = JSON.parse((await mcp.call('read_tab', { tab_id: tab, ref: orders })).text) as { trust: string; content: string; part: { ref: string; role: string; name: string } };
+    expect(part).toMatchObject({ trust: 'untrusted', part: { ref: orders, role: 'region', name: 'Orders' } });
+    expect(part.content).toContain('Shown words: order 12 shipped.');
+    expect(part.content).not.toContain('Story words');
+    // Never what CSS hides, `hidden`, `inert`; never a field's value, an editor's contents, an ARIA text field's
+    // (whatever its tag), nor a frame's inside.
+    const hidden = ['hidden-display', 'hidden-visibility', 'hidden-opacity', 'hidden-attribute'];
+    const sensitive = ['hidden-inert', 'field-value-secret', 'textarea-secret', 'editor-secret', 'aria-textbox-secret', 'aria-searchbox-secret', 'aria-combobox-secret', 'frame-inside-secret'];
+    for (const never of [...hidden, ...sensitive]) expect(part.content, never).not.toContain(never);
+    // Both ways with the page read: what it leaves out of the page, the part's read leaves out too, and what it shows,
+    // the part's does. The page read keeps inert text, as it always has (round 1 of #260): a part's read is a subset.
+    const whole = (JSON.parse((await mcp.call('read_tab', { tab_id: tab })).text) as { content: string }).content;
+    for (const never of hidden) expect(whole, never).not.toContain(never);
+    expect(whole).toContain('Shown words: order 12 shipped.');
+    expect(whole).toContain('hidden-inert');
+
+    // Never more than the page read gives (rounds 1 and 2 of #260): a part inside something the page read never enters
+    // gets no ref (its read would always be refused), and its words are never read. Where the page read leaves them out
+    // too, it does.
+    const STALE = 'That part has changed since your snapshot, or the page moved on: call snapshot again.';
+    const EDITOR = 'That part is an editor: what shows in it is what’s typed there, so it isn’t read.';
+    const unread: [string, string, boolean][] = [
+      // [the part, its words, whether the page read leaves them out too]
+      ['Offscreen', 'offscreen-secret', true],
+      ['In a button', 'button-secret', true],
+      ['Hidden shown', 'hiddenshown-secret', true],
+      ['Contents hidden', 'contents-secret', true],
+      ['In a combobox', 'combobox-part-secret', false],
+      ['Inert part', 'inert-part-secret', false],
+    ];
+    for (const [name, words, pageLeavesOut] of unread) {
+      expect(partRef(`region "${name}"`), name).toBeUndefined();
+      if (pageLeavesOut) expect(whole, name).not.toContain(words);
+    }
+    // Changed after the snapshot (round 2 of #260): each had its ref, and its read now is refused, never read.
+    const later: [string, string, string, string][] = [
+      // [the part, its words, what the page does, what it says]
+      ['Inert later', 'inertlater-secret', 'document.getElementById("w-inert").inert = true', STALE],
+      ['Hidden later', 'hiddenlater-secret', 'const w = document.getElementById("w-hidden"); w.hidden = true; w.style.display = "block"', STALE],
+      ['Editor later', 'editorlater-secret', 'document.getElementById("w-editor").contentEditable = "true"', EDITOR],
+      ['In a shadow', 'shadowpart-secret', 'document.getElementById("w-shadow").inert = true', STALE],
+      ['Adopted', 'adopted-secret', 'document.querySelector("iframe").contentDocument.body.appendChild(document.getElementById("adopted"))', STALE],
+      ['Self inert', 'selfinert-secret', 'document.getElementById("self-inert").inert = true', STALE],
+    ];
+    const laterRefs = later.map(([name]) => partRef(`region "${name}"`));
+    for (const [i, [name]] of later.entries()) expect(laterRefs[i], name).toMatch(/^c\d+$/);
+    for (const [, , change] of later) await inPage(`${change}; 0`);
+    for (const [i, [name, words, , says]] of later.entries()) {
+      const read = await mcp.call('read_tab', { tab_id: tab, ref: laterRefs[i] });
+      expect(read.isError, name).toBe(true);
+      expect(read.text, name).toBe(says);
+      expect(read.text, name).not.toContain(words);
+    }
+    // A part that is a shadow host reads its shadow root.
+    const shadowed = JSON.parse((await mcp.call('read_tab', { tab_id: tab, ref: partRef('region "Shadowed"')! })).text) as { content: string };
+    expect(shadowed.content).toContain('shadow-words');
+    // A section whose label is empty, or names nothing, is no region.
+    expect(outline).not.toMatch(/- region(?: "")? \[ref=/);
+
+    // Read-only: an acting tool given a c ref refuses it, and nothing is pressed.
+    const PART_ACT = 'A c ref names a part of a page to read with read_tab, never one to act on: use an element’s ref (e1, e2…).';
+    await inPage('window.__pressed = 0; document.querySelector("button").addEventListener("click", () => window.__pressed++); 0');
+    const clicked = await allowed('click', { tab_id: tab, ref: orders });
+    expect(clicked.isError).toBe(true);
+    expect(clicked.text).toBe(PART_ACT);
+    expect(await inPage('window.__pressed')).toBe(0);
+
+    // The part renamed since the snapshot: refused as stale, never read.
+    await inPage('document.querySelector("section").setAttribute("aria-label", "Returns"); 0');
+    const renamed = await mcp.call('read_tab', { tab_id: tab, ref: orders });
+    expect(renamed.isError).toBe(true);
+    expect(renamed.text).toBe(STALE);
+
+    // A page that's all editor (designMode): never read this way.
+    const again = (JSON.parse((await mcp.call('snapshot', { tab_id: tab })).text) as { content: string }).content;
+    const story = /article "Story" \[ref=(c\d+)\]/.exec(again)![1]!;
+    await inPage('document.designMode = "on"; 0');
+    const editor = await mcp.call('read_tab', { tab_id: tab, ref: story });
+    expect(editor.isError).toBe(true);
+    expect(editor.text).toBe('That part is an editor: what shows in it is what’s typed there, so it isn’t read.');
     mcp.child.stdin!.end();
     await mcp.exited;
   } finally {

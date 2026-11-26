@@ -1,12 +1,13 @@
 /** The control layer's acting tools (split from tools.ts, #213): click, type, press_key, select_option, hover, navigate and back. */
 import { phaseClock } from './phases';
 import { createHash, randomBytes } from 'node:crypto';
-import { addressWhy, VALUE_TYPES, valueFits, sentLabels, stepFields, type RiskClass, type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, actDone, actPhrase, barAddress, wholeAddress, ELEMENT_REFUSALS, sensitiveField, isPressKey, CONTROL_WAIT_MS, NAVIGATE_URL_MAX, pressKeyEvents, TYPE_TEXT_MAX, type ActDescription, type ActTool, type ElementTool, type PressKey, isNeverReadable, toolResult, type TabNode } from '@chord/core';
+import { addressWhy, BOX_REF, VALUE_TYPES, valueFits, sentLabels, stepFields, type RiskClass, type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, actDone, actPhrase, barAddress, wholeAddress, ELEMENT_REFUSALS, sensitiveField, isPressKey, CONTROL_WAIT_MS, NAVIGATE_URL_MAX, pressKeyEvents, TYPE_TEXT_MAX, type ActDescription, type ActTool, type ElementTool, type PressKey, isNeverReadable, toolResult, type TabNode } from '@chord/core';
 import type { ActAnswer, ActOp } from './act';
 import type { DeepSession } from './deep';
 import { normalUrl, type SendWatch } from './sends';
 import type { AgentInputEvent } from './input';
 import type { ToolOutput } from './scope';
+import { PART_REFUSALS } from './tools-read';
 import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
 import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
@@ -303,6 +304,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   }
 
   const refArg = args['ref'];
+  // A part's container ref is read-only (#207): refused by every acting tool, at run time as by its pattern.
+  if (typeof refArg === 'string' && BOX_REF.test(refArg)) return refuse(PART_REFUSALS.act);
   // An element, by its ref from the tab's latest snapshot, on the page it's on now.
   const lookup = scope.memory.elements?.get(node.id)?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
   if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
