@@ -4,15 +4,16 @@
  * the tint toward the neighbor, and on release settles on the nearest chord.
  *
  * Chromium hands the shell wheel events (`deltaX`); they don't say when the
- * fingers lift, so main forwards the trackpad's gesture phases
- * (`gesture:phase`), and where the OS sends none the gesture ends after
- * IDLE_END_MS and IDLE_END_FRAMES frames without events. Momentum after a release is ignored until it
- * pauses. A mouse's tilt wheel switches one chord per notch.
+ * fingers lift, so on macOS main forwards the trackpad's gesture phases
+ * (`gesture:phase`), and elsewhere the gesture ends when its events stop
+ * (GestureEnd). Momentum after a release is ignored until it pauses, and
+ * after a fling until the OS says a new gesture began. A mouse's tilt wheel
+ * switches one chord per notch.
  */
 import { animate, motionValue, type AnimationPlaybackControls, type MotionValue, type Transition } from 'motion/react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { api } from './api';
-import { IDLE_END_MAX_MS, MOMENTUM_GAP_MS, PHASED_END_MAX_MS, VelocityTracker, gestureIdle, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
+import { FLING_MOMENTUM_MAX_MS, GestureEnd, MOMENTUM_GAP_MS, VelocityTracker, isWheelNotch, lockAxis, rawOffset, settle, shownOffset } from './swipe';
 
 /** How a chord pane comes and goes: the usual slide, a swipe's commit, or a crossfade (reduced motion). */
 export type PaneMotion = { kind: 'slide'; dir: 1 | -1 } | { kind: 'swipe'; exitTo: number; transition: Transition } | { kind: 'fade'; transition: Transition };
@@ -86,11 +87,10 @@ export function useChordSwipe(options: Options): ChordSwipe {
     shown: 0,
     lastAt: 0,
     ignoreUntil: 0,
-    endTimer: undefined as ReturnType<typeof setTimeout> | undefined,
-    endFrame: 0,
-    framesSince: 0,
-    /** The OS said this gesture began (`gesture:phase`): it ends on the OS's end, not on a pause. */
-    phased: false,
+    /** After a fling, momentum is ignored until a new begin, or until then (FLING_MOMENTUM_MAX_MS). */
+    flungUntil: 0,
+    /** The gesture's first event: never cancelled, so macOS starts its scroll and says when it began (its phases). */
+    first: false,
     commitTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     tracker: new VelocityTracker(),
     context: null as null | { currentId: string; prevId: string | null; nextId: string | null; width: number },
@@ -111,15 +111,20 @@ export function useChordSwipe(options: Options): ChordSwipe {
       s.blendId = id;
       setBlendId(id);
     };
-    /** The wait for a gesture's end (frames, and the fallback), stopped. */
-    const stopEnd = () => {
-      clearTimeout(s.endTimer);
-      cancelAnimationFrame(s.endFrame);
-      s.endFrame = 0;
-    };
+    // The gesture's end: the OS's on macOS, or when its events stop (GestureEnd). At the speed as of the last event, or
+    // at rest (an end that never came, a hidden window): never a speed as old as the wait.
+    const end = new GestureEnd(
+      {
+        now: () => performance.now(),
+        frame: (callback) => requestAnimationFrame(callback),
+        cancelFrame: (id) => cancelAnimationFrame(id),
+        timer: (callback, ms) => setTimeout(callback, ms),
+        clearTimer: (id) => clearTimeout(id),
+      },
+      (at, speed) => release(at, speed === 'last' ? s.tracker.velocity(s.lastAt) : 0),
+    );
     const reset = () => {
-      stopEnd();
-      s.phased = false;
+      end.stop();
       clearTimeout(s.commitTimer);
       s.phase = 'idle';
       s.context = null;
@@ -203,8 +208,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
 
     /** The gesture ended at `now`: settled or committed with `speed` (the tracker's as of `now` if not given). */
     const release = (now: number, speed?: number) => {
-      stopEnd();
-      s.phased = false;
+      end.stop();
       if (s.phase === 'deciding' || s.phase === 'vertical') {
         s.phase = 'idle';
         return;
@@ -223,30 +227,12 @@ export function useChordSwipe(options: Options): ChordSwipe {
       else commit(dir, velocity);
     };
 
-    const scheduleEnd = () => {
-      stopEnd();
-      // No end phase from the OS: the gesture ends when the events stop (velocity as of the last one): IDLE_END_MS
-      // and IDLE_END_FRAMES frames with none, so a busy renderer's late frames never end it early (gestureIdle).
-      // One the OS said began ends on the OS's end, never on a pause: only an end that never comes ends it.
-      if (s.phased) {
-        s.endTimer = setTimeout(() => release(s.lastAt), PHASED_END_MAX_MS);
-        return;
-      }
-      s.framesSince = 0;
-      const tick = () => {
-        s.framesSince += 1;
-        if (gestureIdle(performance.now() - s.lastAt, s.framesSince)) release(s.lastAt);
-        else s.endFrame = requestAnimationFrame(tick);
-      };
-      s.endFrame = requestAnimationFrame(tick);
-      s.endTimer = setTimeout(() => release(s.lastAt), IDLE_END_MAX_MS);
-    };
-
     /** A mouse notch: one chord over, with the usual slide. */
     const step = (dir: -1 | 1, now: number) => {
       const o = latest.current;
       const index = o.currentId ? o.chordIds.indexOf(o.currentId) : -1;
       const id = o.chordIds[index + dir];
+      end.stop();
       s.ignoreUntil = now + NOTCH_COOLDOWN_MS;
       if (id) void api.state.dispatch({ t: 'chord.activate', windowId: o.windowId, chordId: id });
     };
@@ -259,12 +245,16 @@ export function useChordSwipe(options: Options): ChordSwipe {
       if (strip && strip.scrollWidth > strip.clientWidth + 1) return;
       const now = performance.now();
       const sideways = Math.abs(event.deltaX) > Math.abs(event.deltaY);
-      // Momentum from the last release (or a notch's cooldown) is ignored until it pauses, unless
-      // the OS says a new gesture began. While a commit plays out, everything waits.
-      if (s.phase === 'committing' || ((s.phase === 'idle' || s.phase === 'settling') && now < s.ignoreUntil)) {
+      // Momentum from the last release (or a notch's cooldown) is ignored until it pauses, unless the OS says a new
+      // gesture began; after a fling, until it does (a stalled frame can leave a pause in the momentum). While a commit
+      // plays out, everything waits. Waiting for a begin, nothing is cancelled: the next gesture's first event must
+      // start its scroll for macOS to send that begin.
+      const resting = s.phase === 'idle' || s.phase === 'settling';
+      const flung = resting && now < s.flungUntil;
+      if (s.phase === 'committing' || (resting && now < s.ignoreUntil) || flung) {
         if (sideways) {
           s.ignoreUntil = Math.max(s.ignoreUntil, now + MOMENTUM_GAP_MS);
-          event.preventDefault();
+          if (!flung) event.preventDefault();
         }
         return;
       }
@@ -277,28 +267,34 @@ export function useChordSwipe(options: Options): ChordSwipe {
         s.phase = 'deciding';
         s.dx = 0;
         s.dy = 0;
+        s.first = true;
       } else if (s.phase === 'settling') {
         s.phase = 'catching';
         s.dx = 0;
         s.dy = 0;
+        s.first = true;
       }
+      const first = s.first;
+      s.first = false;
       s.lastAt = now;
       if (s.phase === 'deciding' || s.phase === 'catching') {
         s.dx += event.deltaX;
         s.dy += event.deltaY;
         const axis = lockAxis(s.dx, s.dy);
         if (axis === 'horizontal') {
-          event.preventDefault();
+          // Not the first: macOS begins a scroll (and its phases) only on a first event that wasn't cancelled. The
+          // sidebar's lists don't scroll sideways (overflow-x hidden), so it moves nothing.
+          if (!first) event.preventDefault();
           engage(now, s.phase === 'catching');
         } else if (axis === 'vertical') {
           // Up and down is the list's; a pane that was settling just finishes.
           s.phase = s.phase === 'catching' ? 'settling' : 'vertical';
         }
-        scheduleEnd();
+        end.event(now);
         return;
       }
       if (s.phase === 'vertical') {
-        scheduleEnd();
+        end.event(now);
         return;
       }
       if (s.phase === 'tracking') {
@@ -306,7 +302,7 @@ export function useChordSwipe(options: Options): ChordSwipe {
         s.raw -= event.deltaX;
         place();
         s.tracker.add(now, s.shown);
-        scheduleEnd();
+        end.event(now);
       }
     };
 
@@ -315,18 +311,29 @@ export function useChordSwipe(options: Options): ChordSwipe {
     const unsubscribe = api.gestures.onPhase((phase) => {
       const now = performance.now();
       if (phase === 'begin') {
-        // A new gesture, not momentum from the last one; it ends when the OS says. A busy renderer can read the begin
-        // after the gesture's first events: it's still this gesture's, and its end is the OS's too.
+        // A new gesture, not momentum from the last one; it ends when the OS says (GestureEnd.begin).
+        s.flungUntil = 0;
         if (s.phase === 'idle' || s.phase === 'settling') s.ignoreUntil = 0;
-        if (s.phase !== 'committing') {
-          s.phased = true;
-          if (s.phase !== 'idle' && s.phase !== 'settling') scheduleEnd();
-        }
+        if (s.phase !== 'committing') end.begin();
         return;
       }
-      // A fling: the fingers left moving, at their speed as of the last event, however late a busy renderer reads it.
-      // An end: they stopped, or lifted slowly; the speed is as of now, so a rest before the lift reads as one.
-      release(now, phase === 'fling' ? s.tracker.velocity(s.lastAt) : undefined);
+      // A fling: the fingers left moving, at their speed as of the last event, however late a busy renderer reads it;
+      // its momentum waits for the next begin. An end: they stopped, or lifted slowly; the speed is as of now, so a rest
+      // before the lift reads as one.
+      if (phase === 'fling') {
+        release(now, s.tracker.velocity(s.lastAt));
+        s.flungUntil = now + FLING_MOMENTUM_MAX_MS;
+      } else release(now);
+    });
+    // Ended at once, at rest, where the fingers can't be followed any more: the window hidden, the command bar over it
+    // (and main sends an end as the window loses focus).
+    const endNow = () => release(performance.now(), 0);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') endNow();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    const unsubscribeOverlay = api.layout.onOverlay((shown) => {
+      if (shown) endNow();
     });
 
     // The switch arrived: the committed chord's pane is the current one now, and settles to 0.
@@ -351,8 +358,10 @@ export function useChordSwipe(options: Options): ChordSwipe {
     return () => {
       root?.removeEventListener('wheel', onWheel);
       unsubscribe();
+      unsubscribeOverlay();
+      document.removeEventListener('visibilitychange', onVisibility);
       stopAll();
-      stopEnd();
+      end.stop();
       clearTimeout(s.commitTimer);
     };
     // The listeners read `latest`; they're attached once per window.

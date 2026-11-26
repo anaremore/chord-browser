@@ -2,8 +2,9 @@
  * Chord switching by swipe (DESIGN.md §6.4) and the theme editor's color
  * wheel (§7.7). Real trackpads can't be driven from a test, so swipes are
  * synthetic wheel events with `deltaX`, as Chromium delivers a trackpad's
- * scroll; the gesture ends the way it does where the OS sends no end phase,
- * after IDLE_END_MS without events.
+ * scroll. A trackpad's on macOS comes with the OS's phases (begin, end,
+ * fling), which a test hook sends on any platform; a mouse's, or a swipe
+ * anywhere else, has none and ends when its events stop (GestureEnd).
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -40,21 +41,31 @@ const gesturePhase = (app: ElectronApplication, phase: 'begin' | 'end' | 'fling'
 
 /**
  * A two-finger swipe as macOS sends it: the OS's begin, wheel events `gapMs` apart over an element of the shell, and
- * the OS's end (`fling` when the fingers left moving). The gesture ends on the OS's end, never on a pause between
- * events: a busy machine delays the events, as it does a trackpad's, and the swipe still ends when the fingers lift
- * (#198). `phases: false` for a mouse's wheel, which has none.
+ * the OS's end (`fling` when the fingers left moving), `endAfterMs` after the last event. The gesture ends on the OS's
+ * end, never on a pause between events: a busy machine delays the events, as it does a trackpad's, and the swipe still
+ * ends when the fingers lift (#198). `phases: false` for a mouse's wheel, or a swipe on Windows or Linux, which have
+ * none. A step with `pauseMs` is a pause of the fingers, no event.
  */
 async function swipe(
   app: ElectronApplication,
   shell: Page,
-  deltas: { x: number; y?: number }[],
+  deltas: { x: number; y?: number; pauseMs?: number }[],
   gapMs: number,
-  { over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]', end = 'end', phases = true }: { over?: string; end?: 'end' | 'fling'; phases?: boolean } = {},
+  {
+    over = '[aria-label="Sidebar"] [aria-label="Unpinned tabs"]',
+    end = 'end',
+    phases = true,
+    endAfterMs = 0,
+  }: { over?: string; end?: 'end' | 'fling'; phases?: boolean; endAfterMs?: number } = {},
 ) {
   if (phases) await gesturePhase(app, 'begin');
   await shell.evaluate(
     async ({ deltas, gapMs, over }) => {
       for (const d of deltas) {
+        if (d.pauseMs) {
+          await new Promise((r) => setTimeout(r, d.pauseMs));
+          continue;
+        }
         // Looked up for each event: once the panes follow the fingers, the element under them is a new one, and an
         // event sent to the one that was there reaches nothing.
         const target = document.querySelector(over) ?? document.querySelector('[data-swipe-area]');
@@ -73,9 +84,11 @@ async function swipe(
     },
     { deltas, gapMs, over },
   );
+  if (endAfterMs) await shell.waitForTimeout(endAfterMs);
   if (phases) await gesturePhase(app, end);
 }
 const steps = (count: number, x: number, y = 0) => Array.from({ length: count }, () => ({ x, y }));
+const pause = (ms: number) => ({ x: 0, pauseMs: ms });
 
 /** Three chords: Personal (the first), then Work and Play; ends on Personal. */
 async function threeChords(shell: Page) {
@@ -117,24 +130,45 @@ test('a two-finger swipe follows the fingers and settles on the nearest chord', 
     await expect.poll(() => paneCount(shell)).toBe(1);
     await selected('Work');
 
-    // A quick flick commits however short: the fingers leave moving (the OS's fling).
-    await swipe(app, shell, steps(4, 12), 4, { end: 'fling' });
-    await selected('Play');
+    // Back the other way.
+    await swipe(app, shell, steps(32, -6), 16);
+    await selected('Personal');
     await expect.poll(() => paneCount(shell)).toBe(1);
 
-    // Past the last chord it rubber-bands, and stays.
+    // A quick flick commits however short: the fingers leave moving (the OS's fling), here read 150 ms after its last
+    // event, as a busy renderer reads it; its speed is the one the fingers had.
+    await swipe(app, shell, steps(5, 18), 4, { end: 'fling', endAfterMs: 150 });
+    await selected('Work');
+    await expect.poll(() => paneCount(shell)).toBe(1);
+
+    // Its momentum keeps coming the same way, with no begin, and a stalled frame leaves a pause in it: still momentum,
+    // never a new swipe to the next chord (Carbon's SF3 on #242).
+    await swipe(app, shell, [...steps(6, 10), pause(150), ...steps(12, 10)], 16, { phases: false });
+    await expect.poll(() => paneCount(shell)).toBe(1);
+    await selected('Work');
+
+    // On to the last; past it, it rubber-bands, and stays.
+    await swipe(app, shell, steps(32, 6), 16);
+    await selected('Play');
     await swipe(app, shell, steps(30, 8), 12);
     await expect.poll(() => paneCount(shell)).toBe(1);
     await selected('Play');
 
-    // Back the other way.
-    await swipe(app, shell, steps(32, -6), 16);
+    // The fingers rest mid-swipe, long enough for a pane let go to spring back, then go on: one swipe, until the OS's
+    // end (#198), however long the rest.
+    await swipe(app, shell, [...steps(14, -6), pause(600), ...steps(18, -6)], 16);
     await selected('Work');
+    await expect.poll(() => paneCount(shell)).toBe(1);
 
     // Up and down scrolls the list; it never switches chords.
     await swipe(app, shell, steps(20, 1, 12), 12);
     await expect.poll(() => paneCount(shell)).toBe(1);
     await selected('Work');
+
+    // With no phases (Windows, Linux): it follows 1:1 and ends when its events stop, past half the width.
+    await swipe(app, shell, steps(32, -6), 16, { phases: false });
+    await selected('Personal');
+    await expect.poll(() => paneCount(shell)).toBe(1);
   } finally {
     await app.close();
   }
