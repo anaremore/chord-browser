@@ -12,7 +12,7 @@
  * disk; the cache comes from your browsing, so it never is.
  */
 import { createHash } from 'node:crypto';
-import type { ThreatKind } from '@chord/core';
+import { sameBytes, type ThreatKind } from '@chord/core';
 import type { FullHashDetail, HashListUpdate, SearchAnswer } from './proto';
 import { decodeRice32, RiceError } from './rice';
 import { urlExpressions } from './url';
@@ -71,7 +71,6 @@ export function checksumOf(prefixes: Uint32Array): Uint8Array {
   return sha256(bytes);
 }
 
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 
 function contains(sorted: Uint32Array, value: number): boolean {
   let lo = 0;

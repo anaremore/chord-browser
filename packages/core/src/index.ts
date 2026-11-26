@@ -48,5 +48,6 @@ export * from './stamps';
 export * from './sync';
 export * from './sync-folder';
 export * from './tab-counts';
+export * from './bytes';
 export * from './text';
 export * from './words';

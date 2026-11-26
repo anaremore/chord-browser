@@ -28,6 +28,7 @@
  * are bounded as an import's are, each step of reading is bounded by bytes
  * read, bytes inflated and records, and records go on to `checkSyncRecord`.
  */
+import { sameBytes } from './bytes';
 import { DATA_FORMAT, DATA_FORMAT_ABOUT, ENCRYPTED_LINE, ENVELOPE_VERSION, envelope, FRAME_TARGET, MAX_FRAME, MAX_LINE, recordLine, SCRYPT, type DataCrypto, type DataKdf, type ScryptParams } from './data-file';
 import { isDataRecord, type DataRecord } from './records';
 import { isDeviceId } from './stamps';
@@ -677,7 +678,6 @@ export interface Appending {
   bytes?: Uint8Array;
 }
 
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, i) => byte === b[i]);
 
 /**
  * A write of this computer's that may have landed, settled before anything

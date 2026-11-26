@@ -59,6 +59,7 @@ import {
 import type { ImportedPage } from './import';
 import { restoreSettings } from './restore';
 import type { Platform } from './shortcuts';
+import { plural } from './text';
 import { compareStamps, type Stamp } from './stamps';
 
 /** The switches on the preview that decide what comes in. History and assistant chats never pass through here. */
@@ -964,8 +965,6 @@ export interface ImportedCounts {
   passwords?: number;
 }
 
-const numbers = new Intl.NumberFormat('en-US');
-const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 
 /** "Imported 2 chords, 40 tabs, 3 Favorites and 3,000 pages of history", without a full stop: a toast's or Settings' line. */
 export function importedText(counts: ImportedCounts): string {
