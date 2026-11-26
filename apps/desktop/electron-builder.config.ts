@@ -107,7 +107,25 @@ export function winSigning(env: Env): Pick<WindowsConfiguration, 'azureSignOptio
   }
 }
 
+/** The window-owner helper a Windows package carries (scripts/build-window-owner.mjs builds it into out/). */
+export const WINDOW_OWNER = join(import.meta.dirname, 'out/window-owner/window-owner.exe');
+
+/**
+ * Why a package can't be made, if it can't: a Windows one without window-owner.exe (#87). Its extraResources copy
+ * skips a missing file without a word, and only release.yml's signature check would notice; Chord Player couldn't play
+ * in the tab, and the agents' DACL, peer and chain lookups (#264) would all fail. Never for macOS or Linux.
+ */
+export function packageBlocker(platform: string, exists: (path: string) => boolean = existsSync): string | null {
+  if (platform !== 'win32' || exists(WINDOW_OWNER)) return null;
+  return `window-owner.exe is missing (${WINDOW_OWNER}): run pnpm build on Windows with the C# compiler of .NET Framework 4.8 (scripts/build-window-owner.mjs) before packaging`;
+}
+
 const config: Configuration = {
+  // Packaging stops, never ships without what the build needs (packageBlocker).
+  beforePack: (context) => {
+    const blocker = packageBlocker(context.electronPlatformName);
+    if (blocker) throw new Error(blocker);
+  },
   // Identity is fixed forever (ARCHITECTURE.md §15.0). The same ID is
   // identity.ts's APP_ID and package.json's desktopName.
   appId: 'com.chordbrowser.Chord',
