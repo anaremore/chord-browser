@@ -18,14 +18,29 @@ describe('folderName: one folder per profile', () => {
     ['a/b', 'a\\b'],
     ['x', 'X'],
     ['', '_'],
+    // Windows drops a name's trailing dots and spaces: these would be `work`'s folder (Neon's N1 on #290).
+    ['work.', 'work'],
+    ['work ', 'work'],
+    ['..', '.'],
+    ['../x', 'x'],
+    // An id that's another's folder name is never that folder.
+    [folderName('Work'), 'Work'],
   ])('%j and %j never share a folder', (a, b) => {
     expect(sameOnDisk(a, b)).toBe(false);
   });
 
-  it.each(['con', 'CON', 'nul', 'aux', 'prn', 'com1', 'lpt9', ''])('%j never names a folder itself (Windows reserved, or empty)', (id) => {
+  it.each(['con', 'CON', 'nul', 'aux', 'prn', 'com0', 'com1', 'lpt0', 'lpt9', '', '..', '.'])('%j never names a folder itself (Windows reserved, a path step, or empty)', (id) => {
     const name = folderName(id);
     expect(name.length).toBeGreaterThan(0);
-    expect(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)).toBe(false);
+    expect(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i.test(name)).toBe(false);
+    expect(name).not.toMatch(/[./\\]/);
+  });
+
+  it('a hashed name is `_` and 32 hex digits; an id longer than any Chord makes (65) is hashed', () => {
+    expect(folderName('Work')).toMatch(/^_[0-9a-f]{32}$/);
+    expect(folderName('a'.repeat(64))).toBe('a'.repeat(64));
+    expect(folderName('a'.repeat(65))).toMatch(/^_[0-9a-f]{32}$/);
+    expect(folderName(folderName('Work'))).not.toBe(folderName('Work'));
   });
 
   it.each(['default', '01a21619-df80-7e66-9577-09ceec5d0a05', 'work-2'])('%j, as Chord makes ids: the folder it always had', (id) => {
@@ -45,6 +60,10 @@ describe('stays: forgetProfiles never removes a folder a profile in use has', ()
     expect(stays('Work', inUse, platform)).toBe(true);
     expect(stays('work', inUse, platform)).toBe(true);
     expect(stays('gone', inUse, platform)).toBe(false);
+  });
+
+  it.each(['win32', 'darwin', 'linux'] as const)('on %s: an old "Work" folder goes when only Work is in use (its folder is the hashed one)', (platform) => {
+    expect(stays('Work', new Set([folderName('Work')]), platform)).toBe(false);
   });
 
   it('on Linux (case kept): only the names in use stay; the old "Work" folder is another one, and goes', () => {
