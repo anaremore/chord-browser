@@ -114,6 +114,16 @@ describe('holdFilePickers', () => {
     expect(pickersUnsecured(contents)).toBe(true);
   });
 
+  it('a failed hold stays unsecured through a new document (round 2 of #282; #287): only a hold that’s on starts each document clean', async () => {
+    const { contents, page } = fake();
+    holdFilePickers(contents, () => undefined);
+    await settle();
+    holdFailed(contents);
+    page.emit('did-navigate');
+    expect(pickersUnsecured(contents)).toBe(true);
+    expect(pickersLost(contents)).toBe(true);
+  });
+
   it('let go of: the hold is lost (acting refused) until it’s attached and armed again', async () => {
     vi.useFakeTimers();
     const { contents, events, sent, state } = fake();

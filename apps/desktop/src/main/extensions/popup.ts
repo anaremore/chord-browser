@@ -24,6 +24,8 @@ export interface ExtensionPopupOptions {
   /** Links the popup opens go to tabs. */
   openTab(url: string): void;
   onClosed(reason: 'blur' | 'other'): void;
+  /** What its first load waits for in its session (its proxy, its chord's ad-blocking rules; tabs.ts' whenProxied). */
+  proxyReady?(session: Session): Promise<void> | null;
 }
 
 /** How far outside the window a popup waits while it measures itself. */
@@ -107,7 +109,15 @@ export class ExtensionPopup implements FloatingView {
         if (/^https?:/i.test(url)) options.openTab(url);
       }
     });
-    void contents.loadURL(options.url).catch(() => this.close());
+    // Its session's pages wait until it's ready (its proxy, its chord's ad-blocking rules); so does this one, asked again
+    // as each wait ends, and never into a popup closed meanwhile (#287).
+    const load = (): void => {
+      if (this.closed || contents.isDestroyed()) return;
+      const pending = options.proxyReady?.(options.session);
+      if (pending) void pending.then(load);
+      else void contents.loadURL(options.url).catch(() => this.close());
+    };
+    load();
   }
 
   get isClosed(): boolean {
