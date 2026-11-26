@@ -121,7 +121,11 @@ interface Call {
  * `cancelled`: the client gave up on this call (MCP's notifications/cancelled; Neon's review of M2g-1, B5): as Stop is for
  * it, so a long call (wait_for) ends and takes down what it left in the page.
  */
-export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>, cancelled?: AbortSignal): Promise<ToolOutput> {
+/**
+ * `settled`: a snapshot taken for an action's answer (open_tab's snapshot: true): of the page as the action left it,
+ * never waiting for a load (round 1 of #232, SF1).
+ */
+export async function runControlTool(scope: ControlScope, browser: ControlBrowser, name: string, args: Record<string, unknown>, cancelled?: AbortSignal, settled = false): Promise<ToolOutput> {
   const spec = controlTool(name);
   // M2's tools exist only where the scope offers them (a build that has M2), and acting only where it lets its agent
   // act (outside agents in M2c): elsewhere they're unknown, as they were.
@@ -155,7 +159,7 @@ export async function runControlTool(scope: ControlScope, browser: ControlBrowse
       try {
         if (spec.name === 'read_form' || spec.name === 'propose_fill') return await formTool(call, spec.name, args);
         if (spec.name === 'page_diagnostics') return await diagnosticsTool(call, args);
-        if (spec.name === 'snapshot') return await snapshotTool(call, args);
+        if (spec.name === 'snapshot') return await snapshotTool(call, args, settled);
         if (spec.name === 'wait_for') return scope.waits ? await waitForTool(call, args) : refuse('There’s no tool called wait_for.');
         if (spec.level === 'act') return await actTool(call, spec.name as ActTool, args);
         return await readTool(call, spec.name, args);
@@ -191,6 +195,9 @@ const READABLE_ADDRESS = /^(https?|file):/i;
  * `unread`: what to say when one of them is no web address (the read's usual words).
  */
 function blockedNow(call: Call, nodeId: NodeId, page: ControlPage | null, unread: string, ...urls: string[]): string | null {
+  // Settings' Nothing (or the scope's own off), turned on meanwhile: nothing more is read (round 1 of #232, SF2).
+  const off = call.scope.off();
+  if (off) return off;
   const now = nodeOf(call.browser.store.state, nodeId);
   if (now?.kind !== 'tab') return CONTROL_REFUSALS.closed;
   if (!call.scope.readable(now)) return unreadable(call.scope, now);
@@ -419,7 +426,12 @@ async function readPdf(call: Call, node: TabNode, page: ControlPage, ref: string
  * that outline, and it's as of when that snapshot was taken (`retrieved_at`). It asks no card: one approval covers a
  * snapshot, all its ranges (the rules on where it may be read are still asked). Refs of tabs that closed go with them.
  */
-async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<ToolOutput> {
+/**
+ * `settled`: for an action's answer (open_tab's and navigate's snapshot: true): of the page as the action left it. No
+ * wait for a load: a page loading, before the read or after it, or one that went elsewhere as it was read, gives no
+ * outline (STILL_LOADING), never the page it was leaving (round 1 of #232, SF1).
+ */
+async function snapshotTool(call: Call, args: Record<string, unknown>, settled = false): Promise<ToolOutput> {
   const { scope, browser } = call;
   const found = resolveTab(call, args['tab_id'], 'No such tab. Use list_tabs or an attached tab id.');
   if (isOutput(found)) return found;
@@ -444,7 +456,9 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   if (refused) return refused;
   const moved = blockedNow(call, node.id, null, 'That tab could not be loaded.');
   if (moved) return refuse(moved);
-  const page = await loadedPage(browser, node.id, call.signal);
+  const loadingNow = () => pageOf(browser.tabs.get(node.id))?.isLoading() === true;
+  if (settled && loadingNow()) return refuse(STILL_LOADING);
+  const page = settled ? currentPage(browser, node.id) : await loadedPage(browser, node.id, call.signal);
   if (!page) return refuse('That tab could not be loaded.');
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const loaded = blockedNow(call, node.id, page, 'That tab could not be loaded.');
@@ -454,13 +468,18 @@ async function snapshotTool(call: Call, args: Record<string, unknown>): Promise<
   let read = await page.snapshot(scope.agent.id, token);
   // Nothing in it: a page that draws itself after it loads (the owner, 2026-11-24: a new tab's first look came back
   // empty). Taken once more when the page shows something, at most FIRST_LOOK_MS later; still nothing, the result says so.
-  if (read && read.nodes.length === 0 && !call.stopped() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped()) {
+  // Not for a page that went somewhere it may not be read, or (for an action's answer) began loading or went elsewhere:
+  // no wait, and no read, once the page has moved on (round 2 of #232).
+  const movedOn = () => (read ? blockedNow(call, node.id, page, 'That page could not be read.', read.url) !== null : false) || (settled && (loadingNow() || !sameId(page, pageId)));
+  if (read && read.nodes.length === 0 && !call.stopped() && !movedOn() && (await page.shows(FIRST_LOOK_MS)) && !call.stopped() && !movedOn()) {
     token = randomBytes(12).toString('hex');
     read = await page.snapshot(scope.agent.id, token);
   }
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   const after = blockedNow(call, node.id, page, 'That page could not be read.', ...(read ? [read.url] : []));
   if (after) return refuse(after);
+  // For an action's answer: a page that began loading, or went elsewhere, as it was read: no outline, no ref.
+  if (settled && (loadingNow() || !sameId(page, pageId))) return refuse(STILL_LOADING);
   if (!read) return refuse('That page could not be read.');
   let refs = elements.get(node.id);
   if (!refs) elements.set(node.id, (refs = new ElementRefs()));
@@ -666,11 +685,50 @@ const NOTHING_SHOWN = (again: string) => `The page shows nothing yet (it may sti
 async function actTool(call: Call, tool: ActTool, args: Record<string, unknown>): Promise<ToolOutput> {
   // A tab of yours (the assistant): its lease, begun in actOn once the tab's checked, always ended here.
   const leased: { node: TabNode | null } = { node: null };
+  let out: ToolOutput;
   try {
-    return await actOn(call, tool, args, leased);
+    out = await actOn(call, tool, args, leased);
   } finally {
     if (leased.node) call.scope.act?.lease?.end(leased.node);
   }
+  // With snapshot: true, the page it went to, as snapshot gives it (S18 M2g-2 slice 3a, #204): once the action is over
+  // and its hold let go of, by snapshot's own call, every read rule with it.
+  if (tool !== 'navigate' || args['snapshot'] !== true || !call.scope.outlineOnGo || out.isError) return out;
+  return withOutline(out, 'navigate', () => snapshotTool(call, { tab_id: args['tab_id'] }, true));
+}
+
+/** No outline for a page still loading when the action answered: never a second wait (open_tab's limit stands). */
+export const STILL_LOADING = 'The page was still loading, so its outline wasn’t taken: call snapshot in a moment.';
+
+/**
+ * An action's answer with the page's outline (S18 M2g-2 slice 3a, #204): snapshot's own answer, its envelope untouched,
+ * with the action's words under the tool's name (less what the envelope says: the tab, page, address and title; and the
+ * note to call snapshot, which the outline answers). No outline (the read refused, or the page still loading): the
+ * action's answer as it was, saying why in `no_outline`, in Chord's words (snapshot's refusal), never the page's. The
+ * action happened either way: never an error.
+ */
+export async function withOutline(action: ToolOutput, tool: 'open_tab' | 'navigate', look: () => Promise<ToolOutput>): Promise<ToolOutput> {
+  if (action.isError || !action.text) return action;
+  const acted = JSON.parse(action.text) as { data: Record<string, unknown> } & Record<string, unknown>;
+  const noOutline = (why: string): ToolOutput => ({ text: JSON.stringify({ ...acted, data: { ...acted.data, no_outline: why } }) });
+  if (acted.data['loading'] === true) return noOutline(STILL_LOADING);
+  const snap = await look();
+  if (snap.isError || !snap.text) return noOutline(refusalOf(snap));
+  // (Its `loading` too: it's false when there's an outline.)
+  const { tab_id: _tab, page_id: _page, url: _url, title: _title, note: _note, loading: _loading, ...rest } = acted.data;
+  return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), [tool]: rest }) };
+}
+
+/** A refusal's sentence: the shared layer's `{data: {refused}}`, or an agent's plain text (toPlain). */
+function refusalOf(out: ToolOutput): string {
+  try {
+    const data = (JSON.parse(out.text ?? '') as { data?: { refused?: unknown; error?: unknown } }).data;
+    if (typeof data?.refused === 'string') return data.refused;
+    if (typeof data?.error === 'string') return data.error;
+  } catch {
+    // Plain words already.
+  }
+  return out.text || 'That page could not be read.';
 }
 
 async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, leased: { node: TabNode | null }): Promise<ToolOutput> {

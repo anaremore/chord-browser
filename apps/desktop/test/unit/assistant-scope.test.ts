@@ -49,6 +49,16 @@ function setup() {
   return { chat, host, scope: duetScope(chat, host), mine, tab };
 }
 
+describe('navigate’s snapshot: true, behind its own flag (S18 M2g-2 slice 3a; round 1 of #232, SF3)', () => {
+  it('the scope says it only when the build’s flag is on', () => {
+    const t = setup();
+    expect(t.scope.outlineOnGo).toBeUndefined();
+    expect(duetScope(t.chat, t.host, true).outlineOnGo).toBeUndefined();
+    expect(duetScope(t.chat, t.host, true, false).outlineOnGo).toBeUndefined();
+    expect(duetScope(t.chat, t.host, true, true).outlineOnGo).toBe(true);
+  });
+});
+
 describe('An outside agent’s tab, for the assistant (S18 M2e-1)', () => {
   it('left out of everything until you point at it, even with All your tabs', () => {
     const t = setup();

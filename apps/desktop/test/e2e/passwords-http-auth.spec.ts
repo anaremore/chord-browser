@@ -123,7 +123,8 @@ const forgetSignIns = (app: ElectronApplication) =>
 test('the sign-in box: a wrong password isn’t saved, Remember saves the right one, a reload fills it, a private window fills and never saves', async () => {
   test.setTimeout(180_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-passwords-http-'));
-  const app = await launch({ CHORD_HOME_URL: `${router.origin}/admin`, CHORD_APPEARANCE: 'light', CHORD_E2E_NO_KEYRING: '1' }, { profile, args: [MAP] });
+  // The hooks: what main's sign-in boxes did, should the Staff sign-in below fail (#199).
+  const app = await launch({ CHORD_HOME_URL: `${router.origin}/admin`, CHORD_APPEARANCE: 'light', CHORD_E2E_NO_KEYRING: '1', CHORD_E2E_HOOKS: '1' }, { profile, args: [MAP] });
   const findings: Finding[] = [];
   try {
     const shell = await pageWhere(app, isShell);
@@ -253,8 +254,24 @@ test('the sign-in box: a wrong password isn’t saved, Remember saves the right 
     await expect(staff.getByRole('checkbox', { name: 'Remember' })).toHaveCount(0);
     await staff.getByLabel('Username').fill(OTHER_USER);
     await staff.getByLabel('Password').fill(OTHER_PASSWORD);
+    // #199: on CI's macOS arm64 runners this sign-in was sometimes never sent. Should it fail again, the failure says what
+    // the box and main saw at the click (no passwords: only how long the typed one is).
+    const boxState = () =>
+      staff.evaluate((form) => {
+        const signIn = [...form.querySelectorAll('button')].find((b) => b.textContent?.includes('Sign in'));
+        const fields = [...form.querySelectorAll('input')].map((i) => (i.type === 'password' ? `password(${i.value.length})` : `${i.type}=${i.value}`));
+        const active = document.activeElement;
+        return { signIn: signIn ? { disabled: signIn.disabled } : null, fields, active: active ? `${active.tagName}${active.id ? `#${active.id}` : ''}` : null, boxes: document.querySelectorAll('[role="alertdialog"]').length };
+      });
+    const mainState = () => app.evaluate(() => (globalThis as unknown as { chordTestHooks: { httpAuth(): unknown } }).chordTestHooks.httpAuth());
+    const atClick = { box: await boxState(), main: await mainState() };
     await staff.getByRole('button', { name: 'Sign in' }).click();
-    await expect.poll(() => router.tried.at(-1)).toBe(`${OTHER_USER}:${OTHER_PASSWORD}`);
+    try {
+      await expect.poll(() => router.tried.at(-1)).toBe(`${OTHER_USER}:${OTHER_PASSWORD}`);
+    } catch (error) {
+      const after = { box: (await staff.count()) === 0 ? 'gone' : await boxState(), main: await mainState().catch(() => null), tried: router.tried.length };
+      throw new Error(`${(error as Error).message}\n[#199] at the click: ${JSON.stringify(atClick)}\n[#199] 10 s later: ${JSON.stringify(after)}`, { cause: error });
+    }
     await expect(staff).toBeHidden();
     await expect(privatePopover.getByRole('dialog')).toHaveCount(0);
     expect(await savedRows(app, shell)).toHaveLength(1);

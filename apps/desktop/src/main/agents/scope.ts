@@ -95,6 +95,7 @@ export function agentScope(agent: ControlAgent, deps: AgentScopeDeps): ControlSc
     cardWaitMs: CONTROL_WAIT_MS,
     sendWaitMs: CONTROL_WAIT_MS,
     waits: true,
+    outlineOnGo: true,
     activity: async () => undefined,
   };
 }
