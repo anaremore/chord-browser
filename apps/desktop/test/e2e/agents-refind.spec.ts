@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type ElectronApplication } from '@playwright/test';
+import { ACT_REFUSALS } from '@chord/core';
 import { failOnMainErrors } from './main-errors';
 import { isPopover, pageWhere } from './a11y-kit';
 import { CODEX, agents, answer, appDir, launch, reached, refOf, relay, siteCardOf, startAgentSite } from './agents-shared';
@@ -98,8 +99,8 @@ test('a table that redraws its buttons: a ref whose node was replaced is found a
     expect(deleted.data.done).toBe('Clicked “Delete row”');
     expect(deleted.data.refound).toBeTruthy();
     await expect.poll(read).toContain('Delete row');
-    // Two buttons named alike in one place: never a guess.
-    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Bet"') })).text).toBe(STALE);
+    // Two buttons named alike in one place: never a guess, and said so (#211).
+    expect((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Bet"') })).text).toBe(ACT_REFUSALS.ambiguous);
     // Raise, now in a form that buys: not the element the snapshot named.
     expect(JSON.parse((await mcp.call('click', { tab_id: 'a1', ref: refOf(outline, 'button "Switch"') })).text)).toMatchObject({ data: { done: 'Clicked “Switch”' } });
     await new Promise((r) => setTimeout(r, 700));
@@ -892,6 +893,82 @@ test('read_tab by a part’s container ref: just its shown text, as the page rea
   }
 });
 
+test('a control drawn late is waited for, then its ref acts; look-alikes are told apart by their item, or refused, never guessed (#211)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const allowed = await allowing(app, mcp);
+    const logOf = (path: string) => app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('document.getElementById("log").textContent'), `${site.origin}${path}`) as Promise<string>;
+    type Look = { tab_id: string; content: string };
+
+    // Late: not there at the first look; wait_for it, then its ref (shown by the wait's answer) acts.
+    const lobby = JSON.parse((await allowed('open_tab', { url: `${site.origin}/late`, snapshot: true })).text) as Look;
+    expect(lobby.content).not.toContain('Join table');
+    // Met: what changed since the first look (or the outline), with the button's ref.
+    const answered = JSON.parse((await allowed('wait_for', { tab_id: lobby.tab_id, role: 'button', name: 'Join table', snapshot: true, timeout_ms: 10_000 })).text) as { content?: string; data?: { page_changes?: { lines?: string[] } } };
+    const waited = answered.content ?? (answered.data?.page_changes?.lines ?? []).join('\n');
+    const join = /button "Join table" \[ref=(e\d+)\]/.exec(waited)?.[1];
+    expect(join, waited).toBeDefined();
+    expect((await allowed('click', { tab_id: lobby.tab_id, ref: join! })).isError).toBe(false);
+    await expect.poll(() => logOf('/late')).toContain('joined');
+    // A styled checkbox drawn late (the box unseen, its label shown): waited for as the snapshot sees it, never timed out.
+    const agreed = await allowed('wait_for', { tab_id: lobby.tab_id, role: 'checkbox', name: 'Agree to the rules', timeout_ms: 5000 });
+    expect(JSON.parse(agreed.text), agreed.text).toMatchObject({ data: { met: true } });
+
+    // Look-alikes in named sections, redrawn every 100 ms: a find by the section's words names the one meant, and its
+    // ref acts on that one, found again after the redraw.
+    const drafts = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins`, snapshot: true })).text) as Look;
+    const found = JSON.parse((await mcp.call('snapshot', { tab_id: drafts.tab_id, find: 'Delete Draft B' })).text) as Look;
+    const draftB = /button "Delete" \[ref=(e\d+)\] \(in region "Draft B"\)/.exec(found.content)?.[1];
+    expect(draftB, found.content).toBeDefined();
+    await new Promise((r) => setTimeout(r, 300));
+    const deleted = await allowed('click', { tab_id: drafts.tab_id, ref: draftB! });
+    expect(deleted.isError, deleted.text).toBe(false);
+    await expect.poll(() => logOf('/twins')).toBe(' deleted B');
+
+    // In unnamed list items, the two are alike in every way the page keeps: after a redraw, which one was meant can't be
+    // told. Refused, saying how to choose; nothing deleted.
+    const plain = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins-plain`, snapshot: true })).text) as Look;
+    const second = [...plain.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)][1]?.[1];
+    expect(second, plain.content).toBeDefined();
+    await new Promise((r) => setTimeout(r, 300));
+    const refused = await allowed('click', { tab_id: plain.tab_id, ref: second! });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toBe(ACT_REFUSALS.ambiguous);
+    expect(await logOf('/twins-plain')).toBe('');
+
+    // The same in a snapshot cut short (more on the page than it reads): the twins it saw are still twins.
+    const cut = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins-cut`, snapshot: true })).text) as Look;
+    const cutSecond = [...cut.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)][1]?.[1];
+    expect(cutSecond, cut.content.slice(0, 400)).toBeDefined();
+    await new Promise((r) => setTimeout(r, 300));
+    const cutRefused = await allowed('click', { tab_id: cut.tab_id, ref: cutSecond! });
+    expect(cutRefused.isError).toBe(true);
+    expect(cutRefused.text).toBe(ACT_REFUSALS.ambiguous);
+    expect(await logOf('/twins-cut')).toBe('');
+
+    // One at the first look, two alike by the time it's clicked: found again twice over, refused the same way.
+    const later = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twin-later`, snapshot: true })).text) as Look;
+    const deletes = [...later.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)].map((m) => m[1]);
+    expect(deletes, later.content).toHaveLength(1);
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('window.twin()'), `${site.origin}/twin-later`);
+    await new Promise((r) => setTimeout(r, 300));
+    const twice = await allowed('click', { tab_id: later.tab_id, ref: deletes[0]! });
+    expect(twice.isError).toBe(true);
+    expect(twice.text).toBe(ACT_REFUSALS.ambiguous);
+    expect(await logOf('/twin-later')).toBe('');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('a game whose action controls are pointer divs, re-rendered every 100 ms and every frame; a bet field the page takes the focus from (the owner’s retest of #117)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
@@ -1007,7 +1084,10 @@ test('a press tried again when the page replaces the element as the pointer arri
     // Between tries, a closed root on it, a twin beside it, it in a form that posts: refused, nothing clicked or sent.
     expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('closed') })).text).toBe('Chord can’t see inside that element (it hides what’s in it from other scripts), so it doesn’t act on it. Ask the user to.');
     expect(await log()).toBe('');
-    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('twin') })).text).toBe(STALE);
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('twin') })).text).toBe(ACT_REFUSALS.ambiguous);
+    expect(await log()).toBe('');
+    // Twins at the snapshot already, redrawn as the pointer arrives: the same refusal, never changed (#211's review).
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('twins') })).text).toBe(ACT_REFUSALS.ambiguous);
     expect(await log()).toBe('');
     expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('form') })).text).toBe(STALE);
     expect(await log()).toBe('');
@@ -1050,15 +1130,20 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
     expect(JSON.parse((await folding).text)).toMatchObject({ data: { done: 'Clicked “Fold”' } });
     const refused = async (what: string, call: Promise<{ text: string }>, says = STALE) => expect((await call).text, what).toBe(says);
-    // Duplicates (two Deletes, one per row): never found again, whichever is gone.
+    // Duplicates (two Deletes, one per row): never found again, whichever is gone; said to have a look-alike (#211).
     o = await snap();
     await mode('gone1');
-    await refused('a Delete of two', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }));
+    await refused('a Delete of two', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }), ACT_REFUSALS.ambiguous);
+    // Both gone: no look-alike left, so changed, never "it has a look-alike" (#211's review).
+    await mode('');
+    o = await snap();
+    await mode('gone2');
+    await refused('both Deletes gone', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }));
     // A twin appears: two matches, refused.
     await mode('');
     o = await snap();
     await mode('twin');
-    await refused('a twin', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Check"') }));
+    await refused('a twin', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Check"') }), ACT_REFUSALS.ambiguous);
     // Gone (zero matches), or moved into a frame (never looked in).
     await mode('');
     o = await snap();
