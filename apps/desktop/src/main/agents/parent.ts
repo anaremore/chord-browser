@@ -2,9 +2,11 @@
  * Who started `chord mcp` (docs/decisions/S18-agent-mcp.md §3): the bridge's parent
  * and two more ancestors (shims: codex.cmd → node → codex.exe). Everything here is
  * what the OS says about a process of the same user, so it's a hint for the connect
- * card, never an identity. Looked up while the card shows, never inside a call:
- * Windows needs one PowerShell for the chain (about 1 s). Never a process's command
- * line, which can hold tokens.
+ * card, never an identity. Looked up while the card shows, never inside a call. On
+ * Windows, window-owner.exe's `chain` reads it from one process snapshot (a few ms);
+ * without the helper, one PowerShell queries each process (about 1 s, and more than
+ * its 10 s on a busy CI runner: #107). Never a process's command line, which can hold
+ * tokens.
  */
 import { execFile } from 'node:child_process';
 import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
@@ -63,9 +65,33 @@ export function sameProgram(a: string | null, b: string): boolean {
   return fold(real(a)) === fold(real(b));
 }
 
-/** The process and up to `depth - 1` of its ancestors. */
-export async function ancestry(pid: number, depth = 3): Promise<ProcessInfo[]> {
+/** window-owner.exe's `chain` answer: its processes as given (each `ProcessInfo`'s fields), or nothing. */
+export function parseChain(stdout: string): ProcessInfo[] {
+  const parsed = attempt(() => JSON.parse(stdout.trim() || '[]') as unknown);
+  if (!Array.isArray(parsed)) return [];
+  const text = (v: unknown) => (typeof v === 'string' ? v : null);
+  const id = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
+  const chain: ProcessInfo[] = [];
+  for (const o of parsed as Record<string, unknown>[]) {
+    const pid = id(o?.['pid']);
+    if (pid === null) break;
+    chain.push({ pid, name: text(o['name']), path: text(o['path']), cwd: null, ppid: id(o['ppid']) });
+  }
+  return chain;
+}
+
+/**
+ * The process and up to `depth - 1` of its ancestors. On Windows, `helper` (window-owner.exe) reads them from one
+ * process snapshot; PowerShell only where there's none.
+ */
+export async function ancestry(pid: number, depth = 3, helper: string | null = null): Promise<ProcessInfo[]> {
   if (!Number.isInteger(pid) || pid <= 1) return [];
+  if (process.platform === 'win32' && helper) {
+    const { stdout } = await run(helper, ['chain', String(pid), String(Math.min(Math.max(depth, 1), 4))], { windowsHide: true, timeout: 10_000 }).catch(() => ({ stdout: '[]' }));
+    const chain = parseChain(stdout);
+    // The helper's chain starts with the process asked about, or it's no answer.
+    return chain[0]?.pid === pid ? chain : [];
+  }
   if (process.platform === 'win32') {
     // Windows never reparents: a parent that exited leaves its PID in ParentProcessId, free for another process. One
     // created after its child isn't its parent (the PID was reused), and the chain stops there. Linux and macOS give an

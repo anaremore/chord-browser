@@ -21,6 +21,11 @@
 //     the user, and denies network logons. Chord runs it once, on the first connection.
 //   window-owner pipe-dacl <pipe>
 //     Prints that pipe's DACL as SDDL (tests).
+//   window-owner chain <process id> <depth>
+//     Prints, as one line of JSON, that process and up to depth - 1 of its ancestors (at most 4 in
+//     all), from one process snapshot: who started an agent's bridge (S18; parent.ts's ancestry).
+//     A PowerShell query of each took more than its 10 s on a busy CI runner (#107); this is
+//     a few milliseconds.
 //   window-owner pipe-clients <pipe> <server's process id>
 //     Prints, as one line of JSON, the process ids of the clients connected to that pipe's
 //     instances, which the server (Chord) holds, and each one's chain: itself, its parent and
@@ -340,11 +345,11 @@ static class WindowOwner
      * snapshot. Windows never reparents, so an exited parent's PID can be another process's: an ancestor that started
      * after its child (a reused PID) ends the chain, as does one Chord can't see when it started.
      */
-    static string Chain(uint pid, Dictionary<uint, ProcessEntry> processes)
+    static string Chain(uint pid, Dictionary<uint, ProcessEntry> processes, int depth = CHAIN_MAX)
     {
         var items = new List<string>();
         long childCreated = long.MaxValue;
-        for (int i = 0; i < CHAIN_MAX && pid > 4; i++)
+        for (int i = 0; i < depth && pid > 4; i++)
         {
             ProcessEntry entry;
             if (!processes.TryGetValue(pid, out entry)) break;
@@ -539,6 +544,14 @@ static class WindowOwner
         {
             if (!AgentPipe.IsMatch(args[1])) return 2;
             return args[0] == "restrict-pipe" ? RestrictPipe(args[1]) : PipeDacl(args[1]);
+        }
+        if (args.Length == 3 && args[0] == "chain")
+        {
+            uint pid;
+            int depth;
+            if (!uint.TryParse(args[1], out pid) || pid <= 4 || !int.TryParse(args[2], out depth) || depth < 1 || depth > CHAIN_MAX) return 2;
+            Console.WriteLine(Chain(pid, Processes(), depth));
+            return 0;
         }
         if (args.Length == 3 && args[0] == "pipe-clients")
         {

@@ -556,14 +556,18 @@ describe('Zero cost, and off in packaged builds', () => {
     ['unknown: nobody, so no program and no Always allow', null, true, 'none'],
     ['a packaged build before M2: the hello’s word, as in M1', null, false, 'hello'],
   ];
+  // On Windows the chain comes from window-owner.exe's `chain` (the build's, as Chord runs it), never PowerShell's query
+  // of each process, which took more than its 10 s on CI's busy Windows runners (#107).
+  const windowsHelper = resolve(import.meta.dirname, '../../out/window-owner/window-owner.exe');
   it.each(started)('who started it: %s', async (_name, peerPid, actions, want) => {
     const ud = profile();
     let asked: { claimed: number; endpoint: string } | null = null;
+    const helper = process.platform === 'win32' && existsSync(windowsHelper) ? windowsHelper : null;
     const service = new AgentService({
       userData: ud,
       browser,
       ask: answering('once'),
-      helper: null,
+      helper,
       waitMs: 2000,
       actions,
       peer: async (_socket, endpoint, claimed) => {
@@ -578,10 +582,9 @@ describe('Zero cost, and off in packaged builds', () => {
     expect((await c.call('list_tabs')).error).toBe(false);
     const [held] = [...service.connections];
     const chain = await held!.parent!;
+    // The right process, on every OS: never the wrong one, and never none where there is one.
     if (want === 'none') expect(chain).toEqual([]);
-    // Never the wrong process. Where the parent chain comes from the OS's own lookup (PowerShell's on Windows), CI's
-    // Windows arm64 runner has had it come back empty (issue #107): nobody is a right answer there, a wrong one never.
-    else if (chain.length > 0 || !(process.platform === 'win32' && process.arch === 'arm64')) expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
+    else expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
     if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
     else expect(asked).toBeNull();
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
