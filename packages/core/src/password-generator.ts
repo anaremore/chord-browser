@@ -200,37 +200,96 @@ interface Plan {
   readonly forced: readonly string[];
 }
 
+/** Whether the rules limit runs: then a password is built a place at a time (`buildWith`), never breaking them. */
+const limitsRuns = (rules: PasswordRuleSet) => rules.maxRepeating !== null || rules.maxSequential !== null;
+
+/**
+ * The most characters the run limits can rule out at one place of a password of `chars` (#60): the one that would
+ * repeat a run too long, and the one that would carry a run in order too far, or with `max-sequential: 1` both of the
+ * last character's neighbours. A limit on runs in order longer than `chars` can make rules out nothing.
+ */
+function ruledOut(rules: PasswordRuleSet, chars: string): number {
+  const s = rules.maxSequential;
+  const sequential = s !== null && s < runs(longestInOrder(chars)).sequential;
+  return (rules.maxRepeating === null ? 0 : 1) + (!sequential ? 0 : s <= 1 ? 2 : 1);
+}
+
+/** The longest run in order (a-z, A-Z, 0-9) that `chars` can make: `abcx` makes `abc`. */
+function longestInOrder(chars: string): string {
+  let best = '';
+  for (const range of ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789']) {
+    let run = '';
+    for (const c of range) {
+      run = chars.includes(c) ? run + c : '';
+      if (run.length > best.length) best = run;
+    }
+  }
+  return best;
+}
+
 /**
  * A lower bound on a plan's bits at `length` (never more than it has): each forced place at log2 of its own class,
  * whether or not its characters are in the pool too (review round 2 of #56), and every other place at log2(pool).
- * Shuffling the forced places in only adds to it. Run limits are the known exception: a password that breaks them is
- * drawn again, which takes a little from this and isn't subtracted yet (#60).
+ * Shuffling the forced places in only adds to it.
+ *
+ * Under run limits (#60) each place is drawn from its class less what the limits rule out there, so it counts
+ * log2(class − ruledOut) at least. A place can run out of characters only where its class has no more than that: a
+ * pool that small counts nothing (`planFor` keeps its password short); a small forced class (a lone required `-`) can
+ * leave a try with no character for it, which is then made again, and the chance of that (`stuckChance`) comes off.
  */
-function planBits(plan: Pick<Plan, 'pool' | 'forced'>, length: number): number {
+function planBits(plan: Pick<Plan, 'pool' | 'forced'>, length: number, rules: PasswordRuleSet): number {
+  const out = limitsRuns(rules) ? ruledOut(rules, plan.pool + plan.forced.join('')) : 0;
+  const placeBits = (size: number) => (size - out > 1 ? Math.log2(size - out) : 0);
+  if (out && plan.pool.length <= out) return 0;
   let bits = 0;
-  for (const cls of plan.forced) bits += Math.log2(new Set(cls).size);
+  for (const cls of plan.forced) bits += placeBits(new Set(cls).size);
   const free = Math.max(0, length - plan.forced.length);
-  return bits + (plan.pool.length > 1 ? free * Math.log2(plan.pool.length) : 0);
+  bits += free * placeBits(plan.pool.length);
+  if (!out) return bits;
+  const stuck = stuckChance(plan, length, out);
+  return stuck >= 1 ? 0 : Math.max(0, bits + Math.log2(1 - stuck));
 }
 
 /**
- * A bound on how likely a password of `length` drawn from `size` characters is to break the rules' run limits: a run
- * of r + 1 identical characters starts at a place with chance at most size^-r, and one of s + 1 in order with at most
- * 2 · size^-s (the first step either way, then the same way). Summed over every place: a union bound.
+ * A bound on how likely one try is to leave a place with no character (#60), under run limits that rule out at most
+ * `out` at a place. Only a forced class of `out` characters or fewer can be left with none, and only by the character
+ * before it: its own, or one next to it in order (three at most can do it). That one came from a class of at least
+ * `wide` characters, drawn from `wide − out` of them or more, unless it was another small forced class, whose places
+ * are anywhere in the password (the forced places are shuffled in): a chance of (small − 1)/(length − 1).
  */
-function runRisk(rules: PasswordRuleSet, size: number, length: number): number {
-  const r = rules.maxRepeating;
-  const s = rules.maxSequential;
-  return length * ((r === null ? 0 : size ** -r) + (s === null ? 0 : 2 * size ** -s));
+function stuckChance(plan: Pick<Plan, 'pool' | 'forced'>, length: number, out: number): number {
+  const sizes = plan.forced.slice(0, length).map((cls) => new Set(cls).size);
+  const small = sizes.filter((size) => size <= out).length;
+  if (!small) return 0;
+  const wide = Math.min(plan.pool.length, ...sizes.filter((size) => size > out));
+  const byOther = length > 1 ? (small - 1) / (length - 1) : 0;
+  return small * (3 / (wide - out) + byOther);
 }
 
 /**
- * A password is made longer only while `runRisk` stays at or under this: then each try meets the run limits at least
- * half the time, and with 10 tries or more (`DRAW_BUDGET` at the longest password) at least 99.9% of focuses get one.
- * Lengthening a tiny pool under a run limit (`allowed: [xy]; max-consecutive: 2;` at 40) would otherwise pass about
- * one try in 3,000 (review round 1 of #56).
+ * The longest password a pool alone can make under the run limits, up to `length` (#60): any length when it has more
+ * characters than the limits can rule out at a place, else found by trying every run (a pool this small is 3
+ * characters at most). `allowed: [a]; max-repeating: 2;` is 2.
  */
-const MAX_RUN_RISK = 0.5;
+function poolReach(pool: string, rules: PasswordRuleSet, length: number): number {
+  if (!limitsRuns(rules) || pool.length > ruledOut(rules, pool)) return length;
+  const keep = Math.max(rules.maxRepeating ?? 0, rules.maxSequential ?? 0);
+  let tails = new Set(['']);
+  for (let n = 0; n < length; n++) {
+    const next = new Set<string>();
+    for (const tail of tails) for (const c of pool) if (fits(tail, c, rules)) next.add((tail + c).slice(-keep));
+    if (!next.size) return n;
+    tails = next;
+  }
+  return length;
+}
+
+/** Whether `c` can follow `before` under the rules' run limits (`before` already meets them). */
+function fits(before: string, c: string, rules: PasswordRuleSet): boolean {
+  const keep = Math.max(rules.maxRepeating ?? 0, rules.maxSequential ?? 0);
+  const { repeating, sequential } = runs(before.slice(-keep) + c);
+  return (rules.maxRepeating === null || repeating <= rules.maxRepeating) && (rules.maxSequential === null || sequential <= rules.maxSequential);
+}
 
 /**
  * How a password for these rules is drawn (as `generatePassword` draws it), the first of these that reaches the floor
@@ -240,8 +299,9 @@ const MAX_RUN_RISK = 0.5;
  * 3. only where the rules allow nothing but look-alikes (`allowed: [0O]`), everything they allow, the same way.
  * A required class of look-alikes alone (`required: [0O]`) gets one forced place of its own in 1 and 2, and every free
  * place stays clean (review round 3 of #56); one clean character allowed (`allowed: [a0O]`) is `aaaa…`, weak.
- * Made longer only within the rules' maximum (and the vault's), and only while the run limits are still met easily
- * (`MAX_RUN_RISK`). When none reaches the floor, it's the last of them the rules allow, as long as the maximum and the
+ * Made longer only within the rules' maximum (and the vault's); under run limits each place counts what they leave
+ * of it (`planBits`), and a pool they could leave with no character is kept as short as it can fill (`poolReach`,
+ * #60). When none reaches the floor, it's the last of them the rules allow, as long as the maximum and the
  * run limits let it be, and weak: never look-alikes for strength alone, under the floor too (the owner's decision of
  * 2026-11-18; four digits are from 2–9). Null when the rules allow no character or no length.
  */
@@ -275,19 +335,14 @@ function planFor(rules: PasswordRuleSet): Plan | null {
     }
     return { pool, length, forced };
   };
-  // The longest the maximum and the run limits allow, never under the default's length.
-  const longest = (pool: string) => {
-    const perPlace = runRisk(rules, pool.length, 1);
-    return perPlace === 0 ? maxLength : Math.max(length, Math.min(maxLength, Math.floor(MAX_RUN_RISK / perPlace)));
-  };
   const reaching = (pool: string, full: boolean, lengthen: boolean): Plan | null => {
     if (!pool) return null;
     const plan = planOf(pool, full);
-    if (planBits(plan, length) >= floor) return plan;
+    if (planBits(plan, length, rules) >= floor) return plan;
     if (!lengthen || pool.length < 2) return null;
-    // The shortest length that reaches the floor: each place past `length` adds log2(pool).
-    const needed = length + Math.ceil((floor - planBits(plan, length)) / Math.log2(pool.length) - 1e-9);
-    return needed <= longest(pool) ? { ...plan, length: needed } : null;
+    // The shortest length that reaches the floor, a place at a time (each adds what the run limits leave of the pool).
+    for (let needed = length + 1; needed <= maxLength; needed++) if (planBits(plan, needed, rules) >= floor) return { ...plan, length: needed };
+    return null;
   };
   const strong = reaching(preferred, false, false) ?? reaching(clean, false, true) ?? (onlyLookAlikes ? reaching(allowed, true, true) : null);
   if (strong) return strong;
@@ -295,7 +350,15 @@ function planFor(rules: PasswordRuleSet): Plan | null {
   // it can be. A pool of one character is no stronger for being longer.
   const pool = onlyLookAlikes ? allowed : clean;
   const plan = planOf(pool, onlyLookAlikes);
-  return pool.length > 1 ? { ...plan, length: longest(pool) } : plan;
+  const reach = poolReach(pool, rules, plan.length);
+  // A pool the run limits could leave with no character: as long as it can fill, with the forced places between.
+  if (reach < plan.length) {
+    const between = plan.forced.filter((cls) => [...cls].some((c) => !pool.includes(c))).length;
+    const short = Math.max(minLength, Math.min(plan.length, reach + between));
+    return { ...plan, length: short, forced: plan.forced.slice(0, short) };
+  }
+  // A pool of one character (or one the run limits leave one of at a place) is no stronger for being longer.
+  return planBits(plan, plan.length + 1, rules) > planBits(plan, plan.length, rules) ? { ...plan, length: maxLength } : plan;
 }
 
 /**
@@ -304,7 +367,7 @@ function planFor(rules: PasswordRuleSet): Plan | null {
  */
 export function passwordBits(password: string, rules: PasswordRuleSet): number {
   const plan = planFor(rules);
-  return plan ? planBits(plan, password.length) : 0;
+  return plan ? planBits(plan, password.length, rules) : 0;
 }
 
 /** Whether a password made for these rules may be called strong (`STRONG_PASSWORD`). */
@@ -402,24 +465,65 @@ export function passwordSatisfies(password: string, rules: PasswordRuleSet): boo
  * alphabet where the rules allow them, and never a look-alike where they allow anything else (`planFor`).
  */
 export function generatePassword(rules: PasswordRuleSet, randomInt: RandomInt): string | null {
+  const plan = drawable(rules);
+  if (!plan) return null;
+  const tries = Math.max(1, Math.min(TRIES, Math.floor(DRAW_BUDGET / (plan.length * 2))));
+  for (let attempt = 0; attempt < tries; attempt++) {
+    const password = drawWith(plan, rules, randomInt);
+    if (password !== null) return password;
+  }
+  return null;
+}
+
+/** The plan a password is drawn by, or null when the rules can't be met. */
+function drawable(rules: PasswordRuleSet): Plan | null {
   const plan = planFor(rules);
   if (!plan) return null;
   const allowed = rules.allowed.replace(/ /g, '');
   if (!rules.required.every((cls) => intersect(cls, allowed))) return null;
+  return plan.forced.length > plan.length ? null : plan;
+}
+
+/** One try at a password by `plan`: the password, or null when this try broke the rules (another may not). */
+function drawWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): string | null {
+  if (limitsRuns(rules)) return buildWith(plan, rules, randomInt);
   const { pool, length, forced } = plan;
-  if (forced.length > length) return null;
   const pick = (from: string) => from[randomInt(from.length)]!;
-  const tries = Math.max(1, Math.min(TRIES, Math.floor(DRAW_BUDGET / (length * 2))));
-  for (let attempt = 0; attempt < tries; attempt++) {
-    const chars = forced.map(pick);
-    while (chars.length < length) chars.push(pick(pool));
-    // Fisher–Yates, so the required characters are anywhere.
-    for (let i = chars.length - 1; i > 0; i--) {
-      const j = randomInt(i + 1);
-      [chars[i], chars[j]] = [chars[j]!, chars[i]!];
-    }
-    const password = chars.join('');
-    if (passwordSatisfies(password, rules)) return password;
+  const chars = forced.map(pick);
+  while (chars.length < length) chars.push(pick(pool));
+  // Fisher–Yates, so the required characters are anywhere.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j]!, chars[i]!];
   }
-  return null;
+  const password = chars.join('');
+  return passwordSatisfies(password, rules) ? password : null;
+}
+
+/**
+ * One try under run limits (#60): where the forced places go first (shuffled, as `drawWith` shuffles them in), then
+ * each place in turn from its class less the characters that would break a run there. Never a run too long, so no try
+ * is thrown away for one; a try is lost only where a small class has nothing left (`stuckChance`).
+ */
+function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): string | null {
+  const { pool, length, forced } = plan;
+  const places = [...forced];
+  while (places.length < length) places.push(pool);
+  for (let i = places.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [places[i], places[j]] = [places[j]!, places[i]!];
+  }
+  let password = '';
+  for (const cls of places) {
+    const left = [...new Set(cls)].filter((c) => fits(password, c, rules));
+    if (!left.length) return null;
+    password += left[randomInt(left.length)];
+  }
+  return passwordSatisfies(password, rules) ? password : null;
+}
+
+/** Tests only (#60): one try, as `generatePassword` makes each, so every outcome of its random numbers can be counted. */
+export function drawOnce(rules: PasswordRuleSet, randomInt: RandomInt): string | null {
+  const plan = drawable(rules);
+  return plan ? drawWith(plan, rules, randomInt) : null;
 }

@@ -1,0 +1,42 @@
+[
+ [
+  "",
+  [
+   "ABhdizyVAqLD69D-Tr-s",
+   "cgWZMwAiQ3wmWEKt-4H9",
+   "SsRr5Due-AjDQDVXtH4m"
+  ]
+ ],
+ [
+  "maxlength: 8; allowed: lower, upper, digit;",
+  [
+   "8SArr6L8",
+   "wG4MH3tD",
+   "UDCjtAe5"
+  ]
+ ],
+ [
+  "allowed: digit; required: [-]; maxlength: 12;",
+  [
+   "536479-95592",
+   "8585-4384226",
+   "-25--2755253"
+  ]
+ ],
+ [
+  "allowed: ascii-printable; required: [!@#$%];",
+  [
+   "ABhdizyVaqLDN-D-T%9s",
+   "cgWZMwAiQ-wmWEK%6Gh9",
+   "SsRrLDue2ajDQD-X%H4m"
+  ]
+ ],
+ [
+  "allowed: [ab]; required: [0]; maxlength: 10;",
+  [
+   "bbaa0bbabb",
+   "baba0abbaa",
+   "aaababaa0a"
+  ]
+ ]
+]
