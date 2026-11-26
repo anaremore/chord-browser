@@ -389,7 +389,15 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<div inert><section aria-label="Inert part"><p>inert-part-secret</p></section></div>' +
       '<section aria-label="Contents hidden" style="display:contents;visibility:hidden"><p>contents-secret</p></section>' +
       '<div id="shadowhost" role="region" aria-label="Shadowed"></div><script>document.getElementById("shadowhost").attachShadow({ mode: "open" }).innerHTML = "<p>shadow-words</p>";</script>' +
-      '<section aria-label=""><p>empty-label-words</p></section><section aria-labelledby="no-such-id"><p>dangling-label-words</p></section></main>',
+      '<section aria-label=""><p>empty-label-words</p></section><section aria-labelledby="no-such-id"><p>dangling-label-words</p></section>' +
+      // Parts the test changes after the snapshot (round 2 of #260): each wrapper made inert, hidden but shown by CSS, an
+      // editor; a shadow host made inert; a part adopted into the frame; a part made inert itself.
+      '<div id="w-inert"><section aria-label="Inert later"><p>inertlater-secret</p></section></div>' +
+      '<div id="w-hidden"><section aria-label="Hidden later"><p>hiddenlater-secret</p></section></div>' +
+      '<div id="w-editor"><section aria-label="Editor later"><p>editorlater-secret</p></section></div>' +
+      '<div id="w-shadow"></div><script>document.getElementById("w-shadow").attachShadow({ mode: "open" }).innerHTML = "<section aria-label=\\"In a shadow\\"><p>shadowpart-secret</p></section>";</script>' +
+      '<section id="adopted" aria-label="Adopted"><p>adopted-secret</p></section>' +
+      '<section id="self-inert" aria-label="Self inert"><p>selfinert-secret</p></section></main>',
     '/article50':
       '<title>Fifty sections</title><main><h1>Fifty sections</h1>' +
       Array.from({ length: 50 }, (_, i) => `<section aria-label="Section ${i + 1}"><h2>Section ${i + 1}</h2><p>${i === 36 ? 'The code word is saffron. ' : ''}${'This paragraph is here to make the section as long as a real one, with nothing to find in it. '.repeat(12)}</p></section>`).join('') +

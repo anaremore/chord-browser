@@ -56,6 +56,18 @@ export const TEXT_LIB = String.raw`
     const position = getComputedStyle(el).position;
     return position !== 'absolute' && position !== 'fixed';
   };
+  // Whether a part can be read on its own by its ref, never more than the page read gives (#207; rounds 1 and 2 of
+  // #260): itself and every ancestor, out through shadow hosts, one the strict walk would enter. Shown (an off-screen
+  // wrapper, a hidden one shown by CSS, isn't), not a tag it skips (a button), not an ARIA text field, not inert; an
+  // editor is said as one. Null if it can; else 'stale' or 'editor'. The snapshot gives no ref to a part it refuses
+  // (round 2 of #260: never a ref whose read is always refused), and the read checks it again.
+  const partBlocked = (el) => {
+    for (let n = el; n; n = n.parentElement || (n.parentNode && n.parentNode.host) || null) {
+      if (n.isContentEditable) return 'editor';
+      if (TEXT_SKIP.has(n.tagName) || TEXT_TYPED.has(textRole(n)) || n.hasAttribute('inert') || !textVisible(n)) return 'stale';
+    }
+    return null;
+  };
   const readText = (root, strict) => {
     const out = [];
     let total = 0;

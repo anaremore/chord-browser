@@ -286,6 +286,7 @@ export function snapshotScript(owner: string, token: string, pinned = true, boxe
   const args = { owner, token, pinned, boxes, scan: SNAPSHOT_SCAN, ms: SNAPSHOT_SCAN_MS, maxRefs: SNAPSHOT_MAX_REFS, nameMax: SNAPSHOT_NAME_MAX, owners: SNAPSHOT_OWNERS, history: SNAPSHOT_HISTORY };
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
+  ${boxes ? TEXT_LIB : ''}
   const started = performance.now();
   const nodes = [];
   const keep = [];
@@ -407,7 +408,8 @@ export function snapshotScript(owner: string, token: string, pinned = true, boxe
         if (keep.length >= args.maxRefs) cut.refs = true;
         else { node.key = keep.length; keep.push({ ref: new WeakRef(el), role, name: node.name, parts: shapeParts(el, chain ? chain.near : NO_NEAR), chain }); }
       }
-      if (args.boxes && CONTAINERS.has(role) && boxes.length < args.maxRefs) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
+      // A part's ref only where its read would go (round 2 of #260, N1: never one always refused as changed).
+      if (args.boxes && CONTAINERS.has(role) && boxes.length < args.maxRefs && !partBlocked(el)) { node.box = boxes.length; boxes.push({ ref: new WeakRef(el), role, name }); }
       nodes.push(node);
       // A frame is listed, never entered; a field's inside is what's typed in it (or its options); an acted-on
       // element's words are its name.
@@ -654,18 +656,14 @@ export function boxTextScript(owner: string, token: string, box: number): string
   const read = snapshotFind(args.owner, args.token);
   const b = read && read.boxes ? read.boxes[args.box] : null;
   const el = b ? b.ref.deref() : null;
-  // Still in this document (never one adopted into a frame), shown, and not itself what the walk never reads.
-  if (!el || !el.isConnected || el.ownerDocument !== document || !textVisible(el) || TEXT_SKIP.has(el.tagName)) return { ok: false, why: 'stale' };
-  if (el.isContentEditable) return { ok: false, why: 'editor' };
+  // Still in this document (never one adopted into a frame).
+  if (!el || !el.isConnected || el.ownerDocument !== document) return { ok: false, why: 'stale' };
+  // Never more than the page read gives (rule 1): itself and every ancestor, as the snapshot checked them (partBlocked),
+  // again now: made inert, hidden, an editor since are refused (rounds 1 and 2 of #260).
+  const blocked = partBlocked(el);
+  if (blocked) return { ok: false, why: blocked };
   const role = roleNow(el);
   if (role !== b.role || nameOf(el, role) !== b.name) return { ok: false, why: 'stale' };
-  // Never more than the page read gives (round 1 of #260, rule 1): every ancestor, out through shadow hosts, is one the
-  // walk would enter: shown (an off-screen wrapper, a hidden one shown by CSS), not a tag it skips (a button), not an
-  // ARIA text field nor inert (the strict walk's), not an editor.
-  for (let n = el.parentElement || (el.parentNode && el.parentNode.host) || null; n; n = n.parentElement || (n.parentNode && n.parentNode.host) || null) {
-    if (n.isContentEditable) return { ok: false, why: 'editor' };
-    if (TEXT_SKIP.has(n.tagName) || TEXT_TYPED.has(textRole(n)) || n.hasAttribute('inert') || !textVisible(n)) return { ok: false, why: 'stale' };
-  }
   return { ok: true, url: location.href, role: b.role, name: b.name, text: readText(el, true) };
 })(${JSON.stringify({ owner, token, box })})`;
 }

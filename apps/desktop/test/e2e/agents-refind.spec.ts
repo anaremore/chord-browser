@@ -788,9 +788,11 @@ test('read_tab by a part’s container ref: just its shown text, as the page rea
     expect(whole).toContain('Shown words: order 12 shipped.');
     expect(whole).toContain('hidden-inert');
 
-    // Never more than the page read gives (round 1 of #260): a part inside something the page read never enters is
-    // refused as stale (or has no ref at all), and its words are never read.
+    // Never more than the page read gives (rounds 1 and 2 of #260): a part inside something the page read never enters
+    // gets no ref (its read would always be refused), and its words are never read. Where the page read leaves them out
+    // too, it does.
     const STALE = 'That part has changed since your snapshot, or the page moved on: call snapshot again.';
+    const EDITOR = 'That part is an editor: what shows in it is what’s typed there, so it isn’t read.';
     const unread: [string, string, boolean][] = [
       // [the part, its words, whether the page read leaves them out too]
       ['Offscreen', 'offscreen-secret', true],
@@ -801,13 +803,27 @@ test('read_tab by a part’s container ref: just its shown text, as the page rea
       ['Inert part', 'inert-part-secret', false],
     ];
     for (const [name, words, pageLeavesOut] of unread) {
-      const ref = partRef(`region "${name}"`);
-      if (ref) {
-        const read = await mcp.call('read_tab', { tab_id: tab, ref });
-        expect(read.isError, name).toBe(true);
-        expect(read.text, name).toBe(STALE);
-      }
+      expect(partRef(`region "${name}"`), name).toBeUndefined();
       if (pageLeavesOut) expect(whole, name).not.toContain(words);
+    }
+    // Changed after the snapshot (round 2 of #260): each had its ref, and its read now is refused, never read.
+    const later: [string, string, string, string][] = [
+      // [the part, its words, what the page does, what it says]
+      ['Inert later', 'inertlater-secret', 'document.getElementById("w-inert").inert = true', STALE],
+      ['Hidden later', 'hiddenlater-secret', 'const w = document.getElementById("w-hidden"); w.hidden = true; w.style.display = "block"', STALE],
+      ['Editor later', 'editorlater-secret', 'document.getElementById("w-editor").contentEditable = "true"', EDITOR],
+      ['In a shadow', 'shadowpart-secret', 'document.getElementById("w-shadow").inert = true', STALE],
+      ['Adopted', 'adopted-secret', 'document.querySelector("iframe").contentDocument.body.appendChild(document.getElementById("adopted"))', STALE],
+      ['Self inert', 'selfinert-secret', 'document.getElementById("self-inert").inert = true', STALE],
+    ];
+    const laterRefs = later.map(([name]) => partRef(`region "${name}"`));
+    for (const [i, [name]] of later.entries()) expect(laterRefs[i], name).toMatch(/^c\d+$/);
+    for (const [, , change] of later) await inPage(`${change}; 0`);
+    for (const [i, [name, words, , says]] of later.entries()) {
+      const read = await mcp.call('read_tab', { tab_id: tab, ref: laterRefs[i] });
+      expect(read.isError, name).toBe(true);
+      expect(read.text, name).toBe(says);
+      expect(read.text, name).not.toContain(words);
     }
     // A part that is a shadow host reads its shadow root.
     const shadowed = JSON.parse((await mcp.call('read_tab', { tab_id: tab, ref: partRef('region "Shadowed"')! })).text) as { content: string };
