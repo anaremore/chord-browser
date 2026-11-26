@@ -8,6 +8,7 @@ import {
   activeTabId,
   extensionKey,
   isPrivateProfile,
+  profileFolderName,
   tabsInOrder,
   openedTab,
   nodeOf,
@@ -21,7 +22,7 @@ import {
 import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult, Rect, Toast } from '@chord/ipc';
 import { BaseWindow, BrowserWindow, Menu, nativeImage, type ContextMenuParams, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
 import { existsSync, readFileSync } from 'node:fs';
-import { readdir, rm } from 'node:fs/promises';
+import { cp, readdir, rm } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { send } from '../ipc';
 import type { AppWindow } from '../window';
@@ -111,6 +112,24 @@ function manifestIcon(dir: string, manifest: ManifestShape, px: number): string 
   if (!file.startsWith(resolve(dir) + sep)) return null;
   const image = nativeImage.createFromPath(file);
   return image.isEmpty() ? null : image.resize({ width: px, height: px, quality: 'best' }).toDataURL();
+}
+
+/** Two paths to one folder, on a file system that ignores case (Windows, macOS, some Linux mounts) or not (#319). */
+const samePath = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase();
+
+/**
+ * Where an install of `id` at `version` unpacks: `<root>/<profile>/<id>/<version>_<n>`, the profile's folder named
+ * one-to-one (core's profileFolderName: `Work` → `_work`, so `Work` and `work` never share one; Chord's own ids as
+ * they always were), and `n` the first that's neither on disk nor `taken` (another extension's, a twin's or an old
+ * one): an install never writes into, or on failure removes, a folder something else uses (#319).
+ */
+export function extensionFolder(root: string, profileId: string, id: string, version: string, taken: (path: string) => boolean): string {
+  const base = join(root, profileFolderName(profileId), id);
+  const clean = version.replace(/[^\d.]/g, '');
+  for (let n = 0; ; n++) {
+    const path = join(base, `${clean}_${n}`);
+    if (!existsSync(path) && !taken(path)) return path;
+  }
 }
 
 export class Extensions {
@@ -469,6 +488,8 @@ export class Extensions {
    * start checking for updates.
    */
   async start(devFolders: readonly string[] = []): Promise<void> {
+    // Profiles whose ids differ only in case sharing one folder (before #319): each gets its own, before anything loads.
+    await this.splitShared();
     // Off the launch path; installs and updates wait for it, so it never sees a folder they're writing.
     this.cleanup = this.removeOrphanFolders().catch((error: unknown) => console.error('Cleaning up old extension folders failed:', error));
     const installed = Object.values(this.deps.state().extensions);
@@ -602,7 +623,7 @@ export class Extensions {
    */
   private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer, sha256: string | null): Promise<string> {
     await this.cleanup;
-    const path = join(this.deps.root, profileId, id, `${version.replace(/[^\d.]/g, '')}_0`);
+    const path = extensionFolder(this.deps.root, profileId, id, version, (p) => this.usedBy(p) !== null);
     try {
       await unpackInWorker(this.deps.unpackWorkerPath, {
         crx,
@@ -732,7 +753,8 @@ export class Extensions {
     }
     const record: InstalledExtension = { ...e, version, path, updatedAt: Date.now() };
     this.deps.dispatch({ t: 'extension.record', extension: record });
-    if (e.path !== path) await this.removeFolder(e.path);
+    // The old version's folder, unless another extension uses it too (a twin's, #319).
+    if (!samePath(e.path, path) && this.usedBy(e.path, extensionKey(e.profileId, e.id)) === null) await this.removeFolder(e.path);
     await this.finishInstall(record);
     return true;
   }
@@ -782,9 +804,39 @@ export class Extensions {
     }
   }
 
+  /** The installed extension whose folder `path` is (compared without case, #319), other than `except`'s; null if none. */
+  private usedBy(path: string, except?: string): InstalledExtension | null {
+    for (const e of Object.values(this.deps.state().extensions)) if (extensionKey(e.profileId, e.id) !== except && samePath(e.path, path)) return e;
+    return null;
+  }
+
+  /**
+   * Store extensions sharing one version folder (the same extension and version in two profiles whose ids differ only
+   * in case, installed before #319): the first keeps it, each other gets a copy of its own and its record moves there.
+   * A copy that fails leaves it shared, as before; nothing removes a folder another extension uses, so it stays safe.
+   */
+  private async splitShared(): Promise<void> {
+    const seen: InstalledExtension[] = [];
+    for (const e of Object.values(this.deps.state().extensions).sort((a, b) => (extensionKey(a.profileId, a.id) < extensionKey(b.profileId, b.id) ? -1 : 1))) {
+      if (e.source !== 'store' || !seen.some((s) => samePath(s.path, e.path))) {
+        seen.push(e);
+        continue;
+      }
+      const to = extensionFolder(this.deps.root, e.profileId, e.id, e.version, (p) => this.usedBy(p) !== null);
+      try {
+        await cp(e.path, to, { recursive: true, errorOnExist: true, force: false });
+        this.deps.dispatch({ t: 'extension.record', extension: { ...e, path: to } });
+      } catch (error) {
+        await this.removeFolder(to);
+        console.error(`Giving ${e.name} (${e.id}) its own folder failed; it shares one this launch:`, error);
+      }
+    }
+  }
+
   /** Web Store folders no installed extension uses (removed last session, or left by an update): deleted at launch. */
   private async removeOrphanFolders(): Promise<void> {
-    const used = new Set(Object.values(this.deps.state().extensions).map((e) => resolve(e.path)));
+    // Compared without case: a folder Electron or the file system spells otherwise is still the one in use (#319).
+    const used = new Set(Object.values(this.deps.state().extensions).map((e) => resolve(e.path).toLowerCase()));
     const dirs = async (dir: string) => {
       try {
         return (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => join(dir, d.name));
@@ -794,7 +846,7 @@ export class Extensions {
     };
     for (const profileDir of await dirs(this.deps.root)) {
       for (const idDir of await dirs(profileDir)) {
-        for (const versionDir of await dirs(idDir)) if (!used.has(resolve(versionDir))) await this.removeFolder(versionDir);
+        for (const versionDir of await dirs(idDir)) if (!used.has(resolve(versionDir).toLowerCase())) await this.removeFolder(versionDir);
         if ((await readdir(idDir).catch(() => ['?'])).length === 0) await this.removeFolder(idDir);
       }
     }
