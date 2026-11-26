@@ -1444,7 +1444,8 @@ if (!app.requestSingleInstanceLock()) {
           let last: Awaited<ReturnType<typeof snapshotPage>> = null;
           for (let i = 0; i < runs; i++) {
             const started = performance.now();
-            last = await snapshotPage(contents, 'timing', `timing${i}`);
+            // As an outside agent's snapshot is (#207): its parts kept, each checked by partBlocked.
+            last = await snapshotPage(contents, 'timing', `timing${i}`, true, true);
             times.push(performance.now() - started);
             // A moment between snapshots, as an agent's are (seconds apart): the refs' items, place and shape are taken
             // in the task right after each (snapshot.ts), timed on its own.

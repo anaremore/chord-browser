@@ -84,7 +84,8 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
     type Times = { times: number[]; after: number[]; walk: number[]; nodes: number; keys: number; cut: Record<string, boolean> | null } | null;
     const timesOf = (url: string, runs: number) => app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotTimes(u: string, r: number): Promise<Times> } }).chordTestHooks.agentSnapshotTimes(u, r), [url, runs] as const);
     const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
-    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/noisy', 300, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
+    // (/article50: fifty named sections, each a part whose ref the snapshot decides by its ancestors: #207.)
+    for (const [path, rows, runs] of [['/rows-300', 300, 20], ['/noisy', 300, 20], ['/article50', 50, 20], ['/rows-4000', 4000, 5], ['/texts', 0, 5]] as const) {
       await mcp.call('open_tab', { url: `${site.origin}${path}` });
       const measured = (await timesOf(`${site.origin}${path}`, runs))!;
       const ms = sorted(measured.times);
@@ -96,6 +97,14 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
       const seen = `${path}: ${rows * 5} elements, ${measured.nodes} nodes, ${measured.keys} keys, cut ${JSON.stringify(measured.cut)}; median ${median.toFixed(1)} ms, p90 ${p90.toFixed(1)} ms, worst ${worst.toFixed(1)} ms (${ms.map((t) => t.toFixed(0)).join(' ')})`;
       test.info().annotations.push({ type: 'snapshot timing', description: seen });
       console.log(`[snapshot timing] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${seen}`);
+      // /article50 (#207): fifty named sections, each a part whose ref the snapshot decides by its ancestors. Its ratio is
+      // logged, never held: a page of 152 nodes, where the snapshot's fixed cost per call outweighs a plain walk (2.3x
+      // with no parts at all; its parts add about 0.5 ms).
+      if (path === '/article50') {
+        const walk = sorted(measured.walk);
+        const walkMedian = walk[Math.floor(walk.length / 2)]!;
+        console.log(`[snapshot ratio] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${path}: the snapshot ${(median / walkMedian).toFixed(2)}x a plain walk of the page (snapshot median ${median.toFixed(1)} ms, walk median ${walkMedian.toFixed(1)} ms; logged, not held)`);
+      }
       if (rows === 300) {
         // #166: the snapshot against a plain walk of the same page, timed in turn with it from main. A slow runner slows
         // both, so their ratio holds where milliseconds don't: held on every runner, CI's too (SNAPSHOT_RATIO_MAX; the
