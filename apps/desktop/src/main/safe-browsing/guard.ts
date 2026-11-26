@@ -173,6 +173,9 @@ export class SafeBrowsingGuard {
   navigationQueued(contents: WebContents): void {
     const watch = this.watches.get(contents);
     if (!watch) return;
+    // A navigation still on its way: once its answer no longer counts, it would arrive unwarned, even an unsafe one,
+    // until yours loads. It stops; the tab keeps loading for yours (Opus's L1, round 2 of #323).
+    if (watch.committed !== watch.seq) contents.stop();
     watch.seq++;
     if (watch.nodeId) this.clear(watch.nodeId, contents);
   }

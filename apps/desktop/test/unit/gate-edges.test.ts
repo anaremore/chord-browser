@@ -116,12 +116,14 @@ describe('Safe Browsing’s warning and a load waiting for the session (Neon’s
     deps.dispatch.mockClear();
     // You asked for another page; it waits for the session (tabs.navigate, whenProxied).
     guard.navigationQueued(contents as never);
-    // The warning still up, about the page before, goes.
+    // The warning still up, about the page before, goes; the navigation still on its way stops (Opus's L1, round 2).
     expect(deps.dispatch).toHaveBeenCalledWith({ t: 'tab.live', nodeId: 'n1', live: { threat: null } });
+    expect(contents.stop).toHaveBeenCalledOnce();
     answer({ verdict: 'unsafe', kind: 'malware' });
     await new Promise((r) => setImmediate(r));
+    // The late answer: no warning, nothing stopped or dropped for it.
     expect(deps.stopWaiting).not.toHaveBeenCalled();
-    expect(contents.stop).not.toHaveBeenCalled();
+    expect(contents.stop).toHaveBeenCalledOnce();
     expect(deps.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ live: expect.objectContaining({ threat: expect.objectContaining({ url: FLAGGED }) }) }));
   });
 });

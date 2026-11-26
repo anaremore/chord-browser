@@ -230,6 +230,9 @@ export class TabManager {
       if (way === 'back') contents.navigationHistory.goBack();
       else contents.navigationHistory.goForward();
     });
+    // Waiting for the session: Safe Browsing hears of it, as of a navigation, so a late answer can't drop it (Neon's
+    // round 2 of #323).
+    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
@@ -356,9 +359,11 @@ export class TabManager {
       if (contents.isDestroyed()) return;
       if (nav) {
         // Back where it was: same page, same back/forward list, same scroll position.
+        const turn = this.loadTurns.get(contents);
         contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
-          // Its address instead, once the session is ready (Neon's NN2, round 1 of #323); not over a load already waiting.
-          if (contents.isDestroyed() || contents.navigationHistory.length() > 0 || this.waiting.has(contents)) return;
+          // Its address instead, once the session is ready (Neon's NN2, round 1 of #323); never over a load asked for
+          // since, waiting or already loading (round 2).
+          if (contents.isDestroyed() || contents.navigationHistory.length() > 0 || this.loadTurns.get(contents) !== turn) return;
           this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
         });
       } else {
@@ -612,7 +617,8 @@ export class TabManager {
     };
 
     contents.on('did-start-loading', () => live({ loading: true, crashed: false }));
-    contents.on('did-stop-loading', () => live({ loading: false, ...history() }));
+    // A load still waiting for the session keeps the tab loading (a navigation stopped for it: Opus's L1 on #323).
+    contents.on('did-stop-loading', () => live({ loading: this.waiting.has(contents), ...history() }));
     if (internal) {
       // Chord's own page keeps its chord:// address (in development it's served from elsewhere),
       // isn't history, and has no site icon.

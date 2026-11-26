@@ -417,6 +417,84 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual([FIRST]);
   });
 
+  it('a navigation while a restored history is on its way, then the restore failing (Neon’s round 2 of #323): the navigation stays', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    t.manager.destroy(NODE);
+    t.manager.restoreHistoryOnLoad(NODE, { entries: [{ url: FIRST, title: '' }], index: 0 } as never);
+    let fail!: (e: Error) => void;
+    const rules = held();
+    waits.push(rules);
+    const page = (t.manager.ensure(NODE) as unknown as FakeView).page as FakeContents;
+    (page.navigationHistory as unknown as { restore: unknown }).restore = vi.fn(() => new Promise((_r, reject) => (fail = reject)));
+    rules.resolve();
+    await tick();
+    t.manager.navigate(NODE, SECOND);
+    fail(new Error('no'));
+    await tick();
+    expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual([SECOND]);
+  });
+
+  it('Back or Forward waiting for the session (Neon’s round 2 of #323): Safe Browsing hears of it, as of a navigation', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    const navigationQueued = vi.fn();
+    (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = navigationQueued;
+    Object.assign(t.page.navigationHistory, { canGoBack: () => true, canGoForward: () => true, goBack: vi.fn(), goForward: vi.fn() });
+    t.manager.go(t.page as never, 'back');
+    expect(navigationQueued).toHaveBeenCalledWith(t.page);
+    navigationQueued.mockClear();
+    rules.resolve();
+    await tick();
+    // The session ready: no wait, nothing to tell.
+    t.manager.go(t.page as never, 'forward');
+    expect(navigationQueued).not.toHaveBeenCalled();
+  });
+
+  it('a page on its way to an unsafe address, then your navigation waiting for the session (Opus’s L1, round 2 of #323): it never arrives unwarned; yours loads after', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const stop = vi.fn();
+    Object.assign(t.page, { stop, session: { isPersistent: () => true } });
+    let answer!: (v: unknown) => void;
+    const guard = new SafeBrowsingGuard({ state: () => t.manager['deps'].state(), dispatch: (c: Command) => void t.commands.push(c), enabled: () => true, check: () => new Promise((r) => (answer = r)), isTab: () => true, contentsOf: () => t.page, handOver: vi.fn(), closeTab: vi.fn(), stopWaiting: (c: WebContents) => void t.manager.stopWaiting(c), navigate: (n: NodeId, u: string) => t.manager.navigate(n, u) } as never);
+    (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = (c: WebContents) => guard.navigationQueued(c);
+    guard.attach(t.page as never, NODE);
+    // The page heads to an address whose check is still out.
+    t.page.emit('did-start-navigation', { url: 'https://unsafe.test/', isMainFrame: true, isSameDocument: false });
+    // The session starts changing; you type another address, which waits.
+    const proxy = held();
+    waits.push(proxy);
+    t.page.loadURL.mockClear();
+    t.manager.navigate(NODE, SECOND);
+    // The unsafe navigation is stopped: it can't arrive while its answer no longer counts.
+    expect(stop).toHaveBeenCalledOnce();
+    // Stopping it doesn't end the tab's loading: your page is on its way.
+    t.page.emit('did-stop-loading');
+    expect(t.commands.filter((c) => c.t === 'tab.live').at(-1)).toMatchObject({ live: { loading: true } });
+    answer({ verdict: 'unsafe', kind: 'malware' });
+    await tick();
+    expect(t.page.loadURL).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([SECOND]);
+  });
+
+  it('your navigation waiting when the page before has arrived (nothing in flight): nothing stopped', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const stop = vi.fn();
+    Object.assign(t.page, { stop, session: { isPersistent: () => true } });
+    const guard = new SafeBrowsingGuard({ state: () => t.manager['deps'].state(), dispatch: vi.fn(), enabled: () => true, check: async () => ({ verdict: 'safe' }), isTab: () => true, contentsOf: () => t.page, handOver: vi.fn(), closeTab: vi.fn(), navigate: vi.fn() } as never);
+    (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = (c: WebContents) => guard.navigationQueued(c);
+    guard.attach(t.page as never, NODE);
+    t.page.emit('did-start-navigation', { url: FIRST, isMainFrame: true, isSameDocument: false });
+    t.page.emit('did-navigate', {}, FIRST, 200);
+    waits.push(held());
+    t.manager.navigate(NODE, SECOND);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);
