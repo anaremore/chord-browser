@@ -1044,6 +1044,60 @@ test('a game whose action controls are pointer divs, re-rendered every 100 ms an
   }
 });
 
+test('a place is what the snapshot saw: a role the page changes before the task after it never finds another element (round 1 of #270, B1)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const url = `${site.origin}/role-twins`;
+    const opening = mcp.call('open_tab', { url });
+    await answer(app, 'Codex', 'Allow once');
+    expect((await opening).text, 'open_tab opened its tab').toMatch(/^\{/);
+    const popover = await pageWhere(app, isPopover);
+    const inPage = (code: string) => app.evaluate(({ webContents }, [u, js]) => webContents.getAllWebContents().find((c) => c.getURL() === u)!.executeJavaScript(js), [url, code] as const);
+    const log = () => inPage('document.getElementById("log").textContent') as Promise<string>;
+    const beforeFinish = (code: string) => app.evaluate((_e, [u, c]) => (globalThis as unknown as { chordTestHooks: { agentBeforeFinish(u: string, c: string): Promise<boolean> } }).chordTestHooks.agentBeforeFinish(u, c), [url, code] as const);
+    const snap = async () => (JSON.parse((await mcp.call('snapshot', { tab_id: 'a1' })).text) as { content: string }).content;
+    // The site's card, once (a click no case below needs): Allow for now. (Pick, never Confirm: a risky step's card would wait.)
+    const first = await snap();
+    const allowing = mcp.call('click', { tab_id: 'a1', ref: refOf(first, 'button "Pick"') });
+    const siteCard = siteCardOf(popover, 'Codex');
+    await expect(siteCard).toBeVisible({ timeout: 15_000 });
+    await popover.waitForTimeout(600);
+    await siteCard.getByRole('button', { name: 'Allow for now', exact: true }).click();
+    await allowing;
+    await inPage('location.reload()');
+    await expect.poll(log).toBe('');
+
+    // Twin rows: in the gap, Order A goes, row 1 draws Order B's Cancel, row 2 becomes presentation. Read live, the twins'
+    // places would differ, and Order A's Cancel would be found again in row 1: Order B's. As the walk saw them, they're
+    // twins, and Order A's ref is never found again.
+    await beforeFinish(`document.getElementById('w1').innerHTML = '<button onclick="log(\\'cancel B\\')">Cancel</button>'; document.getElementById('w2').setAttribute('role', 'presentation'); document.getElementById('w2').innerHTML = '';`);
+    const rows = await snap();
+    const cancelA = refOf(rows, 'button "Cancel"');
+    const cancelling = await mcp.call('click', { tab_id: 'a1', ref: cancelA });
+    expect(await log(), cancelling.text).not.toContain('cancel B');
+
+    // A repurposed container: twin toolbars, each with its Pick. In the gap the second becomes an (empty) dialog, and
+    // the first draws another Pick. Read live, the first toolbar's Pick would be unique, and found again in the new
+    // button. As the walk saw them they're twins, and it's never found again.
+    await inPage('location.reload()');
+    await expect.poll(log).toBe('');
+    await beforeFinish(`const d = document.getElementById('c2'); d.setAttribute('role', 'dialog'); d.innerHTML = ''; document.getElementById('c1').innerHTML = '<button onclick="log(\\'confirm other\\')">Pick</button>';`);
+    const bars = await snap();
+    const confirming = await mcp.call('click', { tab_id: 'a1', ref: refOf(bars, 'button "Pick"') });
+    expect(await log(), confirming.text).not.toContain('confirm other');
+    mcp.child.stdin!.end();
+    await mcp.exited;
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('a press tried again when the page replaces the element as the pointer arrives (the review of #117, round 3)', async () => {
   test.setTimeout(150_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));

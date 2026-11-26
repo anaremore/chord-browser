@@ -269,11 +269,14 @@ export class Extensions {
       if (w && /^(https?|chrome-extension):/i.test(link)) this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: link });
       return { action: 'deny' };
     });
-    const load = () => void (win.isDestroyed() ? undefined : win.loadURL(url).catch(() => {}));
-    // Its session's pages wait until it's ready (#189); so does this one.
-    const pending = this.deps.proxyReady?.(win.webContents.session);
-    if (pending) void pending.then(load);
-    else load();
+    // Its session's pages wait until it's ready (#189); so does this one, asked again as each wait ends (#277).
+    const load = (): void => {
+      if (win.isDestroyed()) return;
+      const pending = this.deps.proxyReady?.(win.webContents.session);
+      if (pending) void pending.then(load);
+      else void win.loadURL(url).catch(() => {});
+    };
+    load();
     return win;
   }
 

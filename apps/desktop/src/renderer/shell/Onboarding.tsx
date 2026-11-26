@@ -3,7 +3,7 @@
  * sit in the content frame, and every choice lands in the real sidebar as you
  * make it. That is the tour.
  */
-import { SAFE_BROWSING_NOTICE, type Chord, type ChordThemeSpec } from '@chord/core';
+import { SAFE_BROWSING_NOTICE, titleCase, type Chord, type ChordThemeSpec } from '@chord/core';
 import type { DefaultBrowserStatus, SystemInfo } from '@chord/ipc';
 import { PRESETS, SWATCHES, cssOklch, presetStops, type PresetId, type SwatchId } from '@chord/tokens';
 import { Check, Dices, ShieldCheck } from 'lucide-react';
@@ -42,7 +42,6 @@ const NAME_CHIPS = [
   { name: 'Home', icon: '🏡' },
 ] as const;
 
-const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 const RADIOS = { items: '[role="radio"]', current: '[aria-checked="true"]', activate: true } as const;
 const PRESET_GRAIN = 0.2;
 

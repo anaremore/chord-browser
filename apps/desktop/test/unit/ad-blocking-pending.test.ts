@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, session: {}, BrowserWindow: class {}, WebContentsView: class {} }));
 vi.mock('../../src/main/launch-timeline', () => ({ mark: vi.fn() }));
 
-const { AdBlocking } = await import('../../src/main/ad-blocking/service');
+const { AdBlocking, RULES_WAIT_MS } = await import('../../src/main/ad-blocking/service');
 const { BlockerExtension } = await import('../../src/main/ad-blocking/extension');
 const { FILTER_LISTS, setVersion } = await import('../../src/main/ad-blocking/lists');
 const { mark } = await import('../../src/main/launch-timeline');
@@ -91,6 +91,14 @@ const settled = async (p: Promise<unknown> | null) => {
   for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
   return done;
 };
+/** `until` without timers (they may be the test's): the event loop's turns, for at most a few seconds. */
+const untilTurns = async (ok: () => boolean) => {
+  const end = Date.now() + 3000;
+  while (!ok()) {
+    if (Date.now() > end) throw new Error('timed out waiting');
+    await new Promise((r) => setImmediate(r));
+  }
+};
 const marks = () => vi.mocked(mark).mock.calls.map(([m]) => m).filter((m) => m.startsWith('ad blocking'));
 
 describe('ad blocking: what a page waits for (#189)', () => {
@@ -167,16 +175,49 @@ describe('ad blocking: what a page waits for (#189)', () => {
     expect(marks()).toContain('ad blocking rules not on: off (default)');
   });
 
-  it('Chromium never answering: released at the cap, marked timeout', async () => {
-    const blocking = service({ rulesWaitMs: 50 });
-    const { session, loads } = chromium();
-    blocking.attach('default', session, false);
-    const gate = blocking.pending(session);
-    await until(() => loads.length === 1);
-    expect(await settled(gate)).toBe(false);
-    await until(() => marks().length > 0);
-    expect(await settled(gate)).toBe(true);
-    expect(marks()).toEqual(['ad blocking rules not on: timeout (default)']);
+  it('Chromium never answering: released at the 15 s cap, not a moment before, marked timeout', async () => {
+    // The cap's timer on a clock the test moves (#277: 50 ms on real timers flaked under load); the files are real.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // The extension's own load gives up at 15 s too (extension.ts' LOAD_TIMEOUT_MS, started a moment later on this
+    // clock): that failure is logged, as it is in Chord, after the cap. Kept off the test's output.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const blocking = service();
+      const { session, loads } = chromium();
+      blocking.attach('default', session, false);
+      const gate = blocking.pending(session);
+      await untilTurns(() => loads.length === 1);
+      vi.advanceTimersByTime(RULES_WAIT_MS - 1);
+      expect(await settled(gate)).toBe(false);
+      expect(marks()).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(await settled(gate)).toBe(true);
+      expect(marks()).toEqual(['ad blocking rules not on: timeout (default)']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Chromium never adding the extension: its load gives up at 15 s, so the profile’s chain goes on (#277)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { session } = chromium();
+      const blocker = new BlockerExtension(session, join(tmpdir(), 'chord-never-loaded'));
+      let outcome = 'pending';
+      blocker.load().then(
+        () => (outcome = 'loaded'),
+        () => (outcome = 'gave up'),
+      );
+      vi.advanceTimersByTime(14_999);
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+      expect(outcome).toBe('pending');
+      vi.advanceTimersByTime(1);
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+      expect(outcome).toBe('gave up');
+      expect(blocker.loaded).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('detached mid-wait (its window gone): released', async () => {

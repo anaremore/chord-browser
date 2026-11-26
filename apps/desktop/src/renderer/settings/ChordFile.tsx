@@ -7,10 +7,10 @@
  * one Undo takes it all back. Main reads the file in a process of its own;
  * this page only says how it's going.
  */
-import { IMPORT_LIMITS, importedText, type MergeCapped, type MergeCounts, type PasswordImportSummary } from '@chord/core';
+import { IMPORT_LIMITS, importedText, plural, type MergeCapped, type MergeCounts, type PasswordImportSummary } from '@chord/core';
 import type { FileImportChoices, FileImportPreview, FileImportProblem, FileImportProgress } from '@chord/ipc';
 import { useEffect, useId, useRef, useState } from 'react';
-import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
+import { ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { api } from './api';
 import { Row, Switch } from './controls';
 import { comesInText } from './PasswordTransfer';

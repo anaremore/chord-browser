@@ -101,6 +101,7 @@ export async function bypassServiceWorkers(contents: WebContents): Promise<boole
  * nothing acts there and open_tab says it couldn't be opened (round 4 of #112: never a page loaded unheld).
  */
 export function holdFailed(contents: object): void {
+  failed.add(contents);
   lost.add(contents);
   unsecured.add(contents);
   // An arming in flight counts for nothing: it can't put the hold back on (Claude's final pass).
@@ -109,6 +110,12 @@ export function holdFailed(contents: object): void {
 
 /** Per tab, its hold's way to make an arming in flight count for nothing (holdFailed). */
 const failers = new WeakMap<object, () => void>();
+/**
+ * Tabs whose hold failed (holdFailed): lost and unsecured for good. Never armed again, by a retry, a load or a timer
+ * (Neon's B1 on #282: a re-arm on the blank page counted its bypass as done without sending it, and the tab ran for
+ * life without its service workers bypassed).
+ */
+const failed = new WeakSet<object>();
 
 /** An action found the hold lost: one try now (never more than one per action), and whether it's on. */
 export async function retryPickers(contents: object): Promise<boolean> {
@@ -221,7 +228,7 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
   const arm = (): Promise<boolean> => {
     if (timer) clearTimeout(timer);
     timer = null;
-    if (contents.isDestroyed()) return Promise.resolve(false);
+    if (contents.isDestroyed() || failed.has(contents)) return Promise.resolve(false);
     arming ??= withDebugger(contents, async () => {
       const mine = ++generation;
       lost.add(contents);
@@ -237,7 +244,7 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
       const frames = framesArming;
       framesArming = null;
       const on = top && (await Promise.all(frames)).every(Boolean);
-      if (on && mine === generation && debug.isAttached()) {
+      if (on && mine === generation && debug.isAttached() && !failed.has(contents)) {
         lost.delete(contents);
         tries = 0;
         return true;
@@ -253,7 +260,7 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
   };
   /** Tried again after a growing wait, at most REARM_TRIES times in a row. */
   const later = () => {
-    if (timer || contents.isDestroyed() || ++tries > REARM_TRIES) return;
+    if (timer || contents.isDestroyed() || failed.has(contents) || ++tries > REARM_TRIES) return;
     timer = setTimeout(() => void arm(), Math.min(REARM_MS * 2 ** (tries - 1), REARM_MAX_MS));
     timer.unref?.();
   };
@@ -285,8 +292,10 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
     lost.add(contents);
     later();
   });
-  // Another document: its frames are its own (one that couldn't be held went with the old one).
-  contents.on('did-navigate', () => unsecured.delete(contents));
+  // Another document: its frames are its own (one that couldn't be held went with the old one). A failed hold stays so.
+  contents.on('did-navigate', () => {
+    if (!failed.has(contents)) unsecured.delete(contents);
+  });
   contents.on('render-process-gone', () => {
     generation++;
     lost.add(contents);
@@ -299,6 +308,9 @@ export function holdFilePickers(contents: WebContents, held: (detail: string) =>
   });
   failers.set(contents, () => {
     generation++;
+    // No retry waiting either: a failed hold is never armed again (failed).
+    if (timer) clearTimeout(timer);
+    timer = null;
   });
   // The page loads once its hold is on (framesReady: its frames' auto-attach and its sends); the rest of the arming
   // (the page's own interception) goes on beside that load.

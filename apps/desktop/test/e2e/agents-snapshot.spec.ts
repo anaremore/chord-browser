@@ -105,6 +105,19 @@ test('snapshot: the outline of a tab an agent opened, its refs, and its budgets 
         const walkMedian = walk[Math.floor(walk.length / 2)]!;
         console.log(`[snapshot ratio] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${path}: the snapshot ${(median / walkMedian).toFixed(2)}x a plain walk of the page (snapshot median ${median.toFixed(1)} ms, walk median ${walkMedian.toFixed(1)} ms; logged, not held)`);
       }
+      if (path === '/rows-300' && TIMES_HELD) {
+        // #166: what each part of the walk costs here, each left out in turn with the full snapshot (logged, never held).
+        // Where times are held (off CI, or CHORD_PERF_ENFORCE=1): 200 more snapshots would cost CI's run 15-20 s (#270).
+        type Parts = Record<string, number[]> | null;
+        const parts = (await app.evaluate((_e, [u, r]) => (globalThis as unknown as { chordTestHooks: { agentSnapshotParts(u: string, r: number): Promise<Parts> } }).chordTestHooks.agentSnapshotParts(u, r), [`${site.origin}${path}`, 40] as const))!;
+        const med = (xs: number[]) => sorted(xs)[Math.floor(xs.length / 2)]!;
+        const full = med(parts['full']!);
+        const saved = Object.entries(parts)
+          .filter(([name]) => name !== 'full')
+          .map(([name, xs]) => `${name === 'eagerPart' ? 'with the part built per element (main)' : `without ${name}`} ${med(xs).toFixed(1)} ms (${(med(xs) - full).toFixed(1)} against full)`)
+          .join('; ');
+        console.log(`[snapshot parts] ${process.env['CHORD_E2E_DISPLAY'] ?? ''} ${path}: full ${full.toFixed(1)} ms; ${saved}`);
+      }
       if (rows === 300) {
         // #166: the snapshot against a plain walk of the same page, timed in turn with it from main. A slow runner slows
         // both, so their ratio holds where milliseconds don't: held on every runner, CI's too (SNAPSHOT_RATIO_MAX; the

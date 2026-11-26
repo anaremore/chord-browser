@@ -2,10 +2,10 @@
  * What Your data's Export card says while Chord writes, and after (Settings → Your data, YourData.tsx). Plain
  * TypeScript, apart from the card, so it's tested without a renderer.
  */
+import { plural } from '@chord/core';
 import type { ExportProgress } from '@chord/ipc';
 
 const numbers = new Intl.NumberFormat('en-US');
-const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 
 /** "3.8 MB", "640 KB". */
 function fileSize(bytes: number): string {

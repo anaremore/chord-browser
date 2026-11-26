@@ -90,3 +90,11 @@ export function ago(at: number, now: number): string {
 export function openedAgo(at: number, now: number): string {
   return `Opened ${ago(at, now)}`;
 }
+
+const counted = new Intl.NumberFormat('en-US');
+
+/** A count and its noun: "1 tab", "1,204 pages", or `many` for an irregular plural ("2 people"). */
+export const plural = (n: number, one: string, many = `${one}s`): string => `${counted.format(n)} ${n === 1 ? one : many}`;
+
+/** A camelCase id as words for a label: `deepSea` → "Deep Sea". */
+export const titleCase = (id: string): string => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
