@@ -5,7 +5,7 @@
  * get exactly the passwords they got before.
  */
 import { describe, expect, it } from 'vitest';
-import { drawOnce, generatePassword, isStrongPassword, passwordBits, passwordRulesFor, passwordSatisfies, type PasswordRuleSet, type RandomInt } from '../src/password-generator';
+import { drawOnce, generatePassword, GENERATOR_CLASSES, isStrongPassword, LOOK_ALIKES, passwordBits, passwordRulesFor, passwordSatisfies, runsAllow, type PasswordRuleSet, type RandomInt } from '../src/password-generator';
 
 /** A seeded generator (mulberry32), as password-generator.test.ts has it. */
 function seeded(seed: number): RandomInt {
@@ -152,14 +152,35 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
 
   const pools = ['[ab]', '[abc]', '[abcd]', '[2345]', '[ab-]'];
   const limits = ['', 'max-repeating: 1;', 'max-repeating: 2;', 'max-sequential: 1;', 'max-sequential: 2;', 'max-consecutive: 1;', 'max-repeating: 1; max-sequential: 2;'];
-  const cases = pools.flatMap((pool) =>
-    limits.flatMap((limit) =>
-      [2, 3, ...(pool.length <= 5 ? [4] : [])].flatMap((max) => [
-        `allowed: ${pool}; maxlength: ${max}; ${limit}`,
-        ...(pool === '[ab-]' ? [`allowed: ${pool}; required: [-]; maxlength: ${max}; ${limit}`] : []),
-      ]),
+  const cases = [
+    ...pools.flatMap((pool) =>
+      limits.flatMap((limit) =>
+        [2, 3, ...(pool.length <= 5 ? [4] : [])].flatMap((max) => [
+          `allowed: ${pool}; maxlength: ${max}; ${limit}`,
+          ...(pool === '[ab-]' ? [`allowed: ${pool}; required: [-]; maxlength: ${max}; ${limit}`] : []),
+        ]),
+      ),
     ),
-  );
+    // Argon's counterexamples (design review of #60, B1): a small forced class among wider ones, and two side by side.
+    'allowed: [abcde]; required: [b]; maxlength: 4; max-sequential: 1;',
+    'allowed: [abcd]; required: [b]; required: [c]; maxlength: 4; max-sequential: 1;',
+    'allowed: [ab01]; required: [01]; max-consecutive: 1;',
+  ];
+
+  /**
+   * Whether no place of these rules' plan can be left with no character (Argon's B4): every class it draws from (the
+   * clean pool, each required class, the default's classes within the pool) has more characters than the run limits
+   * can rule out at a place. Then one try always makes a password.
+   */
+  const neverStuck = (rules: PasswordRuleSet): boolean => {
+    if (rules.maxRepeating === null && rules.maxSequential === null) return true;
+    const e = (rules.maxRepeating === null ? 0 : 1) + (rules.maxSequential === null ? 0 : rules.maxSequential <= 1 ? 2 : 1);
+    const allowed = rules.allowed.replace(/ /g, '');
+    const pool = [...allowed].filter((c) => !LOOK_ALIKES.includes(c)).join('') || allowed;
+    const within = (cls: string, of: string) => [...new Set(cls)].filter((c) => of.includes(c));
+    const classes = [pool, ...rules.required.map((cls) => within(cls, allowed).join('')), ...Object.values(GENERATOR_CLASSES).map((cls) => within(cls, pool).join(''))];
+    return classes.filter(Boolean).every((cls) => new Set(cls).size > e);
+  };
 
   it.each(cases)('%s', (site) => {
     const rules = rulesOf(site);
@@ -171,13 +192,58 @@ describe('the strength shown is a lower bound: every outcome of the random numbe
       for (let n = rules.minLength || 1; n <= Math.min(rules.maxLength, 4); n++) expect(exists(rules, allowed, n), `length ${n}`).toBe(false);
       return;
     }
-    // Most tries make one, or a focus could go without (a password offered on 99.9% of focuses at 300 tries).
+    // Most tries make one, or a focus could go without (a password offered on 99.9% of focuses at 300 tries); every
+    // try, where no place can be left with nothing.
     if (anyAtMax) expect(made).toBeGreaterThan(0.02);
+    if (neverStuck(rules)) expect(made).toBeCloseTo(1, 12);
     const likeliest = Math.max(...chances.values()) / made;
     const minEntropy = -Math.log2(likeliest);
     for (const p of chances.keys()) {
       expect(passwordSatisfies(p, rules), p).toBe(true);
       expect(passwordBits(p, rules), p).toBeLessThanOrEqual(minEntropy + 1e-9);
+    }
+  });
+});
+
+describe('a pool the run limits can’t fill on its own (Argon’s B2)', () => {
+  it('allowed: [ab01]; required: [01]; max-consecutive: 1: 3 long, a 0 or 1 between a and b', () => {
+    const rules = rulesOf('allowed: [ab01]; required: [01]; max-consecutive: 1;');
+    const { rate, passwords } = focuses(rules, 200);
+    expect(rate).toBe(1);
+    for (const p of passwords) {
+      expect(p).toMatch(/^[ab][01][ab]$/);
+      expect(isStrongPassword(p, rules)).toBe(false);
+    }
+  });
+
+  it('a minimum the pool can’t reach: nothing, at once (no draws)', () => {
+    let draws = 0;
+    const counted: RandomInt = (n) => (draws++, seeded(5)(n));
+    expect(generatePassword(rulesOf('allowed: [a]; max-repeating: 2; minlength: 5;'), counted)).toBeNull();
+    expect(generatePassword(rulesOf('allowed: [ab]; max-consecutive: 1; minlength: 2;'), counted)).toBeNull();
+    expect(draws).toBe(0);
+  });
+});
+
+describe('a pool the run limits leave a single character a place (Argon’s B3)', () => {
+  it.each(['allowed: [abcd]; max-consecutive: 1;', 'allowed: [ab]; max-repeating: 1;', 'allowed: [abc]; max-consecutive: 1;'])('%s: a finite length, never lengthened for nothing', (site) => {
+    const rules = rulesOf(site);
+    const p = generatePassword(rules, seeded(8));
+    expect(p).not.toBeNull();
+    expect(p!.length).toBeLessThanOrEqual(20);
+    expect(passwordSatisfies(p!, rules)).toBe(true);
+  });
+});
+
+describe('the run check as a password is built: the same as checking it whole (Argon’s N1)', () => {
+  it('random strings, random limits', () => {
+    const r = seeded(31);
+    const chars = 'abcxyzABC0123-';
+    for (let i = 0; i < 5000; i++) {
+      const password = Array.from({ length: 1 + r(12) }, () => chars[r(chars.length)]).join('');
+      const rules = { ...rulesOf(''), allowed: chars, maxRepeating: r(3) ? 1 + r(4) : null, maxSequential: r(3) ? 1 + r(4) : null };
+      const whole = passwordSatisfies(password, { ...rules, minLength: 0, maxLength: 100, required: [] });
+      expect(runsAllow(password, rules), `${password} ${rules.maxRepeating} ${rules.maxSequential}`).toBe(whole);
     }
   });
 });

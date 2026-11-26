@@ -198,6 +198,8 @@ interface Plan {
    * look-alikes, else whole), then the default's classes as far as the rules allow them and the length leaves room.
    */
   readonly forced: readonly string[];
+  /** The longest the pool can fill under the run limits, with the required classes between its runs (`maxFillable`). */
+  readonly fill: number;
 }
 
 /** Whether the rules limit runs: then a password is built a place at a time (`buildWith`), never breaking them. */
@@ -267,28 +269,63 @@ function stuckChance(plan: Pick<Plan, 'pool' | 'forced'>, length: number, out: n
 }
 
 /**
- * The longest password a pool alone can make under the run limits, up to `length` (#60): any length when it has more
- * characters than the limits can rule out at a place, else found by trying every run (a pool this small is 3
- * characters at most). `allowed: [a]; max-repeating: 2;` is 2.
+ * The longest password a pool can fill under the run limits, with one character of each required class (`separators`)
+ * between its runs (Argon's design review of #60, B2). Any length, except in two cases: one character under
+ * `max-repeating` (`aa` at most, with `max-repeating: 2`), and two characters next to each other in order under
+ * `max-repeating` and `max-sequential: 1` (neither `ab` nor, past r, `aa…`). Then r characters a run, and a separator
+ * between runs where one of its characters can stand beside each of the pool's. Three characters or more, or two not in
+ * order, can always go on (`abab…`, `acac…`).
  */
-function poolReach(pool: string, rules: PasswordRuleSet, length: number): number {
-  if (!limitsRuns(rules) || pool.length > ruledOut(rules, pool)) return length;
-  const keep = Math.max(rules.maxRepeating ?? 0, rules.maxSequential ?? 0);
-  let tails = new Set(['']);
-  for (let n = 0; n < length; n++) {
-    const next = new Set<string>();
-    for (const tail of tails) for (const c of pool) if (fits(tail, c, rules)) next.add((tail + c).slice(-keep));
-    if (!next.size) return n;
-    tails = next;
-  }
-  return length;
+function maxFillable(pool: string, separators: readonly string[], rules: PasswordRuleSet): number {
+  const r = rules.maxRepeating;
+  const s = rules.maxSequential;
+  if (r === null) return Infinity;
+  const chars = [...new Set(pool)];
+  const inOrder = (a: string, b: string) => Math.abs(stepOf(a, b)) === 1;
+  const pair = chars.length === 2 && inOrder(chars[0]!, chars[1]!) && s !== null && s <= 1;
+  if (chars.length !== 1 && !pair) return Infinity;
+  const between = (c: string) => !chars.includes(c) && (s === null || s > 1 || chars.every((p) => !inOrder(p, c)));
+  const k = separators.filter((cls) => [...cls].some(between)).length;
+  return (k + 1) * r + k;
 }
 
-/** Whether `c` can follow `before` under the rules' run limits (`before` already meets them). */
-function fits(before: string, c: string, rules: PasswordRuleSet): boolean {
-  const keep = Math.max(rules.maxRepeating ?? 0, rules.maxSequential ?? 0);
-  const { repeating, sequential } = runs(before.slice(-keep) + c);
-  return (rules.maxRepeating === null || repeating <= rules.maxRepeating) && (rules.maxSequential === null || sequential <= rules.maxSequential);
+/** The run a password ends with, as it's built a character at a time (Argon's N1: no pass over the whole password). */
+interface Tail {
+  readonly last: string;
+  readonly repeating: number;
+  readonly sequential: number;
+  /** The run in order's direction: 1 up, -1 down, 0 none. */
+  readonly dir: number;
+}
+const NO_TAIL: Tail = { last: '', repeating: 0, sequential: 0, dir: 0 };
+
+/** How far apart two characters are within a-z, A-Z or 0-9 (0 when they aren't in the same one). */
+function stepOf(a: string, b: string): number {
+  for (const range of ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789']) {
+    const i = range.indexOf(a);
+    const j = range.indexOf(b);
+    if (i >= 0 && j >= 0) return j - i;
+  }
+  return 0;
+}
+
+/** The tail once `c` follows it. */
+function extend(tail: Tail, c: string): Tail {
+  if (!tail.last) return { last: c, repeating: 1, sequential: 1, dir: 0 };
+  const repeating = c === tail.last ? tail.repeating + 1 : 1;
+  const d = stepOf(tail.last, c);
+  if (d !== 1 && d !== -1) return { last: c, repeating, sequential: 1, dir: 0 };
+  return { last: c, repeating, sequential: tail.sequential === 1 || d === tail.dir ? tail.sequential + 1 : 2, dir: d };
+}
+
+const allows = (tail: Tail, rules: PasswordRuleSet) =>
+  (rules.maxRepeating === null || tail.repeating <= rules.maxRepeating) && (rules.maxSequential === null || tail.sequential <= rules.maxSequential);
+
+/** Tests only (Argon's N1): whether a password meets the rules' run limits, checked a character at a time. */
+export function runsAllow(password: string, rules: PasswordRuleSet): boolean {
+  let tail = NO_TAIL;
+  for (const c of password) if (!allows((tail = extend(tail, c)), rules)) return false;
+  return true;
 }
 
 /**
@@ -300,7 +337,7 @@ function fits(before: string, c: string, rules: PasswordRuleSet): boolean {
  * A required class of look-alikes alone (`required: [0O]`) gets one forced place of its own in 1 and 2, and every free
  * place stays clean (review round 3 of #56); one clean character allowed (`allowed: [a0O]`) is `aaaa…`, weak.
  * Made longer only within the rules' maximum (and the vault's); under run limits each place counts what they leave
- * of it (`planBits`), and a pool they could leave with no character is kept as short as it can fill (`poolReach`,
+ * of it (`planBits`), and a pool they could leave with no character is kept as short as it can fill (`maxFillable`,
  * #60). When none reaches the floor, it's the last of them the rules allow, as long as the maximum and the
  * run limits let it be, and weak: never look-alikes for strength alone, under the floor too (the owner's decision of
  * 2026-11-18; four digits are from 2–9). Null when the rules allow no character or no length.
@@ -320,28 +357,36 @@ function planFor(rules: PasswordRuleSet): Plan | null {
   const owns = rules.required.map((cls) => intersect(cls, allowed)).filter((own) => own);
   // Look-alikes in the free places only when the rules allow nothing else (review round 3 of #56).
   const onlyLookAlikes = !clean;
-  const planOf = (pool: string, full: boolean): Plan => {
+  const planOf = (pool: string, full: boolean): Plan | null => {
     // Drawn from more than the default's alphabet (preferred ⊆ clean ⊆ allowed): the default's classes take their own whole.
     const wide = pool.length !== preferred.length;
     // Each class from the default's alphabet where it can be, else without look-alikes where it can be: only a class of
     // look-alikes alone (`required: [0O]`) gets one of them, and only for that class.
     const forced = owns.map((own) => (full ? own : (!wide && intersect(own, DEFAULT_ALPHABET)) || withoutLookAlikes(own) || own));
+    // As long as the run limits let the pool fill, with the required classes between its runs (#60): never under the
+    // minimum, nor too short for the required classes.
+    const fill = maxFillable(pool, forced, rules);
+    const capped = Math.min(length, fill);
+    if (capped < Math.max(minLength, forced.length)) return null;
     // Then the default's classes, as far as the rules allow them and the length leaves room: a site that only bounds
     // the length gets the default's style.
     const classes = wide ? [NAMED['lower']!, NAMED['upper']!, NAMED['digit']!, GENERATOR_CLASSES.symbol] : Object.values(GENERATOR_CLASSES);
     for (const cls of classes) {
       const own = intersect(cls, pool);
-      if (own && forced.length < length && !forced.some((r) => [...r].every((c) => own.includes(c)))) forced.push(own);
+      if (own && forced.length < capped && !forced.some((r) => [...r].every((c) => own.includes(c)))) forced.push(own);
     }
-    return { pool, length, forced };
+    return { pool, length: capped, forced, fill };
   };
   const reaching = (pool: string, full: boolean, lengthen: boolean): Plan | null => {
     if (!pool) return null;
     const plan = planOf(pool, full);
-    if (planBits(plan, length, rules) >= floor) return plan;
-    if (!lengthen || pool.length < 2) return null;
+    if (!plan) return null;
+    if (planBits(plan, plan.length, rules) >= floor) return plan;
+    // Made longer only where each place adds something (Argon's B3: a pool the run limits leave one character a place).
+    if (!lengthen || planBits(plan, plan.length + 1, rules) <= planBits(plan, plan.length, rules)) return null;
     // The shortest length that reaches the floor, a place at a time (each adds what the run limits leave of the pool).
-    for (let needed = length + 1; needed <= maxLength; needed++) if (planBits(plan, needed, rules) >= floor) return { ...plan, length: needed };
+    const longest = Math.min(maxLength, plan.fill);
+    for (let needed = plan.length + 1; needed <= longest; needed++) if (planBits(plan, needed, rules) >= floor) return { ...plan, length: needed };
     return null;
   };
   const strong = reaching(preferred, false, false) ?? reaching(clean, false, true) ?? (onlyLookAlikes ? reaching(allowed, true, true) : null);
@@ -350,15 +395,9 @@ function planFor(rules: PasswordRuleSet): Plan | null {
   // it can be. A pool of one character is no stronger for being longer.
   const pool = onlyLookAlikes ? allowed : clean;
   const plan = planOf(pool, onlyLookAlikes);
-  const reach = poolReach(pool, rules, plan.length);
-  // A pool the run limits could leave with no character: as long as it can fill, with the forced places between.
-  if (reach < plan.length) {
-    const between = plan.forced.filter((cls) => [...cls].some((c) => !pool.includes(c))).length;
-    const short = Math.max(minLength, Math.min(plan.length, reach + between));
-    return { ...plan, length: short, forced: plan.forced.slice(0, short) };
-  }
+  if (!plan) return null;
   // A pool of one character (or one the run limits leave one of at a place) is no stronger for being longer.
-  return planBits(plan, plan.length + 1, rules) > planBits(plan, plan.length, rules) ? { ...plan, length: maxLength } : plan;
+  return planBits(plan, plan.length + 1, rules) > planBits(plan, plan.length, rules) ? { ...plan, length: Math.min(maxLength, plan.fill) } : plan;
 }
 
 /**
@@ -415,35 +454,13 @@ export function describePasswordRules(source: PasswordRulesSource, rules: Passwo
 
 /** The longest run of identical characters, and of characters in order (a-z, A-Z, 0-9, either way). */
 function runs(password: string): { repeating: number; sequential: number } {
-  const ranges = ['abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789'];
-  const step = (a: string, b: string): number => {
-    for (const r of ranges) {
-      const i = r.indexOf(a);
-      const j = r.indexOf(b);
-      if (i >= 0 && j >= 0) return j - i;
-    }
-    return 0;
-  };
-  let repeating = password.length ? 1 : 0;
-  let sequential = password.length ? 1 : 0;
-  let rep = 1;
-  let seq = 1;
-  let dir = 0;
-  for (let i = 1; i < password.length; i++) {
-    rep = password[i] === password[i - 1] ? rep + 1 : 1;
-    const d = step(password[i - 1]!, password[i]!);
-    if ((d === 1 || d === -1) && (seq === 1 || d === dir)) {
-      seq++;
-      dir = d;
-    } else if (d === 1 || d === -1) {
-      seq = 2;
-      dir = d;
-    } else {
-      seq = 1;
-      dir = 0;
-    }
-    repeating = Math.max(repeating, rep);
-    sequential = Math.max(sequential, seq);
+  let tail = NO_TAIL;
+  let repeating = 0;
+  let sequential = 0;
+  for (const c of password) {
+    tail = extend(tail, c);
+    repeating = Math.max(repeating, tail.repeating);
+    sequential = Math.max(sequential, tail.sequential);
   }
   return { repeating, sequential };
 }
@@ -514,10 +531,13 @@ function buildWith(plan: Plan, rules: PasswordRuleSet, randomInt: RandomInt): st
     [places[i], places[j]] = [places[j]!, places[i]!];
   }
   let password = '';
+  let tail = NO_TAIL;
   for (const cls of places) {
-    const left = [...new Set(cls)].filter((c) => fits(password, c, rules));
+    const left = [...new Set(cls)].filter((c) => allows(extend(tail, c), rules));
     if (!left.length) return null;
-    password += left[randomInt(left.length)];
+    const c = left[randomInt(left.length)]!;
+    password += c;
+    tail = extend(tail, c);
   }
   return passwordSatisfies(password, rules) ? password : null;
 }
