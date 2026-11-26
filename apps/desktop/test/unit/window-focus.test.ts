@@ -11,7 +11,7 @@ import type { Session, WebContentsView } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeView, type FakeContents } from './fake-view';
 
-const focus = vi.hoisted(() => ({ window: null as unknown, contents: null as unknown, platform: 'darwin' }));
+const focus = vi.hoisted(() => ({ window: null as unknown, contents: null as unknown, platform: 'darwin', packaged: true }));
 
 class FakeWindow extends EventEmitter {
   static getFocusedWindow = () => focus.window;
@@ -45,7 +45,11 @@ vi.mock('electron', async () => ({
   WebContentsView: (await import('./fake-view')).FakeView,
   BaseWindow: FakeWindow,
   webContents: { getFocusedWebContents: () => focus.contents },
-  app: { isPackaged: true },
+  app: {
+    get isPackaged() {
+      return focus.packaged;
+    },
+  },
   MessageChannelMain: class {},
   nativeTheme: { on: vi.fn(), off: vi.fn(), shouldUseDarkColors: false },
   screen: {},
@@ -95,7 +99,9 @@ function newWindow() {
   /** Chord goes behind, and comes back to the front with `c` made the first responder. */
   const comesBack = (c: FakeContents) => {
     window.emit('blur');
+    focus.window = null;
     focus.contents = c;
+    focus.window = window;
     window.emit('focus');
     vi.runOnlyPendingTimers();
   };
@@ -211,6 +217,7 @@ describe('a card never takes the keyboard on its own (#200)', () => {
     const { w, page, popover, osFocuses, cardUp } = newWindow();
     cardUp();
     w.focusPopover();
+    w.setCards(false);
     w.setPopoverSize(0, 0);
     cardUp();
     osFocuses(popover.page);
@@ -222,7 +229,7 @@ describe('a card never takes the keyboard on its own (#200)', () => {
     const done = fake();
     const { w, page, popover, cardUp } = newWindow();
     cardUp();
-    w.focusPopover();
+    w.focusPopover('ask');
     focus.contents = popover.page;
     w.popoverDoneAsking();
     vi.runOnlyPendingTimers();
@@ -291,5 +298,242 @@ describe('a card never takes the keyboard on its own (#200)', () => {
     osFocuses(menu, () => menu.emit('before-mouse-event', {}, { type: 'mouseDown' }));
     expect(page.page.focus).toHaveBeenCalledTimes(1);
     done();
+  });
+});
+
+/** Round 3 of #245 (Neon's and Opus's reviews of 989d8aa): who owns the keyboard, and when that ends. */
+describe('who owns the keyboard, and when that ends (#245, round 3)', () => {
+  it('a card that asks owns it until it’s answered; one you clicked in keeps it when another card’s ask ends (B1)', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover('ask');
+    // You click into the save card beside it (a passphrase), then the page cancels the sign-in box.
+    popover.page.emit('before-mouse-event', {}, { type: 'mouseDown' });
+    w.popoverDoneAsking();
+    osFocuses(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('find (yours) is never ended by an ask being answered (B1)', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover();
+    w.popoverDoneAsking();
+    osFocuses(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('find, then Esc to the page, then coming back: the popover owns nothing any more (B2, #201)', () => {
+    const done = fake();
+    const { w, page, popover, comesBack, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover();
+    focus.contents = page.page;
+    popover.page.emit('blur');
+    vi.runOnlyPendingTimers();
+    page.page.focus.mockClear();
+    comesBack(popover.page);
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('a click in a card, then one in the page, then coming back: the card owns nothing any more (B2, #201)', () => {
+    const done = fake();
+    const { page, popover, osFocuses, comesBack, cardUp } = newWindow();
+    cardUp();
+    osFocuses(popover.page, () => popover.page.emit('before-mouse-event', {}, { type: 'mouseDown' }));
+    focus.contents = page.page;
+    popover.page.emit('blur');
+    vi.runOnlyPendingTimers();
+    page.page.focus.mockClear();
+    comesBack(popover.page);
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('the keyboard going to the shell ends it too, without a blur (B2: blur may not come on macOS)', () => {
+    const done = fake();
+    const { w, page, popover, shell, comesBack, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover();
+    focus.contents = shell.page;
+    shell.page.emit('focus');
+    page.page.focus.mockClear();
+    comesBack(popover.page);
+    expect(shell.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('not when the window went behind, nor while a frame snapshot hides the cards: they still own it (B2)', () => {
+    const done = fake();
+    const { w, page, popover, cardUp, comesBack } = newWindow();
+    cardUp();
+    w.focusPopover();
+    focus.window = null;
+    focus.contents = null;
+    popover.page.emit('blur');
+    vi.runOnlyPendingTimers();
+    comesBack(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    let moving = true;
+    Object.defineProperty((w as unknown as { snapshots: object }).snapshots, 'active', { get: () => moving });
+    cardUp();
+    focus.contents = page.page;
+    popover.page.emit('blur');
+    vi.runOnlyPendingTimers();
+    moving = false;
+    cardUp();
+    comesBack(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('an old card’s late 0 × 0 never takes a new card’s ask away (B3)', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    cardUp();
+    // The old card closes (Browser says so), a new one asks while the popover reports the old one gone, late.
+    w.setCards(false);
+    popover.setVisible(false);
+    w.focusPopover('ask');
+    w.setCards(true);
+    w.setPopoverSize(0, 0);
+    cardUp();
+    expect(popover.page.focus).toHaveBeenCalled();
+    osFocuses(popover.page);
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('no card left (Browser’s word): nothing owned, nothing waiting; the next card that doesn’t ask owns nothing (S1)', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    cardUp();
+    w.focusPopover();
+    w.setCards(false);
+    w.setPopoverSize(0, 0);
+    cardUp();
+    osFocuses(popover.page);
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('a card that asks waits while the command bar covers it, and takes the keyboard as it closes (B4)', () => {
+    const done = fake();
+    const { w, popover, cardUp } = newWindow();
+    w.markOverlayReady();
+    w.openOverlay('new', '');
+    cardUp();
+    popover.page.focus.mockClear();
+    w.focusPopover('ask');
+    expect(popover.page.focus).not.toHaveBeenCalled();
+    w.closeOverlay();
+    expect(popover.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('and while a page is full screen, until it leaves it (B4)', () => {
+    const done = fake();
+    const { w, popover, cardUp } = newWindow();
+    cardUp();
+    w.setPageFullScreen(true);
+    popover.page.focus.mockClear();
+    w.focusPopover('ask');
+    expect(popover.page.focus).not.toHaveBeenCalled();
+    w.setPageFullScreen(false);
+    vi.runOnlyPendingTimers();
+    expect(popover.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('the command bar opening ends what the cards owned; the keyboard goes back to the command bar (S1)', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    const overlay = (w.overlay as unknown as FakeView).page;
+    overlay.isFocused = () => focus.contents === overlay;
+    cardUp();
+    w.focusPopover();
+    w.markOverlayReady();
+    w.openOverlay('new', '');
+    overlay.focus.mockClear();
+    osFocuses(popover.page);
+    expect(overlay.focus).toHaveBeenCalled();
+    expect(page.page.focus).not.toHaveBeenCalled();
+    done();
+  });
+
+  it('never back to another window’s contents, nor a pane that’s hidden: the page you see, then the shell (Should-fix 5)', () => {
+    const done = fake();
+    const { page, popover, osFocuses, cardUp } = newWindow();
+    const other = new FakeView().page;
+    focus.contents = other;
+    cardUp();
+    osFocuses(popover.page);
+    expect(other.focus).not.toHaveBeenCalled();
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('never back to where it was once that’s gone from sight: not to the command bar after it closed', () => {
+    const done = fake();
+    const { w, page, popover, osFocuses, cardUp } = newWindow();
+    const overlay = (w.overlay as unknown as FakeView).page;
+    w.markOverlayReady();
+    w.openOverlay('new', '');
+    w.closeOverlay();
+    // Nothing of this window's had it as the card came (the closing command bar's focus hasn't landed yet).
+    focus.contents = null;
+    cardUp();
+    overlay.focus.mockClear();
+    page.page.focus.mockClear();
+    osFocuses(popover.page);
+    expect(overlay.focus).not.toHaveBeenCalled();
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('F6 elsewhere ends the menu’s click, too (S1: keysMovedOnPurpose)', () => {
+    const done = fake();
+    const { w, page, osFocuses } = newWindow();
+    const menu = w.ensureMenuView() as unknown as FakeContents;
+    menu.isFocused = () => focus.contents === menu;
+    osFocuses(menu, () => menu.emit('before-mouse-event', {}, { type: 'mouseDown' }));
+    expect(page.page.focus).not.toHaveBeenCalled();
+    w.focusRegion('page');
+    page.page.focus.mockClear();
+    osFocuses(menu);
+    expect(page.page.focus).toHaveBeenCalled();
+    done();
+  });
+
+  it('the popover is placed before it’s shown, never shown where it was last (B6)', () => {
+    const { w, popover } = newWindow();
+    popover.setBounds.mockClear();
+    popover.setVisible.mockClear();
+    w.setPopoverSize(360, 200);
+    const placed = popover.setBounds.mock.invocationCallOrder[0]!;
+    const shown = popover.setVisible.mock.invocationCallOrder.find((_, i) => popover.setVisible.mock.calls[i]![0] === true)!;
+    expect(placed).toBeLessThan(shown);
+  });
+
+  it('the focus log: only with the test hooks on, in an unpackaged build', () => {
+    process.env['CHORD_E2E_HOOKS'] = '1';
+    try {
+      focus.packaged = true;
+      const packaged = newWindow();
+      packaged.cardUp();
+      expect(packaged.w.cardFocusForTests()).toEqual([]);
+      focus.packaged = false;
+      const unpackaged = newWindow();
+      unpackaged.cardUp();
+      expect(unpackaged.w.cardFocusForTests().length).toBeGreaterThan(0);
+    } finally {
+      delete process.env['CHORD_E2E_HOOKS'];
+      focus.packaged = true;
+    }
   });
 });

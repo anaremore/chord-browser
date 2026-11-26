@@ -147,22 +147,28 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     await expect(firstSave).toBeVisible({ timeout: 15_000 });
     await expect(firstSave.getByLabel('Username')).toHaveValue(USER);
     await expect(firstSave.getByText('Choose a passphrase to lock your passwords. Chord can’t get it back for you.')).toBeVisible();
-    // The card never takes focus, nor the menu under the field (its own view, `#menu`): the page keeps it (#200).
+    // The card never takes focus, nor the menu under the field (its own view, `#menu`): the page keeps it (#200). The
+    // window has the focus and the page has it within it, not merely nothing else (which a window behind would pass).
     // (Asked of main: Playwright emulates focus in each page it drives, so `document.hasFocus()` there says nothing.)
-    // Polled: focus the OS gave one of them on its own goes back on main's next turn, which a check can run ahead of.
-    // Their focus log, if one keeps it.
-    const floatingFocused = () => app.evaluate(({ webContents }) => /^chord:\/\/popover|\/popover\/index\.html/.test(webContents.getFocusedWebContents()?.getURL() ?? ''));
-    await expect
-      .poll(floatingFocused, { timeout: 3_000, message: 'the save card or the menu kept the keyboard' })
-      .toBe(false)
-      .catch(async (error: unknown) => {
-        const log = await app.evaluate(({ BaseWindow, webContents }) => ({
-          events: (globalThis as unknown as { chordTestHooks: { cardFocus(): unknown } }).chordTestHooks.cardFocus(),
-          windowFocused: BaseWindow.getFocusedWindow() !== null,
-          focused: webContents.getFocusedWebContents()?.getURL().replace(/^[a-z-]+:\/\/[^/]*/, '') ?? null,
-        }));
-        throw new Error(`${String(error)}\nthe floating views' focus: ${JSON.stringify(log)}`, { cause: error });
-      });
+    // Polled: focus the OS gave one of them on its own goes back on main's next turn, which a check can run ahead of;
+    // then again a second later, past anything the OS does after. Their focus log, if the page hasn't it.
+    const pageHasKeys = () =>
+      app.evaluate(({ BaseWindow, webContents }, origin) => BaseWindow.getFocusedWindow() !== null && (webContents.getFocusedWebContents()?.getURL().startsWith(origin) ?? false), site.origin);
+    const keysOnPage = (when: string) =>
+      expect
+        .poll(pageHasKeys, { timeout: 3_000, message: `the page has the keyboard ${when}` })
+        .toBe(true)
+        .catch(async (error: unknown) => {
+          const log = await app.evaluate(({ BaseWindow, webContents }) => ({
+            events: (globalThis as unknown as { chordTestHooks: { cardFocus(): unknown } }).chordTestHooks.cardFocus(),
+            windowFocused: BaseWindow.getFocusedWindow() !== null,
+            focused: webContents.getFocusedWebContents()?.getURL().replace(/^[a-z-]+:\/\/[^/]*/, '') ?? null,
+          }));
+          throw new Error(`${String(error)}\nthe floating views' focus: ${JSON.stringify(log)}`, { cause: error });
+        });
+    await keysOnPage('as the save card shows');
+    await page.waitForTimeout(1_000);
+    await keysOnPage('a second later');
     findings.push(...(await audit(popover, 'the first save card', { appearance: 'light' })));
     await firstSave.screenshot({ path: resolve(capturesDir, 'passwords-save-first-light.png') });
     await firstSave.getByLabel('Passphrase', { exact: true }).fill(PASSPHRASE);
