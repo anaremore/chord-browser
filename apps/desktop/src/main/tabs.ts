@@ -67,6 +67,8 @@ export interface TabManagerDeps {
   agentTab?(nodeId: NodeId): boolean;
   /** Something an agent's tab tried that Chord refused (a popup or a new tab), for the agent's next result. */
   onAgentRefused?(nodeId: NodeId, what: AgentHeld, detail: string): void;
+  /** A navigation asked of a tab waits for its session (Safe Browsing's guard: Neon's NSF1b, round 1 of #323). */
+  navigationQueued?(contents: WebContents): void;
 }
 
 /** What an agent's tab held or refused: a page dialog, a file picker, a popup or new tab, a download. */
@@ -78,6 +80,8 @@ const AGENT_TAB_ARG = '--chord-agent-tab';
 /** A page that isn't a tab yet: a Peek's or a mini window's (DESIGN.md §7.9). */
 interface FloatingPage {
   view: WebContentsView;
+  /** Its first page's address: what Reload loads while it has never loaded (Opus's SF1, round 1 of #323). */
+  url: string;
   /** A private window's Peek: its visits never reach history. */
   private: boolean;
 }
@@ -130,10 +134,12 @@ export class TabManager {
     this.loadTurns.get(contents)?.overtaken?.();
     const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
     this.loadTurns.set(contents, turn);
-    const go = () => {
+    // `failed`: a wait that rejected (#299): it's over. Asked again, a source answering that same wait isn't waited on.
+    const go = (failed?: Promise<void>) => {
       if (contents.isDestroyed()) return void (this.waitMarked.delete(contents) && setFirstLoadPending(contents, false));
       if (this.loadTurns.get(contents) !== turn) return;
-      const pending = this.deps.proxyReady(contents.session);
+      const asked = this.deps.proxyReady(contents.session);
+      const pending = asked === failed ? null : asked;
       if (pending) {
         this.waiting.add(contents);
         if (!firstLoadPending(contents)) {
@@ -142,7 +148,10 @@ export class TabManager {
           const nodeId = this.nodeFor(contents);
           if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true } });
         }
-        void pending.then(go);
+        pending.then(
+          () => go(),
+          () => go(pending),
+        );
         return;
       }
       this.waiting.delete(contents);
@@ -171,22 +180,30 @@ export class TabManager {
 
   /**
    * Your Reload (round 1 of #282): a page that never loaded (stopped while it waited for its session) has nothing to
-   * reload, so its tab's address loads, as a navigation; any other page reloads.
+   * reload, so its address loads, as a navigation; any other page reloads. A tab's, and a mini window's or a Peek's
+   * (Opus's SF1, round 1 of #323: from its window's Reload, or the page's menu).
    */
   reload(contents: WebContents, options: { ignoreCache?: boolean } = {}): void {
     // A page already gone (its menu can outlive it: Neon's SF3, round 1 of #292).
     if (contents.isDestroyed()) return;
     const nodeId = this.nodeFor(contents);
     const node = nodeId ? nodeOf(this.deps.state(), nodeId) : undefined;
+    const floatingId = nodeId ? undefined : this.floatingFor(contents);
+    const url = node?.kind === 'tab' ? node.url : floatingId ? this.floating.get(floatingId)?.url : undefined;
     const history = contents.navigationHistory;
     // An agent tab stopped while primed has only its blank page, which is never the tab's (#287).
     const never = history.length() === 0 || (history.length() === 1 && history.getEntryAtIndex(0)?.url === 'about:blank');
-    if (nodeId && node?.kind === 'tab' && never) {
+    if (url !== undefined && never) {
       // Its own first load still on its way (waiting for its session, an agent tab's hold arming or its blank page
-      // primed, or its page asked for and not come): left alone, it loads the tab's address anyway, and an agent tab
-      // keeps its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
+      // primed, or its page asked for and not come): left alone, it loads the address anyway, and an agent tab keeps
+      // its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
       if (this.waiting.has(contents) || this.priming.has(contents) || firstLoadPending(contents)) return;
-      return this.navigate(nodeId, node.url);
+      if (nodeId) return this.navigate(nodeId, url);
+      return this.whenProxied(contents, () => {
+        void contents.loadURL(url).catch(() => {
+          // Load failures show in the page itself, as they would in a tab.
+        });
+      });
     }
     // Once its session is ready, like any load (Neon's B2): never over the old connection, nor before its rules are on.
     // A load waiting already is overtaken by this one. Hard Reload too (round 1 of #292, SF2).
@@ -199,12 +216,23 @@ export class TabManager {
    */
   go(contents: WebContents, way: 'back' | 'forward'): void {
     if (contents.isDestroyed()) return;
-    // Once its session is ready (Neon's B2, round 1 of #292), and only if there's still somewhere to go then.
+    const can = () => (way === 'back' ? contents.navigationHistory.canGoBack() : contents.navigationHistory.canGoForward());
+    // Nowhere to go: nothing, and a load waiting isn't dropped for it (round 2 of #292).
+    if (!can()) return;
+    // Once its session is ready (Neon's B2, round 1 of #292), and only if there's still somewhere to go then; if not,
+    // the tab stops showing loading, put on while it waited (round 2 of #292).
     this.whenProxied(contents, () => {
-      const history = contents.navigationHistory;
-      if (way === 'back' && history.canGoBack()) history.goBack();
-      else if (way === 'forward' && history.canGoForward()) history.goForward();
+      if (!can()) {
+        const nodeId = this.nodeFor(contents);
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+        return;
+      }
+      if (way === 'back') contents.navigationHistory.goBack();
+      else contents.navigationHistory.goForward();
     });
+    // Waiting for the session: Safe Browsing hears of it, as of a navigation, so a late answer can't drop it (Neon's
+    // round 2 of #323).
+    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
@@ -331,8 +359,12 @@ export class TabManager {
       if (contents.isDestroyed()) return;
       if (nav) {
         // Back where it was: same page, same back/forward list, same scroll position.
+        const turn = this.loadTurns.get(contents);
         contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
-          if (!contents.isDestroyed() && contents.navigationHistory.length() === 0) void contents.loadURL(url).catch(() => {});
+          // Its address instead, once the session is ready (Neon's NN2, round 1 of #323); never over a load asked for
+          // since, waiting or already loading (round 2).
+          if (contents.isDestroyed() || contents.navigationHistory.length() > 0 || this.loadTurns.get(contents) !== turn) return;
+          this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
         });
       } else {
         void contents.loadURL(url).catch(() => {
@@ -372,8 +404,18 @@ export class TabManager {
       };
       contents.once('did-navigate', arrived);
       contents.once('did-fail-load', arrived);
-      started = true;
-      load();
+      // Through the gate again: the session may have started changing while the hold armed or the page primed (Neon's
+      // NB2, round 1 of #323). This turn replaces the one that ran `due` without overtaking it, and a load asked for
+      // over it before it starts still overtakes it.
+      this.loadTurns.set(contents, {});
+      this.whenProxied(
+        contents,
+        () => {
+          started = true;
+          load();
+        },
+        overtake,
+      );
     };
     // Its first page is on its way from now (a read or open_tab waits for it, never the blank page before it).
     if (armed) setFirstLoadPending(contents, true);
@@ -409,7 +451,7 @@ export class TabManager {
     const view = new WebContentsView({
       webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false },
     });
-    this.floating.set(nodeId, { view, private: isPrivate });
+    this.floating.set(nodeId, { view, private: isPrivate, url });
     // The page as made: the view forgets it once it's destroyed (view-page.ts), and the proxy may take a while.
     const contents = view.webContents;
     this.wire(nodeId, contents, false);
@@ -420,6 +462,17 @@ export class TabManager {
       });
     });
     return view;
+  }
+
+  /**
+   * A floating page's address: where it is, or, before its first page came (waiting for the session), where it's going
+   * (Neon's NSF2, round 1 of #323: Open in, or Peek's Open in Today, never opens a blank tab).
+   */
+  floatingAddress(nodeId: NodeId): string | undefined {
+    const page = this.floating.get(nodeId);
+    if (!page) return undefined;
+    const contents = pageOf(page.view);
+    return contents?.getURL() || page.url;
   }
 
   /** The floating page with this contents, if it is one. */
@@ -462,7 +515,9 @@ export class TabManager {
       return;
     }
     const contents = pageOf(view);
-    if (contents && !isInternalUrl(url)) this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
+    if (!contents || isInternalUrl(url)) return;
+    this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
+    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
   }
 
   /** Silence the tab's page, or let it be heard. A tab without a page is silenced when it gets one (ensure). */
@@ -562,7 +617,8 @@ export class TabManager {
     };
 
     contents.on('did-start-loading', () => live({ loading: true, crashed: false }));
-    contents.on('did-stop-loading', () => live({ loading: false, ...history() }));
+    // A load still waiting for the session keeps the tab loading (a navigation stopped for it: Opus's L1 on #323).
+    contents.on('did-stop-loading', () => live({ loading: this.waiting.has(contents), ...history() }));
     if (internal) {
       // Chord's own page keeps its chord:// address (in development it's served from elsewhere),
       // isn't history, and has no site icon.

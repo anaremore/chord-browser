@@ -57,6 +57,15 @@ describe('the toolbar’s extension popup waits for its session (#287)', () => {
     expect(t.page.loadURL).toHaveBeenCalledOnce();
   });
 
+  it('a wait that rejects (#299): over, it loads; the same rejected wait again doesn’t spin', async () => {
+    const failed = Promise.reject(new Error('no'));
+    failed.catch(() => {});
+    const host = { showFloating: vi.fn(), hideFloating: vi.fn(), releaseFloating: vi.fn(), window: { isDestroyed: () => false, isFocused: () => true }, frameBounds: { x: 0, y: 0, width: 800, height: 600 } };
+    const popup = new ExtensionPopup(host as never, { extensionId: 'x', session: {} as never, url: 'chrome-extension://x/popup.html', anchor: null, openTab: vi.fn(), onClosed: vi.fn(), proxyReady: () => failed } as never);
+    await tick();
+    expect(((popup.view as unknown as FakeView).page as FakeContents).loadURL).toHaveBeenCalledOnce();
+  });
+
   it('closed during the wait: never loaded', async () => {
     const rules = held();
     const t = open([rules]);

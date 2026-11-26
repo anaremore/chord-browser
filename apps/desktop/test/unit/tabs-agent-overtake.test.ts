@@ -255,6 +255,26 @@ describe('an agent tab’s first page overtaken, or stopped (#277, round 1 of #2
     expect(pickers.pickersLost(t.page)).toBe(false);
   });
 
+  it('closed while its hold arms (round 2 of #292, Neon’s method): no blank page asked of a page gone, nothing thrown', async () => {
+    const unhandled: unknown[] = [];
+    const note = (reason: unknown) => void unhandled.push(reason);
+    process.on('unhandledRejection', note);
+    try {
+      // Its sends' hold (Fetch.enable) answers only later: the arming is in flight.
+      const sends = hold('Fetch.enable');
+      const t = setup();
+      await settle();
+      t.page.destroy();
+      sends();
+      await settle();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(t.loaded()).toEqual([]);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', note);
+    }
+  });
+
   it('Stop while its hold is arming (Neon’s SF1): it’s overtaken, the hold failed, nothing loads after', async () => {
     const interception = hold('Page.setInterceptFileChooserDialog');
     const t = setup();
@@ -290,4 +310,40 @@ describe('an agent tab’s first page overtaken, or stopped (#277, round 1 of #2
     expect(t.manager.stopWaiting(t.page as never)).toBe(false);
     expect(pickers.pickersLost(t.page)).toBe(false);
   });
+
+  it('a proxy wait that starts while it primes (Neon’s NB2 on #323): its first page waits for it', async () => {
+    const bypass = hold('Page.addScriptToEvaluateOnNewDocument');
+    const t = setup();
+    await settle();
+    let over = false;
+    let release!: () => void;
+    const proxy = new Promise<void>((r) => (release = () => ((over = true), r())));
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => (over ? null : proxy);
+    bypass();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank']);
+    expect(pickers.firstLoadPending(t.page)).toBe(true);
+    release();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+  });
+
+  it('Stop during that wait (Neon’s NB2): its first page never comes, and its hold is failed', async () => {
+    const bypass = hold('Page.addScriptToEvaluateOnNewDocument');
+    const t = setup();
+    await settle();
+    let over = false;
+    let release!: () => void;
+    const proxy = new Promise<void>((r) => (release = () => ((over = true), r())));
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => (over ? null : proxy);
+    bypass();
+    await settle();
+    expect(t.manager.stopWaiting(t.page as never)).toBe(true);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+    expect(pickers.firstLoadPending(t.page)).toBe(false);
+    release();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank']);
+  });
 });
+

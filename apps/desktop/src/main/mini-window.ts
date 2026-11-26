@@ -279,7 +279,8 @@ export class MiniWindows {
   /** A shortcut pressed in a mini window: the few that make sense there. Returns whether it was handled. */
   run(action: string, contents: WebContents): boolean {
     const mini = this.forContents(contents);
-    if (!mini) return false;
+    // Fading out after Open in: its page is a tab's now (Neon's NN1, round 1 of #323).
+    if (!mini || mini.promoted) return false;
     const page = pageOf(mini.page);
     if (!page) return false;
     switch (action) {
@@ -287,17 +288,19 @@ export class MiniWindows {
       case 'window.close':
         mini.window.close();
         return true;
+      // Through the tab manager's, as a tab's are (#300): a load waiting for its session is dropped first, and these wait
+      // for it too; Back and Forward look again once it's ready.
       case 'nav.back':
-        if (page.navigationHistory.canGoBack()) page.navigationHistory.goBack();
+        this.deps.tabs.go(page, 'back');
         return true;
       case 'nav.forward':
-        if (page.navigationHistory.canGoForward()) page.navigationHistory.goForward();
+        this.deps.tabs.go(page, 'forward');
         return true;
       case 'nav.reload':
-        page.reload();
+        this.deps.tabs.reload(page, {});
         return true;
       case 'nav.hardReload':
-        page.reloadIgnoringCache();
+        this.deps.tabs.reload(page, { ignoreCache: true });
         return true;
       case 'address.copy':
         clipboard.writeText(page.getURL());

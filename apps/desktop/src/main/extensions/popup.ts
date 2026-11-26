@@ -111,10 +111,16 @@ export class ExtensionPopup implements FloatingView {
     });
     // Its session's pages wait until it's ready (its proxy, its chord's ad-blocking rules); so does this one, asked again
     // as each wait ends, and never into a popup closed meanwhile (#287).
-    const load = (): void => {
+    // A wait that rejects is over (#299): asked again, a source answering that same wait isn't waited on.
+    const load = (failed?: Promise<void>): void => {
       if (this.closed || contents.isDestroyed()) return;
-      const pending = options.proxyReady?.(options.session);
-      if (pending) void pending.then(load);
+      const asked = options.proxyReady?.(options.session) ?? null;
+      const pending = asked === failed ? null : asked;
+      if (pending)
+        pending.then(
+          () => load(),
+          () => load(pending),
+        );
       else void contents.loadURL(options.url).catch(() => this.close());
     };
     load();

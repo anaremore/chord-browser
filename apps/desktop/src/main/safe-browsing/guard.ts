@@ -31,10 +31,16 @@ export interface GuardDeps {
   handOver(contents: WebContents, nodeId: NodeId, url: string): void;
   /** "Back to safety" with nothing to go back to. */
   closeTab(nodeId: NodeId): void;
+  /** Drop a load of the page still waiting for its session (tabs.ts' stopWaiting), so it never lands after this (#300). */
+  stopWaiting?(contents: WebContents): void;
+  /** Load `url` in the tab as a navigation, once its session is ready (tabs.ts' navigate: Neon's NB1, round 1 of #323). */
+  navigate(nodeId: NodeId, url: string): void;
 }
 
 interface Watch {
-  /** Main-frame navigations so far: an answer about an older one is dropped. */
+  /** The tab it's for, if a tab's: its warning goes when you go somewhere else. */
+  nodeId: NodeId | null;
+  /** Main-frame navigations so far, and ones you asked for that wait for the session: an answer about an older one is dropped. */
   seq: number;
   /** The last navigation that committed. */
   committed: number;
@@ -71,7 +77,7 @@ export class SafeBrowsingGuard {
   }
 
   private watch(contents: WebContents, nodeId: NodeId | null, onThreat: (watch: Watch, threat: PageThreat) => void): void {
-    const watch: Watch = { seq: 0, committed: -1, flagged: -1, own: false };
+    const watch: Watch = { nodeId, seq: 0, committed: -1, flagged: -1, own: false };
     this.watches.set(contents, watch);
     const inspect = (url: string, mainFrame: boolean) => {
       if (!this.deps.enabled() || !/^https?:/i.test(url) || this.isAllowed(contents.session, url)) return;
@@ -123,6 +129,12 @@ export class SafeBrowsingGuard {
    */
   private leave(contents: WebContents, watch: Watch, nodeId?: NodeId): void {
     watch.own = true;
+    // A load waiting for the page's session would land over where this goes (#300): dropped first. Back to safety
+    // itself doesn't wait for the session: it leaves a flagged page at once. So if the session was changing (its proxy
+    // set again), the page it goes back to can load before the new proxy is in place, as it could before #300 (Opus's
+    // N1, round 1 of #323). Waiting instead would need Back through the gate past a blank page (goToOffset), and
+    // would keep the flagged page up meanwhile.
+    this.deps.stopWaiting?.(contents);
     if (contents.navigationHistory.canGoBack()) {
       contents.navigationHistory.goBack();
       return;
@@ -153,6 +165,21 @@ export class SafeBrowsingGuard {
     return host !== null && this.allowList(session).has(host);
   }
 
+  /**
+   * A navigation you asked for is waiting for the page's session (tabs.ts' navigate, Neon's NSF1b on #323): it's the
+   * page's next one, so an answer still out about the one before can't stop it or drop it, and a warning still up about
+   * the page before goes, as it does when a navigation starts.
+   */
+  navigationQueued(contents: WebContents): void {
+    const watch = this.watches.get(contents);
+    if (!watch) return;
+    // A navigation still on its way: once its answer no longer counts, it would arrive unwarned, even an unsafe one,
+    // until yours loads. It stops; the tab keeps loading for yours (Opus's L1, round 2 of #323).
+    if (watch.committed !== watch.seq) contents.stop();
+    watch.seq++;
+    if (watch.nodeId) this.clear(watch.nodeId, contents);
+  }
+
   /** The warning's "Back to safety": the page before it, or the tab closes when there's none. */
   back(nodeId: NodeId): void {
     const threat = this.deps.state().live[nodeId]?.threat;
@@ -169,7 +196,10 @@ export class SafeBrowsingGuard {
       return;
     }
     // Still on the flagged page itself (its answer came as it arrived): go back now.
-    if (onFlagged) this.leave(contents, this.watches.get(contents) ?? { seq: 0, committed: -1, flagged: -1, own: false });
+    if (onFlagged) this.leave(contents, this.watches.get(contents) ?? { nodeId, seq: 0, committed: -1, flagged: -1, own: false });
+    // Already left it (the page before, or a blank page): a load still waiting for the session would land the flagged
+    // page again after you chose safety (#300's own case, Neon's NSF1a on #323).
+    else this.deps.stopWaiting?.(contents);
     this.clear(nodeId);
   }
 
@@ -181,7 +211,8 @@ export class SafeBrowsingGuard {
     const host = hostOf(threat.frameUrl ?? threat.url);
     if (host && contents && !contents.isDestroyed()) this.allowList(contents.session).add(host);
     this.clear(nodeId);
-    if (contents && !contents.isDestroyed()) void contents.loadURL(threat.url).catch(() => {});
+    // Once the session is ready, as any load (Neon's NB1 on #323): never before its proxy, never under a load queued.
+    if (contents && !contents.isDestroyed()) this.deps.navigate(nodeId, threat.url);
     else this.deps.dispatch({ t: 'tab.navigate', nodeId, url: threat.url });
   }
 }

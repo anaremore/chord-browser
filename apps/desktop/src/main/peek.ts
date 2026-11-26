@@ -7,6 +7,7 @@
 import { hostOf, isPrivateChord, uuidv7, nodeOf, type ChordId, type Command, type LiveTab, type NodeId, type State, type WindowId } from '@chord/core';
 import { springCurve, springs } from '@chord/tokens';
 import type { Session, WebContents } from 'electron';
+import { firstLoadPending } from './agents/pickers';
 import { uiScale } from './platform';
 import type { TabManager } from './tabs';
 import type { AppWindow } from './window';
@@ -31,10 +32,10 @@ interface OpenPeek {
   chordId: ChordId;
 }
 
-/** What a page's back/forward and loading look like, for the tab it becomes. */
+/** What a page's back/forward and loading look like, for the tab it becomes (loading too while it waits for its session). */
 export function liveOf(contents: WebContents): Partial<LiveTab> {
   if (contents.isDestroyed()) return {};
-  return { loading: contents.isLoading(), canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() };
+  return { loading: contents.isLoading() || firstLoadPending(contents), canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() };
 }
 
 export class Peeks {
@@ -129,6 +130,8 @@ export class Peeks {
     this.open.delete(w.id);
     w.growPeekToFrame(this.deps.animates(), () => {
       w.closePeek();
+      // Before its first page came, its address is where it's going (Neon's NSF2 on #323).
+      const url = this.deps.tabs.floatingAddress(peek.nodeId);
       const view = this.deps.tabs.adopt(peek.nodeId);
       if (!view) return;
       const contents = view.webContents;
@@ -137,7 +140,7 @@ export class Peeks {
         windowId: w.id,
         nodeId: peek.nodeId,
         chordId: peek.chordId,
-        url: contents.getURL(),
+        url: url ?? contents.getURL(),
         title: contents.getTitle(),
         live: liveOf(contents),
       });
