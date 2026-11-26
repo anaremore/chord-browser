@@ -93,7 +93,7 @@ export const USER_TAB_REFUSALS = {
   left: 'The user left this chat or closed the assistant, so acting stopped. Stop, and tell them what you did and what’s left.',
 } as const;
 
-export function duetScope(chat: DuetChat, host: DuetHost, actions = false): ControlScope {
+export function duetScope(chat: DuetChat, host: DuetHost, actions = false, goOutline = false): ControlScope {
   const state = () => host.browser.store.state;
   const granted = (tool: AssistantToolName) => chat.control.granted('read', tool) === 'always';
   /** An agent's tab the user hasn't pointed at: left out of everything the chat sees. */
@@ -102,6 +102,8 @@ export function duetScope(chat: DuetChat, host: DuetHost, actions = false): Cont
   return {
     agent: chat.control,
     actions,
+    // navigate's snapshot: true, behind its own flag (S18 M2g-2 slice 3a, #204).
+    ...(goOutline ? { outlineOnGo: true } : {}),
     refs: chat.refs,
     memory: chat,
     off: () => (host.settings().readsNothing ? 'The user set you to read nothing, in Settings → Assistant.' : null),

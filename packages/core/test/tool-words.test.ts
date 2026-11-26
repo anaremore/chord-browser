@@ -4,12 +4,12 @@
  * can't drop one unseen.
  */
 import { describe, expect, it } from 'vitest';
-import { AGENT_INSTRUCTIONS, agentToolList, assistantTools } from '../src';
+import { ACTING_LINES_GO_OUTLINE, AGENT_INSTRUCTIONS, ASSISTANT_GO_OUTLINE_RELEASED, agentToolList, assistantGoOutline, assistantInstructions, assistantTools } from '../src';
 
 /** Tokens, as the eval counts them: characters ÷ 4. */
 const tokens = (v: unknown) => Math.ceil((typeof v === 'string' ? v : JSON.stringify(v)).length / 4);
-/** The assistant's list as claude.ts sends it (Codex's shape is smaller). */
-const assistantWire = (acting: boolean) => assistantTools(true, acting).map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.readOnly } }));
+/** The assistant's list as claude.ts sends it (Codex's shape is smaller), with every flag a build may turn on. */
+const assistantWire = (acting: boolean) => assistantTools(true, acting, true).map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: t.readOnly } }));
 
 /**
  * What each list may cost, in tokens, with some room. A change that grows one past it fails here, and raises it in
@@ -17,7 +17,10 @@ const assistantWire = (acting: boolean) => assistantTools(true, acting).map((t) 
  */
 // Measured with the diet (M2g-2 slice 2): agents 2,087 + 41 for the instructions (main: 2,330 + 41); the assistant
 // 1,768 acting (main: 1,894) and 1,115 reading only (main: 1,181). Each with 20 tokens' room.
-const BUDGET = { agents: 2148, assistantActing: 1788, assistantReading: 1135 };
+// Raised by slice 3a (#204), snapshot: true on open_tab and navigate: agents 2,129 + 41 (+42), the assistant acting with
+// its flag on 1,790 (+22). The reason: each saves a call on every journey that opens a page and looks at it, a whole turn
+// of definitions and context (the token eval, in #204's PR).
+const BUDGET = { agents: 2190, assistantActing: 1810, assistantReading: 1135 };
 
 describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
   it('outside agents: tools/list and the instructions sent with initialize', () => {
@@ -33,7 +36,8 @@ describe('the tool lists’ cost: a budget per list (M2g-2 slice 2)', () => {
 
 describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', () => {
   const agents = new Map(agentToolList(true).map((t) => [t.name, t.description]));
-  const assistant = new Map(assistantTools(true, true).map((t) => [t.name, t.description]));
+  // With every flag a build may turn on (round 1 of #232's nit): the words a session may be sent.
+  const assistant = new Map(assistantTools(true, true, true).map((t) => [t.name, t.description]));
   // [list, tool, phrase it must keep]
   const pins: [string, string, RegExp][] = [
     ...['read_tab', 'tab_screenshot', 'read_form', 'page_diagnostics', 'read_selection', 'snapshot'].map((t): [string, string, RegExp] => ['agents', t, /untrusted/i]),
@@ -50,6 +54,9 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
     ['agents', 'batch', /one of your own tabs/],
     ['agents', 'batch', /asking the user/],
     ['agents', 'wait_for', /One wait at a time/],
+    ['agents', 'open_tab', /with snapshot, its outline as snapshot gives it/],
+    ['agents', 'navigate', /with snapshot, returns its outline as snapshot gives it/],
+    ['assistant', 'navigate', /with snapshot, returns its outline as snapshot gives it/],
     ...['read_tab', 'read_selection', 'tab_screenshot', 'read_form', 'page_diagnostics', 'snapshot'].map((t): [string, string, RegExp] => ['assistant', t, /untrusted/i]),
     ['assistant', 'read_tab', /ask the user first/],
     ['assistant', 'read_form', /only when the user's own message asks/],
@@ -72,6 +79,24 @@ describe('the safety phrases each tool keeps (M2g-2 slice 2, Neon’s review)', 
   it('the assistant’s snapshot says what’s true since #145: refs stay while their element is on the page', () => {
     expect(assistant.get('snapshot')).not.toMatch(/until the next snapshot/);
     expect(assistant.get('snapshot')).toMatch(/Refs stay good while their element is on the page/);
+  });
+
+  it('snapshot: true on open_tab and navigate only where snapshot is; the assistant’s navigate behind its own flag (#204)', () => {
+    const props = (list: readonly { name: string; inputSchema: unknown }[], name: string) => Object.keys((list.find((t) => t.name === name)!.inputSchema as { properties: object }).properties);
+    expect(props(agentToolList(true), 'open_tab')).toEqual(['url', 'snapshot']);
+    expect(props(agentToolList(true), 'navigate')).toEqual(['tab_id', 'url', 'snapshot']);
+    // M1's list has no snapshot tool, so no snapshot parameter.
+    expect(props(agentToolList(false), 'open_tab')).toEqual(['url']);
+    expect(props(assistantTools(true, true), 'navigate')).toEqual(['tab_id', 'url']);
+    expect(assistantTools(true, true).find((t) => t.name === 'navigate')!.description).not.toMatch(/snapshot/);
+    expect(props(assistantTools(true, true, true), 'navigate')).toEqual(['tab_id', 'url', 'snapshot']);
+    expect(assistantTools(true, true, true).find((t) => t.name === 'navigate')!.description).toMatch(/with snapshot, returns its outline as snapshot gives it/);
+    // The flag: development builds have it; packaged ones not until it's released; only with M2 in the build.
+    expect([assistantGoOutline({ packaged: false }), assistantGoOutline({ packaged: true }), assistantGoOutline({ packaged: true }, true)]).toEqual([true, ASSISTANT_GO_OUTLINE_RELEASED, true]);
+    // Its instructions say so, only when it's on.
+    expect(assistantInstructions('claude', true, true, true)).toContain('navigate with snapshot: true');
+    expect(assistantInstructions('claude', true, true)).not.toContain('snapshot: true');
+    expect(assistantInstructions('claude', true, true, true)).toContain(ACTING_LINES_GO_OUTLINE);
   });
 
   it('the press keys said once: batch’s steps take a key as press_key does, the server checks it', () => {
