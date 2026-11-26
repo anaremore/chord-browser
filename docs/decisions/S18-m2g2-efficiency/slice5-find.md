@@ -14,16 +14,18 @@ The plan's items 5 and 6: an agent finds a control on a big page without a full 
 ## How
 
 - **A flat find** (core: `snapshotOutline`'s `flat`, `flatFind`), where the scope asks for it (`scope.findFlat`: outside agents with M2's tools; the assistant behind `ASSISTANT_FLAT_FIND_RELEASED`, development builds until it's released):
-  - a match is an element whose name has the query, or whose name with its item's has every one of the query's words (`Cancel 150`: the Cancel button in row "Order 150");
-  - at most `FIND_MAX` (20) of them, each the outline's own line, unindented, with the item it's in (`(in row "Order 150")`: its nearest named row, list item, article, dialog, tab panel or region);
-  - past 20, a line says how many more, and to narrow it by an item's words;
+  - a match is a named element whose own name, with its item's, has every one of the query's words, as whole words (numbers as whole tokens: `Cancel 150` never finds order 1500; round 1 of #263);
+  - ranked: every word in its own name first, then some, then its item's alone, the page's order within each; the lines are built for the matches shown only (the cap first);
+  - at most `FIND_MAX` (20) of them, each the outline's own line, unindented, with the item it's in (`(in row "Order 150")`): its nearest row, list item, article, dialog, tab panel or region, by its name, else (unnamed, the common case: a plain `tr`, `li`, `article`) a label from its own contents: its first heading's or link's name, or its first text with the page's text (round 1 of #263);
+  - past 20, a line says how many more, and (when the matches have items) to narrow it by an item's words;
   - none: the nearest names, by words in common with the query's, stop-words left out, at most `FIND_NEAREST` (5), the page's order on ties; Chord's note says so in its own words (`FIND_NEAREST_NOTE`, or `FIND_NONE_NOTE` when nothing is near);
   - without the page's text (`text: false`), a text run never matches.
-- **Never the diff's baseline:** a flat find keeps no outline (neither the full one's slot nor the outline-without-text's). The outline the next diff compares with stays the last whole one.
+- **Never the diff's baseline:** a flat find keeps no outline (neither the full one's slot nor the outline-without-text's), builds no whole outline, gives only its own lines' part refs, and is read unpinned (never taking the agent's full snapshot's place in the page). The outline the next diff compares with stays the last whole one, and a diff's notes after it say *call snapshot without find* (round 1 of #263).
+- **A find of nothing but spaces** is no find (round 1 of #263); a no-match find on a read cut short keeps the cut note.
 - **Only the refs shown are acted on** (plan rule 1, in full; every scope):
   - refs are still issued for every element (numbered by the page's own ids, so none is ever rebound, and an element keeps its ref from one snapshot to the next);
-  - `ElementRefs` keeps the refs the agent was shown on this page (`showRefs`), gathered from each answer's own text: the outline's range it returned (a later range adds its own), a find's lines, a diff's lines, and an action's outline from `open_tab` or `navigate` with `snapshot: true` (snapshot's own call);
-  - every acting tool, and `batch` before step 1, refuses a ref the agent wasn't shown on this page as unknown (`wasShown`): a collapsed run's row, a line past the range it read, an element a find didn't list;
+  - `ElementRefs` keeps the refs the agent was shown on this page (`showRefs`), **structurally, never read out of the text** (round 1 of #263: a page's own words could write any ref): each outline line's own element and offset (`lineRefs`), those within the range the answer returned (`snapshotRange`, `refsInRange`; a later range adds its own, from the kept outline's), a find's lines, and a diff's new and changed lines by their ids (`snapshotLinesWithRefs`, `snapshotDiffShown`: never a gone line's);
+  - every acting tool, and `batch` before step 1, refuses a ref the agent wasn't shown on this page (`wasShown`; `ELEMENT_REFUSALS.notShown`, which says a snapshot or a find shows it): a collapsed run's row, a line past the range it read, an element a find didn't list;
   - another page starts over; `forget()` and the refs' reset clear it.
 
 ## Threat checklist
@@ -58,3 +60,8 @@ The token eval (Linux container, X11), fresh main (`186cbf9`) against this branc
 - **The broad find** (300 orders, the agent after order 150's Cancel) takes one more call: twenty matches of three hundred, then a narrower find by the row's words (`Cancel 150`), as the line says. It reads less for it, since the 300 lines it no longer gets would be read again on every later turn: 30% less cached.
 - **The 300-row list** finds its row as before (one match).
 - **The tool definitions grow 17 tokens** (outside agents: `find`'s words), within the budget.
+
+## Limits
+
+- **`c` refs aren't held to *shown*:** they're read-only, and a part's read is never more than the page read (#207).
+- **Past `SNAPSHOT_MAX_REFS` (2,000) keyed elements**, a match has no ref (the snapshot's own cap).

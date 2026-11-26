@@ -311,7 +311,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   const lookup = tabRefs?.resolve(refArg, page.id) ?? { ok: false as const, why: 'unknown' as const };
   if (!lookup.ok) return refuse(lookup.why === 'unknown' ? ELEMENT_REFUSALS.unknown(String(refArg ?? '')) : ELEMENT_REFUSALS.stale);
   // Never one the agent wasn't shown (#208: rule 1): a collapsed row's, one past the range it read, one a find didn't list.
-  if (!tabRefs!.wasShown(refArg, page.id)) return refuse(ELEMENT_REFUSALS.unknown(String(refArg)));
+  if (!tabRefs!.wasShown(refArg, page.id)) return refuse(ELEMENT_REFUSALS.notShown(String(refArg)));
   /**
    * One step in the page on the ref's element (act.ts). A ref whose node the page replaced may be found again there
    * (the owner's bug #2): the result says so.

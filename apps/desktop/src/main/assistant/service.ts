@@ -492,7 +492,7 @@ export class AssistantService {
 
   /** The tools a session is given when it reads pages: with acting as Settings has it, and this build's flags. */
   private tools(): readonly AssistantToolSpec[] {
-    return assistantTools(agentActions({ packaged: app.isPackaged }), this.acting(), goOutline());
+    return assistantTools(agentActions({ packaged: app.isPackaged }), this.acting(), goOutline(), flatFind());
   }
 
   /** The tab on screen as a message is sent: the one it may act in (S18 M2e-2a, A1). */

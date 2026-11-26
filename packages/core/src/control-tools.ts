@@ -227,9 +227,17 @@ const NAVIGATE_WITH_OUTLINE: AssistantToolSpec = {
  * The assistant's tools: with M2 in the build, snapshot; and with *Click and type on pages* on (S18 M2e), the acting
  * tools too, in the tab on screen.
  */
-export const assistantTools = (actions: boolean, acting = false, goOutline = false): readonly AssistantToolSpec[] =>
+export const assistantTools = (actions: boolean, acting = false, goOutline = false, flatFind = false): readonly AssistantToolSpec[] =>
   // wait_for is outside agents' alone (Neon's round 1 of M2g-1, B-4).
-  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => t.name !== 'wait_for' && (acting || t.name === 'snapshot')).map((t) => (goOutline && t.name === 'navigate' ? NAVIGATE_WITH_OUTLINE : t))] : ASSISTANT_TOOLS;
+  actions ? [...ASSISTANT_TOOLS, ...ACTION_TOOLS.filter((t) => t.name !== 'wait_for' && (acting || t.name === 'snapshot')).map((t) => (goOutline && t.name === 'navigate' ? NAVIGATE_WITH_OUTLINE : flatFind && t.name === 'snapshot' ? SNAPSHOT_FLAT_FIND : t))] : ASSISTANT_TOOLS;
+
+/** The flat find's words in place of find's (#208; round 1 of #263), where the build's flag gives the assistant it. */
+const FIND_WORDS = 'find: only the elements whose names contain it.';
+const FLAT_FIND_WORDS = "find: up to 20 elements whose names (with their item's) have its words, as lines with their items; none: the nearest names.";
+const SNAPSHOT_FLAT_FIND: AssistantToolSpec = (() => {
+  const plain = ACTION_TOOLS.find((t) => t.name === 'snapshot')!;
+  return { ...plain, description: plain.description.replace(FIND_WORDS, FLAT_FIND_WORDS) };
+})();
 export const isActionTool = (name: string): boolean => ACTION_TOOLS.some((t) => t.name === name);
 
 /** The control layer's names for every tool, whoever calls it (M2's included: a scope says whether it offers them). */

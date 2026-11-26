@@ -411,6 +411,11 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Orders</title><main><table><tbody>' +
       Array.from({ length: 300 }, (_, i) => `<tr aria-label="Order ${i + 1}"><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
       '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
+    // The same orders as most pages write them (round 1 of #263): plain rows, no name of their own.
+    '/orders300-plain':
+      '<title>Orders</title><main><table><tbody>' +
+      Array.from({ length: 300 }, (_, i) => `<tr><td>Order ${i + 1}</td><td><button data-n=${i + 1} data-a=view>View</button> <button data-n=${i + 1} data-a=cancel>Cancel</button></td></tr>`).join('') +
+      '</tbody></table><p id=log></p></main><script>document.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && b.dataset.a === "cancel") document.getElementById("log").textContent += " cancelled " + b.dataset.n; });</script>',
     '/aria-body': '<title>Editor</title><body contenteditable aria-label="Pay body">Draft</body>',
     '/root-editor': '<!doctype html><html contenteditable><head><title>Root</title></head><body><p>typed root</p></body></html>',
     '/design': '<title>Design</title><p>typed secret</p><script>document.designMode = "on";</script>',
