@@ -26,7 +26,7 @@ import {
 import type { AntigravityAnswer, RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
 import { app, BaseWindow, clipboard, nativeTheme, net, powerMonitor, session, shell, webContents, type ContextMenuParams, type Session, type WebContents } from 'electron';
 import type { ImportEnv } from '../import/detect';
 import { AdBlocking } from './ad-blocking/service';
@@ -61,7 +61,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { migratePartitions } from './partitions';
+import { migratePartitions, partitionFolder } from './partitions';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -979,7 +979,11 @@ if (!app.requestSingleInstanceLock()) {
     // the blocker extension. No session loads them meanwhile; which profiles are in use is read then, so one made since stays.
     afterLaunch.run(() => {
       const inUse = new Set([...Object.values(browser!.store.state.chords).map((c) => c.profileId), ...profiles.keys()]);
-      void removeUnusedPartitions(app.getPath('userData'), [...inUse].map((id) => partitionFallbacks.get(id) ?? profilePartition(id)));
+      // The folders in use: each session made's own, as Electron named it, and each profile in use's (its old one if
+      // its sign-ins couldn't be moved this launch), never worked out again for a session that has one (#315).
+      const folders = [...inUse].map((id) => partitionFolder(partitionFallbacks.get(id) ?? profilePartition(id)));
+      for (const ses of profiles.values()) if (ses.storagePath) folders.push(basename(ses.storagePath));
+      void removeUnusedPartitions(app.getPath('userData'), folders);
       void adBlocking.forgetProfiles(inUse);
     });
 

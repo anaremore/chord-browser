@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { profilePartition } from '@chord/core';
-import { migratePartitions, type PartitionFs } from '../../src/main/partitions';
+import { migratePartitions, partitionFolder, type PartitionFs } from '../../src/main/partitions';
 import { removeUnusedPartitions } from '../../src/main/persistence';
 
 const dirs: string[] = [];
@@ -134,8 +134,9 @@ describe('migratePartitions (#315)', () => {
     expect(fallbacks).toEqual(new Map([['Work', 'persist:p-Work']]));
     expect(fallbacks.get('Work')).not.toBe(profilePartition('work'));
     expect(cookies(root, 'p-work')).toBe('Work');
-    // The cleanup once launch is over counts its old folder as in use.
-    await removeUnusedPartitions(root, [fallbacks.get('Work')!]);
+    // The cleanup once launch is over counts its old folder as in use: main passes the folder of the partition each
+    // profile runs on (its old one here), and its session's own (Opus's blocker-class note on #315's PR 2).
+    await removeUnusedPartitions(root, [partitionFolder(fallbacks.get('Work')!)]);
     expect(cookies(root, 'p-work')).toBe('Work');
   });
 
@@ -149,7 +150,7 @@ describe('migratePartitions (#315)', () => {
 describe('removeUnusedPartitions after #315', () => {
   it('a legacy `p-work_1` goes once unused; a migrated profile’s new folder stays; `.migrating-*` is never touched (SF2)', async () => {
     const root = userData({ 'p-work_1': 'old', [folderOf('Work_1')]: 'Work_1', '.migrating-p-x': 'staging', 'p-0123abcd': 'gone' });
-    await removeUnusedPartitions(root, [profilePartition('Work_1')]);
+    await removeUnusedPartitions(root, [partitionFolder(profilePartition('Work_1'))]);
     expect(cookies(root, 'p-work_1')).toBeNull();
     expect(cookies(root, 'p-0123abcd')).toBeNull();
     expect(cookies(root, folderOf('Work_1'))).toBe('Work_1');

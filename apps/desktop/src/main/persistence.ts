@@ -6,7 +6,6 @@
  */
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { partitionFolder } from './partitions';
 import type { ArchiveReason, AssistantThread, ExportCounts, PersistedState, SavedEffects, State } from '@chord/core';
 import {
   opKey,
@@ -669,18 +668,19 @@ export class Persistence {
 
 /**
  * Deletes the sign-ins (cookies, storage, cache) of profiles no chord uses:
- * every `<userData>/Partitions/p-…` folder that isn't the folder of a
- * partition in `used` (each profile's in use, or the old one it runs on this
- * launch, partitions.ts), as Electron names it: in lower case, so compared
- * without case (#315). Runs once launch is over. Only Chord's own `p-…`
- * folders qualify (any an id could ever have named, before #315's escape or
- * after it), so nothing else can be deleted through this; `.migrating-*`
- * never matches.
+ * every `<userData>/Partitions/p-…` folder that isn't one in `inUse`, the
+ * folders sessions use: each session made's own (its `storagePath`), and each
+ * profile in use's, its old one if it runs on that this launch (partitions.ts),
+ * so a live folder is never worked out again from an id. Compared without case:
+ * Electron names them in lower case (#315). Runs once launch is over. Only
+ * Chord's own `p-…` folders qualify (any an id could ever have named, before
+ * #315's escape or after it), so nothing else can be deleted through this;
+ * `.migrating-*` never matches.
  */
-export async function removeUnusedPartitions(userData: string, used: Iterable<string>): Promise<void> {
+export async function removeUnusedPartitions(userData: string, inUse: Iterable<string>): Promise<void> {
   const root = join(userData, 'Partitions');
   const names = await readdir(root).catch(() => [] as string[]);
-  const kept = new Set([...used].map(partitionFolder));
+  const kept = new Set([...inUse].map((folder) => folder.toLowerCase()));
   for (const name of names) {
     if (/^p-[0-9a-z_-]{1,128}$/i.test(name) && !kept.has(name.toLowerCase())) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
   }

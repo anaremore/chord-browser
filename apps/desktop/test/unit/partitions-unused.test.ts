@@ -8,10 +8,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { profilePartition } from '@chord/core';
+import { partitionFolder } from '../../src/main/partitions';
 import { removeUnusedPartitions } from '../../src/main/persistence';
 
-/** The partitions of these profiles, as main passes them (#315's PR 2: partitions, not ids). */
-const of = (...ids: string[]) => ids.map(profilePartition);
+/** The folders of these profiles' partitions, as main passes them (#315: the folders in use, not ids). */
+const of = (...ids: string[]) => ids.map((id) => partitionFolder(profilePartition(id)));
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -36,7 +37,7 @@ describe('removeUnusedPartitions (#315)', () => {
     // Before #315's escape it was named `p-${id}` (in lower case); since, its old partition is what it runs on until
     // its folder has moved (partitions.ts), so main passes that one.
     const data = userData([`p-${UPPER.toLowerCase()}`]);
-    await removeUnusedPartitions(data.root, [`persist:p-${UPPER}`]);
+    await removeUnusedPartitions(data.root, [partitionFolder(`persist:p-${UPPER}`)]);
     expect(data.has(`p-${UPPER.toLowerCase()}`)).toBe(true);
   });
 
@@ -44,8 +45,21 @@ describe('removeUnusedPartitions (#315)', () => {
     // `DEADBEEF` in use has `p-deadbeef` (Electron's lower case); `p-cafef00d` is no profile's, and goes. (Two distinct
     // ids: Argon's SF3 on #315's design.)
     const data = userData(['p-deadbeef', 'p-cafef00d']);
-    await removeUnusedPartitions(data.root, ['persist:p-DEADBEEF']);
+    await removeUnusedPartitions(data.root, [partitionFolder('persist:p-DEADBEEF')]);
     expect(data.has('p-deadbeef')).toBe(true);
+    expect(data.has('p-cafef00d')).toBe(false);
+  });
+
+  it('a folder on disk in upper case stays while its profile is in use: compared without case (Opus’s nit on #318)', async () => {
+    const data = userData(['p-DEADBEEF']);
+    await removeUnusedPartitions(data.root, [partitionFolder('persist:p-DEADBEEF')]);
+    expect(data.has('p-DEADBEEF')).toBe(true);
+  });
+
+  it('a session’s own folder (its storagePath, as Electron named it) stays, whatever its profile’s id would make of it now', async () => {
+    const data = userData(['p-work', 'p-cafef00d']);
+    await removeUnusedPartitions(data.root, ['p-work']);
+    expect(data.has('p-work')).toBe(true);
     expect(data.has('p-cafef00d')).toBe(false);
   });
 
