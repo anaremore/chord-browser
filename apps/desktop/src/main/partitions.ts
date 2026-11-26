@@ -34,9 +34,10 @@ export interface PartitionFs {
   cp: typeof cp;
   stat: typeof stat;
   writeFile: typeof writeFile;
+  readFile: typeof readFile;
 }
 
-const realFs: PartitionFs = { readdir, rm, rename, cp, stat, writeFile };
+const realFs: PartitionFs = { readdir, rm, rename, cp, stat, writeFile, readFile };
 
 /** Development and tests only (CHORD_E2E_PARTITION_MOVE_FAIL): the file system, with `profileId`'s copy and rename failing. */
 export function partitionFsFailingFor(profileId: string): PartitionFs {
@@ -124,8 +125,15 @@ export async function migratePartitions(
         throw error;
       },
     );
-  /** Whose a folder's marker says it is, or null (none, or unreadable). */
-  const markerOf = (folder: string) => readFile(join(root, folder, MOVED_MARKER), 'utf8').then((s) => s.trim(), () => null);
+  /** Whose a folder's marker says it is, or null if it has none; an error that isn't "not there" throws (a fallback). */
+  const markerOf = (folder: string) =>
+    fs.readFile(join(root, folder, MOVED_MARKER), 'utf8').then(
+      (s) => s.trim(),
+      (error: NodeJS.ErrnoException) => {
+        if (error?.code === 'ENOENT') return null;
+        throw error;
+      },
+    );
   const failed: { id: string; old: string }[] = [];
   const fallBack = (id: string, old: string, error: unknown) => {
     console.error(`Moving ${id}'s sign-ins to their new folder failed; they stay where they were this launch:`, error);
@@ -133,6 +141,9 @@ export async function migratePartitions(
     occupied.add(old);
   };
 
+  // Folders in use by a profile that doesn't move (its folder is its partition's now): never renamed away or written,
+  // nor shared by a fallback, even when Partitions can't be read (Neon's and Opus's SF1-R3 on #329).
+  const kept = new Set([...using].filter((id) => !listed.includes(id)).map((id) => partitionFolder(profilePartition(id))));
   let names: string[];
   try {
     names = await fs.readdir(root);
@@ -143,14 +154,12 @@ export async function migratePartitions(
       return { fallbacks, moved };
     }
     for (const id of listed) fallBack(id, `p-${id.toLowerCase()}`, error);
-    return { fallbacks: inMemoryWhereShared(failed, new Set()), moved };
+    return { fallbacks: inMemoryWhereShared(failed, kept), moved };
   }
   // A copy a crash or a full disk cut short: never a profile's, and in the way of the next.
   for (const name of names) if (name.startsWith(STAGING)) await fs.rm(join(root, name), { recursive: true, force: true }).catch(() => {});
 
   const plan = listed.map((id) => ({ id, next: partitionFolder(profilePartition(id)), old: `p-${id.toLowerCase()}` }));
-  // Folders in use by a profile that doesn't move (its folder is its partition's now): never renamed away or written.
-  const kept = new Set([...using].filter((id) => !listed.includes(id)).map((id) => partitionFolder(profilePartition(id))));
   // By old folder: how many listed profiles still need it (a failed move goes on needing it).
   const needing = new Map<string, number>();
   for (const m of plan) needing.set(m.old, (needing.get(m.old) ?? 0) + 1);
@@ -191,7 +200,9 @@ export async function migratePartitions(
       } else {
         const staging = join(root, `${STAGING}${next}`);
         const from = join(root, old);
-        await fs.cp(from, staging, { recursive: true, filter: (path) => !CACHES.has(path.slice(from.length + 1).split(/[\\/]/)[0]!) && !path.endsWith(MOVED_MARKER) });
+        // Not the caches, and not the old folder's own marker (only that one: a site's file of that name deeper in is copied).
+        const ownMarker = join(from, MOVED_MARKER);
+        await fs.cp(from, staging, { recursive: true, filter: (path) => !CACHES.has(path.slice(from.length + 1).split(/[\\/]/)[0]!) && path !== ownMarker });
         await fs.writeFile(join(staging, MOVED_MARKER), id);
         await fs.rename(staging, join(root, next));
       }

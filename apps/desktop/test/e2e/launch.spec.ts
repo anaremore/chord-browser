@@ -479,7 +479,9 @@ test('a chord can keep its sign-ins separate, with Undo, and its sign-ins are de
   try {
     const shell = await pageWhere(app, isShell);
     const overlay = await pageWhere(app, isOverlay);
-    await pageWhere(app, (url) => url === `${site.origin}/login`);
+    // The home page signs in: its cookie is set once it has run (its title says so), before Work asks (#329 round 3).
+    const login = await pageWhere(app, (url) => url === `${site.origin}/login`);
+    await expect.poll(() => login.title()).toBe('Signed in');
     const visit = async (path: string) => {
       await openCommandBar(shell, overlay, 'new');
       await overlay.keyboard.type(`${site.origin}${path}`);

@@ -279,6 +279,8 @@ describe('the move list comes off one profile at a time, as each moves (Neon’s
     const dying: PartitionFs = { ...fsp, rename: (from, to) => (++renames === 3 ? new Promise<void>(() => {}) : fsp.rename(from, to)) };
     void migratePartitions(root, moves.rows, ids, dying, moves.onMoved);
     await vi.waitFor(() => expect(renames).toBe(3));
+    // Each came off the list as it moved: only the one that never finished is still listed (Neon's SF2-R3 on #329).
+    expect(moves.rows).toEqual(['Work']);
     // Relaunch: what's still listed moves, on the same disk.
     const { fallbacks } = await migratePartitions(root, [...moves.rows], ids, fsp as unknown as PartitionFs, moves.onMoved);
     for (const id of ids) expect(opens(root, id, fallbacks), id).toBe(id);
@@ -290,8 +292,11 @@ describe('the move list comes off one profile at a time, as each moves (Neon’s
     const rows = [...ids];
     const failingWrite = async () => Promise.reject(new Error('chord-data is gone'));
     const first = await migratePartitions(root, [...rows], ids, fsp as unknown as PartitionFs, failingWrite);
-    // `_work` moved: its sign-ins are in its new folder, not a fallback.
+    // `_work` moved: its sign-ins are in its new folder, not a fallback, and its old folder is gone. Its row stayed, so
+    // the old folder is occupied: `Work` doesn't move into it this launch (Neon's SF2-R3 on #329).
     expect(first.fallbacks.has('_work')).toBe(false);
+    expect(existsSync(join(partitionsDir(root), 'p-_work'))).toBe(false);
+    expect(first.fallbacks.get('Work')).toBe(fallbackPartition('Work'));
     for (const id of ids) expect(opens(root, id, first.fallbacks), id).toBe(id);
     // Next launch, its row (and Work's, if Work didn't move) still listed; the write works now.
     const moves = list(rows);
@@ -300,3 +305,35 @@ describe('the move list comes off one profile at a time, as each moves (Neon’s
     for (const id of ids) expect(opens(root, id, fallbacks), id).toBe(id);
   });
 });
+
+describe('#329 round 3', () => {
+  it('SF1-R3: Partitions can’t be read (EACCES): `Work` listed, `work` in use keeping `p-work`, so `Work` runs in memory, never on `work`’s folder', async () => {
+    const root = userData({ 'p-work': 'shared' });
+    const fs: PartitionFs = { ...fsp, readdir: (async () => Promise.reject(Object.assign(new Error('EACCES'), { code: 'EACCES' }))) as unknown as PartitionFs['readdir'] };
+    const { fallbacks } = await migratePartitions(root, ['Work'], ['Work', 'work'], fs);
+    expect(fallbacks).toEqual(new Map([['Work', inMemoryFallback('Work')]]));
+  });
+
+  it('a marker that can’t be read for another reason than "not there": falls back, never removes the folder', async () => {
+    const root = userData({ 'p-work': 'Work', [folderOf('Work')]: 'Work-own' });
+    const fs: PartitionFs = {
+      ...fsp,
+      readFile: (async (path: string, options: unknown) =>
+        String(path).endsWith(MOVED_MARKER) ? Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' })) : fsp.readFile(path, options as never)) as unknown as PartitionFs['readFile'],
+    };
+    const { fallbacks } = await migratePartitions(root, ['Work'], ['Work'], fs);
+    expect(fallbacks.has('Work')).toBe(true);
+    expect(cookies(root, folderOf('Work'))).toBe('Work-own');
+  });
+
+  it('a copy leaves out only the old folder’s own marker, never a file of that name deeper in', async () => {
+    const root = userData({ 'p-work': 'shared' });
+    mkdirSync(join(partitionsDir(root), 'p-work', 'Local Storage'), { recursive: true });
+    writeFileSync(join(partitionsDir(root), 'p-work', 'Local Storage', MOVED_MARKER), 'a site’s file');
+    writeFileSync(join(partitionsDir(root), 'p-work', MOVED_MARKER), 'someone');
+    await migratePartitions(root, ['Work'], ['Work', 'work']);
+    expect(readFileSync(join(partitionsDir(root), folderOf('Work'), 'Local Storage', MOVED_MARKER), 'utf8')).toBe('a site’s file');
+    expect(readFileSync(join(partitionsDir(root), folderOf('Work'), MOVED_MARKER), 'utf8')).toBe('Work');
+  });
+});
+
