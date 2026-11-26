@@ -176,8 +176,22 @@ export class TabManager {
   reload(contents: WebContents): void {
     const nodeId = this.nodeFor(contents);
     const node = nodeId ? nodeOf(this.deps.state(), nodeId) : undefined;
-    if (nodeId && node?.kind === 'tab' && contents.navigationHistory.length() === 0) return this.navigate(nodeId, node.url);
+    const history = contents.navigationHistory;
+    // An agent tab stopped while primed has only its blank page, which is never the tab's (#287).
+    const never = history.length() === 0 || (history.length() === 1 && history.getEntryAtIndex(0)?.url === 'about:blank');
+    if (nodeId && node?.kind === 'tab' && never) return this.navigate(nodeId, node.url);
+    this.stopWaiting(contents);
     contents.reload();
+  }
+
+  /**
+   * Your Back or Forward (#287): a load still waiting for its session is dropped first (stopWaiting), so it never lands
+   * over the page you went to.
+   */
+  go(contents: WebContents, way: 'back' | 'forward'): void {
+    this.stopWaiting(contents);
+    if (way === 'back') contents.navigationHistory.goBack();
+    else contents.navigationHistory.goForward();
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
@@ -317,6 +331,8 @@ export class TabManager {
     // address, only if that answered (fail closed: a service worker would send out of the hold's sight). The blank
     // page is never the tab's: not its address, nor in its back list.
     let overtaken = false;
+    /** Its first page's load has started: a load over it from then is only a load, its hold on (#287). */
+    let started = false;
     const primed = async () => {
       if (overtaken) return;
       this.priming.add(contents);
@@ -340,6 +356,7 @@ export class TabManager {
       };
       contents.once('did-navigate', arrived);
       contents.once('did-fail-load', arrived);
+      started = true;
       load();
     };
     // Its first page is on its way from now (a read or open_tab waits for it, never the blank page before it).
@@ -347,7 +364,7 @@ export class TabManager {
     // A load asked for over an agent tab's first page before it came (you, in the address bar): its hold is failed (nothing
     // acts there, as a page loaded without its service workers bypassed), and nothing waits for a first page that won't come.
     const overtake = () => {
-      if (!firstLoadPending(contents)) return;
+      if (!firstLoadPending(contents) || started) return;
       overtaken = true;
       // The overtaking page is the tab's: its address, title and history reported, never swallowed as the blank page's
       // (Neon's SF2 on #282).

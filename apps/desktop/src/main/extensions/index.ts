@@ -241,6 +241,7 @@ export class Extensions {
           session: tab.session,
           url,
           anchor,
+          proxyReady: this.deps.proxyReady ? (session) => this.deps.proxyReady!(session) : undefined,
           openTab: (link) => this.deps.dispatch({ t: 'tab.open', windowId: w.id, url: link }),
           onClosed: (reason) => {
             if (this.popups.get(w.id) === popup) this.popups.delete(w.id);

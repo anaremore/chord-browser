@@ -20,6 +20,11 @@ const hold = (method: string) => {
   return () => (holding.delete(method), release());
 };
 
+/** Every command any agent page's debugger was sent, by method. */
+const sent: string[] = [];
+/** The blank page's load, answered when the test says (null: at once). */
+const blank = { held: null as null | Promise<void> };
+
 /** A page with a debugger that answers every command (after any hold on it), and its address as last loaded. */
 class AgentView extends FakeView {
   constructor() {
@@ -29,12 +34,16 @@ class AgentView extends FakeView {
     let attached = false;
     let url = '';
     page['getURL'] = () => url;
-    page.loadURL.mockImplementation(async (to: string) => void (url = to));
+    page.loadURL.mockImplementation(async (to: string) => {
+      url = to;
+      if (to === 'about:blank' && blank.held) await blank.held;
+    });
     page['debugger'] = {
       isAttached: () => attached,
       attach: () => void (attached = true),
       on: (e: string, f: (...a: unknown[]) => void) => events.on(e, f),
       sendCommand: async (method: string) => {
+        sent.push(method);
         await holding.get(method)?.promise;
         return method === 'Runtime.evaluate' ? { result: { value: true } } : undefined;
       },
@@ -65,6 +74,8 @@ const SECOND = 'https://second.test/';
 afterEach(() => {
   for (const { release } of holding.values()) release();
   holding.clear();
+  sent.length = 0;
+  blank.held = null;
   vi.useRealTimers();
 });
 
@@ -169,6 +180,32 @@ describe('an agent tab’s first page overtaken, or stopped (#277, round 1 of #2
     bypass();
     await settle();
     expect(t.loaded()).toEqual(['about:blank']);
+  });
+
+  it('overtaken while its blank page loads (#287): no bypass asked for, no first address, the hold failed', async () => {
+    let answer = () => {};
+    blank.held = new Promise<void>((r) => (answer = r));
+    const t = setup();
+    await settle();
+    expect(t.loaded()).toEqual(['about:blank']);
+    t.manager.navigate(NODE, SECOND);
+    sent.length = 0;
+    answer();
+    await settle();
+    expect(sent).not.toContain('Network.setBypassServiceWorker');
+    expect(t.loaded()).toEqual(['about:blank', SECOND]);
+    expect(pickers.pickersLost(t.page)).toBe(true);
+  });
+
+  it('a navigation once its first page has started loading (#287): only a load, the hold stays on (bypassed, it is held)', async () => {
+    const t = setup();
+    await settle();
+    // Its first page asked for, not committed yet (still connecting).
+    expect(t.loaded()).toEqual(['about:blank', FIRST]);
+    expect(pickers.firstLoadPending(t.page)).toBe(true);
+    t.manager.navigate(NODE, SECOND);
+    expect(t.loaded()).toEqual(['about:blank', FIRST, SECOND]);
+    expect(pickers.pickersLost(t.page)).toBe(false);
   });
 
   it('Stop once its first page has started loading: only the page’s own Stop, the hold stays on', async () => {

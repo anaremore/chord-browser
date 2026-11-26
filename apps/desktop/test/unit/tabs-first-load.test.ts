@@ -142,9 +142,34 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.loaded()).toEqual([FIRST]);
     expect(t.page.reload).not.toHaveBeenCalled();
     // Once it has history, Reload is the page's own.
-    (t.page.navigationHistory as { length: () => number }).length = () => 1;
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
     t.manager.reload(t.page as never);
     expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
+  it('Reload after Stop while it was primed (#287): a history of only the blank page is no history, so its address loads', () => {
+    const t = setup([]);
+    const history = t.page.navigationHistory as unknown as { length: () => number; getEntryAtIndex: (i: number) => { url: string } | null };
+    history.length = () => 1;
+    history.getEntryAtIndex = () => ({ url: 'about:blank' });
+    t.page.loadURL.mockClear();
+    t.manager.reload(t.page as never);
+    expect(t.loaded()).toEqual([FIRST]);
+    expect(t.page.reload).not.toHaveBeenCalled();
+  });
+
+  it.each(['back', 'forward'] as const)('%s while a load waits for its session (#287): the waiting load is dropped, then the page goes that way', async (way) => {
+    const rules = held();
+    const t = setup([rules]);
+    const history = t.page.navigationHistory as unknown as Record<string, unknown>;
+    history['goBack'] = vi.fn();
+    history['goForward'] = vi.fn();
+    t.manager.go(t.page as never, way);
+    expect(history[way === 'back' ? 'goBack' : 'goForward']).toHaveBeenCalledOnce();
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([]);
+    expect(firstLoadPending(t.page)).toBe(false);
   });
 
   it('Stop on a page not waiting: nothing to drop (the page’s own Stop does the rest)', () => {

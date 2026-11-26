@@ -570,6 +570,7 @@ export class Browser {
           },
           extensionItems: (params) => this.extensions.contextMenuItems(contents, params),
           navigates: (going) => this.userNavigates?.(contents, going),
+          reload: () => this.tabs.reload(contents),
           adBlocking: this.blockingMenu(contents),
           screenshot: () => {
             const w = this.windowFor(contents);
@@ -1947,8 +1948,7 @@ export class Browser {
         this.devtools.toggleWindow(nodeId, true);
         return true;
       case 'nav.reload':
-        if (page) this.userNavigates?.(page);
-        page?.reload();
+        if (page) this.reloadPage(page);
         return true;
       case 'nav.hardReload':
         if (page) this.userNavigates?.(page);
@@ -2285,8 +2285,17 @@ export class Browser {
   reloadTab(nodeId: string): void {
     const contents = this.tabs.get(nodeId)?.webContents;
     if (!contents || contents.isDestroyed()) return;
+    this.reloadPage(contents);
+  }
+
+  /**
+   * Your Reload, from anywhere (the toolbar, Ctrl/Cmd+R, the sidebar, the tab menu, DevTools, the page menu): it moves
+   * the page (an agent's tab is yours from here), and a page stopped before it ever loaded loads its tab's address
+   * rather than reloading nothing (tabs.reload, #287).
+   */
+  private reloadPage(contents: WebContents): void {
     this.userNavigates?.(contents);
-    contents.reload();
+    this.tabs.reload(contents);
   }
 
   openAppMenu(contents: WebContents, anchor: Rect): void {
@@ -2361,8 +2370,7 @@ export class Browser {
         copyMarkdown: () => clipboard.writeText(markdownLink(tab.title, tab.url)),
         reload: () => {
           const page = pageOf(this.tabs.get(nodeId));
-          if (page) this.userNavigates?.(page);
-          page?.reload();
+          if (page) this.reloadPage(page);
         },
         duplicate: () => this.store.dispatch({ t: 'tab.open', windowId: w.id, url: tab.url }),
         muted: Boolean(tab.muted),
@@ -2844,8 +2852,7 @@ export class Browser {
         this.store.dispatch({ t: 'tab.cycle', windowId: w.id, direction: action === 'tab.next' ? 1 : -1 });
         return true;
       case 'nav.reload':
-        if (pageContents) this.userNavigates?.(pageContents);
-        pageContents?.reload();
+        if (pageContents) this.reloadPage(pageContents);
         return true;
       case 'nav.hardReload':
         if (pageContents) this.userNavigates?.(pageContents);

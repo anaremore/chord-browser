@@ -366,10 +366,11 @@ function registerIpc(): void {
     // The toolbar's buttons: an agent's tab is yours from here (S18 M2e-1), when one moves it.
     if (action === 'back' && history.canGoBack()) {
       browser!.userNavigates?.(contents, 'back');
-      history.goBack();
+      // A load still waiting for its session is dropped first (#287).
+      browser!.tabs.go(contents, 'back');
     } else if (action === 'forward' && history.canGoForward()) {
       browser!.userNavigates?.(contents, 'forward');
-      history.goForward();
+      browser!.tabs.go(contents, 'forward');
     } else if (action === 'reload') {
       browser!.userNavigates?.(contents);
       // A page stopped before it ever loaded: its tab's address (round 1 of #282).

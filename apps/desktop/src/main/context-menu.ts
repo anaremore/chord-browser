@@ -28,6 +28,8 @@ export interface ContextMenuDeps {
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
   /** Back, Forward or Reload chosen here: about to move the page (an agent's tab: you take it over, S18 M2e-1). */
   navigates?(going: 'back' | 'forward' | 'reload'): void;
+  /** Its Reload, where the page is a tab's (tabs.reload: one stopped before it ever loaded loads its address, #287). */
+  reload?(): void;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
   extensionItems?(params: ContextMenuParams): MenuItem[];
   /**
@@ -137,7 +139,8 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
         accelerator: accel('nav.reload'),
         click: () => {
           deps.navigates?.('reload');
-          contents.reload();
+          if (deps.reload) deps.reload();
+          else contents.reload();
         },
       },
       { type: 'separator' },
