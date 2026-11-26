@@ -453,7 +453,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
     pending = false;
     // Another snapshot since (its refs replace these): nothing to keep.
     const began = performance.now();
-    let whole = !(cut.refs || cut.elements || cut.time);
+    let shapesOk = true;
     try {
       for (const k of keep) {
         if (!k.chain) continue;
@@ -461,16 +461,19 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
         k.path = placeOf(k.chain);
         k.shape = shapeOf(k.parts);
       }
-    } catch { whole = false; }
+    } catch { shapesOk = false; }
+    const whole = shapesOk && !(cut.refs || cut.elements || cut.time);
     // Found again only if nothing else here looked like it: its role, name, items, place and shape unique among the
     // snapshot's own, and the snapshot whole (never cut short: what it didn't see could be its twin). Its items stay
     // either way: every step checks them (act.ts).
     const counts = new Map();
     for (const k of keep) { delete k.chain; delete k.parts; k.sig = JSON.stringify([k.role, k.name, k.items, k.path, k.shape]); counts.set(k.sig, (counts.get(k.sig) || 0) + 1); }
     for (const k of keep) {
-      if (!whole || counts.get(k.sig) !== 1) { delete k.path; delete k.shape; }
-      // Twins (#211): found again, either could be it; an action on one says so, never guesses.
-      if (whole && counts.get(k.sig) > 1) k.twins = true;
+      // Twins (#211): two or more alike among the snapshot's own, cut short or not. Their place and shape stay, so a
+      // look finds whether any is still there (none: changed); an action on one is never taken, and says why.
+      const twins = shapesOk && k.path !== undefined && counts.get(k.sig) > 1;
+      if (twins) k.twins = true;
+      else if (!whole) { delete k.path; delete k.shape; }
       delete k.sig;
     }
     // (Its cost, for the budgets journey.)
@@ -555,7 +558,8 @@ function waitScript(want: WaitFor, ms: number): string {
         let role = roleNow(el);
         if (!role && !keyed && pointerGeneric(el)) role = 'generic';
         // One that can be acted on counts only when it's on screen, as the snapshot gives it a ref (S-5).
-        if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name && (!(ACTED.has(role) || role === 'generic') || shown(el))) { found = true; return; }
+        // Shown as the snapshot judges it: a field by visibleField (a styled checkbox: its box unseen, its label shown).
+        if (args.role !== undefined && role === args.role && nameOf(el, role) === args.name && (!(ACTED.has(role) || role === 'generic') || (isField(el) ? visibleField(el, typeOf(el)) : shown(el)))) { found = true; return; }
         // A field's inside is what's typed in it: never looked at. A frame's is its fallback, never shown (S-5).
         if (isField(el) || TYPED.has(role) || el.localName === 'iframe' || el.localName === 'frame') continue;
         const inner = keyed || ACTED.has(role) || role === 'generic';

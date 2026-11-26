@@ -8,7 +8,7 @@ import { normalUrl, type SendWatch } from './sends';
 import type { AgentInputEvent } from './input';
 import type { ToolOutput } from './scope';
 import { PART_REFUSALS } from './tools-read';
-import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
+import { KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, redrawn, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
 import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
 
@@ -31,6 +31,8 @@ export async function actTool(call: Call, tool: ActTool, args: Record<string, un
   } finally {
     if (leased.node) call.scope.act?.lease?.end(leased.node);
   }
+  // A look-alike's refusal, for a client whose find can't name a row by its words: never told to (#211's review).
+  if (out.isError && !call.scope.findFlat && refusalOf(out) === ACT_REFUSALS.ambiguous) out = refuse(ACT_REFUSALS.ambiguousPlain);
   // With snapshot: true, the page it went to, as snapshot gives it (S18 M2g-2 slice 3a, #204): once the action is over
   // and its hold let go of, by snapshot's own call, every read rule with it.
   if (tool !== 'navigate' || args['snapshot'] !== true || !call.scope.outlineOnGo || out.isError) return out;
@@ -599,7 +601,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // found again and checked again by the retry (refocus), as for the focus taken.
         nothingWent =
           (failed === ACT_REFUSALS.focusMoved && (!inputBegan || (typeof down === 'object' && down.moved && down.passed === 0 && !down.lost && !keyUnseen))) ||
-          (failed === ACT_REFUSALS.changed && !inputBegan);
+          (redrawn(failed) && !inputBegan);
         return false;
       }
       // Another document (a submit's Enter, or Enter on a link, navigated the page): its focus went with it, and that's
@@ -717,7 +719,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // The element itself gone, in the same document (a page that redraws it: the table on a slow runner, #117): a
         // button's click comes with the character, so the key may have done nothing. Never said done; never tried again
         // either (its keydown reached the page).
-        if (again === ACT_REFUSALS.changed && page.mark.document === documentAtKey) return KEY_REDRAWN;
+        if (redrawn(again) && page.mark.document === documentAtKey) return KEY_REDRAWN;
         // The hold lost, Stop, or the user taking the tab meanwhile: a no, not done (Neon's review 4), asked of each
         // directly. The focus gone elsewhere, or the page gone on (Enter on a link: its element's checks fail as its
         // document goes): the keydown did its work.

@@ -915,6 +915,9 @@ test('a control drawn late is waited for, then its ref acts; look-alikes are tol
     expect(join, waited).toBeDefined();
     expect((await allowed('click', { tab_id: lobby.tab_id, ref: join! })).isError).toBe(false);
     await expect.poll(() => logOf('/late')).toContain('joined');
+    // A styled checkbox drawn late (the box unseen, its label shown): waited for as the snapshot sees it, never timed out.
+    const agreed = await allowed('wait_for', { tab_id: lobby.tab_id, role: 'checkbox', name: 'Agree to the rules', timeout_ms: 5000 });
+    expect(JSON.parse(agreed.text), agreed.text).toMatchObject({ data: { met: true } });
 
     // Look-alikes in named sections, redrawn every 100 ms: a find by the section's words names the one meant, and its
     // ref acts on that one, found again after the redraw.
@@ -938,12 +941,24 @@ test('a control drawn late is waited for, then its ref acts; look-alikes are tol
     expect(refused.text).toBe(ACT_REFUSALS.ambiguous);
     expect(await logOf('/twins-plain')).toBe('');
 
+    // The same in a snapshot cut short (more on the page than it reads): the twins it saw are still twins.
+    const cut = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twins-cut`, snapshot: true })).text) as Look;
+    const cutSecond = [...cut.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)][1]?.[1];
+    expect(cutSecond, cut.content.slice(0, 400)).toBeDefined();
+    await new Promise((r) => setTimeout(r, 300));
+    const cutRefused = await allowed('click', { tab_id: cut.tab_id, ref: cutSecond! });
+    expect(cutRefused.isError).toBe(true);
+    expect(cutRefused.text).toBe(ACT_REFUSALS.ambiguous);
+    expect(await logOf('/twins-cut')).toBe('');
+
     // One at the first look, two alike by the time it's clicked: found again twice over, refused the same way.
     const later = JSON.parse((await allowed('open_tab', { url: `${site.origin}/twin-later`, snapshot: true })).text) as Look;
-    const only = /button "Delete" \[ref=(e\d+)\]/.exec(later.content)?.[1];
-    expect(only, later.content).toBeDefined();
-    await new Promise((r) => setTimeout(r, 700));
-    const twice = await allowed('click', { tab_id: later.tab_id, ref: only! });
+    const deletes = [...later.content.matchAll(/button "Delete" \[ref=(e\d+)\]/g)].map((m) => m[1]);
+    expect(deletes, later.content).toHaveLength(1);
+    await app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((c) => c.getURL() === url)!.executeJavaScript('window.twin()'), `${site.origin}/twin-later`);
+    await new Promise((r) => setTimeout(r, 300));
+    const twice = await allowed('click', { tab_id: later.tab_id, ref: deletes[0]! });
+    expect(twice.isError).toBe(true);
     expect(twice.text).toBe(ACT_REFUSALS.ambiguous);
     expect(await logOf('/twin-later')).toBe('');
     mcp.child.stdin!.end();
@@ -1071,6 +1086,9 @@ test('a press tried again when the page replaces the element as the pointer arri
     expect(await log()).toBe('');
     expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('twin') })).text).toBe(ACT_REFUSALS.ambiguous);
     expect(await log()).toBe('');
+    // Twins at the snapshot already, redrawn as the pointer arrives: the same refusal, never changed (#211's review).
+    expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('twins') })).text).toBe(ACT_REFUSALS.ambiguous);
+    expect(await log()).toBe('');
     expect((await mcp.call('click', { tab_id: 'a1', ref: await ready('form') })).text).toBe(STALE);
     expect(await log()).toBe('');
     expect(reached.filter((r) => r.includes('wipe'))).toEqual([]);
@@ -1116,6 +1134,11 @@ test('re-finding, narrowed (the review of #117): never a twin, a field turned se
     o = await snap();
     await mode('gone1');
     await refused('a Delete of two', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }), ACT_REFUSALS.ambiguous);
+    // Both gone: no look-alike left, so changed, never "it has a look-alike" (#211's review).
+    await mode('');
+    o = await snap();
+    await mode('gone2');
+    await refused('both Deletes gone', mcp.call('click', { tab_id: 'a1', ref: refOf(o, 'button "Delete"') }));
     // A twin appears: two matches, refused.
     await mode('');
     o = await snap();

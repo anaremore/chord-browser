@@ -105,9 +105,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     // Never once the element is checked and pointed at (the hit test, the step again, the focus, the text, a choice):
     // there a node replaced since is said so (replaced, when it could be found again), and the action starts over from
     // its pointer's move, which looks again (tools.ts; the owner's retest of #117).
-    // Twins in the snapshot (#211): which one can't be told once the page replaced it.
-    if (entry.path === undefined) return { ok: false, why: entry.twins ? 'ambiguous' : 'changed' };
-    if (!(args.refind || args.op === 'point')) return { ok: false, why: 'replaced' };
+    if (entry.path === undefined) return { ok: false, why: 'changed' };
+    // Twins in the snapshot (#211): which one can't be told once the page replaced it; never looked for to act on.
+    if (!(args.refind || args.op === 'point')) return { ok: false, why: entry.twins ? 'ambiguous' : 'replaced' };
     const started = performance.now();
     let looked = 0;
     let over = false;
@@ -116,7 +116,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     // most 4 shadow roots deep; the cheap checks (its tag, place and shape) before its name; the clock from the start.
     const visit = (parent, shadows) => {
       for (let c = parent.firstElementChild; c; c = c.nextElementSibling) {
-        if (over || found.length > 1) return;
+        if (over || found.length > (entry.twins ? 0 : 1)) return;
         looked++;
         if (looked > args.refindScan || (looked % 16 === 0 && performance.now() - started > args.refindMs)) { over = true; return; }
         if (SKIP.has(c.localName) || String(c.getAttribute('aria-hidden')).toLowerCase() === 'true' || !visible(c)) continue;
@@ -129,6 +129,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       }
     };
     visit(document.body || document.documentElement, 0);
+    // Twins in the snapshot (#211): never acted on. Any of them still here: which one can't be told; none: changed.
+    if (entry.twins) return { ok: false, why: found.length ? 'ambiguous' : 'changed' };
     // More than one alike now (#211): never a guess, and said so.
     if (!over && found.length > 1) return { ok: false, why: 'ambiguous' };
     if (over || found.length !== 1) return { ok: false, why: 'changed' };
@@ -381,7 +383,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     }
     await new Promise((done) => setTimeout(done, 0));
     // Replaced while the move was awaited (a page that re-renders): said so, and the action starts over (tools.ts).
-    if (!el.isConnected) return { ok: false, why: entry.path !== undefined ? 'replaced' : 'changed' };
+    // Twins (#211): which one can't be told, never looked for again.
+    if (!el.isConnected) return { ok: false, why: entry.twins ? 'ambiguous' : entry.path !== undefined ? 'replaced' : 'changed' };
     if (!arrived) {
       const was = moved && moved.before;
       return { ok: false, why: 'no-move', ...(was && near(was) ? { there: true } : {}) };
