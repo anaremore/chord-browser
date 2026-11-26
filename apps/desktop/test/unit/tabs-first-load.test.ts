@@ -118,6 +118,41 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(firstLoadPending(t.page)).toBe(false);
   });
 
+  it('Stop during the wait (#277): its load is dropped, the tab stops showing loading, nothing left pending', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    expect(t.manager.stopWaiting(t.page as never)).toBe(true);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+    expect(firstLoadPending(t.page)).toBe(false);
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([]);
+    // A load asked for after Stop goes as usual.
+    t.manager.navigate(NODE, SECOND);
+    expect(t.loaded()).toEqual([SECOND]);
+  });
+
+  it('Reload after Stop on a page that never loaded (round 1 of #282): its tab’s address loads; a page with history reloads', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    t.manager.stopWaiting(t.page as never);
+    rules.resolve();
+    await tick();
+    t.manager.reload(t.page as never);
+    expect(t.loaded()).toEqual([FIRST]);
+    expect(t.page.reload).not.toHaveBeenCalled();
+    // Once it has history, Reload is the page's own.
+    (t.page.navigationHistory as { length: () => number }).length = () => 1;
+    t.manager.reload(t.page as never);
+    expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
+  it('Stop on a page not waiting: nothing to drop (the page’s own Stop does the rest)', () => {
+    const t = setup([]);
+    expect(t.loaded()).toEqual([FIRST]);
+    expect(t.manager.stopWaiting(t.page as never)).toBe(false);
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);

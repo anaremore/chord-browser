@@ -1,7 +1,10 @@
 /**
  * What a page's first load waits for in its session (#189): each source's wait still pending (the proxy being set,
- * the chord's ad-blocking rules being on), as one promise. The same promise for every page in the session while the
- * waits don't change, so pages waiting together load in the order they asked (tabs.ts' whenProxied).
+ * the chord's ad-blocking rules being on), as one promise. The same promise for every page in the session for as long
+ * as the waits it was made from don't change. What that orders: loads that wait on that one promise go on in the order
+ * they asked to wait (its callbacks run in turn). Not loads across a change: one that asked after the proxy was set
+ * again waits on a new promise, which can settle before or after the old one. Within one page, tabs.ts' whenProxied
+ * runs only its newest load in any case (#272, #277).
  */
 export type Wait = Promise<void> | null;
 
