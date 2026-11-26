@@ -34,8 +34,9 @@ describe('removeUnusedPartitions (#315)', () => {
     expect(data.has(`p-${UPPER.toLowerCase()}`)).toBe(true);
   });
 
-  it('the folder of no profile in use goes, though one in use differs from it only in case', async () => {
-    // `DEADBEEF` in use has `p-deadbeef`; nothing else does, so that's the only folder that stays.
+  it('beside an upper-case id’s folder, the folder of no profile in use goes', async () => {
+    // `DEADBEEF` in use has `p-deadbeef` (Electron's lower case); `p-cafef00d` is no profile's, and goes. (Two distinct
+    // ids: Argon's SF3 on #315's design.)
     const data = userData(['p-deadbeef', 'p-cafef00d']);
     await removeUnusedPartitions(data.root, new Set(['DEADBEEF']));
     expect(data.has('p-deadbeef')).toBe(true);
