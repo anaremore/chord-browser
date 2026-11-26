@@ -18,6 +18,7 @@ import {
   type CustomTheme,
   type InterfaceSettings,
   type Oklch,
+  titleCase,
 } from '@chord/core';
 import type { SettingsSnapshot, SystemInfo } from '@chord/ipc';
 import { PRESETS, SWATCHES, createChordTheme, cssOklch, presetStops, springs, type Appearance as Mode, type PresetId, type SwatchId } from '@chord/tokens';
@@ -55,7 +56,6 @@ const PRESET_GRAIN = 0.2;
 /** The last "Edit colors…" request opened, so coming back to Appearance doesn't reopen the editor. */
 let handledEditColors = 0;
 
-const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-3;
 const sameStops = (a: readonly Oklch[], b: readonly Oklch[]) => a.length === b.length && a.every((s, i) => near(s.l, b[i]!.l) && near(s.c, b[i]!.c) && near(s.h, b[i]!.h));
 const copyOf = (t: { stops: readonly Oklch[] }) => t.stops.map((s) => ({ ...s }));

@@ -4,7 +4,7 @@
  * center. Colors you pick sit at the swatches' display lightness (PICK_L);
  * the theme generator maps them into each appearance's band.
  */
-import type { Oklch } from '@chord/core';
+import { titleCase, type Oklch } from '@chord/core';
 import { SWATCHES, type SwatchId } from '@chord/tokens';
 
 /** The display lightness picked colors are stored at, like the swatches. */
@@ -80,7 +80,6 @@ export function stepColor(color: Oklch, key: string, shift: boolean): Oklch | nu
   return { ...color, l: PICK_L, h: wrap(Math.round(color.h + sign * HUE_STEP)) };
 }
 
-const titleCase = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 const hueGap = (a: number, b: number) => Math.min(wrap(a - b), wrap(b - a));
 
 /** What a screen reader hears for a handle: the nearest swatch, and how vivid it is. */

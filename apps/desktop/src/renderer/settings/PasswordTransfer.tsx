@@ -14,12 +14,12 @@
  *   of its own (never the vault's, the owner's decision), or a CSV, with its
  *   warning. The vault's passphrase is asked for at the save, as *Show* asks.
  */
-import { importChoices, PASSWORD_SOURCE_NAMES, type ImportIssue, type PasswordImportResult, type PasswordImportSummary, type PasswordImportUndone } from '@chord/core';
+import { importChoices, PASSWORD_SOURCE_NAMES, plural, type ImportIssue, type PasswordImportResult, type PasswordImportSummary, type PasswordImportUndone } from '@chord/core';
 import type { ExportProgress, PasswordImportProgress, PasswordsView } from '@chord/ipc';
 import { size } from '@chord/tokens';
 import { Search, TriangleAlert } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
+import { ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { EMPTY_PASSPHRASE, PassphraseStep, passphraseReady, type PassphraseValue } from '../shared/PassphraseStep';
 import { api } from './api';
 import { RadioGroup, Row, Switch } from './controls';

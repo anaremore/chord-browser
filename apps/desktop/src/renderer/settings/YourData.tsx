@@ -6,10 +6,10 @@
  * dialog and a process of its own writes the file; this page only says how
  * it's going.
  */
-import { passphraseProblem, suggestPassphrase, type ExportCounts } from '@chord/core';
+import { passphraseProblem, plural, suggestPassphrase, type ExportCounts } from '@chord/core';
 import type { ExportProgress, SettingsSnapshot, SystemInfo } from '@chord/ipc';
 import { useEffect, useId, useRef, useState } from 'react';
-import { plural, ProblemCard, ProgressLine } from '../shared/ImportPanel';
+import { ProblemCard, ProgressLine } from '../shared/ImportPanel';
 import { api } from './api';
 import { Row, SectionHeader, Switch } from './controls';
 import { exportText } from './export-text';

@@ -23,6 +23,7 @@ import {
   type ImportChoices,
   type State,
   type WindowId,
+  plural,
 } from '@chord/core';
 import type { ImportCounts, ImportPreviewResult, ImportProblem, ImportProgress, ImportRunResult, ImportSource, Toast } from '@chord/ipc';
 import { PRESETS, presetStops, type PresetId } from '@chord/tokens';
@@ -59,8 +60,6 @@ export interface ImporterOptions {
 /** A profile's handle for renderers: its folder, hashed. */
 const keyOf = (profile: FoundProfile) => createHash('sha256').update(profile.dir).digest('hex').slice(0, 16);
 
-const numbers = new Intl.NumberFormat('en-US');
-const plural = (n: number, one: string, many = `${one}s`) => `${numbers.format(n)} ${n === 1 ? one : many}`;
 const NONE: ImportCounts = { bookmarks: 0, folders: 0, chords: 0, favorites: 0, tabs: 0, pages: 0 };
 
 /** "Chrome", "Chrome · Work" when it has several profiles, "Firefox (Flatpak)". */

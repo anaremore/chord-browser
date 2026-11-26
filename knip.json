@@ -7,7 +7,8 @@
     "**/test/*/fixtures/**",
     "packages/chrome-extensions/types/**",
     "packages/chrome-extensions/src/browser-action.ts",
-    "apps/player/scripts/test-page.d.mts"
+    "apps/player/scripts/test-page.d.mts",
+    "scripts/ci/e2e-shards.d.mts"
   ],
   "ignoreBinaries": ["wsl.exe", "openssl", "tasklist", "xdotool", "plutil", "vmmap", "ss", "mkfifo", "reg"],
   "workspaces": {
