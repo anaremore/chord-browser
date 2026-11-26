@@ -582,7 +582,8 @@ export function App({ info: infoSource, mirror, toasts }: { info: Live<SystemInf
     currentId: chord?.id,
     panes: !collapsed || peeking,
     release: spring('release', 'chordSlide'),
-    reduced: info.prefersReducedMotion && state.settings.motion.followSystem,
+    // Reduced (a crossfade) only while the slide is on: off is no animation at all, the OS's setting or not (#250).
+    reduced: motionMode(state.settings, info.prefersReducedMotion, 'chordSlide') === 'reduced',
     blend: state.settings.motion.colorBlend,
   });
   const paneMotion: PaneMotion = swipe.paneMotion ?? { kind: 'slide', dir: slide };

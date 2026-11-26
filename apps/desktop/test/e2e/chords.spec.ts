@@ -10,6 +10,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { setReducedMotion } from './a11y-kit';
 import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 failOnMainErrors();
@@ -233,6 +234,55 @@ test("a mouse's tilt wheel steps one chord per notch, and the minimal bar swipes
   }
 });
 
+
+test('motion settings: with reduced motion a swipe’s commit crossfades; with “Slide between chords” off it switches with no animation (#250)', async () => {
+  const app = await launch();
+  try {
+    const shell = await pageWhere(app, isShell);
+    const chords = await threeChords(shell);
+    const selected = (name: string) => expect(chords.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+    // The opacity of the chord pane coming in (the one not hidden from assistive tech), every frame, from `record` until
+    // `read`.
+    type Recorder = { opacities: number[]; frame: number };
+    const record = () =>
+      shell.evaluate(() => {
+        const w = window as unknown as { recorder: Recorder };
+        w.recorder = { opacities: [], frame: 0 };
+        const tick = () => {
+          for (const pane of document.querySelectorAll('[class*="chordPane"]:not([aria-hidden])')) w.recorder.opacities.push(Number(getComputedStyle(pane).opacity));
+          w.recorder.frame = requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    const read = () =>
+      shell.evaluate(() => {
+        const w = window as unknown as { recorder: Recorder };
+        cancelAnimationFrame(w.recorder.frame);
+        return w.recorder.opacities;
+      });
+    const between = (opacities: number[]) => opacities.some((o) => o > 0.05 && o < 0.95);
+
+    // Reduced motion: no slide, a 120 ms crossfade to the chord the swipe commits to (DESIGN.md §6.6).
+    await setReducedMotion(app, shell, true);
+    await record();
+    await swipe(app, shell, steps(32, 6), 16);
+    await selected('Work');
+    await shell.waitForTimeout(400);
+    expect(between(await read()), 'a crossfade').toBe(true);
+
+    // "Slide between chords" off: no animation at all, not even the crossfade (§6.8), reduced motion or not.
+    await runAction(shell, 'app.settings');
+    await (await pageWhere(app, isSettings)).evaluate(() => (window as unknown as { chord: { settings: { set(s: unknown): Promise<void> } } }).chord.settings.set({ motion: { chordSlide: false } }));
+    await shell.bringToFront();
+    await record();
+    await swipe(app, shell, steps(32, -6), 16);
+    await selected('Personal');
+    await shell.waitForTimeout(400);
+    expect(between(await read()), 'no crossfade').toBe(false);
+  } finally {
+    await app.close();
+  }
+});
 
 test('the color wheel: keys turn the hue, a click moves the nearest color, and a color dragged off goes', async () => {
   const app = await launch();
