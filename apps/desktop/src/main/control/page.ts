@@ -94,6 +94,8 @@ export interface ControlPage {
   unsecured(): boolean;
   /** An agent's tab whose hold isn't on now (agents/pickers.ts): nothing goes there until it is. */
   lost(): boolean;
+  /** Its page crashed (#115 PR 2): why its hold is lost, said as that. */
+  crashed?(): boolean;
   /** One try to put a lost hold back on (an action's); whether it's on. */
   retryHold(): Promise<boolean>;
   /** Watches what one action sends (control/sends.ts): held, or let go for a step already allowed; null if it can't. */
@@ -387,6 +389,7 @@ export function controlPage(contents: WebContents, gate: LoadGate): ControlPage 
     unsecured: () => pickersUnsecured(contents),
     // An agent's tab whose hold is down, or a tab of yours whose lease was lost (S18 M2e-2a): nothing goes there.
     lost: () => pickersLost(contents) || userLeaseLost(contents),
+    crashed: () => !contents.isDestroyed() && contents.isCrashed(),
     retryHold: () => retryPickers(contents),
     watchSends: (allowed) => watchSends(contents, allowed),
     droppedAfter: () => takeDroppedAfter(contents),

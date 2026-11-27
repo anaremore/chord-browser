@@ -232,6 +232,17 @@ export const ACT_REFUSALS = {
   unsecured: 'A frame on this page couldn’t be secured, so Chord won’t act here. Try another page, or ask the user.',
   // It can follow an input that ran (#143, round 2 of #266): never an invitation to do the step again unseen.
   noCheck: 'Chord couldn’t check that page right now (is its DevTools window busy?). The step may have gone in: call snapshot before you try it again.',
+  // The tab's page crashed (#115 PR 2): an outside agent's own tab is never reloaded by Chord, so its own way first
+  // (#336, Fable's S2: a new tab of the address, then this one closed, works at once), or the user's reload.
+  crashed: 'That tab stopped working (its page crashed), so nothing was done. Open the address in a new tab and close this one, or ask the user to reload it.',
+  // The same, once input went in (#336, Opus's B1): a page that crashes itself after a click on Buy may have bought.
+  crashedAfter: 'That tab stopped working (its page crashed) during the step, so it may have gone in. Open the address in a new tab and close this one (or ask the user to reload it), then check before you try it again.',
+  // A tab of the user's (the assistant's lease): Chord reloads a crashed tab itself, so no reload advice (#336, Fable's S4).
+  crashedYours: 'The tab’s page crashed, so nothing was done. Call snapshot in a moment (Chord reloads it); if it’s still stopped, tell the user.',
+  crashedAfterYours: 'The tab’s page crashed during the step, so it may have gone in: call snapshot before you try it again.',
+  // An outside agent's tab, reached by a caller that can't open or close tabs (the assistant) (#336, Neon's NB3).
+  crashedAgentTab: 'That tab stopped working (its page crashed), so nothing was done. Ask the user to reload it.',
+  crashedAfterAgentTab: 'That tab stopped working (its page crashed) during the step, so it may have gone in. Ask the user to reload it, then check before you try it again.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',
   noMove: 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.',
   sharedReadOnly: 'That tab is shared with you to read, not to act on. Ask the user if they want you to act in your own tab.',

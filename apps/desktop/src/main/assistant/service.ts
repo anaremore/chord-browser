@@ -9,7 +9,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
+import { ACT_REFUSALS,
   agentChords,
   barAddress,
   wholeAddress,
@@ -1638,6 +1638,8 @@ export class AssistantService {
         begin: async (node) => {
           const contents = this.browser.tabs.get(node.id)?.webContents;
           if (!contents || contents.isDestroyed()) return 'That tab could not be loaded.';
+          // A tab of yours whose page crashed (Chord reloads it): said so, never its developer tools (#336, Neon's NSF2).
+          if (contents.isCrashed()) return ACT_REFUSALS.crashedYours;
           const action = await beginUserAction(contents, s.control.id, {
             siteOf: originOf,
             ask: this.tailCard(s, node.id, contents),
@@ -1682,6 +1684,8 @@ export class AssistantService {
             endUserLease(contents, s.control.id);
             return s.actEnded ?? 'The user stopped this. Stop, and tell them what you did and what’s left.';
           }
+          // Its page crashed while the lease was being had: the crash, never its developer tools (#336, Neon's SF2).
+          if (begun === 'no' && !s.actEnded && !contents.isDestroyed() && contents.isCrashed()) return ACT_REFUSALS.crashedYours;
           if (begun === 'no') return s.actEnded ?? 'Chord can’t check this page now (its developer tools may have it). Ask the user to close them, then to ask again.';
           // (Its *Allow for this chat* stays with the chat through a begin that was cancelled: only taking the tab
           // mid-action ends it.)

@@ -3,7 +3,7 @@
  * give the keyboard back (window.ts' shownHere), and the cards only while you own them. A window closed asks nothing.
  */
 import { describe, expect, it } from 'vitest';
-import { registerWindowShown, shownIn, unregisterWindowShown, windowShown, type ShownParts } from '../../src/main/window-shown';
+import { cardsYours, registerWindowShown, shownIn, unregisterWindowShown, windowShown, type ShownParts } from '../../src/main/window-shown';
 
 type Page = { name: string; isDestroyed(): boolean };
 const page = (name: string, destroyed = false): Page => ({ name, isDestroyed: () => destroyed });
@@ -71,6 +71,18 @@ describe('what a window shows (#322’s SF1)', () => {
     expect(shownIn(w.cards!, yours, { floating: true }), 'cards yours').toBe(true);
     expect(shownIn(w.cards!, yours), 'never where the floating views give the keyboard back (shownHere)').toBe(false);
     expect(shownIn(w.menu!, yours, { floating: true }), 'the menu').toBe(false);
+  });
+
+  it('the cards are yours only while on screen and you own them (shownParts’ gate)', () => {
+    const cards = page('cards');
+    const rows: [string, boolean, 'ask' | 'you' | null, Page | null][] = [
+      ['on screen, yours', true, 'you', cards],
+      ['on screen, an ask waiting', true, 'ask', null],
+      ['on screen, no one’s', true, null, null],
+      ['hidden, yours', false, 'you', null],
+    ];
+    for (const [what, visible, owner, yours] of rows) expect(cardsYours(cards, visible, owner), what).toBe(yours);
+    expect(cardsYours(null, true, 'you'), 'no cards page').toBeNull();
   });
 
   it('a window closed is asked nothing again', () => {

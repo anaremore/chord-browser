@@ -48,6 +48,11 @@ export function shownIn<P extends { isDestroyed(): boolean }>(page: P, w: ShownP
   return w.docked.includes(page);
 }
 
+/** The cards' page as `ShownParts.yours`: only while they're on screen and you own them (you clicked into them). */
+export function cardsYours<P>(cards: P | null, visible: boolean, owner: 'ask' | 'you' | null): P | null {
+  return cards && visible && owner === 'you' ? cards : null;
+}
+
 const shownBy = new WeakMap<object, WindowShown>();
 
 export function registerWindowShown(window: object, shown: WindowShown): void {

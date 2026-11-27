@@ -84,7 +84,7 @@ export interface TabManagerDeps {
 }
 
 /** What an agent's tab held or refused: a page dialog, a file picker, a popup or new tab, a download. */
-export type AgentHeld = 'dialog' | 'file' | 'popup' | 'download' | 'signin';
+export type AgentHeld = 'dialog' | 'file' | 'print' | 'popup' | 'download' | 'signin';
 
 /** What an agent's tab's preload looks for in its arguments (preload/page.ts has the same). */
 const AGENT_TAB_ARG = '--chord-agent-tab';
@@ -812,11 +812,13 @@ export class TabManager {
     });
     contents.on('page-favicon-updated', (_event, favicons) => void this.loadFavicon(nodeId, contents, favicons, agentPage, ours));
     contents.on('audio-state-changed', (event) => live({ audible: event.audible }));
-    // An agent's tab (S18): a dialog or file picker its preload held, for the agent's next result. Any frame's.
+    // An agent's tab (S18): a dialog or file picker its preload held, or a print its stub refused (#115 PR 2), for the
+    // agent's next result. Any frame's.
     contents.ipc.on('page:agentHeld', (event, raw: unknown) => {
-      if (!agentPage || !raw || typeof raw !== 'object') return;
+      // Only while it's the tab's page (#336, Neon's N2): a page the tab no longer shows is never heard.
+      if (!agentPage || !current() || !raw || typeof raw !== 'object') return;
       const { kind, detail } = raw as { kind?: unknown; detail?: unknown };
-      if ((kind !== 'dialog' && kind !== 'file') || typeof detail !== 'string') return;
+      if ((kind !== 'dialog' && kind !== 'file' && kind !== 'print') || typeof detail !== 'string') return;
       this.deps.onAgentRefused?.(nodeId, kind, heldFromFrame(kind, detail, event.senderFrame, contents.mainFrame));
     });
     // A tab of yours copied (its page preload): the assistant's lease there puts it back if its click set it off (S18 M2e-2b).

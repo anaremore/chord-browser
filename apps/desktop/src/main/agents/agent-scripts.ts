@@ -95,5 +95,76 @@ export const PAGE_LACKS = String.raw`(() => {
     try { delete self[name]; } catch { /* not configurable: left */ }
   }
   try { delete Navigator.prototype.serviceWorker; } catch { /* left */ }
+  // Print (#115 PR 2, Argon's B3): never in an agent's tab. The native dialog would open for a tab no one sees, and hold
+  // its renderer. What it uses is captured now, before the page runs, so a page can't swap it: print is a constant
+  // that only reports; execCommand turns its command into a string once, refuses "print" in any case, and gives the
+  // original that same string, never the raw argument (a toString that answers "copy", then "print", can't slip by).
+  // Workers have no print and no document: nothing to do there.
+  const Doc = self.Document;
+  if (Doc) {
+    const apply = Reflect.apply;
+    const define = Object.defineProperty;
+    const toText = String;
+    const lower = String.prototype.toLowerCase;
+    const exec = Doc.prototype.execCommand;
+    const Told = self.CustomEvent;
+    const Plain = self.Event;
+    const dispatch = EventTarget.prototype.dispatchEvent;
+    const here = self;
+    // The parent's getter, captured (#336, Fable's N3): a page that replaces a frame's parent can't silence its note.
+    const ownGet = Object.getOwnPropertyDescriptor;
+    const protoOf = Object.getPrototypeOf;
+    let parentGet = null;
+    for (let o = here; o && !parentGet; o = protoOf(o)) parentGet = (ownGet(o, 'parent') || {}).get || null;
+    // Said through the outermost frame of this page's origin above this one (up to 8: #336, Fable's N1), whose preload
+    // takes it and tells main. Never this frame first (Neon's NSF1): a blank frame has no preload of its own, so a page
+    // listener there could cancel it as if one had; the outermost such frame is the top, or another site's frame, each
+    // with its preload's listener first. Another site's parent can't be reached: the climb stops below it. The event's
+    // init has no prototype (Fable's N3): a page's getters on Object.prototype never run.
+    const tell = (how) => {
+      let at = here;
+      for (let up = 0; up < 8; up++) {
+        let next = null;
+        try {
+          next = parentGet ? apply(parentGet, at, []) : null;
+          // Of this origin: its document can be reached (another site's throws).
+          if (next && next !== at) void next.document;
+          else next = null;
+        } catch {
+          next = null;
+        }
+        if (!next) break;
+        at = next;
+      }
+      try { apply(dispatch, at, [new Told('chord:print-held', { __proto__: null, cancelable: true, detail: how })]); } catch { /* not told */ }
+    };
+    // As a real print does (#336, Fable's N4): beforeprint, then afterprint, so a page waiting on afterprint goes on.
+    // Told first (Neon's NSF1): a frame that removes itself as print begins can't lose its note.
+    const printed = (how) => {
+      tell(how);
+      try { apply(dispatch, here, [new Plain('beforeprint')]); } catch { /* left */ }
+      try { apply(dispatch, here, [new Plain('afterprint')]); } catch { /* left */ }
+    };
+    // Never configurable, so delete and defineProperty fail, and the native print and execCommand stay out of reach.
+    // print is a writable value (#336, Opus's NS1): a page may declare its own (function print, var print) or wrap it,
+    // and its scripts run, with its own print from then on. execCommand is an accessor whose setter ignores what it's
+    // given (Opus's S2): a page that wraps it, in strict code, never throws, and it's still the wrapper.
+    const ignore = function () {};
+    const printNot = function print() { printed('print'); };
+    try { define(here, 'print', { value: printNot, writable: true, enumerable: true, configurable: false }); } catch { /* left */ }
+    if (typeof exec === 'function') {
+      // As native's shape (#336, Opus's N5): one declared argument, and a Symbol command throws a TypeError.
+      const Mistype = TypeError;
+      const execNot = function execCommand(command) {
+        // No command at all, or a Symbol: native's TypeError (Neon's N1; Opus's N5).
+        if (arguments.length < 1) throw new Mistype("Failed to execute 'execCommand' on 'Document': 1 argument required, but only 0 present.");
+        if (typeof command === 'symbol') throw new Mistype('Cannot convert a Symbol value to a string');
+        const name = toText(command);
+        if (apply(lower, name, []) === 'print') { printed('execCommand'); return false; }
+        return apply(exec, this, [name, arguments[1], arguments[2]]);
+      };
+      try { define(Doc.prototype, 'execCommand', { get: () => execNot, set: ignore, enumerable: true, configurable: false }); } catch { /* left */ }
+    }
+  }
   return true;
 })()`;

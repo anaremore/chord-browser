@@ -1,7 +1,7 @@
 /** The control layer's acting tools (split from tools.ts, #213): click, type, press_key, select_option, hover, navigate and back. */
 import { phaseClock } from './phases';
 import { createHash, randomBytes } from 'node:crypto';
-import { ACT_SENDS_WAITING, addressWhy, BOX_REF, VALUE_TYPES, valueFits, sentLabels, stepFields, type RiskClass, type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, actDone, actPhrase, barAddress, wholeAddress, ELEMENT_REFUSALS, sensitiveField, isPressKey, CONTROL_WAIT_MS, NAVIGATE_URL_MAX, pressKeyEvents, TYPE_TEXT_MAX, type ActDescription, type ActTool, type ElementTool, type PressKey, isNeverReadable, toolResult, nodeOf, type TabNode } from '@chord/core';
+import { type NodeId, ACT_SENDS_WAITING, addressWhy, BOX_REF, VALUE_TYPES, valueFits, sentLabels, stepFields, type RiskClass, type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, actDone, actPhrase, barAddress, wholeAddress, ELEMENT_REFUSALS, sensitiveField, isPressKey, CONTROL_WAIT_MS, NAVIGATE_URL_MAX, pressKeyEvents, TYPE_TEXT_MAX, type ActDescription, type ActTool, type ElementTool, type PressKey, isNeverReadable, toolResult, nodeOf, type TabNode } from '@chord/core';
 import type { ActAnswer, ActOp } from './act';
 import type { DeepSession } from './deep';
 import { normalUrl, type SendWatch } from './sends';
@@ -10,7 +10,7 @@ import type { ToolOutput } from './scope';
 import { PART_REFUSALS } from './tools-read';
 import { byDeadline, countAllows, HandedOver, OpenCards } from './handed-over';
 import { INPUT_REDRAWN, KEY_REDRAWN, KEY_SEEN_MS, PRESS_SEEN_MS, PRESS_TRIES, RETRY_CHECKS, actRefusal, allowedBy, askHeld, deepRefusal, redrawn, stepOf, stepShape, stepSubmits, targetOf } from './act-steps';
-import { type Call, NEVER, blockedNow, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
+import { type Call, NEVER, blockedAfter, blockedNow, crashedWhy, heldStep, isOutput, loadedPage, notTheirNo, originOf, refuse, resolveTab, unreadable } from './tool-call';
 import { emptyDiff, pageChanges, saidOnce, snapshotTool } from './tools-outline';
 
 /* ---------- Acting (S18 M2c) ---------- */
@@ -62,6 +62,16 @@ export async function withOutline(action: ToolOutput, tool: 'open_tab' | 'naviga
   // (Its `loading` too: it's false when there's an outline.)
   const { tab_id: _tab, page_id: _page, url: _url, title: _title, note: _note, loading: _loading, ...rest } = acted.data;
   return { text: JSON.stringify({ ...(JSON.parse(snap.text) as Record<string, unknown>), [tool]: rest }) };
+}
+
+/**
+ * A hold found lost: why. Its page crashed (#115 PR 2): the tab stopped working, and the user's reload is theirs; with
+ * nothing gone in yet, nothing was done, else the step may have gone in (#336, Opus's B1: a page that crashes itself
+ * right after a click on Buy must never invite the agent to click again). Not crashed: Chord couldn't check the page,
+ * which says the step may have gone in, whatever went (the conservative answer, meant).
+ */
+function lostWhy(call: Call, nodeId: NodeId, page: { crashed?(): boolean }, went: boolean): string {
+  return page.crashed?.() ? crashedWhy(call, nodeId, went) : ACT_REFUSALS.noCheck;
 }
 
 /** A refusal's sentence: the shared layer's `{data: {refused}}`, or an agent's plain text (toPlain). */
@@ -138,12 +148,14 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     });
     void sending.then(
       (sent) => handed.ended(sent),
-      () => handed.ended(ACT_REFUSALS.noCheck),
+      // Handed over, input had gone in: a crash meanwhile is said so (#336, Neon NB1).
+      () => handed.ended(lostWhy(call, node.id, page, true)),
     );
     return handed;
   };
   const done = async (navigated: boolean, loading: boolean, what: string, droppedBefore = 0, refoundElement = false, focusTaken = false, pastDeadline = false, sendsWait = false): Promise<ToolOutput> => {
-    const after = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
+    // After the action: something went in (its input, or its load), so a crash now may have taken it (Neon's NB2).
+    const after = blockedAfter(call, node.id, page, 'That page went somewhere that can’t be read.', true);
     if (after) return refuse(after);
     const settledOn = page.id;
     await call.activity(tool, what, page.url());
@@ -156,7 +168,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     // not be read is refused (nothing of where), and one that went to another document is said to have, its refs
     // forgotten and no diff of the page it left. The answer's page, address and title are then all of where it is now.
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-    const late = blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
+    const late = blockedAfter(call, node.id, page, 'That page went somewhere that can’t be read.', true);
     if (late) return refuse(late);
     if (page.id !== settledOn) {
       navigated = true;
@@ -281,7 +293,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (page.unsecured()) return refuse(ACT_REFUSALS.unsecured);
     // An outside agent's tab: its hold tried again. A tab of yours: a loss is its last lease's, and this action's own
     // lease (below) starts clean (round 3 of #147).
-    if (!host.lease && page.lost() && !(await page.retryHold())) return refuse(ACT_REFUSALS.noCheck);
+    // A crashed page's hold can't come back by trying (#336, Fable's S1): said at once.
+    if (page.crashed?.()) return refuse(crashedWhy(call, node.id, false));
+    if (!host.lease && page.lost() && !(await page.retryHold())) return refuse(lostWhy(call, node.id, page, false));
     const before = page.id;
     // It runs: a late Allow given on this tab for another step is spent.
     scope.agent.dropLateSteps(node.id);
@@ -295,7 +309,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       const notNow = notHereNow() ?? (await leaseOn());
       if (notNow) return refuse(notNow);
       const w = page.watchSends(goingWhy || leaves || host.lease ? { urls: new Set(), documents: new Set([normalUrl(goingTo)]) } : null);
-      if (!w) return refuse(ACT_REFUSALS.noCheck);
+      if (!w) return refuse(lostWhy(call, node.id, page, false));
       // Where it goes: a page there sending the tab on to another site asks too (an open redirect, M2e-2c). Told once
       // the hold is on (Neon's N2 on #151).
       host.lease?.going(node, goingTo);
@@ -311,19 +325,20 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // while the page is the document it was when the card opened (#143, Neon's B4: as an action's, below); a no or
       // no answer stays the user's, whatever the page did meanwhile.
       let allowedNow = false;
+      /** Its load started (the gate let it go): from then on it may have gone (lostWhy). */
+      let started = false;
       const halt = (opened?: unknown) =>
         call.stopped()
           ? CONTROL_REFUSALS.stopped
           : scope.agent.state(node.id).paused
             ? CONTROL_REFUSALS.paused
-            : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : allowedNow && opened && page.mark.document !== (opened as typeof page.mark).document ? ACT_REFUSALS.movedOn : null));
+            : (takenOver() ?? notHereNow() ?? (page.lost() ? lostWhy(call, node.id, page, started) : allowedNow && opened && page.mark.document !== (opened as typeof page.mark).document ? ACT_REFUSALS.movedOn : null));
       try {
         // Its load never starts once anything would refuse the step (Stop, a pause, your hand, the tab not one it may act
         // in, the hold lost), nor once the step has answered a refusal: dropped at once then (Fable's FB1 on #333).
         const refusing = new AbortController();
         const refuseLoad = () => refusing.abort();
         const abandoned = () => refusing.signal.aborted || halt() !== null;
-        let started = false;
         const how = { abandoned, signal: refusing.signal, onStart: () => void (started = true) };
         const going = tool === 'navigate' ? page.navigate(target, how) : page.back(back!, how);
         const cards = new OpenCards(scope.agent, node.id);
@@ -401,7 +416,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (handed || past) return { text: toolResult({ tab_id: ref, done: stepWords, loading: true, page_id: page.id, url: page.url(), title: page.title(), ...(handed ? { sending: ACT_SENDS_WAITING } : {}) }) };
       if (sent) return refuse(sent);
       // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
-      if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
+      // A load that started may have gone (Opus's S1, #336): said so; one that never did, nothing was done.
+      if (page.lost()) return refuse(lostWhy(call, node.id, page, started));
       // It never started: the tab closed; or what would refuse the step says why (Stop, a pause, your hand, the tab not one
       // it may act in: Fable's FSF1); else, for back, the tab's history moved while it waited; else it was dropped
       // (Opus's N4, round 1 of #333; Fable's FN1).
@@ -464,7 +480,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   phases.lap('look');
   // Stopped while it was described: nothing after it (round 2 of #145).
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-  if (!element.ok) return refuse(actRefusal(element));
+  // A look that failed on a page that crashed: the crash, before any input (#336, Neon's SF1).
+  if (!element.ok) return refuse(page.crashed?.() ? crashedWhy(call, node.id, false) : actRefusal(element));
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
   if (tool === 'type' && !element.editable) return refuse(ACT_REFUSALS.notEditable);
@@ -484,6 +501,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
    */
   /** This action has its own checks (deep) and, in a tab of yours, its own lease: a loss from then on is its own. */
   let holds = false;
+  /** Input reached the page (a key, a press: typing's click comes first, a value): a look-alike's refusal after it says it may have worked, and so does a crash (lostWhy). */
+  let inputWent = false;
   const halt = (): string | null => {
     if (call.stopped()) return CONTROL_REFUSALS.stopped;
     if (scope.agent.state(node.id).paused) return CONTROL_REFUSALS.paused;
@@ -492,10 +511,21 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     // The hold lost (a detach, the renderer gone) since this action got its checks: nothing more goes, and nothing is
     // done (Neon's B5, round 2 of #147). Before then, a loss is an earlier one's: the checks (deep) try again or refuse
     // (round 3 of #147).
-    if (holds && page.lost()) return ACT_REFUSALS.noCheck;
+    if (holds && page.lost()) return lostWhy(call, node.id, page, inputWent);
     // The page went somewhere: input now would land on another page's element.
     if (page.id !== pageAtCheck) return ELEMENT_REFUSALS.stale;
     return null;
+  };
+  /**
+   * The answer's last word on a page that crashed (#336, Neon's round 2, B1 and SF1; Opus's N-a): whatever the step's
+   * checks made of a page whose scripts no longer answer (stale, changed, a timeout), it's the crash, with whether its
+   * input had gone in. Never the user's or a policy's own refusal: Stop, a pause, the tab taken or closed, a card's
+   * no, sends dropped, the page moved on, the tab no longer one it may act in, a Never site.
+   */
+  const crashAnswer = (refused: string | null): string | null => {
+    if (!refused || !page.crashed?.()) return refused;
+    const kept = [CONTROL_REFUSALS.stopped, CONTROL_REFUSALS.paused, CONTROL_REFUSALS.closed, ACT_REFUSALS.takenOver, ACT_REFUSALS.stepDenied, ACT_REFUSALS.sendsDropped, ACT_REFUSALS.sendsTooMany, ACT_REFUSALS.movedOn, NEVER, notHereNow()];
+    return kept.includes(refused) ? refused : crashedWhy(call, node.id, inputWent);
   };
   /**
    * Text or a key goes where the focus is: only while it's this element's, and it's no field Chord never types in. The
@@ -606,7 +636,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     // What the card showed is what goes (#112 review 1): described again, the same step, the same name, the same form
     // (where it goes, how, and its fields). A page that changed any of it while the card was up gets nothing.
     const now = await actOn({ op: 'describe', refind: true, ...(tool === 'select_option' ? { option: asked } : {}) });
-    if (!now.ok) return refuse(actRefusal(now));
+    if (!now.ok) return refuse(page.crashed?.() ? crashedWhy(call, node.id, false) : actRefusal(now));
     if (now.field && sensitiveField(now.field)) return refuse(ACT_REFUSALS.sensitive);
     const stepNow = stepOf(tool, args, now);
     if (now.name !== element.name || stepNow.class !== 'risky' || stepNow.why !== step.why || stepShape(now) !== stepShape(element)) return refuse(ACT_REFUSALS.stepChanged);
@@ -661,8 +691,6 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
      * on a timer, on a slow machine). Then it's tried again, the element focused again (guardedTries).
      */
     let nothingWent = false;
-    /** Input reached the page (a key, a press: typing's click comes first, a value): a look-alike's refusal after it says it may have worked. */
-    let inputWent = false;
     /**
      * A keydown sent that the page's guard hadn't seen by KEY_SEEN_MS: late, maybe still coming. Then nothing is ever
      * tried again, as it could land twice (Claude's review 5 of #117).
@@ -927,11 +955,16 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (!watch) return void (refused = ACT_REFUSALS.noCheck);
       watchOn();
       if ((refused = halt())) return;
-      if (tool === 'hover') return void page.pointer(pointed.x, pointed.y);
+      // Marked before each input (#336, Neon's NB2): a crash as it goes in may have taken it.
+      if (tool === 'hover') {
+        inputWent = true;
+        return void page.pointer(pointed.x, pointed.y);
+      }
       if (tool === 'select_option') {
         if ((refused = await readyAgain())) return;
         if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
         // By the page's whole label, as describe matched it (the card showed it clipped).
+        inputWent = true;
         const chosen = await actOn({ op: 'choose', option: asked });
         if (!chosen.ok) refused = actRefusal(chosen);
         return;
@@ -949,8 +982,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         if (!remembered.ok) return void (refused = actRefusal(remembered));
         if ((refused = halt())) return;
         if (!deep.held()) return void (refused = ACT_REFUSALS.noCheck);
+        inputWent = true;
         const set = await actOn({ op: 'setValue', value: value as string });
-        if (set.ok) inputWent = true;
         if (!set.ok) return void (refused = set.why === 'bad-value' ? ACT_REFUSALS.badValue(valueType) : actRefusal(set));
         if ((refused = await typedWhere())) return;
         if (args['submit'] !== true) return;
@@ -1106,7 +1139,10 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     }
     // The hold lost during the action (a detach, the renderer gone): what it sent wasn't asked about, so never done
     // (Neon's B5, round 2 of #147).
-    if (!refused && holds && page.lost()) refused = ACT_REFUSALS.noCheck;
+    if (!refused && holds && page.lost()) refused = lostWhy(call, node.id, page, inputWent);
+    // Any "couldn't check" on a page that crashed meanwhile is said as the crash (#336, Neon's NB1: render-process-gone
+    // cancels the watch, and the checks answer noCheck before lostWhy would): with whether input had gone in.
+    if (refused === ACT_REFUSALS.noCheck) refused = lostWhy(call, node.id, page, inputWent);
     if (handed || past) {
       // The deadline holds (Neon's B3, Opus's S4, should-fix 6): never the 10 s wait for the page to load after the step,
       // nor its diff. Past it with nothing held: the watch ends now (finally), and what the page sends after is the
@@ -1115,7 +1151,7 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       phases.lap('settle');
       if (refused) {
         handed?.withdraw();
-        return refuse(refused);
+        return refuse(crashAnswer(refused)!);
       }
       if (call.stopped()) {
         handed?.withdraw();
@@ -1131,6 +1167,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
     if (deep) await (deep as DeepSession).close();
     // A look-alike's refusal once input had gone in: it may have worked, never "nothing was done" (#211's round 2).
     if ((refused === ACT_REFUSALS.ambiguous || refused === ACT_REFUSALS.rowChanged || refused === ACT_REFUSALS.rowEmpty) && inputWent) refused = INPUT_REDRAWN;
+    // After the action's own end (`await acting` can set its refusal again: Neon's B1): one last word on a crash.
+    refused = crashAnswer(refused);
     if (refused) return refuse(refused);
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     return await done(navigated, loading, actDone(description), droppedBefore, refound, enterMovedFocus);

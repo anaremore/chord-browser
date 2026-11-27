@@ -5,7 +5,7 @@ import { pageOf } from '../view-page';
 import { controlPage, type ControlPage } from './page';
 import { extractPdf, PdfError, pdfProblemCopy } from './pdf';
 import type { ToolOutput } from './scope';
-import { type Call, NEVER, PDFS_KEPT, READABLE_ADDRESS, blockedNow, currentPage, isOutput, isPdf, loadedPage, markRead, refuse, resolveTab, safeHost, sameId, unreadable } from './tool-call';
+import { type Call, NEVER, PDFS_KEPT, READABLE_ADDRESS, blockedNow, crashedWhy, currentPage, isOutput, isPdf, loadedPage, markRead, refuse, resolveTab, safeHost, sameId, unreadable } from './tool-call';
 import { FIRST_LOOK_MS, NOTHING_SHOWN } from './tools-outline';
 
 /* ---------- Reading: list_tabs, searches, read_tab, read_selection, tab_screenshot ---------- */
@@ -207,6 +207,8 @@ export async function diagnosticsTool(call: Call, args: Record<string, unknown>)
     const inspect = scope.mayInspect(now, 'page_diagnostics');
     if (inspect) return inspect;
     if (!page || page.gone()) return 'That tab could not be read.';
+    // Its page crashed: said so (#336, Neon's NSF2).
+    if (page.crashed?.()) return crashedWhy(call, node.id, false);
     // Where the page is, which can be ahead of the tab's saved address.
     if (isNeverReadable(page.url(), scope.neverSites())) return NEVER;
     // Only a web address can be on another site: a page still loading (about:blank) isn't one, as in blockedNow.
@@ -225,8 +227,10 @@ export async function diagnosticsTool(call: Call, args: Record<string, unknown>)
   const pageId = page.id;
   const read = await page.diagnostics();
   if (!read.ok) {
-    await call.activity('page_diagnostics', `Couldn’t check “${title}” for problems`, read.why, false);
-    return refuse(read.why);
+    // A crash while it read says so, never the read's own words (NSF2).
+    const why = blocked() ?? read.why;
+    await call.activity('page_diagnostics', `Couldn’t check “${title}” for problems`, why, false);
+    return refuse(why);
   }
   // What was read belongs to the page that was asked about, still on screen and still readable.
   const after = blocked(url);
@@ -274,7 +278,8 @@ export async function formTool(call: Call, tool: 'read_form' | 'propose_fill', a
     const token = randomBytes(12).toString('hex');
     const pageId = page?.id ?? '';
     const read = page ? await page.readForm(token) : null;
-    if (!page || !read) return refuse('That page could not be read.');
+    // A crash while it read says so (NSF2), before the read's own failure.
+    if (!page || !read) return refuse((page && blockedNow(call, node.id, page, 'That page could not be read.')) || 'That page could not be read.');
     // A form read after Stop is never kept: a later propose_fill must not find it.
     if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
     // Nor one read where the page went meanwhile, if that's a site the agent may never read.
@@ -295,6 +300,7 @@ export async function formTool(call: Call, tool: 'read_form' | 'propose_fill', a
   if (busy) return refuse(busy);
   const page = currentPage(browser, node.id);
   if (!page || page.gone()) return refuse('That tab could not be read.');
+  if (page.crashed?.()) return refuse(crashedWhy(call, node.id, false));
   const mapped = proposedFill(form.read, args, page.url());
   if (!mapped.ok) return refuse('Some values can’t go in this form. Fix them and call propose_fill again.', mapped.problems);
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
