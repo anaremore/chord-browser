@@ -75,8 +75,80 @@ export async function answer(app: ElectronApplication, name: string, button: 'De
   const card = cardOf(popover, name);
   await expect(card).toBeVisible({ timeout: 15_000 });
   await popover.waitForTimeout(600);
-  await card.getByRole('button', { name: button, exact: true }).click();
+  await card
+    .getByRole('button', { name: button, exact: true })
+    .click()
+    .catch(async (error: unknown) => {
+      // #327: say what the popover's view was when its card's button couldn't be clicked; the failure is the same.
+      throw new Error(`${String(error)}\n${await popoverDiagnostic(app, popover, button)}`, { cause: error });
+    });
   await expect(card).toHaveCount(0);
+}
+
+/** Each probe's cap: a hung popover page adds at most this much, and never changes whether the test passes. */
+const PROBE_MS = 2000;
+
+const capped = <T>(probe: Promise<T>): Promise<T | string> =>
+  Promise.race([probe.catch((e: unknown) => `failed: ${String(e).split('\n')[0]}`), new Promise<string>((r) => setTimeout(() => r('no answer'), PROBE_MS))]);
+
+/**
+ * #327: why Playwright found the card's button not "visible, enabled and stable", as `[diagnostic]` lines (CI's flaky
+ * summary shows them even when the retry passes). A hidden popover view isn't it: its page still gets frames (checked in
+ * the container, 2026-11-27). So: the button's box over half a second (moving?), its own style (hidden by CSS?), its
+ * aria-disabled, whether the page gets a frame, and the popover view's bounds twice (main moving it?).
+ */
+async function popoverDiagnostic(app: ElectronApplication, popover: Page, button: string): Promise<string> {
+  const page = await capped(
+    popover.evaluate(
+      (label) =>
+        new Promise((done) => {
+          const el = [...document.querySelectorAll('[role="alertdialog"] button')].find((b) => b.textContent?.trim() === label) as HTMLElement | undefined;
+          const box = () => {
+            const r = el?.getBoundingClientRect();
+            return r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null;
+          };
+          const style = el ? getComputedStyle(el) : null;
+          const boxes: (number[] | null)[] = [box()];
+          let frames = 0;
+          const tick = () => {
+            frames++;
+            if (frames < 30) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+          const sample = setInterval(() => boxes.push(box()), 100);
+          setTimeout(() => {
+            clearInterval(sample);
+            done({
+              found: Boolean(el),
+              boxes,
+              style: style && { visibility: style.visibility, display: style.display, opacity: style.opacity, pointerEvents: style.pointerEvents },
+              ariaDisabled: el?.getAttribute('aria-disabled') ?? null,
+              framesIn500ms: frames,
+              visibility: document.visibilityState,
+              hasFocus: document.hasFocus(),
+              size: [innerWidth, innerHeight],
+            });
+          }, 500);
+        }),
+      button,
+    ),
+  );
+  const views = async () =>
+    capped(
+      app.evaluate(({ BaseWindow }) =>
+        BaseWindow.getAllWindows().map((w) => ({
+          shown: w.isVisible(),
+          views: w.contentView.children.map((v) => {
+            const c = (v as unknown as { webContents?: { getURL(): string } }).webContents;
+            return { url: c?.getURL().slice(0, 40) ?? null, visible: v.getVisible(), bounds: v.getBounds() };
+          }),
+        })),
+      ),
+    );
+  const before = await views();
+  await new Promise((r) => setTimeout(r, 300));
+  const after = await views();
+  return [`[diagnostic] #327 popover button: ${JSON.stringify(page)}`, `[diagnostic] #327 windows: ${JSON.stringify(before)}`, `[diagnostic] #327 windows 300 ms later: ${JSON.stringify(after)}`].join('\n');
 }
 
 /** The shop's results (M2c): a button that says it worked, one under a banner, a list of choices. */

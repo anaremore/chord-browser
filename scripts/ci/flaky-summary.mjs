@@ -43,13 +43,27 @@ export function firstLine(error, max = 200) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** The flaky tests: failed (or timed out) on a try, then passed. */
+/**
+ * A try's `[diagnostic]` lines (a test's own words about what it saw when it failed, #327: the popover's view), without
+ * terminal colors: kept whole, as the first line alone would lose them, and shown even when the retry passed.
+ */
+export function diagnosticLines(error) {
+  return String(error?.message ?? error?.value ?? '')
+    .replace(COLORS, '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('[diagnostic] '));
+}
+
+/** The flaky tests: failed (or timed out) on a try, then passed; with that try's diagnostics, if it said any. */
 export function flakyTests(report) {
   return testsOf(report)
     .filter((t) => t.status === 'flaky')
     .map((t) => {
       const failed = t.results.find((r) => r.status !== 'passed' && r.status !== 'skipped');
-      return { where: `${t.file}:${t.line}`, title: t.title, error: firstLine(failed?.error ?? failed?.errors?.[0]) };
+      const error = failed?.error ?? failed?.errors?.[0];
+      const diagnostics = diagnosticLines(error);
+      return { where: `${t.file}:${t.line}`, title: t.title, error: firstLine(error), ...(diagnostics.length ? { diagnostics } : {}) };
     });
 }
 
@@ -59,13 +73,18 @@ export function summary(flaky, job) {
   if (flaky.length === 0) return `${heading}\n\nNone: every test passed on its first try, or failed both.\n`;
   const cell = (s) => s.replaceAll('|', '\\|').replaceAll('\n', ' ');
   const rows = flaky.map((f) => `| \`${cell(f.where)}\` | ${cell(f.title)} | ${cell(f.error) || '—'} |`);
-  return [heading, '', `${flaky.length} passed only on the retry:`, '', '| Where | Test | First try’s error |', '| --- | --- | --- |', ...rows, ''].join('\n');
+  // What a test said about its failed try, under the table: each one's lines, as they were.
+  const said = flaky.filter((f) => f.diagnostics?.length).flatMap((f) => [`\`${f.where}\`:`, '', '```', ...f.diagnostics, '```', '']);
+  return [heading, '', `${flaky.length} passed only on the retry:`, '', '| Where | Test | First try’s error |', '| --- | --- | --- |', ...rows, '', ...said].join('\n');
 }
 
 /** A GitHub warning annotation for each flaky test, so it shows on the run and the pull request's checks. */
 export function annotations(flaky, job) {
   const esc = (s) => s.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
-  return flaky.map((f) => `::warning title=${esc(`Flaky${job ? ` (${job})` : ''}: ${f.where}`).replaceAll(',', '%2C').replaceAll(':', '%3A')}::${esc(`${f.title}${f.error ? ` — ${f.error}` : ''}`)}`);
+  return flaky.map(
+    (f) =>
+      `::warning title=${esc(`Flaky${job ? ` (${job})` : ''}: ${f.where}`).replaceAll(',', '%2C').replaceAll(':', '%3A')}::${esc(`${f.title}${f.error ? ` — ${f.error}` : ''}${f.diagnostics?.length ? `\n${f.diagnostics.join('\n')}` : ''}`)}`,
+  );
 }
 
 export function run(path, job, env = process.env, log = console.log) {

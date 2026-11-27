@@ -86,6 +86,42 @@ describe('flaky E2E tests, from the json report', () => {
     expect(annotations([{ where: 'a.spec.ts:3', title: 'x, y', error: '' }], 'Linux, X11')).toEqual(['::warning title=Flaky (Linux%2C X11)%3A a.spec.ts%3A3::x, y']);
   });
 
+  it('a failed try’s [diagnostic] lines (#327): kept, shown under the table and in the warning, even though the retry passed', () => {
+    const tagged = {
+      suites: [
+        {
+          title: 'agents-acting.spec.ts',
+          file: 'agents-acting.spec.ts',
+          specs: [
+            {
+              title: 'acting',
+              file: 'agents-acting.spec.ts',
+              line: 19,
+              tests: [
+                {
+                  status: 'flaky',
+                  results: [
+                    result('failed', `TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n${ESC}[2m[diagnostic] #327 popover page: {"frames":false}${ESC}[22m\n[diagnostic] #327 windows: []`),
+                    result('passed'),
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const [flaky] = flakyTests(tagged);
+    expect(flaky).toEqual({
+      where: 'agents-acting.spec.ts:19',
+      title: 'acting',
+      error: 'TimeoutError: locator.click: Timeout 30000ms exceeded.',
+      diagnostics: ['[diagnostic] #327 popover page: {"frames":false}', '[diagnostic] #327 windows: []'],
+    });
+    expect(summary([flaky!], 'Linux')).toContain('`agents-acting.spec.ts:19`:\n\n```\n[diagnostic] #327 popover page: {"frames":false}\n[diagnostic] #327 windows: []\n```');
+    expect(annotations([flaky!], '')[0]).toContain('%0A[diagnostic] #327 popover page: {"frames":false}%0A[diagnostic] #327 windows: []');
+  });
+
   it('appends to the step summary; a missing report says so and fails nothing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'chord-flaky-'));
     try {
