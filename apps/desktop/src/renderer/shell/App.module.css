@@ -296,8 +296,10 @@ kbd {
   background: var(--color-item-hover);
 }
 
+/* Forced colours have no warning colour: a button's own outline says it's one, and not the quiet icon. */
 @media (forced-colors: active) {
   .proxyFailing {
+    border: var(--size-hairline) solid ButtonText;
     color: ButtonText;
   }
 }
