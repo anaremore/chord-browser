@@ -287,6 +287,13 @@ export class Browser {
   agentShareMenu: ((nodeId: NodeId) => AgentShareMenu | null) | null = null;
   /** Whether any tab is shared with an agent now (its bar). Set by main. */
   agentSharing: (() => boolean) | null = null;
+  /** The agents' tabs at full speed for their session (#358: AgentChords.fullSpeedTabs), parked off screen; set with the agents. */
+  agentFullSpeedTabs: (() => NodeId[]) | null = null;
+
+  /** Which agent tabs run at full speed changed (#358): they're parked, or let go, now. */
+  agentSpeedChanged(): void {
+    this.syncParking();
+  }
   /** A normal window came to the front: a connect card waiting for one shows there (S18). */
   agentWindowFocused: ((windowId: WindowId) => void) | null = null;
 
@@ -1522,10 +1529,12 @@ export class Browser {
       const home = holder ?? (reading ? shownIn : undefined) ?? by.map((id) => this.windowShowing(id)).find((id) => id && this.windows.has(id)) ?? this.windowShowing(nodeId);
       if (home) wanted.set(home, [...(wanted.get(home) ?? []), view]);
     }
-    // An outside agent's tab while the agent works on it (S18): parked the same way, so its pictures and reads see a
-    // painted page, and only then (parked, a page isn't throttled). In the window used last, if no window has it.
-    for (const [nodeId, live] of Object.entries(state.live)) {
-      if (live.agent?.state !== 'working') continue;
+    // An outside agent's tab for its session (S18; #358: from its first call until it's done, stopped or paused, and
+    // while it has called within AGENT_UNTHROTTLED_IDLE_MS): parked the same way, so its pictures and reads see a painted
+    // page, and its page keeps its animation frames while the agent thinks (a detached view has none). In the window
+    // used last, if no window has it. Without the agents' chords, the tabs its bar shows as worked on.
+    const agentTabs = this.agentFullSpeedTabs?.() ?? Object.entries(state.live).flatMap(([nodeId, live]) => (live.agent?.state === 'working' ? [nodeId as NodeId] : []));
+    for (const nodeId of agentTabs) {
       const view = this.tabs.get(nodeId);
       if (!view || !pageOf(view) || Object.values(state.windows).some((m) => shownTabs(state, m.id).includes(nodeId))) continue;
       const last = this.lastBrowserWindow();

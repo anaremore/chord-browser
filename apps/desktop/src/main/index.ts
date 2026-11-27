@@ -1269,6 +1269,8 @@ if (!app.requestSingleInstanceLock()) {
         };
         agentBrowser.agentShareMenu = (nodeId) => agents?.service?.shareMenu(nodeId) ?? null;
         agentBrowser.agentSharing = () => agents?.service?.sharing ?? false;
+        // #358: an agent's tabs stay parked (painting off screen) for its session, not only while its bar says working.
+        agentBrowser.agentFullSpeedTabs = () => agents?.service?.chords?.fullSpeedTabs() ?? [];
         return new AgentService({
           userData: app.getPath('userData'),
           browser: agentBrowser,
@@ -1290,6 +1292,7 @@ if (!app.requestSingleInstanceLock()) {
             store: agentBrowser.store,
             neverSites: () => agentBrowser.store.state.settings.assistant.neverSites,
             page: (nodeId) => pageOf(agentBrowser.tabs.get(nodeId)),
+            speedChanged: () => agentBrowser.agentSpeedChanged(),
             lastWindow: () => {
               const w = lastWindow();
               return w ? { id: w.id, toast: (toast) => w.toast(toast) } : null;

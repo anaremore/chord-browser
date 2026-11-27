@@ -457,6 +457,50 @@ test('your hand on an agent’s tab: Back, Reload (the app menu’s, the row men
 
 /* ---------- Acting: the agent's input is the page's, never yours (S18 M2a) ---------- */
 
+test('an agent’s tab off screen keeps its animation frames for its session, past the bar’s 45 s, and lets them go when the agent is done (#358)', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_AGENTS: '1' });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(async () => (await agents(app)).serving).toBeTruthy();
+    const mcp = relay(profile);
+    await mcp.request('initialize', CODEX);
+    const opening = mcp.call('open_tab', { url: `${site.origin}/shop?frames` });
+    await answer(app, 'Codex', 'Allow once');
+    await opening;
+    // Your tab stays in front: the agent's is off screen.
+    await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toBeVisible();
+    const page = await pageWhere(app, (u) => u.endsWith('?frames'));
+    await page.evaluate(() => {
+      const w = window as unknown as { frames: number };
+      w.frames = 0;
+      const tick = () => {
+        w.frames++;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    /** Its frames a second, over a second and a half (read through Playwright, which a detached page still answers). */
+    const fps = async () => {
+      const at = await page.evaluate(() => (window as unknown as { frames: number }).frames);
+      await shell.waitForTimeout(1500);
+      return ((await page.evaluate(() => (window as unknown as { frames: number }).frames)) - at) / 1.5;
+    };
+    // Past the bar's steady frame (45 s, its bar idle now): still parked, still painting.
+    await shell.waitForTimeout(47_000);
+    expect(await agents(app).then((a) => a.connections)).toBe(1);
+    expect(await fps()).toBeGreaterThan(20);
+    // The agent goes (its relay ends): done, and its tab is let go, no more frames.
+    mcp.child.stdin!.end();
+    await expect.poll(async () => (await agents(app)).connections, { timeout: 15_000 }).toBe(0);
+    await expect.poll(fps, { timeout: 10_000 }).toBe(0);
+  } finally {
+    await app.close();
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+});
+
 test('input Chord sends an agent’s tab is trusted by the page, reaches a parked tab, and is never taken for yours', async () => {
   test.setTimeout(90_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));

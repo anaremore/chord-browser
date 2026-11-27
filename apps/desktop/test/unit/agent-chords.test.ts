@@ -6,7 +6,7 @@
  * agent connects.
  */
 import { EventEmitter } from 'node:events';
-import { AGENT_BAR_HEIGHT, AGENT_READ_DEFAULT, CONTROL_REFUSALS, agentToolList, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
+import { AGENT_BAR_HEIGHT, AGENT_READ_DEFAULT, AGENT_UNTHROTTLED_IDLE_MS, CONTROL_REFUSALS, agentToolList, agentToolsVersion, emptyState, findShortcut, nodeList, nodeOf, type Command, type State, type TabNode } from '@chord/core';
 import { size } from '@chord/tokens';
 import type { Toast } from '@chord/ipc';
 import type { Session, WebContents } from 'electron';
@@ -48,13 +48,14 @@ function setup(neverSites: string[] = [], present: CardPresenter = async () => '
     if (!('getURL' in p)) Object.assign(p, { getURL: () => '' });
     return Object.assign(p, { isDestroyed: () => false, setBackgroundThrottling: (on: boolean) => (p!.throttled = on) }) as unknown as WebContents;
   };
-  const chords = new AgentChords({ store, page, lastWindow: () => ({ id: 'w1', toast: (t) => void toasts.push(t) }), neverSites: () => neverSites });
+  const speed = { changes: 0 };
+  const chords = new AgentChords({ store, page, lastWindow: () => ({ id: 'w1', toast: (t) => void toasts.push(t) }), neverSites: () => neverSites, speedChanged: () => void speed.changes++ });
   const agent = new ControlAgent('agent:1', present);
   const chordId = chords.chordFor(agent, 'Claude Code', null);
   const open = (nodeId: string, url = `https://agent.test/${nodeId}`) => store.dispatch({ t: 'agent.tab.add', chordId, nodeId, url });
   open('a1');
   open('a2');
-  return { store, mine, chords, agent, chordId, toasts, pages, page, open };
+  return { store, mine, chords, agent, chordId, toasts, pages, page, open, speed };
 }
 
 const agentLive = (store: Store, nodeId: string) => store.state.live[nodeId]?.agent ?? null;
@@ -82,7 +83,7 @@ describe('What an agent sees', () => {
 });
 
 describe('The bar, throttling and your hands', () => {
-  it('working while a call runs on a tab (at full speed), and for AGENT_STEADY_MS after; idle then; stopped on every tab until it continues', async () => {
+  it('working while a call runs on a tab (at full speed), and for AGENT_STEADY_MS after; idle then (its bar, not its speed: #358); stopped on every tab until it continues', async () => {
     vi.useFakeTimers();
     const t = setup();
     let finish!: () => void;
@@ -96,7 +97,8 @@ describe('The bar, throttling and your hands', () => {
     expect(agentLive(t.store, 'a1')).toMatchObject({ state: 'working' });
     await vi.advanceTimersByTimeAsync(45_000);
     expect(agentLive(t.store, 'a1')).toBeNull();
-    expect(t.pages.get('a1')!.throttled).toBe(true);
+    // Its bar goes idle; its tab stays at full speed for the session (#358: the cases below).
+    expect(t.pages.get('a1')!.throttled).toBe(false);
     t.chords.stopAll();
     expect([agentLive(t.store, 'a1')?.state, agentLive(t.store, 'a2')?.state]).toEqual(['stopped', 'stopped']);
     await expect(t.agent.call('a1', async () => 'ran', (why) => why)).resolves.toBe('stopped');
@@ -809,6 +811,106 @@ describe('Review 1 of #77', () => {
     // And Keep works on the chord that came back.
     t.chords.keep('w1', t.chordId);
     expect(nodeOf(t.store.state, 'a1')).toMatchObject({ chordId: 'c1' });
+  });
+});
+
+describe('An agent’s tabs at full speed for its session (#358)', () => {
+  /** Whether a tab's page runs throttled (what Chord last told setBackgroundThrottling); a tab with no page: null. */
+  const throttled = (t: ReturnType<typeof setup>, id: string) => t.pages.get(id)?.throttled ?? null;
+  /** A call on `id` that ends at once. */
+  const call = (t: ReturnType<typeof setup>, id: string) => t.agent.call(id, async () => 'ran', (why) => why);
+
+  it('from its first call, every tab of its own at full speed, and still past the 45 s steady frame; the user’s tab never touched', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    // Before any call: Electron's default, untouched.
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([null, null]);
+    await call(t, 'a1');
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([false, false]);
+    // The bar's steady frame ends at 45 s; full speed doesn't.
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(agentLive(t.store, 'a1')).toBeNull();
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([false, false]);
+    expect(throttled(t, t.mine)).toBeNull();
+  });
+
+  it('a tab you paused (your hands): throttled, that one only; when you leave it, full speed again', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await call(t, 'a1');
+    const contents = t.page('a1');
+    t.chords.wire(contents, 'a1');
+    t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: 'a1' });
+    (contents as unknown as EventEmitter).emit('before-input-event', {}, { type: 'keyDown', key: 'a' });
+    expect(agentLive(t.store, 'a1')?.state).toBe('paused');
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([true, false]);
+    t.store.dispatch({ t: 'tab.activate', windowId: 'w1', nodeId: t.mine });
+    expect(throttled(t, 'a1')).toBe(false);
+  });
+
+  it('Stop: every tab throttled; Continue: full speed again while its session is fresh', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await call(t, 'a1');
+    t.chords.stopAll();
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([true, true]);
+    t.chords.continue(t.chordId);
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([false, false]);
+  });
+
+  it('done: every tab throttled', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await call(t, 'a1');
+    t.chords.done(t.agent);
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([true, true]);
+  });
+
+  it(`a forgotten session: no call for AGENT_UNTHROTTLED_IDLE_MS (${AGENT_UNTHROTTLED_IDLE_MS / 60_000} min), throttled; its next call, full speed again`, async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await call(t, 'a1');
+    await vi.advanceTimersByTimeAsync(AGENT_UNTHROTTLED_IDLE_MS - 1000);
+    expect(throttled(t, 'a1')).toBe(false);
+    // A call on another of its tabs keeps the whole session going.
+    await call(t, 'a2');
+    await vi.advanceTimersByTimeAsync(AGENT_UNTHROTTLED_IDLE_MS - 1000);
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([false, false]);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([true, true]);
+    await call(t, 'a1');
+    expect([throttled(t, 'a1'), throttled(t, 'a2')]).toEqual([false, false]);
+  });
+
+  it('Browser hears which tabs run at full speed, to keep them parked (a detached view gets no frames): at the first call, at the cap, when done', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    expect(t.chords.fullSpeedTabs()).toEqual([]);
+    await call(t, 'a1');
+    expect(t.chords.fullSpeedTabs().sort()).toEqual(['a1', 'a2']);
+    const atFirst = t.speed.changes;
+    expect(atFirst).toBeGreaterThan(0);
+    // Past the bar's steady frame: nothing changes, so nothing is said.
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(t.speed.changes).toBe(atFirst);
+    await vi.advanceTimersByTimeAsync(AGENT_UNTHROTTLED_IDLE_MS);
+    expect(t.chords.fullSpeedTabs()).toEqual([]);
+    expect(t.speed.changes).toBe(atFirst + 1);
+    await call(t, 'a1');
+    t.chords.done(t.agent);
+    expect(t.chords.fullSpeedTabs()).toEqual([]);
+    expect(t.speed.changes).toBe(atFirst + 3);
+  });
+
+  it('a page made while its session is at full speed (after a sleep, past the steady frame): full speed at once', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await call(t, 'a1');
+    await vi.advanceTimersByTimeAsync(46_000);
+    const late = t.page('a2');
+    (late as unknown as { throttled: boolean }).throttled = true;
+    t.chords.wire(late, 'a2');
+    expect((late as unknown as { throttled: boolean }).throttled).toBe(false);
   });
 });
 
