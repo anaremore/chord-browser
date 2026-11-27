@@ -610,19 +610,26 @@ test('a page open when its proxy fails (#331, the owner’s pick): held, its own
   rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
 });
 
-test('an extension’s worker already running when its proxy fails (#331, Opus’s SF-A): it sends nothing from then, and runs again once the proxy takes', async () => {
-  test.setTimeout(90_000);
+test('an extension’s worker already running when its proxy fails (#331, Opus’s SF-A): it sends nothing from then, and a new one runs once the proxy takes', async () => {
+  test.setTimeout(120_000);
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
-  // An installed extension whose service worker fetches on a loop, as some do.
+  // An installed extension whose service worker fetches on a loop, as some do. Each start of it has its own boot id in
+  // what it sends, and reading its storage on every tick keeps it alive (Opus's round 3: so a worker left running is
+  // caught every time, not only when Chromium hasn't stopped it for being idle).
   const ext = join(profile, 'looper');
   mkdirSync(ext, { recursive: true });
-  writeFileSync(join(ext, 'manifest.json'), JSON.stringify({ manifest_version: 3, name: 'Looper', version: '1.0', background: { service_worker: 'bg.js' }, host_permissions: ['http://site.test/*'] }));
-  writeFileSync(join(ext, 'bg.js'), `let n = 0; setInterval(() => fetch('${url('/sw-tick')}-' + (n++)).catch(() => {}), 250);`);
+  writeFileSync(join(ext, 'manifest.json'), JSON.stringify({ manifest_version: 3, name: 'Looper', version: '1.0', permissions: ['storage'], background: { service_worker: 'bg.js' }, host_permissions: ['http://site.test/*'] }));
+  writeFileSync(
+    join(ext, 'bg.js'),
+    `const boot = Math.random().toString(36).slice(2, 10); let n = 0; setInterval(async () => { await chrome.storage.local.get('x'); fetch('${url('/sw-tick')}-' + boot + '-' + (n++)).catch(() => {}); }, 250);`,
+  );
   const app = await launch(profile, { CHORD_HOME_URL: url('/home'), CHORD_LOAD_EXTENSION: ext });
-  const ticks = () => [...direct.seen, ...proxyA.seen].filter((s) => s.includes('/sw-tick')).length;
+  const ticksIn = (seen: string[]) => seen.filter((s) => s.includes('/sw-tick-'));
+  const bootOf = (s: string) => /\/sw-tick-([a-z0-9]+)-/.exec(s)?.[1];
   try {
     const shell = await pageWhere(app, isShell);
-    await expect.poll(ticks, { timeout: 15_000 }).toBeGreaterThan(2);
+    await expect.poll(() => ticksIn(direct.seen).length, { timeout: 15_000 }).toBeGreaterThan(2);
+    const before = new Set(ticksIn(direct.seen).map(bootOf));
     await app.evaluate(({ session }, port) => {
       const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
       const real = proto.setProxy;
@@ -638,15 +645,18 @@ test('an extension’s worker already running when its proxy fails (#331, Opus�
     await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill(String(proxyA.port));
     await settings.getByRole('button', { name: 'Use this proxy' }).click();
     await expect(settings.locator('[data-tone="warning"]').getByText('Can’t use this proxy.')).toBeVisible({ timeout: 10_000 });
-    // From a moment after it failed (its extension taken out and loaded again, under the block): nothing gets out.
+    // From a moment after it failed, for 10 s (through retries): nothing of the worker's reaches the site or the proxy.
     await shell.waitForTimeout(1000);
     clearSeen();
-    await shell.waitForTimeout(3000);
-    expect(ticks()).toBe(0);
-    // It takes: the worker's requests go again, through the proxy.
+    await shell.waitForTimeout(10_000);
+    expect(ticksIn([...direct.seen, ...proxyA.seen])).toEqual([]);
+    // It takes: a worker runs again through the proxy, and it's a new one (its extension was loaded again), never the old.
     await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
     await settings.getByRole('button', { name: 'Try again' }).click();
-    await expect.poll(() => proxyA.seen.filter((s) => s.includes('/sw-tick')).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => ticksIn(proxyA.seen).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    const after = new Set(ticksIn(proxyA.seen).map(bootOf));
+    for (const boot of after) expect(before.has(boot), `boot ${boot} ran before the failure too`).toBe(false);
+    expect(ticksIn(direct.seen)).toEqual([]);
   } finally {
     await app.close();
   }

@@ -359,5 +359,21 @@ describe('#331 round 1 (Opus)', () => {
     await vi.advanceTimersByTimeAsync(5);
     expect(work.state.calls.length).toBe(calls);
   });
+
+  it('a try queued behind another for a config no longer wanted is skipped: never set over the newer one (Opus’s nit, round 2)', async () => {
+    const C: ProxySettings = { mode: 'server', server: { scheme: 'http', host: '10.0.0.4', port: 8080, bypass: [] }, pac: null };
+    const { proxies, settings } = setup(A);
+    const work = fakeSession();
+    work.state.failing = false;
+    proxies.make('work', () => (proxies.created(work.session), work.session));
+    // A is being set (it answers a tick later); B is wanted, then C, before A answers.
+    settings.own = B;
+    proxies.sync();
+    settings.own = C;
+    proxies.sync();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(work.state.calls).toEqual(['setProxy http://10.0.0.2:3128', 'setProxy http://10.0.0.4:8080']);
+    expect(proxies.ready(work.session)).toBeNull();
+  });
 });
 

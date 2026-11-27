@@ -510,17 +510,24 @@ export class Extensions {
   async restartIn(ses: Session): Promise<void> {
     for (const [profileId, host] of this.hosts) {
       if (host.session !== ses) continue;
-      for (const e of Object.values(this.deps.state().extensions)) {
-        const key = extensionKey(e.profileId, e.id);
-        // One being installed or updated loads its new version itself, from where its update put it (Neon's nit r3).
-        if (e.profileId !== profileId || !host.get(e.id) || this.installing.has(key) || this.updating.has(key)) continue;
+      const keys = Object.values(this.deps.state().extensions).flatMap((e) => (e.profileId === profileId ? [extensionKey(e.profileId, e.id)] : []));
+      for (const key of keys) {
+        // Read fresh each time: an install, an update or a removal may have come since (Opus's round 3 on #331).
+        const e = this.deps.state().extensions[key];
+        // One being installed, updated or loaded loads its own version itself, from where that put it.
+        if (!e || !host.get(e.id) || this.installing.has(key) || this.updating.has(key) || this.loading.has(key)) continue;
+        this.loading.add(key);
         host.unload(e.id);
         try {
           await host.load(e.path);
-          // Removed while it loaded again: it doesn't stay loaded. (Updated meanwhile: its update loads its own version.)
-          if (!this.stillCurrent(e) && !this.deps.state().extensions[key] && !this.updating.has(key)) host.unload(e.id);
+          // Removed while it loaded again: it doesn't stay loaded.
+          if (!this.deps.state().extensions[key]) host.unload(e.id);
         } catch (error) {
+          // Not tried again by itself (reconcile skips it), as any extension that won't load.
+          this.unloadable.add(key);
           console.error(`Extension ${e.name} (${e.id}) didn't load again after its proxy began failing:`, error);
+        } finally {
+          this.loading.delete(key);
         }
       }
     }
