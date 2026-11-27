@@ -2367,6 +2367,17 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(g.t.at.loads).toEqual([]);
     });
 
+    it('a Send data card still up at the call’s deadline while its load waits (Neon’s round 3 of #333): not ready, dropped, never after', async () => {
+      const g = await gated('navigate', { answer: 'hold', callDeadlineMs: 300, act: { siteAllowed: () => true } });
+      // The page it's on sends while the load waits: held, its card up, unanswered past the deadline.
+      g.t.at.emitDebug!('Fetch.requestPaused', { requestId: 'g2', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Fetch' });
+      expect(refusal(await g.going).refused).toBe(ACT_REFUSALS.notReady);
+      expect(g.gate.dropped).toBe(true);
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.loads).toEqual([]);
+    });
+
     it('back whose entry is another page by the time the session is ready (FN1): its history moved', async () => {
       const g = await gated('back');
       g.t.at.history = [{ url: 'https://news.test/elsewhere' }, { url: g.t.at.url }];

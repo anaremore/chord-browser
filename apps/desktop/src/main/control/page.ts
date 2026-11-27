@@ -257,8 +257,9 @@ export interface GatedLoad {
 function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => unknown) | null, how: GatedLoad = {}): Promise<{ loading: boolean } | null> {
   const { abandoned, signal, onStart } = how;
   return new Promise((done) => {
-    // A page already gone, or refused already: nothing to wait for (Neon's NB1, round 2 of #333).
-    if (contents.isDestroyed() || signal?.aborted) return done(null);
+    // A page already gone, refused already, or not wanted now: nothing to wait for, nothing queued (Neon's NB1, round 2
+    // of #333; round 3).
+    if (contents.isDestroyed() || signal?.aborted || abandoned?.()) return done(null);
     let decided = false;
     let drop: (() => void) | void = undefined;
     /** It's decided: nothing more is listened for. */

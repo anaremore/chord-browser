@@ -365,10 +365,12 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
           // What an answer would check first (Neon's should-fix 4): Stop, your hand, the hold lost, a page that can't be
           // read. Any of them: nothing waits, its cards come down, and what it sent is dropped (Opus's N2).
           const no = halt() ?? blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
-          if (no) {
+          // Its load not started yet (the session not ready): never handed over as *Going to…* for a load that would come
+          // after the step's watch ends (Neon's round 3 of #333, as `past` below).
+          if (no || !started) {
             cardsEnd.abort();
             w.deny();
-            sent = no;
+            sent = no ?? ACT_REFUSALS.notReady;
             refuseLoad();
           } else handed = handOver(w, counted.allowed, cards, cardsEnd, stepWords, sending);
         } else if ('past' in settled) {
@@ -405,7 +407,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       // (Opus's N4, round 1 of #333; Fable's FN1).
       if (!went) {
         if (nodeOf(call.browser.store.state, node.id)?.kind !== 'tab' || page.gone()) return refuse(CONTROL_REFUSALS.closed);
-        return refuse(halt() ?? (tool === 'back' && page.backEntry()?.url !== goingTo ? ACT_REFUSALS.backMoved : ACT_REFUSALS.overtaken));
+        // Moved: the entry just before isn't the one checked, by place or address (as page.ts' still()).
+        const entry = page.backEntry();
+        return refuse(halt() ?? (tool === 'back' && (entry?.index !== back!.index || entry?.url !== goingTo) ? ACT_REFUSALS.backMoved : ACT_REFUSALS.overtaken));
       }
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
