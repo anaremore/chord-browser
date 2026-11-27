@@ -298,5 +298,22 @@ describe('#334 round 1 (Neon)', () => {
       rmSync(link, { force: true, recursive: false });
     }
   });
+
+  it('round 2 (Neon, Opus): a twin whose record goes through a junction and one under the real root are the same folder: split', async () => {
+    unpacked(join(root, 'Work', A, '1.0_0'));
+    const link = `${root}-link2`;
+    symlinkSync(root, link, 'junction');
+    try {
+      record('Work', A, join(link, 'Work', A, '1.0_0'));
+      record('work', A, join(root, 'work', A, '1.0_0'));
+      await launch();
+      const key = (p: string) => p.split(/[\\/]/).slice(-3).join('/').toLowerCase();
+      const paths = [state.extensions[`Work:${A}`]!.path, state.extensions[`work:${A}`]!.path];
+      expect(key(paths[0]!)).not.toBe(key(paths[1]!));
+      for (const p of paths) expect(existsSync(join(p, 'manifest.json')), p).toBe(true);
+    } finally {
+      rmSync(link, { force: true, recursive: false });
+    }
+  });
 });
 

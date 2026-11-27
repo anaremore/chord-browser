@@ -118,6 +118,14 @@ function manifestIcon(dir: string, manifest: ManifestShape, px: number): string 
 const samePath = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
 /**
+ * An extension's version folder by its last three parts (profile, id and version folders, without case): the one key
+ * for "the same folder" wherever a record could spell its root otherwise (User Data moved or restored elsewhere, a
+ * junction, a symlink). Two records with one key are treated as one folder: only ever more cautious (#334).
+ */
+const folderKey = (path: string): string => resolve(path).split(/[\\/]/).slice(-3).join('/').toLowerCase();
+const sameFolder = (a: string, b: string): boolean => samePath(a, b) || folderKey(a) === folderKey(b);
+
+/**
  * Where an install of `id` at `version` unpacks: `<root>/<profile>/<id>/<version>_<n>`, the profile's folder named
  * one-to-one (core's profileFolderName: `Work` → `_work`, so `Work` and `work` never share one; Chord's own ids as
  * they always were), and `n` the first that's neither on disk nor `taken` (another extension's, a twin's or an old
@@ -833,7 +841,7 @@ export class Extensions {
   private usedBy(path: string, except?: string): InstalledExtension | null {
     const state = this.deps.state();
     // One removed but still to Undo counts too: its folder is what Undo loads (Neon's SF3 on #334).
-    for (const e of [...Object.values(state.extensions), ...(state.removedExtensions ?? [])]) if (extensionKey(e.profileId, e.id) !== except && samePath(e.path, path)) return e;
+    for (const e of [...Object.values(state.extensions), ...(state.removedExtensions ?? [])]) if (extensionKey(e.profileId, e.id) !== except && sameFolder(e.path, path)) return e;
     return null;
   }
 
@@ -845,7 +853,8 @@ export class Extensions {
   private async splitShared(): Promise<void> {
     const seen: InstalledExtension[] = [];
     for (const e of Object.values(this.deps.state().extensions).sort((a, b) => (extensionKey(a.profileId, a.id) < extensionKey(b.profileId, b.id) ? -1 : 1))) {
-      const keeper = e.source === 'store' ? seen.find((s) => samePath(s.path, e.path)) : undefined;
+      // The same folder however its record spells the root (a junction, a moved User Data): Neon and Opus, round 2.
+      const keeper = e.source === 'store' ? seen.find((s) => sameFolder(s.path, e.path)) : undefined;
       if (!keeper) {
         seen.push(e);
         continue;
@@ -873,9 +882,8 @@ export class Extensions {
     // compared without case (#319): so a record that spells the root otherwise (User Data moved or restored elsewhere,
     // or reached through a junction or a symlink) still keeps its folder (Opus's round 1 on #334). Removed ones whose
     // Undo is open keep theirs too.
-    const lastThree = (path: string) => resolve(path).split(/[\\/]/).slice(-3).join('/').toLowerCase();
     const state = this.deps.state();
-    const used = new Set([...Object.values(state.extensions), ...(state.removedExtensions ?? [])].map((e) => lastThree(e.path)));
+    const used = new Set([...Object.values(state.extensions), ...(state.removedExtensions ?? [])].map((e) => folderKey(e.path)));
     const dirs = async (dir: string) => {
       try {
         return (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => join(dir, d.name));
@@ -885,7 +893,7 @@ export class Extensions {
     };
     for (const profileDir of await dirs(this.deps.root)) {
       for (const idDir of await dirs(profileDir)) {
-        for (const versionDir of await dirs(idDir)) if (!used.has(lastThree(versionDir))) await this.removeFolder(versionDir);
+        for (const versionDir of await dirs(idDir)) if (!used.has(folderKey(versionDir))) await this.removeFolder(versionDir);
         if ((await readdir(idDir).catch(() => ['?'])).length === 0) await this.removeFolder(idDir);
       }
     }
