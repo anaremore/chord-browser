@@ -2287,6 +2287,8 @@ export function plainNote(text: string): string {
 /** What the chat says of something the assistant's click set off (M2e-2b, A6), Chord's words around the page's. */
 export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   file: () => 'The page tried to open a file picker; it wasn’t shown',
+  // #338: fixed words; the renderer gives none (Argon's SF3).
+  print: () => 'The page tried to print while the assistant acted; Chord didn’t print it',
   // An alert has no Cancel: it was closed (its OK); a confirm or a prompt was answered Cancel.
   dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
   popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,

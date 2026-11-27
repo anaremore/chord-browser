@@ -1,6 +1,6 @@
 import { createContext, runInContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { PAGE_LACKS, WORKER_READS_ONLY } from '../../src/main/agents/agent-scripts';
+import { PAGE_LACKS, PAGE_PRINT_ASKS, WORKER_READS_ONLY } from '../../src/main/agents/agent-scripts';
 
 /**
  * A dedicated worker's scope, as far as the lock needs one: its own built-ins (a vm context's), a `fetch` that records
@@ -76,5 +76,80 @@ describe('what an agent’s tab never has, in any document (round 4 of #112)', (
     runInContext(`self = globalThis; self.SharedWorker = class {}; self.fetchLater = () => 1;`, context);
     expect(runInContext(PAGE_LACKS, context)).toBe(true);
     expect(runInContext(`[typeof SharedWorker, typeof fetchLater, 'serviceWorker' in navigator].join('/')`, context)).toBe('undefined/undefined/false');
+  });
+});
+
+/**
+ * #338: a tab of yours while the assistant acts. Its frame as the print script sees one: an EventTarget window with its
+ * own print (recording `this`), a Document whose execCommand records, and, for a frame, a top. `cancels`: the top's
+ * preload answers *held* (the lease catching). `top`: 'self' (the top frame), 'reachable' (a frame of the same site),
+ * 'unreachable' (another site's, or an opaque one: dispatching on it throws).
+ */
+function yourFrame(o: { cancels: boolean; top?: 'self' | 'reachable' | 'unreachable'; pagePrint?: boolean }) {
+  const calls: string[] = [];
+  const context = createContext({ calls, EventTarget, Event, CustomEvent, cancels: o.cancels, where: o.top ?? 'self', pagePrint: Boolean(o.pagePrint) });
+  runInContext(
+    String.raw`
+      const topWin = new EventTarget();
+      const answer = (w) => w.addEventListener('chord:print-asked', (e) => { calls.push('asked ' + e.detail); if (cancels) e.preventDefault(); }, true);
+      class Frame extends EventTarget {
+        get top() {
+          if (where === 'self') return this;
+          if (where === 'unreachable') return { dispatchEvent() { throw new Error('SecurityError'); } };
+          return topWin;
+        }
+      }
+      self = new Frame();
+      if (where === 'self') answer(self); else answer(topWin);
+      self.addEventListener('beforeprint', () => calls.push('beforeprint'));
+      self.addEventListener('afterprint', () => calls.push('afterprint'));
+      self.print = pagePrint ? function print() { calls.push('page print ' + (this === self)); } : function print() { calls.push('native print ' + (this === self)); };
+      self.Document = function Document() {};
+      self.Document.prototype.execCommand = function execCommand(name) { calls.push('exec ' + name); return true; };
+      self.CustomEvent = CustomEvent;
+      self.Event = Event;
+      doc = new self.Document();`,
+    context,
+  );
+  expect(runInContext(PAGE_PRINT_ASKS, context)).toBe(true);
+  return { calls, run: (code: string) => runInContext(code, context) as unknown };
+}
+
+describe('a page’s print in a tab of yours asks the top frame first (#338)', () => {
+  it('not held (the assistant isn’t acting): the page’s print, as itself; execCommand as ever', () => {
+    const f = yourFrame({ cancels: false });
+    f.run(`self.print(); doc.execCommand('print'); doc.execCommand('copy');`);
+    expect(f.calls).toEqual(['asked print', 'native print true', 'asked execCommand', 'exec print', 'exec copy']);
+  });
+
+  it('held at the top (the lease catching): no print; beforeprint and afterprint, as a print would; execCommand answers false', () => {
+    const f = yourFrame({ cancels: true });
+    expect(f.run(`self.print(); doc.execCommand('PRINT')`)).toBe(false);
+    expect(f.calls).toEqual(['asked print', 'beforeprint', 'afterprint', 'asked execCommand', 'beforeprint', 'afterprint']);
+  });
+
+  it.each([
+    ['held at its top', 'reachable', true, false],
+    ['not held at its top', 'reachable', false, true],
+    ['its top out of reach (another site’s, an opaque frame): held, never printed (Argon’s B1)', 'unreachable', false, false],
+  ] as const)('a frame, %s', (_, top, cancels, prints) => {
+    const f = yourFrame({ cancels, top });
+    f.run(`self.print();`);
+    expect(f.calls.some((c) => c.startsWith('native print')), top).toBe(prints);
+  });
+
+  it('a print the page set before the lease is the one called, as itself', () => {
+    const f = yourFrame({ cancels: false, pagePrint: true });
+    f.run(`self.print();`);
+    expect(f.calls).toEqual(['asked print', 'page print true']);
+  });
+
+  it('installed again (another lease): left as it is, never wrapped twice (Argon’s B2)', () => {
+    const f = yourFrame({ cancels: false });
+    const first = f.run(`self.print`);
+    expect(f.run(PAGE_PRINT_ASKS)).toBe(true);
+    expect(f.run(`self.print`)).toBe(first);
+    f.run(`self.print();`);
+    expect(f.calls).toEqual(['asked print', 'native print true']);
   });
 });

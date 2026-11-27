@@ -6,7 +6,7 @@
  */
 import { countShows, isCrossSite, isInternalUrl, isNeverReadable, pageBadge, placeKey, usableDataIcon, nodeOf, type Command, type LiveTab, type NodeId, type State, type TabCount, type TabNode, type WindowId } from '@chord/core';
 import { isAgentInput } from './control/input';
-import { noteUserTab, userTabCatching, userTabCopied } from './control/user-watch';
+import { noteUserTab, noteUserTabPrint, userTabCatching, userTabCopied } from './control/user-watch';
 import type { NavState } from '@chord/data';
 import { frameRadius } from '@chord/tokens';
 import { WebContentsView, type BrowserWindow, type HandlerDetails, type Session, type WebContents, type WindowOpenHandlerResponse } from 'electron';
@@ -824,6 +824,14 @@ export class TabManager {
     // A tab of yours copied (its page preload): the assistant's lease there puts it back if its click set it off (S18 M2e-2b).
     contents.ipc.on('page:copied', (event) => {
       if (!agentPage && !event.senderFrame?.parent) userTabCopied(contents);
+    });
+    // #338: a tab of yours' top frame asks, as its page tries to print, whether the assistant's lease catches what it sets
+    // off now (held then), and says when it held one. Never an agent's tab (its print never prints: agent-scripts.ts).
+    contents.ipc.on('page:userTabCatching', (event) => {
+      event.returnValue = !agentPage && !event.senderFrame?.parent && userTabCatching(contents);
+    });
+    contents.ipc.on('page:userTabPrint', (event) => {
+      if (!agentPage && !event.senderFrame?.parent && userTabCatching(contents)) noteUserTabPrint(contents);
     });
     // A frame of an agent's tab, as its preload starts: is an action's guard up? (agent-guard.ts' installFrameGuard)
     contents.ipc.on('page:agentGuardState', (event) => {

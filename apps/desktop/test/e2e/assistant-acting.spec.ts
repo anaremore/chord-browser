@@ -31,6 +31,12 @@ test.beforeAll(async () => {
     '/plain': '<form><label>Customer name: <input name=customer></label></form>',
     // #210 (F8): a same-origin frame in a tab of yours: read, never a ref inside.
     '/framed': '<title>Framed</title><h1>Framed</h1><iframe title="Inner form" srcdoc="<button>Inner button</button>"></iframe><button>Top button</button>',
+    // #338: a page's own Print button, and what it does after print returns. On /printer the page has set its own print
+    // (a spy) as it loads, before any lease; /printer-native keeps Chromium's.
+    '/printer':
+      '<title>Invoice</title><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
+      '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
+    '/printer-native': '<title>Receipt</title><p id=log></p><button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
     '/form': '<title>Sign up</title><form><label>Full name <input name=name></label> <label>Email <input name=email></label> <button type=button onclick="this.form.reset()">Reset</button></form>',
     // M2e-2b: what a click can set off. Each button's outcome goes in the page's log (and the passkey's time, for the
     // pending-request check: one asked with a 20 s timeout while Chord holds WebAuthn).
@@ -747,3 +753,66 @@ test('a page whose service worker sends its POSTs: while the assistant acts, its
     rmSync(config, { recursive: true, force: true });
   }
 });
+
+test('#338: a page’s Print the assistant clicks in your tab doesn’t print, and the chat says so; once it’s done, the page’s Print prints', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/printer` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/printer`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/printer`))!;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    // Asked, held: the page went on, and its print (the spy) never ran.
+    await expect(page.locator('#log')).toHaveText('before after ');
+    await expect(panel.getByText('The page tried to print while the assistant acted; Chord didn’t print it')).toBeVisible();
+    // The lease over (its tail and AFTER_MS past the last action): the page's own Print prints again.
+    await page.waitForTimeout(8000);
+    await page.getByRole('button', { name: 'Print' }).click();
+    await expect(page.locator('#log')).toHaveText('before after before printed after ');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('#338: Chromium’s own print, clicked by the assistant in your tab: no dialog holds the page, and the next read works', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/printer-native` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/printer-native`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/printer-native`))!;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }, { tool: 'read_tab' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 45_000 }).toBe(1);
+    await expect(page.locator('#log')).toHaveText('before after ');
+    const steps = lastActing(config);
+    expect(steps.map((s) => s.tool)).toEqual(['snapshot', 'click', 'read_tab']);
+    // Read: the page answered (before #338 it was held by the dialog: *That page could not be read.*).
+    expect(steps[2]!.result).not.toContain('refused');
+    expect(steps[2]!.result).toContain('before after');
+    await expect(panel.getByText('The page tried to print while the assistant acted; Chord didn’t print it')).toBeVisible();
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+

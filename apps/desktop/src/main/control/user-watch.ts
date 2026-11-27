@@ -25,6 +25,7 @@
  * - **Let go of in order:** from the moment it ends, what the tab sends is yours (it goes), what was held for the
  *   assistant fails, and only then is the hold's listener taken off, once Fetch is off (Neon's B4).
  */
+import { PAGE_PRINT_ASKS } from '../agents/agent-scripts';
 import type { WebContents } from 'electron';
 import { withDebugger } from '../debugger-queue';
 import { failHeld, holdSends, holding, sendHoldDeps, unholdSends, type SendHoldDeps } from './sends';
@@ -60,7 +61,7 @@ const AUTO_ATTACH = {
 const NETWORK_BUFFERS = { maxTotalBufferSize: 64 * 1024, maxResourceBufferSize: 16 * 1024, maxPostDataSize: 0 };
 
 /** What the lease caught, for the chat (a muted row each). */
-export type UserTabNote = 'file' | 'dialog' | 'popup' | 'clipboard' | 'unload' | 'external';
+export type UserTabNote = 'file' | 'dialog' | 'popup' | 'clipboard' | 'unload' | 'external' | 'print';
 
 /** A download the assistant's click started: its name (made safe) and where it comes from (its redirects' end). */
 export interface UserTabDownload {
@@ -131,6 +132,10 @@ interface Lease {
   pending: Set<Promise<void>>;
   /** A frame that was there as the lease began couldn't be held: the lease isn't handed out (fail closed). */
   frameFailed: boolean;
+  /** #338: the print script added in each session (the page's: undefined), by its identifier, to take out at the end. */
+  printScripts: Map<string | undefined, string>;
+  /** #338: when a print the page tried was last said (at most once a second: Argon's SF1). */
+  printSaidAt: number;
   onMessage: (event: unknown, method: string, params: unknown, sessionId?: string) => void;
   onDetach: () => void;
   onGone: () => void;
@@ -154,6 +159,19 @@ export function userTabActing(contents: object): boolean {
 export function userTabCatching(contents: object): boolean {
   const lease = leases.get(contents as WebContents);
   return Boolean(lease && !lease.ended);
+}
+
+/**
+ * #338: the page tried to print while the lease catches, and its top frame's preload held it (agent-scripts.ts'
+ * PAGE_PRINT_ASKS): said in the chat, in fixed words (nothing from the renderer: Argon's SF3), at most once a second.
+ */
+export function noteUserTabPrint(contents: object): void {
+  const lease = leases.get(contents as WebContents);
+  if (!lease || lease.ended) return;
+  const now = Date.now();
+  if (now - lease.printSaidAt < 1000) return;
+  lease.printSaidAt = now;
+  lease.deps.note('print', '');
 }
 
 /** Something caught outside the lease (a popup, the clipboard: tabs.ts, permissions.ts), said in the chat. */
@@ -273,6 +291,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     sessions: new Set(),
     pending: new Set(),
     frameFailed: false,
+    printScripts: new Map(),
+    printSaidAt: -Infinity,
     onMessage: () => undefined,
     onDetach: () => undefined,
     onGone: () => undefined,
@@ -283,12 +303,20 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
   // FedCM isn't one: Electron has no FedCM UI, so a page's sign-in request fails by itself (NetworkError), and with the
   // domain on it would wait instead, where dismissing it takes the app down (Electron 45.5, the build's E2E row).
   const catching = async (sessionId?: string) => {
+    const pageOn = command(debug, 'Page.enable', {}, sessionId);
     await Promise.all([
-      command(debug, 'Page.enable', {}, sessionId),
+      pageOn,
       command(debug, 'Page.setInterceptFileChooserDialog', { enabled: true }, sessionId),
       command(debug, 'WebAuthn.enable', { enableUI: false }, sessionId),
       // Network is on only for the bypass: it keeps no bodies (small buffers).
       command(debug, 'Network.enable', NETWORK_BUFFERS, sessionId).then(() => command(debug, 'Network.setBypassServiceWorker', { bypass: true }, sessionId)),
+      // #338: a print the page tries asks the top frame's preload first (held while this catches), in the documents there
+      // now and each new one; after Page.enable (as agents/pickers.ts), within COMMAND_MS, so a frozen renderer fails
+      // the lease closed (Argon's B3). Its identifier is kept, to take it out at the end on someone else's attachment.
+      pageOn.then(() => command(debug, 'Page.addScriptToEvaluateOnNewDocument', { source: PAGE_PRINT_ASKS, runImmediately: true }, sessionId)).then((added) => {
+        const identifier = (added as { identifier?: unknown } | undefined)?.identifier;
+        if (typeof identifier === 'string') lease.printScripts.set(sessionId, identifier);
+      }),
     ]);
   };
   lease.onMessage = (_event, method, params) => {
@@ -579,6 +607,10 @@ async function turnOff(contents: WebContents, lease: Lease): Promise<void> {
   for (const sessionId of [...lease.sessions, undefined]) {
     await quiet('Fetch.disable', {}, sessionId);
     await quiet('Network.disable', {}, sessionId);
+    // #338: Page.disable leaves a script to run in new documents: taken out here (Argon's SF2). Those it ran in keep it,
+    // asking each time, and nothing holds their print outside a lease.
+    const printScript = lease.printScripts.get(sessionId);
+    if (printScript) await quiet('Page.removeScriptToEvaluateOnNewDocument', { identifier: printScript }, sessionId);
     await quiet('Page.disable', {}, sessionId);
     await quiet('WebAuthn.disable', {}, sessionId);
     await quiet('Page.setInterceptFileChooserDialog', { enabled: false }, sessionId);
