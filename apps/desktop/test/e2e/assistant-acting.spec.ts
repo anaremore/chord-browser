@@ -149,10 +149,10 @@ async function send(panel: Locator, text: string): Promise<void> {
   await input.press('Enter');
 }
 
-/** The fake's last `Act:` turn: each step's tool and what Chord answered. */
 // Every test here fails if its run logged an error in main (Carbon's SF3 on #343).
 failOnMainErrors();
 
+/** The fake's last `Act:` turn: each step's tool and what Chord answered. */
 const lastActing = (config: string): { tool: string; result: string }[] => {
   const lines = readFileSync(join(config, 'acting.jsonl'), 'utf8').trim().split('\n');
   return JSON.parse(lines.at(-1)!) as { tool: string; result: string }[];
@@ -390,7 +390,26 @@ test('what the assistant’s click sets off in your tab is caught: a window, a f
     await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Get file' }, { tool: 'click', name: 'Open sheet' }, { tool: 'click', name: 'Identity' }, { tool: 'click', name: 'Start worker' }]));
     // The worker the click started sends: held, and asked about as the page's own would be.
     const workerCard = panel.getByRole('group', { name: /^Send data to / }).last();
-    await expect(workerCard).toBeVisible({ timeout: 30_000 });
+    await expect(workerCard)
+      .toBeVisible({ timeout: 30_000 })
+      .catch(async (error: unknown) => {
+        // #349: what there was instead of the worker's card; the failure is the same. Each probe capped at 2 s.
+        const capped = <T>(probe: Promise<T>) =>
+          Promise.race([probe.catch((e: unknown) => `failed: ${String(e).split('\n')[0]}`), new Promise<string>((r) => setTimeout(() => r('no answer'), 2000))]);
+        const cards = await capped(panel.getByRole('group').evaluateAll((groups) => groups.map((g) => g.getAttribute('aria-label') ?? g.textContent?.slice(0, 60))));
+        const log = await capped(page.locator('#log').textContent());
+        const steps = await capped(Promise.resolve().then(() => lastActing(config).map((s) => `${s.tool}: ${s.result.slice(0, 160)}`)));
+        throw new Error(
+          [
+            String(error),
+            `[diagnostic] #349 panel cards: ${JSON.stringify(cards)}`,
+            `[diagnostic] #349 page log: ${JSON.stringify(log)}`,
+            `[diagnostic] #349 reached: ${JSON.stringify(reached)}`,
+            `[diagnostic] #349 acting turns: ${actingTurns(config)}; the last one's steps: ${JSON.stringify(steps)}`,
+          ].join('\n'),
+          { cause: error },
+        );
+      });
     expect(reached.filter((x) => x.startsWith('POST /wmove'))).toEqual([]);
     await shell.waitForTimeout(700);
     await workerCard.getByRole('button', { name: 'Allow', exact: true }).click();
