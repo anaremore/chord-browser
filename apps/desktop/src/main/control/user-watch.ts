@@ -666,12 +666,7 @@ function lose(contents: WebContents, lease: Lease): void {
   // The renderer gone with the debugger still on: Fetch off (Chord's attachment let go of), or the reloaded tab's
   // requests would wait on a hold no one answers (Claude's S1, round 2). The listener stays until then.
   void withDebugger(contents, async () => {
-    if (superseded(contents, lease)) {
-      // #338: its print scripts out (the new lease adds its own, and sets the deadline): never left to run in new
-      // documents after the new lease ends (Opus's S1a).
-      if (!contents.isDestroyed()) await removePrintScripts(contents.debugger, lease);
-      return debugOff(contents, lease);
-    }
+    if (superseded(contents, lease)) return supersededOff(contents, lease);
     try {
       if (!contents.isDestroyed()) contents.debugger.off('detach', lease.onDetach);
       await turnOff(contents, lease);
@@ -702,6 +697,15 @@ function superseded(contents: WebContents, lease: Lease): boolean {
   if (!now || now === lease || now.ended) return false;
   now.mine ||= lease.mine;
   return true;
+}
+
+/**
+ * A lease superseded at its end: its print scripts out (#338: the new lease adds its own and sets the deadline; never
+ * left to run in new documents after the new lease ends: Opus's S1a), then its listeners off.
+ */
+async function supersededOff(contents: WebContents, lease: Lease): Promise<void> {
+  if (!contents.isDestroyed()) await removePrintScripts(contents.debugger, lease);
+  debugOff(contents, lease);
 }
 
 /** Everything the lease turned on, off: Chord's own attachment detached, someone else's left as it was. */
@@ -764,12 +768,7 @@ async function release(contents: WebContents, lease: Lease, putBack: boolean): P
   if (putBack) await putBackClipboard(lease);
   if (contents.isDestroyed()) return void debugOff(contents, lease);
   await withDebugger(contents, async () => {
-    if (superseded(contents, lease)) {
-      // #338: its print scripts out (the new lease adds its own, and sets the deadline): never left to run in new
-      // documents after the new lease ends (Opus's S1a).
-      if (!contents.isDestroyed()) await removePrintScripts(contents.debugger, lease);
-      return debugOff(contents, lease);
-    }
+    if (superseded(contents, lease)) return supersededOff(contents, lease);
     try {
       // Taken off only now: a detach from here on is this release's own.
       if (!contents.isDestroyed()) contents.debugger.off('detach', lease.onDetach);
