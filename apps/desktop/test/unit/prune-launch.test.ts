@@ -62,9 +62,12 @@ describe('a profile no chord uses any more, at the next launch (#330)', () => {
 
     // Two chords with sign-ins of their own, an extension installed in each; then the first shares sign-ins again.
     let db = new ChordDatabase(file);
-    const state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
+    let state = seedState({ now: 1000, newId: ctx.newId, theme: THEME, homeUrl: 'https://home.test/' });
     db.write(opsForState(state));
+    // A second chord: seedState makes one (Neon's B2 on #335).
+    state = drive(db, state, [{ t: 'chord.create', windowId: Object.keys(state.windows)[0]!, name: 'Two', icon: 'T', theme: THEME }]);
     const [first, second] = Object.keys(state.chords);
+    expect(second).toBeDefined();
     drive(db, state, [
       { t: 'chord.profile', chordId: first!, profileId: 'gone' },
       { t: 'chord.profile', chordId: second!, profileId: 'kept' },
@@ -88,5 +91,15 @@ describe('a profile no chord uses any more, at the next launch (#330)', () => {
     await removeUnusedPartitions(userData, foldersInUse(sessions, new Map(), []));
     expect(existsSync(folder('gone'))).toBe(false);
     expect(existsSync(folder('kept'))).toBe(true);
+  });
+});
+
+describe('launchProfiles (#330)', () => {
+  it('every chord’s profile, and every one an extension is installed in, once each (Neon’s SF2 on #335)', () => {
+    const state = {
+      chords: { a: { profileId: 'default' }, b: { profileId: 'work' }, c: { profileId: 'work' } },
+      extensions: { 'ext-only:x': { profileId: 'ext-only' }, 'work:x': { profileId: 'work' } },
+    } as unknown as Pick<State, 'chords' | 'extensions'>;
+    expect(launchProfiles(state).sort()).toEqual(['default', 'ext-only', 'work']);
   });
 });

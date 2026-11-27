@@ -19,6 +19,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 let n = 0;
 const ctx: Context = { now: 5000, newId: () => `id-${++n}` };
+const THEME = { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' as const };
 const seed = () =>
   seedState({ now: 1000, newId: ctx.newId, theme: { stops: [{ l: 0.72, c: 0.12, h: 270 }], grain: 0.2, appearance: 'auto' }, homeUrl: 'https://home.test/' });
 
@@ -213,11 +214,7 @@ describe('chord-data', () => {
     expect(count('profile')).toBe(1);
   });
 
-  it('a pruned profile’s installed extensions go with it (#330); a profile still in use, or a deleted chord’s (its Undo), keeps theirs', () => {
-    let db = new ChordDatabase(file);
-    let state = seed();
-    db.write(opsForState(state));
-    const [first, second] = Object.keys(state.chords);
+  describe('a profile no chord uses, pruned at launch with the extensions installed in it (#330)', () => {
     const ext = (profileId: string) => ({
       id: 'ddkjiahejlhfcafbddmgiahcphecmpfh',
       profileId,
@@ -230,24 +227,58 @@ describe('chord-data', () => {
       installedAt: 1,
       updatedAt: 2,
     });
-    state = drive(db, state, [
-      { t: 'chord.profile', chordId: first!, profileId: 'p-gone' },
-      { t: 'chord.profile', chordId: second!, profileId: 'p-deleted' },
-      { t: 'extension.record', extension: ext('default') },
-      { t: 'extension.record', extension: ext('p-gone') },
-      { t: 'extension.record', extension: ext('p-deleted') },
-    ]);
-    // The first chord shares sign-ins again (its own are given up); the second is deleted (Undo can bring it back).
-    drive(db, state, [
-      { t: 'chord.profile', chordId: first!, profileId: 'default' },
-      { t: 'chord.delete', chordId: second! },
-    ]);
-    db.close();
-    db = new ChordDatabase(file);
-    expect(db.pruneProfiles()).toEqual(['persist:p-p-gone']);
-    const saved = db.load();
-    db.close();
-    expect((saved?.extensions ?? []).map((e) => e.profileId).sort()).toEqual(['default', 'p-deleted']);
+
+    it('a chord sharing sign-ins again, and one deleted: theirs go; a live chord’s and the default’s stay (Neon’s SF1 on #335)', () => {
+      let db = new ChordDatabase(file);
+      let state = seed();
+      db.write(opsForState(state));
+      const windowId = Object.keys(state.windows)[0]!;
+      state = drive(db, state, [
+        { t: 'chord.create', windowId, name: 'Two', icon: 'T', theme: THEME },
+        { t: 'chord.create', windowId, name: 'Three', icon: 'H', theme: THEME },
+      ]);
+      // Three chords, not one: each command below acts (Neon's B2 on #335).
+      const [shared, deleted, live] = Object.keys(state.chords);
+      expect([shared, deleted, live].every(Boolean)).toBe(true);
+      state = drive(db, state, [
+        { t: 'chord.profile', chordId: shared!, profileId: 'p-shared' },
+        { t: 'chord.profile', chordId: deleted!, profileId: 'p-deleted' },
+        { t: 'chord.profile', chordId: live!, profileId: 'p-live' },
+        { t: 'extension.record', extension: ext('default') },
+        { t: 'extension.record', extension: ext('p-shared') },
+        { t: 'extension.record', extension: ext('p-deleted') },
+        { t: 'extension.record', extension: ext('p-live') },
+      ]);
+      expect(Object.values(state.chords).map((c) => c.profileId).sort()).toEqual(['p-deleted', 'p-live', 'p-shared']);
+      // The first shares sign-ins again; the second is deleted (its Undo lasts the session: nothing of it is saved).
+      drive(db, state, [
+        { t: 'chord.profile', chordId: shared!, profileId: 'default' },
+        { t: 'chord.delete', chordId: deleted! },
+      ]);
+      db.close();
+      db = new ChordDatabase(file);
+      expect(db.pruneProfiles().sort()).toEqual(['persist:p-p-deleted', 'persist:p-p-shared']);
+      const saved = db.load();
+      db.close();
+      expect((saved?.extensions ?? []).map((e) => e.profileId).sort()).toEqual(['default', 'p-live']);
+    });
+
+    it('rows already orphaned (a profile pruned before #330, its extension rows left): they go too (Neon’s B1 on #335)', () => {
+      let db = new ChordDatabase(file);
+      db.write(opsForState(seed()));
+      db.close();
+      const raw = new DatabaseSync(file);
+      raw.prepare(
+        "INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at) VALUES ('p-orphan', ?, 'E', '1', 'store', '/x', NULL, 1, 0, 0)",
+      ).run('a'.repeat(32));
+      raw.close();
+      db = new ChordDatabase(file);
+      db.pruneProfiles();
+      const saved = db.load();
+      db.close();
+      expect(saved?.extensions ?? []).toEqual([]);
+      expect(count('extension')).toBe(0);
+    });
   });
 
   it('upgrades a version-15 profile to 16, and keeps the proxy for every chord and a chord’s own across a restart', () => {

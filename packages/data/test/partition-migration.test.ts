@@ -157,5 +157,24 @@ describe('profile partitions after #315 (migration)', () => {
       db.close();
     }
   });
+
+  it('an extension row already orphaned (its profile row gone before #330) comes off the move list with it (Neon’s B1, SF2 on #335)', () => {
+    before(['Work', 'Ext_Only']);
+    const old = new DatabaseSync(file);
+    old.exec('PRAGMA foreign_keys = OFF');
+    old.prepare("DELETE FROM chord WHERE profile_id = 'Ext_Only'").run();
+    old.prepare("DELETE FROM profile WHERE id = 'Ext_Only'").run();
+    old.prepare("INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at) VALUES ('Ext_Only', ?, 'E', '1', 'store', '/x', NULL, 1, 0, 0)").run('a'.repeat(32));
+    old.close();
+    const db = new ChordDatabase(file);
+    try {
+      expect(db.partitionMoves()).toEqual(['Ext_Only', 'Work']);
+      db.pruneProfiles();
+      expect(db.partitionMoves()).toEqual(['Work']);
+      expect(db.load()?.extensions ?? []).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 });
 
