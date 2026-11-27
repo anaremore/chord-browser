@@ -1685,14 +1685,27 @@ test('Chord’s own views come back when their renderer crashes: the sidebar, an
         },
         [name, script, open] as const,
       );
+    // Whether that view's page is there and loaded. The command bar, popover and preview load only once the shell has
+    // painted (or 2 s after it loaded: window.ts' deferViews), and a shell crashed before that paints again first: until
+    // then they have no address to be found by (main's red run at 8371d911, where crash('overlay') found none).
+    const loaded = (name: string) =>
+      app.evaluate(({ webContents }, n) => {
+        const contents = webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`));
+        return Boolean(contents && !contents.isCrashed() && !contents.isLoading());
+      }, name);
     const crash = (name: string) =>
-      app.evaluate(({ webContents }, n) => webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`))!.forcefullyCrashRenderer(), name);
+      app.evaluate(({ webContents }, n) => {
+        const contents = webContents.getAllWebContents().find((c) => c.getURL().startsWith(`chord://${n}`) || c.getURL().includes(`/${n}/index.html`));
+        if (!contents) throw new Error(`no ${n} page to crash`);
+        contents.forcefullyCrashRenderer();
+      }, name);
 
     for (const [name, script, expected, open] of [
       ['shell', `document.querySelector('[role="tree"][aria-label="Unpinned tabs"]')?.textContent ?? ''`, 'First page', false],
       ['overlay', `document.querySelector('[role="combobox"]') ? 'ready' : ''`, 'ready', true],
       ['popover', `document.getElementById('root')?.childElementCount > 0 ? 'ready' : ''`, 'ready', false],
     ] as const) {
+      await expect.poll(() => loaded(name), { message: `Chord's ${name} page has loaded`, timeout: 15_000 }).toBe(true);
       await crash(name);
       await expect.poll(() => view(name, script, open), { timeout: 15_000 }).toContain(expected);
     }
