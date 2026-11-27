@@ -471,14 +471,7 @@ function About({ about, snapshot }: { about: AboutInfo; snapshot: SettingsSnapsh
 export function Settings({ info: infoSource, snapshot: snapshotSource, about }: { info: Live<SystemInfo>; snapshot: Live<SettingsSnapshot>; about: AboutInfo }) {
   const info = useLive(infoSource);
   const snapshot = useLive(snapshotSource);
-  const [chosen, setSection] = useState<SectionId>(initialSection);
-  // Agents (S18) only in builds that have them (AGENTS_RELEASED): elsewhere no section, and #agents opens General.
-  const sections = about.agents ? SECTIONS : SECTIONS.filter((s) => s.id !== 'agents');
-  const section: SectionId = chosen === 'agents' && !about.agents ? 'general' : chosen;
-  // The address says where you are: #agents that opened General says #general.
-  useEffect(() => {
-    if (chosen === 'agents' && !about.agents) history.replaceState(null, '', '#general');
-  }, [chosen, about.agents]);
+  const [section, setSection] = useState<SectionId>(initialSection);
   /** A Chord file from a newer Chord: check for updates, and show where the answer is (About). */
   const checkForUpdates = () => {
     void api.settings.checkForUpdates();
@@ -520,7 +513,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
 
         <nav className={styles.nav} aria-label="Settings sections">
           <p className={styles.navTitle}>Settings</p>
-          {sections.map((s) => {
+          {SECTIONS.map((s) => {
             const Icon = s.icon;
             const current = s.id === section;
             return (
@@ -564,7 +557,7 @@ export function Settings({ info: infoSource, snapshot: snapshotSource, about }: 
               {section === 'extensions' && <ExtensionsSection snapshot={snapshot} />}
               {section === 'data' && <YourDataSection snapshot={snapshot} info={info} onUpdates={checkForUpdates} />}
               {section === 'assistant' && <AssistantSettings snapshot={snapshot} />}
-              {section === 'agents' && about.agents && <AgentsSettings snapshot={snapshot} />}
+              {section === 'agents' && <AgentsSettings snapshot={snapshot} />}
               {section === 'shortcuts' && <ShortcutsSection snapshot={snapshot} info={info} />}
               {section === 'about' && <About about={about} snapshot={snapshot} />}
             </motion.div>

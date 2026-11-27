@@ -1294,8 +1294,6 @@ export interface AboutInfo {
   node: string;
   platform: Platform;
   arch: string;
-  /** Whether this build has outside agents (S18): development ones, and packaged ones once AGENTS_RELEASED. */
-  agents: boolean;
 }
 
 export const Rect = z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() });

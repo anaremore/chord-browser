@@ -55,6 +55,7 @@ import {
   nextReplyText,
   replyBlockStart,
   nodeList,
+  sameBytes,
   type AssistantAttachment,
   type AssistantCitation,
   type AssistantImage,
@@ -2241,8 +2242,6 @@ async function readClipboardItems(): Promise<ClipboardSnapshot> {
     return null;
   }
 }
-
-const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /**
  * The clipboard as the assistant's lease takes and puts it back (control/user-watch.ts): all of it, every item and

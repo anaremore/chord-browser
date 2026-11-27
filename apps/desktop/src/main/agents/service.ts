@@ -286,8 +286,6 @@ export class AgentService {
    * allow isn't offered.
    */
   private async whoStarted(held: HeldConnection): Promise<ProcessInfo[]> {
-    // A packaged build before AGENT_ACTIONS_RELEASED: M1's lookup, from the bridge's word.
-    if (this.deps.actions === false) return import('./parent').then(({ ancestry }) => ancestry(held.hello.parentPid, 3, this.deps.helper));
     // Its claim, contested (another live connection claims that PID too): it can't tell, before the lookup or after.
     const contested = () => (this.claims.get(held.hello.bridgePid)?.size ?? 0) > 1;
     const unknown = () => {

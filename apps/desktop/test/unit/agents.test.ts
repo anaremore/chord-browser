@@ -80,7 +80,7 @@ async function chord(userData: string, ask: Ask = answering('once'), waitMs = 20
 }
 
 /** An MCP client on a bridge in this process: as an agent would talk to `chord mcp`. */
-function client(userData: string, closed?: boolean, cwd = userData, actions?: boolean) {
+function client(userData: string, cwd = userData, actions?: boolean) {
   const input = new PassThrough();
   const output = new PassThrough();
   const waiting = new Map<number, (m: Record<string, unknown>) => void>();
@@ -91,7 +91,7 @@ function client(userData: string, closed?: boolean, cwd = userData, actions?: bo
     if (m.method) notifications.push(m.method);
     if (typeof m.id === 'number') waiting.get(m.id)?.(m);
   });
-  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd, closed, ...(actions === undefined ? {} : { actions }) });
+  runBridge({ userData, input, output, version: '0.0.0-test', onEnd: () => (ended = true), parentPid: process.pid, cwd, ...(actions === undefined ? {} : { actions }) });
   let id = 0;
   const request = (method: string, params: unknown = {}) =>
     new Promise<{ result: Record<string, unknown> }>((done) => {
@@ -138,19 +138,9 @@ describe('chord mcp and the endpoint: M0’s paths', () => {
     // and no PR tier runs it. This is the same list, every push.
     const actions = agentActions({ packaged: true });
     expect(actions).toBe(AGENT_ACTIONS_RELEASED);
-    const c = client(profile(), undefined, undefined, actions);
+    const c = client(profile(), undefined, actions);
     await c.initialize();
     expect((await c.request('tools/list')).result['tools']).toEqual(agentToolList(actions));
-  });
-
-  it('a build without Agents (packaged, before AGENTS_RELEASED): calls say Chord isn’t open even while one serves', async () => {
-    const ud = profile();
-    const service = await chord(ud);
-    const c = client(ud, true);
-    await c.initialize();
-    expect(((await c.request('tools/list')).result['tools'] as unknown[]).length).toBe(18);
-    expect(await c.call('list_tabs')).toEqual({ error: true, text: CONTROL_REFUSALS.notOpen });
-    expect(service.connections.size).toBe(0);
   });
 
   it('allowed: tools run through the shared layer on the agent’s own tabs (none yet), refusing in one sentence', async () => {
@@ -550,11 +540,10 @@ describe('Zero cost, and off in packaged builds', () => {
 
   // M2a: Started by comes from the process at the other end, as the OS says (peer.ts), never the hello's parentPid.
   // [the peer the OS gives, M2 in this build, whose chain the card gets: 'parent' (this process's parent: the peer is
-  // Chord's own executable, the bridge), 'none', or 'hello' (M1's: from the hello's parentPid, this process)]
-  const started: [string, number | null, boolean, 'parent' | 'none' | 'hello'][] = [
+  // Chord's own executable, the bridge), or 'none']
+  const started: [string, number | null, boolean, 'parent' | 'none'][] = [
     ['the bridge, in Chord’s executable: who started it', process.pid, true, 'parent'],
     ['unknown: nobody, so no program and no Always allow', null, true, 'none'],
-    ['a packaged build before M2: the hello’s word, as in M1', null, false, 'hello'],
   ];
   // On Windows the chain comes from window-owner.exe's `chain` (the build's, as Chord runs it), never PowerShell's query
   // of each process, which took more than its 10 s on CI's busy Windows runners (#107). Built here when it isn't yet
@@ -591,7 +580,7 @@ describe('Zero cost, and off in packaged builds', () => {
     const chain = await held!.parent!;
     // The right process, on every OS: never the wrong one, and never none where there is one.
     if (want === 'none') expect(chain).toEqual([]);
-    else expect(chain[0]?.pid).toBe(want === 'parent' ? process.ppid : process.pid);
+    else expect(chain[0]?.pid).toBe(process.ppid);
     if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
     else expect(asked).toBeNull();
     expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
@@ -710,7 +699,7 @@ describe('Zero cost, and off in packaged builds', () => {
     // X goes: the contest clears, but a later claimant of the same PID contests it with R again.
     x!.destroy();
     await expect.poll(() => service.connections.size).toBe(1);
-    const again = client(ud, false, '/again');
+    const again = client(ud, '/again');
     await again.initialize();
     expect((await again.call('list_tabs')).error).toBe(false);
     expect(await heldBy('/again').parent).toEqual([]);
@@ -719,7 +708,7 @@ describe('Zero cost, and off in packaged builds', () => {
     again.close();
     await expect.poll(() => service.connections.size).toBe(0);
     // Alone again, a claim holds: looked up with its claim, nothing taken.
-    const alone = client(ud, false, '/alone');
+    const alone = client(ud, '/alone');
     await alone.initialize();
     expect((await alone.call('list_tabs')).error).toBe(false);
     expect(asked).toEqual([{ claimed: process.pid, held: [] }]);
@@ -729,7 +718,7 @@ describe('Zero cost, and off in packaged builds', () => {
     // Contested while it looked (another hello arrived meanwhile): what it found isn't used.
     let release!: () => void;
     delay = new Promise((done) => (release = done));
-    const looking = client(ud, false, '/looking');
+    const looking = client(ud, '/looking');
     await looking.initialize();
     const calling = looking.call('list_tabs');
     await expect.poll(() => asked.length).toBe(2);
