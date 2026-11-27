@@ -237,4 +237,25 @@ describe('updating extensions with the unpacking in a worker', () => {
     expect(record()).toMatchObject({ version: '2.0', path: folder('2.0') });
     expect(engine.loaded.get(id)).toBe(folder('2.0'));
   });
+
+  it('#334 (Neon’s SF2 (1)): twins sharing the old version’s folder: the first update leaves it (the twin still runs from it); once the twin updates too, it goes', async () => {
+    // A twin (its profile's id in another case) installed the same version before #319: one folder for both.
+    const twin: InstalledExtension = { ...record()!, profileId: 'DEFAULT' };
+    state = { ...state, extensions: { ...state.extensions, [`DEFAULT:${id}`]: twin } } as State;
+    // The second download waits, from the moment the first update loads its new version.
+    engine.beforeLoad = async (path) => {
+      if (path.includes('2.0')) holdDownload = true;
+    };
+    const check = setup().checkForUpdates();
+    await downloading();
+    // One updated; the twin's still on 1.0, so its folder stays.
+    expect(existsSync(folder('1.0'))).toBe(true);
+    release!();
+    expect(await check).toBe(2);
+    // Both moved off: the old folder goes, and each has its own new one.
+    expect(existsSync(folder('1.0'))).toBe(false);
+    const paths = [state.extensions[`default:${id}`]!.path, state.extensions[`DEFAULT:${id}`]!.path];
+    expect(paths[0]!.toLowerCase()).not.toBe(paths[1]!.toLowerCase());
+  });
 });
+

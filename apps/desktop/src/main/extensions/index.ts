@@ -23,7 +23,7 @@ import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult,
 import { BaseWindow, BrowserWindow, Menu, nativeImage, type ContextMenuParams, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
 import { existsSync, readFileSync } from 'node:fs';
 import { cp, readdir, rm } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { send } from '../ipc';
 import type { AppWindow } from '../window';
 import { extensionIdFrom } from './crx';
@@ -488,6 +488,22 @@ export class Extensions {
    * start checking for updates.
    */
   async start(devFolders: readonly string[] = []): Promise<void> {
+    // Launch loads everything itself, once: a store change meanwhile (the split moving a record) never has reconcile()
+    // load from a folder that's about to change, or a second time (Neon's B1 on #334).
+    this.starting = true;
+    try {
+      await this.startLoading(devFolders);
+    } finally {
+      this.starting = false;
+    }
+    for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
+    this.deps.changed();
+    this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
+    this.updateTimer.unref?.();
+  }
+
+  /** Launch's part that nothing else may load during: the split, the cleanup's start, and every extension's load. */
+  private async startLoading(devFolders: readonly string[]): Promise<void> {
     // Profiles whose ids differ only in case sharing one folder (before #319): each gets its own, before anything loads.
     await this.splitShared();
     // Off the launch path; installs and updates wait for it, so it never sees a folder they're writing.
@@ -513,11 +529,10 @@ export class Extensions {
         console.error(`CHORD_LOAD_EXTENSION: ${folder} didn't load:`, error);
       }
     }
-    for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
-    this.deps.changed();
-    this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
-    this.updateTimer.unref?.();
   }
+
+  /** While launch loads everything (start): reconcile waits for it, never loading the same extension beside it. */
+  private starting = false;
 
   private scheduleUpdates(): void {
     clearTimeout(this.updateTimer);
@@ -618,12 +633,15 @@ export class Extensions {
   }
 
   /**
-   * Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_0, keeping the store's ID.
+   * Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_<n> (extensionFolder), keeping the
+   * store's ID.
    * All of it (signatures, inflating, writing, the manifest's key) happens in a worker thread, never on main.
    */
   private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer, sha256: string | null): Promise<string> {
     await this.cleanup;
-    const path = extensionFolder(this.deps.root, profileId, id, version, (p) => this.usedBy(p) !== null);
+    // Another unpack under way (a twin's install, at once) counts as taken too: never the same folder (Neon's N1 on #334).
+    const path = extensionFolder(this.deps.root, profileId, id, version, (p) => this.usedBy(p) !== null || [...this.unpacking].some((u) => samePath(u, p)));
+    this.unpacking.add(path);
     try {
       await unpackInWorker(this.deps.unpackWorkerPath, {
         crx,
@@ -637,9 +655,14 @@ export class Extensions {
       // The worker removes what it wrote; if it died partway, this does.
       await this.removeFolder(path);
       throw error;
+    } finally {
+      this.unpacking.delete(path);
     }
     return path;
   }
+
+  /** Folders an unpack is writing now. */
+  private readonly unpacking = new Set<string>();
 
   /**
    * The install step Electron skips: turn on the rulesets the manifest
@@ -784,6 +807,8 @@ export class Extensions {
    * installed again (Undo) loads. One that won't load isn't retried.
    */
   reconcile(): void {
+    // Launch is loading everything from where it ends up: it loads each once (Neon's B1 on #334).
+    if (this.starting) return;
     for (const e of Object.values(this.deps.state().extensions)) {
       const key = extensionKey(e.profileId, e.id);
       if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key) || this.updating.has(key)) continue;
@@ -806,7 +831,9 @@ export class Extensions {
 
   /** The installed extension whose folder `path` is (compared without case, #319), other than `except`'s; null if none. */
   private usedBy(path: string, except?: string): InstalledExtension | null {
-    for (const e of Object.values(this.deps.state().extensions)) if (extensionKey(e.profileId, e.id) !== except && samePath(e.path, path)) return e;
+    const state = this.deps.state();
+    // One removed but still to Undo counts too: its folder is what Undo loads (Neon's SF3 on #334).
+    for (const e of [...Object.values(state.extensions), ...(state.removedExtensions ?? [])]) if (extensionKey(e.profileId, e.id) !== except && samePath(e.path, path)) return e;
     return null;
   }
 
@@ -825,9 +852,10 @@ export class Extensions {
       }
       const to = extensionFolder(this.deps.root, e.profileId, e.id, e.version, (p) => this.usedBy(p) !== null);
       try {
-        // From the path the keeper's record spells (the folder as it's on disk): on a file system that ignores case,
-        // this one's own spelling names the same folder; where case counts, only the keeper's is sure to be there.
-        await cp(keeper.path, to, { recursive: true, errorOnExist: true, force: false });
+        // From its own folder if it's on disk (where case counts, each twin has its own), else from the keeper's (where
+        // case is ignored, the same folder): Neon's SF1 on #334.
+        const from = existsSync(join(e.path, 'manifest.json')) ? e.path : keeper.path;
+        await cp(from, to, { recursive: true, errorOnExist: true, force: false });
         this.deps.dispatch({ t: 'extension.record', extension: { ...e, path: to } });
       } catch (error) {
         await this.removeFolder(to);
@@ -862,7 +890,8 @@ export class Extensions {
    */
   private async removeFolder(path: string): Promise<void> {
     const rel = relative(resolve(this.deps.root), resolve(path));
-    if (!rel || rel.startsWith('..') || resolve(path) === resolve(this.deps.root)) return;
+    // Never outside Chord's extensions folder: nor on another drive (Windows gives an absolute `relative`: Neon's N3).
+    if (!rel || rel.startsWith('..') || isAbsolute(rel) || resolve(path) === resolve(this.deps.root)) return;
     await rm(path, { recursive: true, force: true, maxRetries: 3 }).catch((error: unknown) => console.error(`Removing ${path} failed:`, error));
   }
 }
