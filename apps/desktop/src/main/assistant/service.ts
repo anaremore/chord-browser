@@ -1649,6 +1649,9 @@ export class AssistantService {
               const said = USER_TAB_NOTES[what](plainNote(detail));
               // In the chat, and in the next result there, so the model never says done when the page said no.
               const caught = s.caught.get(node.id) ?? [];
+              // A print said once an action (control/user-watch.ts), and not again while that same note still waits for
+              // this tab's next result (#338, Fable's SF1).
+              if (what === 'print' && caught.includes(said)) return;
               if (caught.length < CAUGHT_MAX) s.caught.set(node.id, [...caught, said]);
               if (s.thread) void this.activity(s, 'act', said, contents.isDestroyed() ? '' : contents.getURL(), false);
             },

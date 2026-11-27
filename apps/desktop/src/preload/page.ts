@@ -151,24 +151,6 @@ if (!agentTab && isTop && (protocol === 'https:' || protocol === 'http:')) {
   installAgentGuard(globalThis as unknown as Parameters<typeof installAgentGuard>[0]);
   // The page copying: reported, so the assistant's lease puts back only what the page copied (copy-report.ts).
   installCopyReport(globalThis as unknown as Parameters<typeof installCopyReport>[0], () => ipcRenderer.send('page:copied'));
-  // #338: the page trying to print, from the lease's script (agents/agent-scripts.ts' PAGE_PRINT_ASKS), in this frame or
-  // one below it: held while the assistant's lease catches what it sets off (asked of main, the answer kept 250 ms: Argon's
-  // SF1), first, in this world (capture), and no listener of the page's hears it (SF3). Main says it in the chat.
-  let catchingUntil = -Infinity;
-  (globalThis as unknown as { addEventListener(type: string, listener: (event: { preventDefault(): void; stopImmediatePropagation(): void }) => void, capture: boolean): void }).addEventListener(
-    'chord:print-asked',
-    (event) => {
-      const now = performance.now();
-      if (now >= catchingUntil) {
-        if (ipcRenderer.sendSync('page:userTabCatching') !== true) return;
-        catchingUntil = now + 250;
-      }
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      ipcRenderer.send('page:userTabPrint');
-    },
-    true,
-  );
 }
 // An outside agent's tab: every frame of it, whatever its address (an about:blank, srcdoc or blob: frame takes its
 // parent's origin, and its pickers and dialogs would be the page's), but never an extension's or DevTools' page.

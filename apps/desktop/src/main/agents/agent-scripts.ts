@@ -84,13 +84,6 @@ export const WORKER_READS_ONLY = String.raw`(() => {
 })()`;
 
 /**
- * Run in every new document of an agent's tab, its frames' too (a script-made blank frame and a sandboxed one
- * included: the page preload never runs in those, round 4 of #112), before the page's own code: what could send out of
- * the hold's sight is gone. Shared workers (the site's, shared with your own tabs), deferred sends (`fetchLater`: they
- * go after the tab closes), and service workers (the site's, which could send for the page: on `postMessage`, by
- * background or periodic sync, by push). A page that looks for them finds none, as in a browser without them.
- */
-/**
  * What a print stub captures as it installs, before the page's code can swap any of it (#336): the agent's tab's
  * (PAGE_LACKS) and a tab of yours' (PAGE_PRINT_ASKS, #338). In scope: `Doc`, the page's Document.
  */
@@ -126,6 +119,13 @@ const execCommandAsks = (onPrint: string) => String.raw`if (typeof exec === 'fun
       try { define(Doc.prototype, 'execCommand', { get: () => execNot, set: ignore, enumerable: true, configurable: false }); } catch { /* left */ }
     }`;
 
+/**
+ * Run in every new document of an agent's tab, its frames' too (a script-made blank frame and a sandboxed one
+ * included: the page preload never runs in those, round 4 of #112), before the page's own code: what could send out of
+ * the hold's sight is gone. Shared workers (the site's, shared with your own tabs), deferred sends (`fetchLater`: they
+ * go after the tab closes), and service workers (the site's, which could send for the page: on `postMessage`, by
+ * background or periodic sync, by push). A page that looks for them finds none, as in a browser without them.
+ */
 export const PAGE_LACKS = String.raw`(() => {
   for (const name of ['SharedWorker', 'fetchLater']) {
     try { delete self[name]; } catch { /* not configurable: left */ }
@@ -182,43 +182,87 @@ export const PAGE_LACKS = String.raw`(() => {
   return true;
 })()`;
 
+/** #338: a tab's print token: what names its event and its binding. Main makes it (hex), one a tab, for its life. */
+const isToken = (token: string): boolean => /^[0-9a-f]{16,64}$/.test(token);
+/** The isolated world each frame of a tab of yours holds its prints in (the lease adds it by CDP, never the page). */
+export const PRINT_HOLD_WORLD = 'chord-print-hold';
+export const printEvent = (token: string): string => `chord-print-${token}`;
+export const printBinding = (token: string): string => `chordPrintHeld_${token}`;
+
 /**
- * #338: a page's print in a tab of yours while the assistant acts there (control/user-watch.ts, the lease, adds it to
- * each frame's documents while it catches). Electron has no event before the print dialog, so the page's own call is
- * where it's caught: print and execCommand('print') ask first, with a cancelable `chord:print-asked` on this frame and
- * then on the top, whose preload holds it while the lease catches (your tabs' frames have no preload of their own). A
- * top out of reach (another site's frame, an opaque one) holds it: never printed (Argon's B1). Held: beforeprint and
- * afterprint, as a print would, and nothing printed. Not held: the page's print (the one there as this installed: its
- * own, if it set one), as itself. Installed once a document: a second lease finds it (its print never configurable)
- * and leaves it (Argon's B2). It stays after the lease, and asks each time; outside a lease nothing holds it.
+ * #338: a page's print in a tab of yours, in the page's world (the lease adds it to the documents of the page and of
+ * each frame, in their own sessions, while it catches). Electron has no event before the print dialog and CDP no print
+ * intercept, so the page's own call is where it's caught: print and execCommand('print') dispatch the tab's own event
+ * (its name random, the tab's: a page can't know it) on this frame, and the frame's PRINT_HOLD_WORLD listener cancels
+ * it while the lease holds prints there (printHold). Held: beforeprint and afterprint, as a print would, and nothing
+ * printed. Not held (no lease, or it's over): the page's own print (the one there as this installed, read once: Neon's
+ * N1), as itself; and execCommand as ever. Each frame asks itself, never its top: a detached frame (Neon's B1), a page
+ * gone to a blob: (Neon's B2) or another site's frame (Fable's B1) holds as the top does, and prints again once the
+ * lease is over. print and execCommand are each wrapped once (never configurable after), and each only if the page left
+ * it configurable (Neon's SF4): a second lease finds them and leaves them (Argon's B2); a dispatch that throws holds it.
  */
-export const PAGE_PRINT_ASKS = String.raw`(() => {
+export const printAsks = (token: string): string => {
+  if (!isToken(token)) throw new Error('not a print token');
+  return String.raw`(() => {
   const Doc = self.Document;
   if (!Doc) return true;
-  const had = Object.getOwnPropertyDescriptor(self, 'print');
-  if (had && had.configurable === false) return true;
   ${PRINT_INTRINSICS}
-  const realPrint = had && typeof had.value === 'function' ? had.value : typeof here.print === 'function' ? here.print : null;
-  let topGet = null;
-  for (let o = here; o && !topGet; o = protoOf(o)) topGet = (ownGet(o, 'top') || {}).get || null;
-  const asked = (at, how) => apply(dispatch, at, [new Told('chord:print-asked', { __proto__: null, cancelable: true, detail: how })]) === false;
-  const held = (how) => {
-    try { if (asked(here, how)) return true; } catch { return true; }
-    let top = here;
-    try { top = topGet ? apply(topGet, here, []) : here; } catch { return true; }
-    if (!top || top === here) return false;
-    try { return asked(top, how); } catch { return true; }
+  const EVENT = '${printEvent(token)}';
+  // The window a document is printed in: the frame's own for print(); for execCommand, the document's (a frame's
+  // execCommand called on another document, its frame then removed, prints that document: Neon's B1 on #346).
+  const viewGet = (ownGet(Doc.prototype, 'defaultView') || {}).get || null;
+  const windowOf = (doc) => {
+    try { return viewGet ? apply(viewGet, doc, []) : here; } catch { return null; }
   };
-  const quietly = () => {
-    try { apply(dispatch, here, [new Plain('beforeprint')]); } catch { /* left */ }
-    try { apply(dispatch, here, [new Plain('afterprint')]); } catch { /* left */ }
+  // Asked in that window; held if its hold cancels, or if it can't be asked (no window, a dispatch that throws).
+  const asked = (how, at = here) => {
+    if (!at) return true;
+    try { return apply(dispatch, at, [new Told(EVENT, { __proto__: null, cancelable: true, detail: how })]) === false; } catch { return true; }
   };
-  const printAsks = function print() {
-    if (held('print')) return void quietly();
-    if (realPrint) return apply(realPrint, here, []);
+  const quietly = (at = here) => {
+    if (!at) return;
+    try { apply(dispatch, at, [new Plain('beforeprint')]); } catch { /* left */ }
+    try { apply(dispatch, at, [new Plain('afterprint')]); } catch { /* left */ }
   };
-  try { define(here, 'print', { value: printAsks, writable: true, enumerable: true, configurable: false }); } catch { /* left */ }
-  ${execCommandAsks("if (held('execCommand')) { quietly(); return false; }")}
+  const hadPrint = ownGet(here, 'print');
+  if (!hadPrint || hadPrint.configurable !== false) {
+    const current = hadPrint && 'value' in hadPrint ? hadPrint.value : here.print;
+    const realPrint = typeof current === 'function' ? current : null;
+    const printAsks = function print() {
+      if (asked('print')) return void quietly();
+      if (realPrint) return apply(realPrint, here, []);
+    };
+    try { define(here, 'print', { value: printAsks, writable: true, enumerable: true, configurable: false }); } catch { /* left */ }
+  }
+  const hadExec = ownGet(Doc.prototype, 'execCommand');
+  if (!hadExec || hadExec.configurable !== false) {
+    ${execCommandAsks("const at = windowOf(this); if (asked('execCommand', at)) { quietly(at); return false; }")}
+  }
   return true;
 })()`;
+};
 
+/**
+ * #338: each frame's hold, in PRINT_HOLD_WORLD (an isolated world: the page sees none of it). While the deadline in
+ * that world (printUntil) is ahead, it cancels the tab's print event, before any other listener, and says so through
+ * the tab's binding (main says it in the chat, once an action). Once a world: a second lease leaves it, and only moves
+ * the deadline.
+ */
+export const printHold = (token: string): string => {
+  if (!isToken(token)) throw new Error('not a print token');
+  return String.raw`(() => {
+  if (self.__chordPrintHold) return true;
+  self.__chordPrintHold = true;
+  if (typeof self.__chordPrintUntil !== 'number') self.__chordPrintUntil = 0;
+  addEventListener('${printEvent(token)}', (event) => {
+    if (!(Date.now() < self.__chordPrintUntil)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try { self['${printBinding(token)}']('print'); } catch { /* not said */ }
+  }, true);
+  return true;
+})()`;
+};
+
+/** #338: the hold's deadline in each frame's PRINT_HOLD_WORLD (a time in ms; 0: over). */
+export const printUntil = (until: number): string => `self.__chordPrintUntil = ${Math.max(0, Math.floor(until))}; true`;

@@ -1,6 +1,6 @@
 import { createContext, runInContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { PAGE_LACKS, PAGE_PRINT_ASKS, WORKER_READS_ONLY } from '../../src/main/agents/agent-scripts';
+import { PAGE_LACKS, printAsks, printBinding, printEvent, printHold, printUntil, WORKER_READS_ONLY } from '../../src/main/agents/agent-scripts';
 
 /**
  * A dedicated worker's scope, as far as the lock needs one: its own built-ins (a vm context's), a `fetch` that records
@@ -79,77 +79,123 @@ describe('what an agent’s tab never has, in any document (round 4 of #112)', (
   });
 });
 
+const TOKEN = '0123456789abcdef0123456789abcdef';
+
 /**
- * #338: a tab of yours while the assistant acts. Its frame as the print script sees one: an EventTarget window with its
- * own print (recording `this`), a Document whose execCommand records, and, for a frame, a top. `cancels`: the top's
- * preload answers *held* (the lease catching). `top`: 'self' (the top frame), 'reachable' (a frame of the same site),
- * 'unreachable' (another site's, or an opaque one: dispatching on it throws).
+ * #338: a frame of a tab of yours, as the lease's scripts see one. Its page's world (a vm context): an EventTarget
+ * window with its own print (recording `this`), and a Document whose execCommand records. Its hold's world: another vm
+ * context with that same window's addEventListener, and the tab's binding (recording what it's told). `hold`: whether
+ * the hold's world has its listener at all (a frame the lease never reached has none), and its deadline.
  */
-function yourFrame(o: { cancels: boolean; top?: 'self' | 'reachable' | 'unreachable'; pagePrint?: boolean }) {
+function yourFrame(o: { hold?: 'on' | 'over' | 'none'; pagePrint?: boolean; frozenPrint?: boolean } = {}) {
   const calls: string[] = [];
-  const context = createContext({ calls, EventTarget, Event, CustomEvent, cancels: o.cancels, where: o.top ?? 'self', pagePrint: Boolean(o.pagePrint) });
+  const page = createContext({ calls, EventTarget, Event, CustomEvent, pagePrint: Boolean(o.pagePrint), frozenPrint: Boolean(o.frozenPrint) });
   runInContext(
     String.raw`
-      const topWin = new EventTarget();
-      const answer = (w) => w.addEventListener('chord:print-asked', (e) => { calls.push('asked ' + e.detail); if (cancels) e.preventDefault(); }, true);
-      class Frame extends EventTarget {
-        get top() {
-          if (where === 'self') return this;
-          if (where === 'unreachable') return { dispatchEvent() { throw new Error('SecurityError'); } };
-          return topWin;
-        }
-      }
-      self = new Frame();
-      if (where === 'self') answer(self); else answer(topWin);
+      self = new EventTarget();
       self.addEventListener('beforeprint', () => calls.push('beforeprint'));
       self.addEventListener('afterprint', () => calls.push('afterprint'));
-      self.print = pagePrint ? function print() { calls.push('page print ' + (this === self)); } : function print() { calls.push('native print ' + (this === self)); };
+      if (frozenPrint) Object.defineProperty(self, 'print', { value: function print() { calls.push('frozen print'); }, writable: false, configurable: false });
+      else self.print = pagePrint ? function print() { calls.push('page print ' + (this === self)); } : function print() { calls.push('native print ' + (this === self)); };
       self.Document = function Document() {};
       self.Document.prototype.execCommand = function execCommand(name) { calls.push('exec ' + name); return true; };
+      // A document's window, as Document.prototype.defaultView reads it (none: a document with no window).
+      Object.defineProperty(self.Document.prototype, 'defaultView', { get() { return this.view; }, configurable: true });
       self.CustomEvent = CustomEvent;
       self.Event = Event;
-      doc = new self.Document();`,
-    context,
+      doc = new self.Document();
+      doc.view = self;`,
+    page,
   );
-  expect(runInContext(PAGE_PRINT_ASKS, context)).toBe(true);
-  return { calls, run: (code: string) => runInContext(code, context) as unknown };
+  const win = runInContext('self', page) as EventTarget;
+  const world = createContext({ addEventListener: (type: string, listener: (event: Event) => void, capture: boolean) => win.addEventListener(type, listener, capture), Date });
+  runInContext(`self = globalThis; self['${printBinding(TOKEN)}'] = (what) => calls.push('said ' + what);`, world);
+  (world as { calls?: string[] }).calls = calls;
+  runInContext(`calls = globalThis.calls;`, world);
+  if ((o.hold ?? 'on') !== 'none') {
+    expect(runInContext(printHold(TOKEN), world)).toBe(true);
+    runInContext(printUntil(o.hold === 'over' ? 0 : Date.now() + 60_000), world);
+  }
+  expect(runInContext(printAsks(TOKEN), page)).toBe(true);
+  return { calls, run: (code: string) => runInContext(code, page) as unknown, world: (code: string) => runInContext(code, world) as unknown };
 }
 
-describe('a page’s print in a tab of yours asks the top frame first (#338)', () => {
-  it('not held (the assistant isn’t acting): the page’s print, as itself; execCommand as ever', () => {
-    const f = yourFrame({ cancels: false });
-    f.run(`self.print(); doc.execCommand('print'); doc.execCommand('copy');`);
-    expect(f.calls).toEqual(['asked print', 'native print true', 'asked execCommand', 'exec print', 'exec copy']);
-  });
-
-  it('held at the top (the lease catching): no print; beforeprint and afterprint, as a print would; execCommand answers false', () => {
-    const f = yourFrame({ cancels: true });
+describe('a page’s print in a tab of yours, held in its own frame while the assistant acts (#338)', () => {
+  it('held (the lease’s deadline ahead): no print; beforeprint and afterprint, as a print would; said through the tab’s binding; execCommand answers false', () => {
+    const f = yourFrame();
     expect(f.run(`self.print(); doc.execCommand('PRINT')`)).toBe(false);
-    expect(f.calls).toEqual(['asked print', 'beforeprint', 'afterprint', 'asked execCommand', 'beforeprint', 'afterprint']);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint', 'said print', 'beforeprint', 'afterprint']);
   });
 
-  it.each([
-    ['held at its top', 'reachable', true, false],
-    ['not held at its top', 'reachable', false, true],
-    ['its top out of reach (another site’s, an opaque frame): held, never printed (Argon’s B1)', 'unreachable', false, false],
-  ] as const)('a frame, %s', (_, top, cancels, prints) => {
-    const f = yourFrame({ cancels, top });
+  it('the lease over (its deadline gone): the page’s print, as itself, and execCommand as ever: nothing changes (Fable’s B1)', () => {
+    const f = yourFrame({ hold: 'over' });
+    f.run(`self.print(); doc.execCommand('print'); doc.execCommand('copy');`);
+    expect(f.calls).toEqual(['native print true', 'exec print', 'exec copy']);
+  });
+
+  it('a frame the lease never reached (no hold in its world): prints as ever', () => {
+    const f = yourFrame({ hold: 'none' });
     f.run(`self.print();`);
-    expect(f.calls.some((c) => c.startsWith('native print')), top).toBe(prints);
+    expect(f.calls).toEqual(['native print true']);
+  });
+
+  it('the deadline moved on and back: held, then not', () => {
+    const f = yourFrame({ hold: 'over' });
+    f.world(printUntil(Date.now() + 60_000));
+    f.run(`self.print();`);
+    f.world(printUntil(0));
+    f.run(`self.print();`);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint', 'native print true']);
   });
 
   it('a print the page set before the lease is the one called, as itself', () => {
-    const f = yourFrame({ cancels: false, pagePrint: true });
+    const f = yourFrame({ hold: 'over', pagePrint: true });
     f.run(`self.print();`);
-    expect(f.calls).toEqual(['asked print', 'page print true']);
+    expect(f.calls).toEqual(['page print true']);
   });
 
-  it('installed again (another lease): left as it is, never wrapped twice (Argon’s B2)', () => {
-    const f = yourFrame({ cancels: false });
-    const first = f.run(`self.print`);
-    expect(f.run(PAGE_PRINT_ASKS)).toBe(true);
-    expect(f.run(`self.print`)).toBe(first);
+  it('a page that froze its own print first: execCommand is still held (Neon’s SF4)', () => {
+    const f = yourFrame({ frozenPrint: true });
+    expect(f.run(`doc.execCommand('print')`)).toBe(false);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint']);
+  });
+
+  it('installed again (another lease): print and execCommand left as they are, and one hold in the world (Argon’s B2)', () => {
+    const f = yourFrame();
+    const before = f.run(`[self.print, doc.execCommand]`) as unknown[];
+    expect(f.run(printAsks(TOKEN))).toBe(true);
+    expect(f.world(printHold(TOKEN))).toBe(true);
+    expect(f.run(`[self.print, doc.execCommand]`)).toEqual(before);
     f.run(`self.print();`);
-    expect(f.calls).toEqual(['asked print', 'native print true']);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint']);
+  });
+
+  it('another event than the tab’s own: nothing held, nothing said', () => {
+    const f = yourFrame();
+    expect(f.run(`self.dispatchEvent(new CustomEvent('chord:print-asked', { cancelable: true }))`)).toBe(true);
+    expect(f.run(`self.dispatchEvent(new CustomEvent('${printEvent('fedcba9876543210fedcba9876543210')}', { cancelable: true }))`)).toBe(true);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('another frame’s execCommand, called on this frame’s document: asks this frame’s hold (the document’s window), held and said (Neon’s B1 on #346)', () => {
+    // The other frame: one the lease never reached, or one removed (its hold's world gone): no hold of its own.
+    const gone = yourFrame({ hold: 'none' });
+    const top = yourFrame();
+    const exec = gone.run('self.Document.prototype.execCommand') as (this: unknown, name: string) => unknown;
+    expect(exec.call(top.run('doc'), 'print')).toBe(false);
+    expect(top.calls).toEqual(['said print', 'beforeprint', 'afterprint']);
+    expect(gone.calls).toEqual([]);
+  });
+
+  it('a document with no window: execCommand of print held (nothing to ask), never run', () => {
+    const f = yourFrame();
+    f.run('doc.view = null;');
+    expect(f.run(`doc.execCommand('print')`)).toBe(false);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('only a token main made is baked in', () => {
+    expect(() => printAsks('x"; alert(1); "')).toThrow();
+    expect(() => printHold('NOT-HEX')).toThrow();
   });
 });
