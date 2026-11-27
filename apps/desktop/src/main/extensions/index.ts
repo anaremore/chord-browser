@@ -855,7 +855,10 @@ export class Extensions {
         // From its own folder if it's on disk (where case counts, each twin has its own), else from the keeper's (where
         // case is ignored, the same folder): Neon's SF1 on #334.
         const from = existsSync(join(e.path, 'manifest.json')) ? e.path : keeper.path;
+        // Before any extension loads, once per twin and launch: how long it took, for a launch that's slow (Opus's nit).
+        const started = Date.now();
         await cp(from, to, { recursive: true, errorOnExist: true, force: false });
+        console.info(`Gave ${e.name} (${e.id}) in ${e.profileId} a folder of its own (#319): ${Date.now() - started} ms`);
         this.deps.dispatch({ t: 'extension.record', extension: { ...e, path: to } });
       } catch (error) {
         await this.removeFolder(to);
@@ -866,8 +869,13 @@ export class Extensions {
 
   /** Web Store folders no installed extension uses (removed last session, or left by an update): deleted at launch. */
   private async removeOrphanFolders(): Promise<void> {
-    // Compared without case: a folder Electron or the file system spells otherwise is still the one in use (#319).
-    const used = new Set(Object.values(this.deps.state().extensions).map((e) => resolve(e.path).toLowerCase()));
+    // A folder is in use when a record names its profile, id and version folders (the last three parts of its path),
+    // compared without case (#319): so a record that spells the root otherwise (User Data moved or restored elsewhere,
+    // or reached through a junction or a symlink) still keeps its folder (Opus's round 1 on #334). Removed ones whose
+    // Undo is open keep theirs too.
+    const lastThree = (path: string) => resolve(path).split(/[\\/]/).slice(-3).join('/').toLowerCase();
+    const state = this.deps.state();
+    const used = new Set([...Object.values(state.extensions), ...(state.removedExtensions ?? [])].map((e) => lastThree(e.path)));
     const dirs = async (dir: string) => {
       try {
         return (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => join(dir, d.name));
@@ -877,7 +885,7 @@ export class Extensions {
     };
     for (const profileDir of await dirs(this.deps.root)) {
       for (const idDir of await dirs(profileDir)) {
-        for (const versionDir of await dirs(idDir)) if (!used.has(resolve(versionDir).toLowerCase())) await this.removeFolder(versionDir);
+        for (const versionDir of await dirs(idDir)) if (!used.has(lastThree(versionDir))) await this.removeFolder(versionDir);
         if ((await readdir(idDir).catch(() => ['?'])).length === 0) await this.removeFolder(idDir);
       }
     }

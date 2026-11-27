@@ -6,7 +6,7 @@
  */
 import type { Command, InstalledExtension, State } from '@chord/core';
 import type * as FsPromises from 'node:fs/promises';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,22 @@ vi.mock('node:fs/promises', async (original) => {
       await real.mkdir(to, { recursive: true });
       await real.writeFile(`${to}/half`, 'x');
       throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    },
+  };
+});
+
+/** The installer's worker, stood in for: it writes the extension where it's told, or (`unpack.fail`) fails part-way. */
+const unpack = vi.hoisted(() => ({ fail: false, dests: [] as string[] }));
+vi.mock('../../src/main/extensions/unpack', async () => {
+  const fs = await import('node:fs');
+  return {
+    WORKER_STOPPED: 'stopped',
+    unpackInWorker: async (_worker: string, job: { dest: string; version: string }) => {
+      unpack.dests.push(job.dest);
+      fs.mkdirSync(job.dest, { recursive: true });
+      if (unpack.fail) throw new Error('the package is damaged');
+      fs.writeFileSync(`${job.dest}/manifest.json`, JSON.stringify({ manifest_version: 3, name: 'Fixture', version: job.version }));
+      return 1;
     },
   };
 });
@@ -60,6 +76,8 @@ const B = 'b'.repeat(32);
 let root: string;
 let state: State;
 beforeEach(() => {
+  unpack.fail = false;
+  unpack.dests.length = 0;
   loads.length = 0;
   fail.cp = false;
   root = mkdtempSync(join(tmpdir(), 'chord-ext-folders-'));
@@ -98,7 +116,8 @@ function extensions() {
     root,
     preloadPath: 'unused',
     unpackWorkerPath: 'unused',
-    webStore: { check: async () => [], download: async () => Buffer.alloc(0) } as never,
+    // One extension in the store, version 1.0: what install() fetches.
+    webStore: { check: async (ids: { id: string }[]) => ids.map((i) => ({ id: i.id, status: 'ok', version: '1.0', codebase: 'https://store.test/x.crx', sha256: null })), download: async () => Buffer.alloc(0) } as never,
     windows: () => [],
     windowById: () => undefined,
     lastWindow: () => undefined,
@@ -233,6 +252,51 @@ describe('#334 round 1 (Neon)', () => {
     const ext = extensions();
     const taken = (ext as unknown as { usedBy(p: string): unknown }).usedBy(at);
     expect(taken).not.toBeNull();
+  });
+
+  it('Opus 1: `work` installing what its twin `Work` has (record and folder at Work/A/1.0_0): it lands in a folder of its own', async () => {
+    const twin = join(root, 'Work', A, '1.0_0');
+    unpacked(twin, 'Work’s');
+    record('Work', A, twin);
+    const result = await extensions().install('work', A);
+    expect(result).toMatchObject({ ok: true });
+    const theirs = state.extensions[`work:${A}`]!.path;
+    expect(theirs.toLowerCase()).not.toBe(twin.toLowerCase());
+    expect(JSON.parse(readFileSync(join(twin, 'manifest.json'), 'utf8')).name).toBe('Work’s');
+  });
+
+  it('Opus 1: that install failing part-way: the twin’s folder survives, whole', async () => {
+    const twin = join(root, 'Work', A, '1.0_0');
+    unpacked(twin, 'Work’s');
+    record('Work', A, twin);
+    unpack.fail = true;
+    const result = await extensions().install('work', A);
+    expect(result).toMatchObject({ ok: false });
+    expect(unpack.dests.map((d) => d.toLowerCase())).not.toContain(twin.toLowerCase());
+    expect(JSON.parse(readFileSync(join(twin, 'manifest.json'), 'utf8')).name).toBe('Work’s');
+  });
+
+  it('Opus 2: a record that spells the root otherwise (User Data moved, or restored on another computer): its folder survives launch', async () => {
+    unpacked(join(root, 'Work', A, '1.0_0'));
+    // The record as the old computer wrote it: the same profile, id and version, under a root that isn't this one.
+    record('Work', A, join(root, '..', 'elsewhere', 'User Data', 'Extensions', 'Work', A, '1.0_0'));
+    await launch();
+    expect(existsSync(join(root, 'Work', A, '1.0_0', 'manifest.json'))).toBe(true);
+  });
+
+  it('Opus 2: a record spelling the root through a junction (or a symlink): its folder survives launch; one no record names still goes', async () => {
+    unpacked(join(root, 'Work', A, '1.0_0'));
+    unpacked(join(root, 'Work', B, '1.0_0'));
+    const link = `${root}-link`;
+    symlinkSync(root, link, 'junction');
+    try {
+      record('Work', A, join(link, 'Work', A, '1.0_0'));
+      await launch();
+      expect(existsSync(join(root, 'Work', A, '1.0_0', 'manifest.json'))).toBe(true);
+      expect(existsSync(join(root, 'Work', B, '1.0_0'))).toBe(false);
+    } finally {
+      rmSync(link, { force: true, recursive: false });
+    }
   });
 });
 
