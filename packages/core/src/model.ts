@@ -39,8 +39,9 @@ export const isId = (v: unknown): v is string => typeof v === 'string' && /^[A-Z
  * `_` → `__`, an upper-case letter → `_` and its lower case. Electron keeps `persist:<name>` in a folder named in lower
  * case on every platform, so `Work` and `work` would otherwise share one. An id with neither (all of Chord's own:
  * uuidv7 and `default`) is unchanged. migrations.ts' 25 spells the same in SQL; a test holds them to each other.
+ * Extensions' folders are named the same way (#319).
  */
-const partitionName = (profileId: ProfileId): string => profileId.replace(/[A-Z_]/g, (c) => (c === '_' ? '__' : `_${c.toLowerCase()}`));
+export const profileFolderName = (profileId: ProfileId): string => profileId.replace(/[A-Z_]/g, (c) => (c === '_' ? '__' : `_${c.toLowerCase()}`));
 
 /**
  * The Electron session partition that holds a profile's cookies, storage and
@@ -48,7 +49,7 @@ const partitionName = (profileId: ProfileId): string => profileId.replace(/[A-Z_
  * memory only.
  */
 export const profilePartition = (profileId: ProfileId): string =>
-  profileId === DEFAULT_PROFILE ? 'persist:default' : isPrivateProfile(profileId) ? `chord-${profileId}` : `persist:p-${partitionName(profileId)}`;
+  profileId === DEFAULT_PROFILE ? 'persist:default' : isPrivateProfile(profileId) ? `chord-${profileId}` : `persist:p-${profileFolderName(profileId)}`;
 
 export interface Oklch {
   l: number;

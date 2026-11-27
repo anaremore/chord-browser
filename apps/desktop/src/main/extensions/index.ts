@@ -8,6 +8,7 @@ import {
   activeTabId,
   extensionKey,
   isPrivateProfile,
+  profileFolderName,
   tabsInOrder,
   openedTab,
   nodeOf,
@@ -21,8 +22,8 @@ import {
 import type { ExtensionAction, ExtensionInfo, ExtensionsBarState, InstallResult, Rect, Toast } from '@chord/ipc';
 import { BaseWindow, BrowserWindow, Menu, nativeImage, type ContextMenuParams, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
 import { existsSync, readFileSync } from 'node:fs';
-import { readdir, rm } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { cp, readdir, rm } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { send } from '../ipc';
 import type { AppWindow } from '../window';
 import { extensionIdFrom } from './crx';
@@ -120,6 +121,32 @@ function manifestIcon(dir: string, manifest: ManifestShape, px: number): string 
   if (!file.startsWith(resolve(dir) + sep)) return null;
   const image = nativeImage.createFromPath(file);
   return image.isEmpty() ? null : image.resize({ width: px, height: px, quality: 'best' }).toDataURL();
+}
+
+/** Two paths to one folder, on a file system that ignores case (Windows, macOS, some Linux mounts) or not (#319). */
+const samePath = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase();
+
+/**
+ * An extension's version folder by its last three parts (profile, id and version folders, without case): the one key
+ * for "the same folder" wherever a record could spell its root otherwise (User Data moved or restored elsewhere, a
+ * junction, a symlink). Two records with one key are treated as one folder: only ever more cautious (#334).
+ */
+const folderKey = (path: string): string => resolve(path).split(/[\\/]/).slice(-3).join('/').toLowerCase();
+const sameFolder = (a: string, b: string): boolean => samePath(a, b) || folderKey(a) === folderKey(b);
+
+/**
+ * Where an install of `id` at `version` unpacks: `<root>/<profile>/<id>/<version>_<n>`, the profile's folder named
+ * one-to-one (core's profileFolderName: `Work` → `_work`, so `Work` and `work` never share one; Chord's own ids as
+ * they always were), and `n` the first that's neither on disk nor `taken` (another extension's, a twin's or an old
+ * one): an install never writes into, or on failure removes, a folder something else uses (#319).
+ */
+export function extensionFolder(root: string, profileId: string, id: string, version: string, taken: (path: string) => boolean): string {
+  const base = join(root, profileFolderName(profileId), id);
+  const clean = version.replace(/[^\d.]/g, '');
+  for (let n = 0; ; n++) {
+    const path = join(base, `${clean}_${n}`);
+    if (!existsSync(path) && !taken(path)) return path;
+  }
 }
 
 export class Extensions {
@@ -483,6 +510,24 @@ export class Extensions {
    * start checking for updates.
    */
   async start(devFolders: readonly string[] = []): Promise<void> {
+    // Launch loads everything itself, once: a store change meanwhile (the split moving a record) never has reconcile()
+    // load from a folder that's about to change, or a second time (Neon's B1 on #334).
+    this.starting = true;
+    try {
+      await this.startLoading(devFolders);
+    } finally {
+      this.starting = false;
+    }
+    for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
+    this.deps.changed();
+    this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
+    this.updateTimer.unref?.();
+  }
+
+  /** Launch's part that nothing else may load during: the split, the cleanup's start, and every extension's load. */
+  private async startLoading(devFolders: readonly string[]): Promise<void> {
+    // Profiles whose ids differ only in case sharing one folder (before #319): each gets its own, before anything loads.
+    await this.splitShared();
     // Off the launch path; installs and updates wait for it, so it never sees a folder they're writing.
     this.cleanup = this.removeOrphanFolders().catch((error: unknown) => console.error('Cleaning up old extension folders failed:', error));
     const installed = Object.values(this.deps.state().extensions);
@@ -506,11 +551,10 @@ export class Extensions {
         console.error(`CHORD_LOAD_EXTENSION: ${folder} didn't load:`, error);
       }
     }
-    for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
-    this.deps.changed();
-    this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
-    this.updateTimer.unref?.();
   }
+
+  /** While launch loads everything (start): reconcile waits for it, never loading the same extension beside it. */
+  private starting = false;
 
   private scheduleUpdates(): void {
     clearTimeout(this.updateTimer);
@@ -611,12 +655,15 @@ export class Extensions {
   }
 
   /**
-   * Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_0, keeping the store's ID.
+   * Verify a downloaded package and unpack it to <root>/<profile>/<id>/<version>_<n> (extensionFolder), keeping the
+   * store's ID.
    * All of it (signatures, inflating, writing, the manifest's key) happens in a worker thread, never on main.
    */
   private async unpackFromStore(profileId: string, id: string, version: string, crx: Buffer, sha256: string | null): Promise<string> {
     await this.cleanup;
-    const path = join(this.deps.root, profileId, id, `${version.replace(/[^\d.]/g, '')}_0`);
+    // Another unpack under way (a twin's install, at once) counts as taken too: never the same folder (Neon's N1 on #334).
+    const path = extensionFolder(this.deps.root, profileId, id, version, (p) => this.usedBy(p) !== null || [...this.unpacking].some((u) => samePath(u, p)));
+    this.unpacking.add(path);
     try {
       await unpackInWorker(this.deps.unpackWorkerPath, {
         crx,
@@ -630,9 +677,14 @@ export class Extensions {
       // The worker removes what it wrote; if it died partway, this does.
       await this.removeFolder(path);
       throw error;
+    } finally {
+      this.unpacking.delete(path);
     }
     return path;
   }
+
+  /** Folders an unpack is writing now. */
+  private readonly unpacking = new Set<string>();
 
   /**
    * The install step Electron skips: turn on the rulesets the manifest
@@ -746,7 +798,8 @@ export class Extensions {
     }
     const record: InstalledExtension = { ...e, version, path, updatedAt: Date.now() };
     this.deps.dispatch({ t: 'extension.record', extension: record });
-    if (e.path !== path) await this.removeFolder(e.path);
+    // The old version's folder, unless another extension uses it too (a twin's, #319).
+    if (!samePath(e.path, path) && this.usedBy(e.path, extensionKey(e.profileId, e.id)) === null) await this.removeFolder(e.path);
     await this.finishInstall(record);
     return true;
   }
@@ -776,6 +829,8 @@ export class Extensions {
    * installed again (Undo) loads. One that won't load isn't retried.
    */
   reconcile(): void {
+    // Launch is loading everything from where it ends up: it loads each once (Neon's B1 on #334).
+    if (this.starting) return;
     for (const e of Object.values(this.deps.state().extensions)) {
       const key = extensionKey(e.profileId, e.id);
       if (this.unloadable.has(key) || this.loading.has(key) || this.installing.has(key) || this.updating.has(key)) continue;
@@ -796,9 +851,53 @@ export class Extensions {
     }
   }
 
+  /** The installed extension whose folder `path` is (compared without case, #319), other than `except`'s; null if none. */
+  private usedBy(path: string, except?: string): InstalledExtension | null {
+    const state = this.deps.state();
+    // One removed but still to Undo counts too: its folder is what Undo loads (Neon's SF3 on #334).
+    for (const e of [...Object.values(state.extensions), ...(state.removedExtensions ?? [])]) if (extensionKey(e.profileId, e.id) !== except && sameFolder(e.path, path)) return e;
+    return null;
+  }
+
+  /**
+   * Store extensions sharing one version folder (the same extension and version in two profiles whose ids differ only
+   * in case, installed before #319): the first keeps it, each other gets a copy of its own and its record moves there.
+   * A copy that fails leaves it shared, as before; nothing removes a folder another extension uses, so it stays safe.
+   */
+  private async splitShared(): Promise<void> {
+    const seen: InstalledExtension[] = [];
+    for (const e of Object.values(this.deps.state().extensions).sort((a, b) => (extensionKey(a.profileId, a.id) < extensionKey(b.profileId, b.id) ? -1 : 1))) {
+      // The same folder however its record spells the root (a junction, a moved User Data): Neon and Opus, round 2.
+      const keeper = e.source === 'store' ? seen.find((s) => sameFolder(s.path, e.path)) : undefined;
+      if (!keeper) {
+        seen.push(e);
+        continue;
+      }
+      const to = extensionFolder(this.deps.root, e.profileId, e.id, e.version, (p) => this.usedBy(p) !== null);
+      try {
+        // From its own folder if it's on disk (where case counts, each twin has its own), else from the keeper's (where
+        // case is ignored, the same folder): Neon's SF1 on #334.
+        const from = existsSync(join(e.path, 'manifest.json')) ? e.path : keeper.path;
+        // Before any extension loads, once per twin and launch: how long it took, for a launch that's slow (Opus's nit).
+        const started = Date.now();
+        await cp(from, to, { recursive: true, errorOnExist: true, force: false });
+        console.info(`Gave ${e.name} (${e.id}) in ${e.profileId} a folder of its own (#319): ${Date.now() - started} ms`);
+        this.deps.dispatch({ t: 'extension.record', extension: { ...e, path: to } });
+      } catch (error) {
+        await this.removeFolder(to);
+        console.error(`Giving ${e.name} (${e.id}) its own folder failed; it shares one this launch:`, error);
+      }
+    }
+  }
+
   /** Web Store folders no installed extension uses (removed last session, or left by an update): deleted at launch. */
   private async removeOrphanFolders(): Promise<void> {
-    const used = new Set(Object.values(this.deps.state().extensions).map((e) => resolve(e.path)));
+    // A folder is in use when a record names its profile, id and version folders (the last three parts of its path),
+    // compared without case (#319): so a record that spells the root otherwise (User Data moved or restored elsewhere,
+    // or reached through a junction or a symlink) still keeps its folder (Opus's round 1 on #334). Removed ones whose
+    // Undo is open keep theirs too.
+    const state = this.deps.state();
+    const used = new Set([...Object.values(state.extensions), ...(state.removedExtensions ?? [])].map((e) => folderKey(e.path)));
     const dirs = async (dir: string) => {
       try {
         return (await readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => join(dir, d.name));
@@ -808,7 +907,7 @@ export class Extensions {
     };
     for (const profileDir of await dirs(this.deps.root)) {
       for (const idDir of await dirs(profileDir)) {
-        for (const versionDir of await dirs(idDir)) if (!used.has(resolve(versionDir))) await this.removeFolder(versionDir);
+        for (const versionDir of await dirs(idDir)) if (!used.has(folderKey(versionDir))) await this.removeFolder(versionDir);
         if ((await readdir(idDir).catch(() => ['?'])).length === 0) await this.removeFolder(idDir);
       }
     }
@@ -821,7 +920,8 @@ export class Extensions {
    */
   private async removeFolder(path: string): Promise<void> {
     const rel = relative(resolve(this.deps.root), resolve(path));
-    if (!rel || rel.startsWith('..') || resolve(path) === resolve(this.deps.root)) return;
+    // Never outside Chord's extensions folder: nor on another drive (Windows gives an absolute `relative`: Neon's N3).
+    if (!rel || rel.startsWith('..') || isAbsolute(rel) || resolve(path) === resolve(this.deps.root)) return;
     await rm(path, { recursive: true, force: true, maxRetries: 3 }).catch((error: unknown) => console.error(`Removing ${path} failed:`, error));
   }
 }
