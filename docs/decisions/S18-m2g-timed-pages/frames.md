@@ -1,6 +1,6 @@
 # Acting inside same-site frames (#210): design and threat checklist
 
-Part of #209. **Status: PR 1 (read only) is #320, in review (rounds 1 and 2 folded in).** Argon cleared the design (2026-11-26) after its round-1 blockers; their changes are in *Argon's review: what changed*, and folded into the sections they touch. PRs 2 and 3 (click and hover; text, keys and choices) follow.
+Part of #209. **Status: PR 1 (read only) shipped in #320. PR 2 (click and hover) is #347, in review; Argon's design pass on it is folded in (*PR 2: Argon's design pass*, below). PR 3 (text, keys and choices) follows.** Argon cleared the design (2026-11-26) after its round-1 blockers; their changes are in *Argon's review: what changed*, and folded into the sections they touch.
 
 ## Outcome and Done when (#210)
 
@@ -218,6 +218,25 @@ With a frame mutating every millisecond, `wait_for`'s watching kept the page at 
 - **A top hidden at its root** (`hidden`, `inert`, or CSS on its `html` or `body`) reads empty, with the note that it may still be loading; the agent calls again.
 - **A body hidden by `visibility: hidden`** with a child set back to `visibility: visible` is still unread: the document is treated as hidden, the safe side.
 - **PR 2 owes** the row check for a frame ref (#273's `rowChanged` and `rowEmpty`, within the frame's own document: `act.ts` answers *not yet* before it today), and the chain check in `deep.ts` (its hit test and its look: `openDeep`, `CHECK_FN`, `open()`) and the `tools-act` refusal of a frame ref under a lease (the snapshot already gives none).
+
+## PR 2: Argon's design pass (#347, 2026-11-27)
+
+Click and hover act on a frame ref; text, keys and choices stay *not yet* (PR 3). What the pass changed:
+- **B1:** the act's first look answers `inFrame`, and `tools-act` refuses right after it, before any site or step card, for what PR 2 doesn't do (type, press_key, select_option) and for any frame ref in a tab of yours (B3, F8). `act.ts` still refuses focus, focused, select, choose, setValue and values in a frame.
+- **B2:** the pointer's moves are watched on the element's own window (a frame's never reach the top's, and its coordinates are its own). `hit` asks again, after the move's handlers have run, whether anything is bent and whether the point is still the element's through the live chain. The off-and-back nudge for a second click stays inside the frame's visible box.
+- **B3:** `deep.ts`' check climbs a hit out of other documents through each frame's element (a decoy frame says *frame "Decoy"*). A hit in a frame that can't be resolved into Chord's world (another site's, a sandboxed one) is named by its frame's element, out to the nearest that resolves: *covered*, never *couldn't check*. `hit` gives the top window's scroll.
+- **B4:** `riskOf` reads addresses against the element's own document's base, and a form through its own window's prototypes.
+- **B5:** a replaced node in a frame is looked for again in the frame's own document.
+- **SF1:** an action's settle waits for any frame's navigation it started (the main frame's alone counts as navigated), and watches the readable frames of the page's own origin.
+- **SF2:** each frame's viewport without its classic scrollbars, and its content box; the hit test top-down through each level, open shadow roots pierced; bent means a `transform`, `scale`, `rotate`, `translate`, `perspective`, `offset-path` or a zoom anywhere from the element up, through each frame and its ancestors.
+- **SF3:** each frame on a chain records its name, items, unnamed row, place among its ancestors (`refPath`) and index among its sibling frames; any of them changed is *changed*.
+- **Nits:** the deep session needs its ref, not its node (a node replaced since answers *replaced*, for the retry); an editor frame's ref has `row: ''`.
+
+**Limits (PR 2):**
+- **A right-to-left frame with a classic scrollbar on its left:** the frame's offsets don't include it; if the shift is wider than the element, both hit tests fail closed (*covered*).
+- **A vertical writing mode** on a frame's root: coordinates stay the viewport's; scrolling may differ.
+- **SVG filter displacement** moves pixels, not boxes: both hit tests agree on the layout box.
+- **B4's base and realm** have no test that tells them apart from the top's: a frame of the page's own origin resolves a form's action the same either way in every fixture tried.
 
 ## Spikes (run 2026-11-26, Linux container, an agent's tab; a throwaway spec, not committed)
 

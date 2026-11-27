@@ -29,6 +29,7 @@ import { ACT_SETTLE_MS, ACT_SETTLE_QUIET_MS, SNAPSHOT_SCAN, type SnapshotField }
 import type { WebContents } from 'electron';
 import { pageCall } from '../page-call';
 import { ASSISTANT_WORLD } from './extract';
+import { FRAME_CHAIN_FN } from './frame-chain';
 import { SNAPSHOT_LIB, SNAPSHOT_FIND } from './snapshot';
 
 /** How long a step in the page may take: a busy page answers within it. */
@@ -72,8 +73,8 @@ interface ActRisk {
 }
 
 export type ActAnswer =
-  | { ok: true; role: string; name: string; items?: string; row?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean }
-  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'row' | 'row-empty' | 'in-frame' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
+  | { ok: true; role: string; name: string; items?: string; row?: string; path?: string; x?: number; y?: number; editable?: boolean; select?: boolean; disabled?: boolean; choice?: string; field?: SnapshotField; focused?: boolean; scrollX?: number; scrollY?: number; risk?: ActRisk; changed?: boolean; has?: boolean; others?: number; refound?: boolean; inFrame?: boolean; off?: { x: number; y: number } }
+  | { ok: false; there?: boolean; why: 'stale' | 'changed' | 'ambiguous' | 'row' | 'row-empty' | 'in-frame' | 'transformed' | 'covered' | 'no-move' | 'file' | 'bad-value' | 'no-values' | 'no-choice' | 'two-choices' | 'not-select' | 'no-answer' | 'replaced'; cover?: { role: string; name: string } };
 
 /** How long `hit` waits for the page to see the pointer's move (it's sent with the page's next frame). */
 const HIT_WAIT_MS = 250;
@@ -89,31 +90,28 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   return String.raw`(async (args) => {
   ${SNAPSHOT_LIB}
   ${SNAPSHOT_FIND}
+  ${FRAME_CHAIN_FN}
   const read = snapshotFind(args.owner, args.token);
   if (!read) return { ok: false, why: 'stale' };
   // Its refs' items, place and shape, if the snapshot's own task hasn't taken them yet (snapshot.ts).
   if (read.finish) read.finish();
   const entry = read.keep[args.key];
   let el = entry && entry.ref.deref();
-  // A ref inside a same-origin frame (#210, read only for now): its frames first, each still where it was, holding the
-  // document it held (B5: never one gone, gone elsewhere, or moved into another document), and the element in the last
-  // of them; then not yet.
-  if (entry && entry.frames) {
-    let doc = document;
-    for (const f of entry.frames.chain) {
-      const frame = f.frame.deref();
-      const held = f.doc.deref();
-      if (!frame || !held || !frame.isConnected || frame.ownerDocument !== doc || frame.contentDocument !== held) return { ok: false, why: 'stale' };
-      // The same frame as the snapshot named it, in the same items (#320's SF3: retitled, or moved with moveBefore).
-      if (nameOf(frame, 'iframe') !== f.name || itemsOf(frame) !== f.items) return { ok: false, why: 'changed' };
-      doc = held;
-    }
-    if (!el || !el.isConnected) return { ok: false, why: 'changed' };
-    if (el.ownerDocument !== doc) return { ok: false, why: 'stale' };
-    return { ok: false, why: 'in-frame' };
+  // A ref inside a same-origin frame (#210): its frames first, each still the one the snapshot found, holding the
+  // document it held (B5, SF3: frame-chain.ts), and the element in the last of them: its own document from here on.
+  // A replaced element is looked for again there (below), so the chain is checked without it then.
+  const inFrame = Boolean(entry && entry.frames);
+  let doc = document;
+  if (inFrame) {
+    const chained = frameChain(entry.frames.chain, el && el.isConnected ? el : undefined, document, { nameOf, itemsOf, rowOf, pathOf: refPath, placeOf: framePlace });
+    if (!chained.ok) return chained;
+    doc = chained.doc;
+    // Click and hover act in a frame (#347); text, keys and choices not yet (PR 3: one guard in every frame, B8).
+    if (['focus', 'focused', 'select', 'choose', 'setValue', 'values'].includes(args.op)) return { ok: false, why: 'in-frame' };
+  } else if (el && el.isConnected && el.ownerDocument !== document) {
+    // A top element moved (adopted) into a frame's document (#210's B5): another element now.
+    return { ok: false, why: 'changed' };
   }
-  // A top element moved (adopted) into a frame's document (#210's B5): another element now.
-  if (el && el.isConnected && el.ownerDocument !== document) return { ok: false, why: 'changed' };
   // A node the page replaced (a table that redraws, the owner's bug #2): looked for again, once, in this document, by
   // its role, name, place and shape (snapshot.ts' refPath and refShape), shown. Exactly one: the ref is it from now on,
   // and every check below is on it. None, or more than one (two named alike in one place: bug #5), or past the budget:
@@ -157,7 +155,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
         visit(c, shadows);
       }
     };
-    visit(document.body || document.documentElement, 0);
+    // In the element's own document: a frame's, for a ref in one (#347, Argon's B5), never the top's.
+    visit(doc.body || doc.documentElement, 0);
     // Twins in the snapshot (#211): never acted on. Any of them still here: which one can't be told; none: changed.
     if (entry.twins) return { ok: false, why: found.length ? 'ambiguous' : rowOnly ? 'row' : 'changed' };
     // Found nowhere but in a row that says something else now: that, with its way out (never just changed).
@@ -191,13 +190,15 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   const select = el.localName === 'select';
   // A field as it is now, for main's sensitiveField: a page can turn a field into a password field after the snapshot.
   // Its items and place too (Neon's round 1 of M2g-1, B-2): part of the step a card asks about and a late Allow covers.
-  const said = { role: entry.role, name: entry.name, items: itemsOf(el), row: rowOf(el), path: refPath(el), ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}) };
+  const said = { role: entry.role, name: entry.name, items: itemsOf(el), row: rowOf(el), path: refPath(el), ...(refound ? { refound: true } : {}), ...(isField(el) || TYPED.has(role) ? { field: fieldOf(el) } : {}), ...(inFrame ? { inFrame: true } : {}) };
   // What has the focus now, through open shadow roots: text and keys go to it, so it must be this element.
   const deepFocus = () => {
     let f = document.activeElement;
     while (f && f.shadowRoot && f.shadowRoot.activeElement) f = f.shadowRoot.activeElement;
     return f;
   };
+  // An element's own window (a frame's: Argon's B4; frames.md's N1), the top's when its document has none.
+  function winOf(n) { return (n && n.ownerDocument && n.ownerDocument.defaultView) || window; }
   // A choice by the page's own label, whole (clipped only to show it): matched before anything is asked, so only the
   // page's words are ever shown. Never a disabled one (itself or its group) nor a hidden one; two with the label, none.
   const norm = (text) => String(text).replace(/\s+/g, ' ').trim();
@@ -215,6 +216,8 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
   // (each described as the snapshot describes a field: never a value). Only the page's structure: its words for a
   // button are the snapshot's name, already checked above.
   const riskOf = () => {
+    // Addresses as the element's own document reads them (a frame's base: Argon's B4), never the top's.
+    const base = (el.ownerDocument && el.ownerDocument.baseURI) || location.href;
     // What a click on it acts on (#112 review 1): a label's control (a label for a submit button submits), else a
     // submit button or link it's inside (a span in a link goes where the link does), else itself.
     // (closestDeep and actTarget: snapshot.ts' SNAPSHOT_LIB, shared with the ref's shape.)
@@ -229,7 +232,7 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     // An address's words; null when it can't be read (too long, not decodable): unknown, so it asks.
     const addressOf = (url) => {
       try {
-        const u = new URL(url, location.href);
+        const u = new URL(url, base);
         if (u.href.length > 2048) return null;
         return clip(decodeURIComponent(u.pathname + ' ' + u.search), 2048);
       } catch {
@@ -246,8 +249,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     const linkWords = link ? addressOf(link.getAttribute('href')) : '';
     const multiline = target.localName === 'textarea' || (el.isContentEditable && el.localName !== 'input');
     let form = null;
-    // A form's own properties, never what a field named action, method or elements puts in their place (clobbering).
-    const formGet = (f, prop) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(f);
+    // A form's own properties, never what a field named action, method or elements puts in their place (clobbering):
+    // its own window's (a frame's form: Argon's B4).
+    const formGet = (f, prop) => Object.getOwnPropertyDescriptor(winOf(f).HTMLFormElement.prototype, prop).get.call(f);
     if (formOf) {
       const SKIPPED = new Set(['submit', 'button', 'reset', 'image', 'file']);
       const TEXTY = new Set(['text', 'email', 'search', 'url', 'tel', 'number', 'password', '']);
@@ -271,11 +275,11 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
       // address is no search).
       const own = submits && target.hasAttribute('formaction') ? target.formAction : '';
       const method = submits && target.hasAttribute('formmethod') && target.formMethod ? target.formMethod : formGet(formOf, 'method') || 'get';
-      const url = own || formGet(formOf, 'action') || location.href;
+      const url = own || formGet(formOf, 'action') || base;
       const action = addressOf(url);
       form = {
         method: String(method).toLowerCase(),
-        search: Boolean(Element.prototype.closest.call(formOf, '[role=search]')),
+        search: Boolean(winOf(formOf).Element.prototype.closest.call(formOf, '[role=search]')),
         searchFields,
         hidden,
         // A form described only in part, or whose address can't be read, is never a search.
@@ -377,8 +381,9 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     for (let n = hit; n; n = n.parentNode || n.host) if (n === el) return true;
     return false;
   };
-  const deepest = (x, y) => {
-    let hit = document.elementFromPoint(x, y);
+  // What's at a point of a document, through its open shadow roots.
+  const deepestIn = (d, x, y) => {
+    let hit = d.elementFromPoint(x, y);
     while (hit && hit.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); if (!inner || inner === hit) break; hit = inner; }
     return hit;
   };
@@ -394,25 +399,86 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     }
     return { role: cover ? cover.localName : 'element', name: '' };
   };
+  // The frames it's in, outermost first (none at the top).
+  const chainFrames = inFrame ? entry.frames.chain.map((f) => f.frame.deref()) : [];
+  // Bent (#347, B7; Argon's SF2): a transform or a zoom on the element, a frame on its chain, or any of their ancestors
+  // (through shadow hosts) moves where it's drawn from where the frames' boxes say: where the pointer lands can't be
+  // told, so it isn't placed. Neither is inherited, so each is asked of every ancestor.
+  const bentFrom = (n0) => {
+    for (let n = n0; n && n.nodeType === 1; n = n.parentElement || (n.parentNode && n.parentNode.host) || null) {
+      if (typeof n.currentCSSZoom === 'number' && n.currentCSSZoom !== 1) return true;
+      const cs = winOf(n).getComputedStyle(n);
+      if (cs.transform !== 'none' || (cs.scale && cs.scale !== 'none') || (cs.rotate && cs.rotate !== 'none') || (cs.translate && cs.translate !== 'none')) return true;
+      if (cs.perspective !== 'none' || (cs.offsetPath && cs.offsetPath !== 'none') || (cs.zoom && cs.zoom !== '1' && cs.zoom !== 'normal')) return true;
+    }
+    return false;
+  };
+  const bent = () => inFrame && (bentFrom(el) || chainFrames.some((f) => !f || bentFrom(f)));
+  // Each frame on the chain, as it is now: where its content box starts in its parent's viewport (border and padding
+  // in), and how much of its own viewport shows (its classic scrollbars out, and its content box: Argon's SF2).
+  const boxes = () =>
+    chainFrames.map((f) => {
+      const r = f.getBoundingClientRect();
+      const cs = winOf(f).getComputedStyle(f);
+      const pl = parseFloat(cs.paddingLeft) || 0, pt = parseFloat(cs.paddingTop) || 0, pr = parseFloat(cs.paddingRight) || 0, pb = parseFloat(cs.paddingBottom) || 0;
+      const inner = f.contentDocument, iw = inner.defaultView, de = inner.documentElement;
+      const vw = de && de.clientWidth ? Math.min(iw.innerWidth, de.clientWidth) : iw.innerWidth;
+      const vh = de && de.clientHeight ? Math.min(iw.innerHeight, de.clientHeight) : iw.innerHeight;
+      return { ox: r.left + f.clientLeft + pl, oy: r.top + f.clientTop + pt, w: Math.min(vw, Math.max(0, f.clientWidth - pl - pr)), h: Math.min(vh, Math.max(0, f.clientHeight - pt - pb)) };
+    });
+  // A rect in the element's own viewport, as much of it as shows, in the top's viewport: clipped to each frame's
+  // viewport as it's translated out (B7), then to the top's.
+  const outOf = (rect, bs) => {
+    let { left, top, right, bottom } = rect;
+    for (let i = bs.length - 1; i >= 0; i--) {
+      const b = bs[i];
+      left = Math.max(left, 0) + b.ox; top = Math.max(top, 0) + b.oy; right = Math.min(right, b.w) + b.ox; bottom = Math.min(bottom, b.h) + b.oy;
+    }
+    return { left: Math.max(left, 0), top: Math.max(top, 0), right: Math.min(right, innerWidth), bottom: Math.min(bottom, innerHeight) };
+  };
+  // A top point in the element's own viewport.
+  const localOf = (x, y, bs) => {
+    for (const b of bs) { x -= b.ox; y -= b.oy; }
+    return { x, y };
+  };
+  // The point's hit test, top-down (B7): each frame on the chain at its level, then the element in its own document.
+  const hitAt = (x, y, bs) => {
+    let px = x, py = y, d = document;
+    for (let i = 0; i < chainFrames.length; i++) {
+      const h = deepestIn(d, px, py);
+      if (h !== chainFrames[i]) return { cover: h };
+      px -= bs[i].ox; py -= bs[i].oy;
+      d = chainFrames[i].contentDocument;
+    }
+    const h = deepestIn(d, px, py);
+    return ours(h) ? { ok: true } : { cover: h };
+  };
+  // Where the pointer was last seen in each window, before an action's move (kept by a listener that stays once an
+  // agent acts there); and the window whose moves this action watches: the element's own (Argon's B2: a frame's moves
+  // never reach the top's window, and its clientX and clientY are its own).
+  const win = winOf(el);
+  const pointers = globalThis.__chordPointers || (globalThis.__chordPointers = new WeakMap());
   // hit: just before the button goes down, the point is still the element's (nothing moved over it since point). The
   // pointer's move first: the page sees it with its next frame, after main sent it, and its mouseover and mouseenter
   // handlers run before the move's own listeners, so once the move is seen here (and its dispatch over: a task later),
   // whatever they put over the point is there to be hit. It fails closed: a move never seen (a tab that draws no
-  // frames, a page listener that swallows moves, a move into a frame, whose document gets it) gets no press, as the
-  // button going down would send the move then, and its handlers would run after this test. A pointer that was at the
-  // point already (a second click there) gets no move: "there" says so, and main moves it off and back, which the
-  // page must see too ("onlyMove": just the move seen, no test). The moves are watched from point on (the watch stays
-  // until a test passes), so one that arrives before this script runs is seen too.
+  // frames, a page listener that swallows moves) gets no press, as the button going down would send the move then, and
+  // its handlers would run after this test. A pointer that was at the point already (a second click there) gets no
+  // move: "there" says so, and main moves it off and back (to the off point says: inside the frame), which the page
+  // must see too ("onlyMove": just the move seen, no test). The moves are watched from point on (the watch stays until
+  // a test passes), so one that arrives before this script runs is seen too.
   if (args.op === 'hit') {
-    const near = (e) => Math.abs(e.clientX - args.x) <= 2 && Math.abs(e.clientY - args.y) <= 2;
+    if (bent()) return { ok: false, why: 'transformed' };
+    const at = localOf(args.x, args.y, boxes());
+    const near = (e) => Math.abs(e.clientX - at.x) <= 2 && Math.abs(e.clientY - at.y) <= 2;
     const moved = globalThis.__chordMoved;
-    let arrived = Boolean(moved && moved.seen && near(moved.seen));
+    let arrived = Boolean(moved && moved.win === win && moved.seen && near(moved.seen));
     if (!arrived) {
       arrived = await new Promise((done) => {
         const timer = setTimeout(() => finish(false), args.hitWait);
         function seen(e) { if (e.isTrusted && near(e)) finish(true); }
-        function finish(saw) { clearTimeout(timer); removeEventListener('mousemove', seen, true); done(saw); }
-        addEventListener('mousemove', seen, true);
+        function finish(saw) { clearTimeout(timer); win.removeEventListener('mousemove', seen, true); done(saw); }
+        win.addEventListener('mousemove', seen, true);
       });
     }
     await new Promise((done) => setTimeout(done, 0));
@@ -420,47 +486,63 @@ function actScript(owner: string, token: string, key: number, op: ActOp): string
     // Twins (#211): which one can't be told, never looked for again.
     if (!el.isConnected) return { ok: false, why: entry.twins ? 'ambiguous' : entry.path !== undefined ? 'replaced' : 'changed' };
     if (!arrived) {
-      const was = moved && moved.before;
+      const was = moved && moved.win === win && moved.before;
       return { ok: false, why: 'no-move', ...(was && near(was) ? { there: true } : {}) };
     }
     if (args.onlyMove) return { ok: true, ...said };
-    const hit = deepest(args.x, args.y);
-    if (!ours(hit)) return { ok: false, why: 'covered', cover: coverOf(hit) };
-    if (moved) { removeEventListener('mousemove', moved.listen, true); globalThis.__chordMoved = null; }
-    // Where the page is scrolled to: the debugger's hit test takes the document's coordinates.
+    // As things are now, the move's handlers run (Argon's B2): never bent since, and the point the element's through
+    // the live chain.
+    if (bent()) return { ok: false, why: 'transformed' };
+    const now = hitAt(args.x, args.y, boxes());
+    if (!now.ok) return { ok: false, why: 'covered', cover: coverOf(now.cover) };
+    if (moved) { moved.win.removeEventListener('mousemove', moved.listen, true); globalThis.__chordMoved = null; }
+    // Where the top page is scrolled to: the debugger's hit test takes the top document's coordinates (Argon's B3).
     return { ok: true, ...said, scrollX, scrollY };
   }
   // point: to the middle of the view, then the hit test at its middle and its quarters' middles.
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-  const r = el.getBoundingClientRect();
-  const left = Math.max(r.left, 0), top = Math.max(r.top, 0), right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight);
-  if (right - left < 1 || bottom - top < 1) return { ok: false, why: 'changed' };
-  const w = right - left, h = bottom - top;
+  if (bent()) return { ok: false, why: 'transformed' };
+  const bs = boxes();
+  const box = outOf(el.getBoundingClientRect(), bs);
+  if (box.right - box.left < 1 || box.bottom - box.top < 1) return { ok: false, why: 'changed' };
+  const w = box.right - box.left, h = box.bottom - box.top;
+  const { left, top } = box;
   const points = [[left + w / 2, top + h / 2], [left + w / 4, top + h / 4], [left + (3 * w) / 4, top + h / 4], [left + w / 4, top + (3 * h) / 4], [left + (3 * w) / 4, top + (3 * h) / 4]];
+  // Where the pointer goes off and back to for a second click at the point (Argon's B2): 3 px, inside the frame's
+  // visible box (a move outside it is the parent's, never the frame's); at the top, inside the view.
+  const inside = outOf({ left: 0, top: 0, right: Infinity, bottom: Infinity }, bs);
+  const offOf = (x, y) => {
+    for (const [ox, oy] of [[x + 3, y], [x - 3, y], [x, y + 3], [x, y - 3]]) if (ox > inside.left && ox < inside.right && oy > inside.top && oy < inside.bottom) return { x: ox, y: oy };
+    return { x: Math.min(Math.max(x + 3, inside.left + 1), inside.right - 1), y };
+  };
   let cover = null;
   for (const [x, y] of points) {
-    const hit = deepest(x, y);
-    if (ours(hit)) {
-      // From here, the pointer's move is watched for: main sends it next, and hit waits for the page to see it.
+    const at = hitAt(x, y, bs);
+    if (at.ok) {
+      // From here, the pointer's move is watched for, in the element's own window: main sends it next, and hit waits
+      // for the page to see it.
       const was = globalThis.__chordMoved;
-      if (was) removeEventListener('mousemove', was.listen, true);
-      // Where the pointer was last seen, before this action's move (kept by a listener that stays once an agent acts).
-      if (!globalThis.__chordPointer) {
-        const pointer = (globalThis.__chordPointer = { at: null });
-        addEventListener('mousemove', (e) => { if (e.isTrusted) pointer.at = { clientX: e.clientX, clientY: e.clientY }; }, true);
+      if (was) was.win.removeEventListener('mousemove', was.listen, true);
+      // Where the pointer was last seen there, before this action's move.
+      let pointer = pointers.get(win);
+      if (!pointer) {
+        pointer = { at: null };
+        pointers.set(win, pointer);
+        const kept = pointer;
+        win.addEventListener('mousemove', (e) => { if (e.isTrusted) kept.at = { clientX: e.clientX, clientY: e.clientY }; }, true);
       }
-      const watch = { seen: null, before: globalThis.__chordPointer.at, listen: (e) => { if (e.isTrusted) watch.seen = { clientX: e.clientX, clientY: e.clientY }; } };
-      addEventListener('mousemove', watch.listen, true);
+      const watch = { win, seen: null, before: pointer.at, listen: (e) => { if (e.isTrusted) watch.seen = { clientX: e.clientX, clientY: e.clientY }; } };
+      win.addEventListener('mousemove', watch.listen, true);
       globalThis.__chordMoved = watch;
-      setTimeout(() => { if (globalThis.__chordMoved === watch) { removeEventListener('mousemove', watch.listen, true); globalThis.__chordMoved = null; } }, 5000);
+      setTimeout(() => { if (globalThis.__chordMoved === watch) { win.removeEventListener('mousemove', watch.listen, true); globalThis.__chordMoved = null; } }, 5000);
       if (args.highlight) {
         const quiet = matchMedia('(prefers-reduced-motion: reduce)').matches;
         const ring = '0 0 0 3px oklch(0.55 0.12 250 / 0.9), 0 0 0 7px oklch(0.55 0.12 250 / 0.18)';
         el.animate(quiet ? [{ boxShadow: ring }, { boxShadow: ring }] : [{ boxShadow: ring, offset: 0 }, { boxShadow: ring, offset: 0.7 }, { boxShadow: 'none', offset: 1 }], { duration: 1200 });
       }
-      return { ok: true, ...said, x, y, disabled, editable, select };
+      return { ok: true, ...said, x, y, off: offOf(x, y), disabled, editable, select };
     }
-    if (!cover && hit) cover = hit;
+    if (!cover && at.cover) cover = at.cover;
   }
   return { ok: false, why: 'covered', cover: coverOf(cover) };
 })(${JSON.stringify(args)})`;
@@ -470,7 +552,18 @@ const SETTLE_SCRIPT = String.raw`new Promise((done) => {
   let timer = setTimeout(finish, ${ACT_SETTLE_QUIET_MS});
   const cap = setTimeout(finish, ${ACT_SETTLE_MS});
   const watch = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(finish, ${ACT_SETTLE_QUIET_MS}); });
-  watch.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  // The top's document, and each readable frame's of its own origin, three deep (#347, Argon's SF1): an action in a
+  // frame changes the frame.
+  const observe = (d, depth) => {
+    watch.observe(d, { subtree: true, childList: true, attributes: true, characterData: true });
+    if (depth >= 3) return;
+    for (const f of d.querySelectorAll('iframe, frame')) {
+      let inner = null;
+      try { inner = f.contentWindow && f.contentWindow.origin === window.origin && window.origin !== 'null' ? f.contentDocument : null; } catch { inner = null; }
+      if (inner) observe(inner, depth + 1);
+    }
+  };
+  observe(document, 0);
   function finish() { watch.disconnect(); clearTimeout(timer); clearTimeout(cap); done(true); }
 })`;
 

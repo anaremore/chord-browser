@@ -245,6 +245,9 @@ export const ACT_REFUSALS = {
   crashedAfterAgentTab: 'That tab stopped working (its page crashed) during the step, so it may have gone in. Ask the user to reload it, then check before you try it again.',
   file: 'That opens a file picker: agents never choose files. Ask the user to.',
   noMove: 'The page didn’t see the pointer arrive, so nothing was clicked. Call snapshot again, then try once more.',
+  // #347 (B7): an element in a frame under a transform or a zoom (its own, a frame's, or a box's above them): where
+  // the pointer would land can't be told, so it isn't placed.
+  cantPoint: 'Chord can’t place the pointer there (that element, its frame or a box around them is transformed or zoomed), so nothing was done. Ask the user to do it.',
   sharedReadOnly: 'That tab is shared with you to read, not to act on. Ask the user if they want you to act in your own tab.',
   siteDenied: (site: string) => `The user didn’t let you act on ${site}. Don’t act there again unless the user asks you to.`,
   noSite: 'Chord can’t act on this page (it isn’t a web page).',
