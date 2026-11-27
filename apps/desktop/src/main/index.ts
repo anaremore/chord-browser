@@ -231,6 +231,12 @@ const adBlocking = new AdBlocking(
     offSites: (profileId) => (browser ? blockingOffSites(browser.store.state, profileId) : []),
   },
 );
+/**
+ * Development and test builds (#321): open once launch's chords can load their first pages, their ad-blocking rules
+ * on or their 15 s wait over. The E2E harness waits for it (test/e2e/main-errors.ts), so no test races the gate.
+ */
+let firstPagesCanLoad = (): void => {};
+if (!app.isPackaged) (globalThis as { chordFirstPagesGate?: Promise<void> }).chordFirstPagesGate = new Promise<void>((resolve) => (firstPagesCanLoad = resolve));
 
 const downloads = new DownloadManager({
   state: () => browser!.store.state,
@@ -1209,6 +1215,7 @@ if (!app.requestSingleInstanceLock()) {
     adBlocking.sync();
     // Every chord's session, made now, so each one's blocker extension has loaded before any of its pages loads (below).
     for (const profileId of profilesInUse) if (!isPrivateProfile(profileId)) profileSession(profileId);
+    void adBlocking.rulesSettled().then(() => firstPagesCanLoad());
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     // One-time move for profiles from 0.6.x, whose assistant kept its files (panel.json, images, its empty working

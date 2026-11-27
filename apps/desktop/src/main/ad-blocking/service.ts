@@ -254,8 +254,12 @@ export class AdBlocking {
    * (pending).
    */
   async loaded(capMs = 3000): Promise<void> {
-    const waits = [...this.profiles.values()].map((p) => p.rulesOn);
-    await Promise.race([Promise.all(waits), new Promise<void>((resolve) => setTimeout(resolve, capMs).unref?.())]);
+    await Promise.race([this.rulesSettled(), new Promise<void>((resolve) => setTimeout(resolve, capMs).unref?.())]);
+  }
+
+  /** Once every attached chord's rules are on, or its pages stopped waiting (each at most RULES_WAIT_MS). */
+  async rulesSettled(): Promise<void> {
+    await Promise.all([...this.profiles.values()].map((p) => p.rulesOn));
   }
 
   /**
@@ -370,16 +374,20 @@ export class AdBlocking {
         if (stale) {
           profile.ready = false;
           await this.writeRules(blocker);
+          // Launch's timeline (dev and test builds): which step of a fresh profile's rules takes the time (#321).
+          mark(`ad blocking rules written (${profileId})`);
           if (gone()) return;
         }
         // At launch the rules just load; turned back on, applying again says when they're in.
         const reloaded = (await blocker.load()) && profile.loadedOnce;
+        mark(`ad blocking extension loaded (${profileId})`);
         profile.loadedOnce = true;
         if (gone()) return;
         if (stale || reloaded || profile.applyFailed || !sameSites(applied.offSites, offSites)) {
           profile.applyFailed = true;
           // A fresh profile's rulesets are off until applied (extension.ts): its pages wait for this, not just the load.
           await blocker.apply(offSites);
+          mark(`ad blocking rules applied (${profileId})`);
           profile.ready = true;
           if (gone()) return;
           this.saved.profiles[profileId] = { rulesVersion: version, offSites };
@@ -415,6 +423,7 @@ export class AdBlocking {
     try {
       await mkdir(join(staging, 'rules'), { recursive: true });
       for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
+      mark(`ad blocking rules staged (${basename(blocker.folder)})`);
       await blocker.write(staging);
     } finally {
       // Gone whether the write worked or not; one that can't go yet (a scanner holding a handle) never fails the rules
