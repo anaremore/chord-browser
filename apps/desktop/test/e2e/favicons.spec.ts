@@ -20,8 +20,17 @@ const appDir = resolve(import.meta.dirname, '../..');
 /** A 1 × 1 PNG: the site's icon. */
 const ICON = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
+/** #324: the Cookie header each icon request came with, by path ('' for none). */
+const iconCookies: Record<string, string[]> = {};
+
 function startSite(): Promise<{ server: Server; port: number }> {
   const pages: Record<string, string> = {
+    // #324: a page whose icon is on another site (other.test), and one whose icon is its own.
+    '/cross': '<title>Cross icon</title><link rel="icon" href="http://other.test:{port}/x.png"><p>Cross</p>',
+    '/own': '<title>Own icon</title><link rel="icon" href="/own.png"><p>Own</p>',
+    // #324: an icon of the page's own site that redirects: on to another site (other.test), or within its own.
+    '/hops-away': '<title>Hops away</title><link rel="icon" href="/hop-away.png"><p>Away</p>',
+    '/hops-home': '<title>Hops home</title><link rel="icon" href="/hop-home.png"><p>Home</p>',
     // Names its icon.
     '/a': '<title>Page A</title><link rel="icon" href="/a.png"><p>A</p>',
     // Names none: Chromium asks for /favicon.ico, which isn't there.
@@ -33,7 +42,19 @@ function startSite(): Promise<{ server: Server; port: number }> {
   };
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
-    if (path === '/a.png') {
+    if (path === '/hop-away.png' || path === '/hop-home.png') {
+      const port = (server.address() as AddressInfo).port;
+      res.writeHead(302, { location: path === '/hop-away.png' ? `http://other.test:${port}/x.png` : '/own.png' });
+      res.end();
+    } else if (path === '/x.png' || path === '/own.png') {
+      (iconCookies[path] ??= []).push(req.headers.cookie ?? '');
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end(ICON);
+    } else if (path === '/set') {
+      // other.test's own page, as you'd visit it: its cookies, the strictest and the usual.
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': ['strict=1; Path=/; SameSite=Strict', 'lax=1; Path=/; SameSite=Lax'] });
+      res.end('<title>Other</title><p>Signed in</p>');
+    } else if (path === '/a.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       res.end(ICON);
     } else if (path === '/nothing') {
@@ -42,7 +63,7 @@ function startSite(): Promise<{ server: Server; port: number }> {
       res.end();
     } else if (pages[path]) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(pages[path]);
+      res.end(pages[path].replaceAll('{port}', String((server.address() as AddressInfo).port)));
     } else {
       res.writeHead(404);
       res.end();
@@ -51,10 +72,10 @@ function startSite(): Promise<{ server: Server; port: number }> {
   return new Promise((done) => server.listen(0, '127.0.0.1', () => done({ server, port: (server.address() as AddressInfo).port })));
 }
 
-async function launch(home: string): Promise<ElectronApplication> {
+async function launch(home: string, args: string[] = []): Promise<ElectronApplication> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: mkdtempSync(join(tmpdir(), 'chord-e2e-')), CHORD_HOME_URL: home };
   delete env['ELECTRON_RUN_AS_NODE'];
-  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run'], env, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: [appDir, '--no-first-run', ...args], env, cwd: appDir }));
 }
 
 async function pageWhere(app: ElectronApplication, match: (url: string) => boolean): Promise<Page> {
@@ -118,6 +139,42 @@ test("a tab keeps its site's icon: through pages without one, a broken one and a
     await tab.goto(`${origin}/b`);
     await expect.poll(async () => (await shown(shell)).url).toBe(`${origin}/b`);
     expect((await shown(shell)).favicon).toBe(icon);
+  } finally {
+    await app.close();
+  }
+});
+
+test('#324: a tab of yours whose page names another site’s icon fetches it without that site’s cookies', async () => {
+  // Fresh for each run (--repeat-each, a retry: Neon's SF4 on #337).
+  for (const path of Object.keys(iconCookies)) delete iconCookies[path];
+  // Two sites on this machine: page.test (the page) and other.test (the icon's), each its own site.
+  const app = await launch(`http://other.test:${site.port}/set`, ['--host-resolver-rules=MAP page.test 127.0.0.1, MAP other.test 127.0.0.1']);
+  try {
+    const shell = await pageWhere(app, isShell);
+    const tab = await pageWhere(app, (url) => url.includes('other.test'));
+    await expect.poll(async () => (await shown(shell)).title, { timeout: 20_000 }).toBe('Other');
+
+    // On other.test, its own icon: what an icon of the page's own site sends (the probe's other half).
+    await tab.goto(`http://other.test:${site.port}/own`);
+    await expect.poll(() => iconCookies['/own.png']?.length ?? 0, { timeout: 10_000 }).toBeGreaterThan(0);
+
+    // On page.test, an icon on other.test: Chord's fetch of it.
+    await tab.goto(`http://page.test:${site.port}/cross`);
+    await expect.poll(() => iconCookies['/x.png']?.length ?? 0, { timeout: 10_000 }).toBeGreaterThan(0);
+    console.log(`#324 probe: same-site icon sent [${iconCookies['/own.png']!.join(' | ')}]; cross-site icon sent [${iconCookies['/x.png']!.join(' | ')}]`);
+    expect(iconCookies['/x.png']).toEqual(['']);
+    // Its own site's icon keeps its cookies, as before.
+    expect(iconCookies['/own.png']).toEqual(['strict=1; lax=1']);
+
+    // page.test's own icon redirecting to other.test: other.test gets none of its cookies.
+    await tab.goto(`http://page.test:${site.port}/hops-away`);
+    await expect.poll(() => iconCookies['/x.png']!.length, { timeout: 10_000 }).toBe(2);
+    expect(iconCookies['/x.png']![1]).toBe('');
+    // other.test's own icon redirecting within its site: fetched again without cookies too (Electron's fetch can't
+    // follow a redirect a hop at a time, so a same-site icon that redirects never carries them on).
+    await tab.goto(`http://other.test:${site.port}/hops-home`);
+    await expect.poll(() => iconCookies['/own.png']!.length, { timeout: 10_000 }).toBe(2);
+    expect(iconCookies['/own.png']![1]).toBe('');
   } finally {
     await app.close();
   }

@@ -16,6 +16,16 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { failHeld } from './control/sends';
 import { pickFavicon } from './favicon-pick';
+import type * as PasswordSites from '@chord/core/password-sites';
+
+/** The Public Suffix List's sites (tldts), loaded the first time a tab of yours fetches an icon: off the launch path. */
+let faviconSitesModule: Promise<typeof PasswordSites> | undefined;
+/** Null when it doesn't load: then every icon of yours goes without cookies (fails closed), and the next tries again. */
+const faviconSites = (): Promise<typeof PasswordSites | null> =>
+  (faviconSitesModule ??= import('@chord/core/password-sites').catch((error: unknown) => {
+    faviconSitesModule = undefined;
+    throw error;
+  })).catch(() => null);
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
 import { holdFilePickers, bypassServiceWorkers, firstLoadPending, holdFailed, setFirstLoadPending } from './agents/pickers';
@@ -907,7 +917,13 @@ export class TabManager {
     // An agent's tab (#115, B1): only a data: or own-origin icon, with no credentials and no redirect; none on a Never
     // site (favicon-pick.ts).
     const never = (url: string) => isNeverReadable(url, this.deps.state().settings?.assistant?.neverSites ?? []);
-    const picked = pickFavicon(favicons, page, { agent, never });
+    // A tab of yours: its own site by the Public Suffix List (#324), read in only when it's needed (its icon an http(s)
+    // address), as passwords do. Not loaded: no site, so the icon goes without cookies (Neon's SF2, round 1 of #337).
+    const first = favicons.find((u) => /^(https?|data):/i.test(u));
+    const site = !agent && first && /^https?:/i.test(first) ? (await faviconSites())?.loginSite : undefined;
+    // The page may have closed, or stopped being the tab's, while the list loaded (Neon's SF1).
+    if (!ours()) return;
+    const picked = pickFavicon(favicons, page, { agent, never, ...(site ? { site } : {}) });
     if (!picked) return;
     const { url } = picked;
     const session = contents.session;
@@ -916,7 +932,16 @@ export class TabManager {
       if (/^data:/i.test(url)) {
         if (usableDataIcon(url, MAX_FAVICON_BYTES)) icon = url;
       } else {
-        const response = await contents.session.fetch(url, { ...picked.init, signal: AbortSignal.timeout(8000) });
+        const signal = AbortSignal.timeout(8000);
+        let response: Response;
+        try {
+          response = await contents.session.fetch(url, { ...picked.init, signal });
+        } catch (error) {
+          // A tab of yours' own-site icon that redirected (or failed): once more without cookies, wherever it goes, never
+          // on to another site with that site's cookies (#324). An agent's: nothing (#115).
+          if (agent || picked.init.credentials === 'omit' || signal.aborted || !ours()) throw error;
+          response = await contents.session.fetch(url, { credentials: 'omit', signal });
+        }
         const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim();
         const bytes = response.ok && /^image\//.test(type) ? Buffer.from(await response.arrayBuffer()) : null;
         if (bytes && bytes.length > 0 && bytes.length <= MAX_FAVICON_BYTES) icon = `data:${type};base64,${bytes.toString('base64')}`;
