@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { dispatch, pressReal, where } from './a11y-kit';
-import { watchForMainErrors } from './main-errors';
+import { failOnMainErrors, watchForMainErrors } from './main-errors';
 
 const appDir = resolve(import.meta.dirname, '../..');
 const fake = resolve(import.meta.dirname, 'fake-claude.mjs');
@@ -150,6 +150,9 @@ async function send(panel: Locator, text: string): Promise<void> {
 }
 
 /** The fake's last `Act:` turn: each step's tool and what Chord answered. */
+// Every test here fails if its run logged an error in main (Carbon's SF3 on #343).
+failOnMainErrors();
+
 const lastActing = (config: string): { tool: string; result: string }[] => {
   const lines = readFileSync(join(config, 'acting.jsonl'), 'utf8').trim().split('\n');
   return JSON.parse(lines.at(-1)!) as { tool: string; result: string }[];

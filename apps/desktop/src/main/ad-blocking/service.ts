@@ -106,6 +106,8 @@ interface Profile {
   /** Ends that wait (once; later calls do nothing), marking how. */
   release: (status: RulesStatus) => void;
   released: boolean;
+  /** How that wait ended (rulesSettled says whether any reached its cap). */
+  releasedAs?: RulesStatus;
   /**
    * Its blocking isn't on though the switch is (#284): it failed, or wasn't on by the cap (its pages didn't wait any
    * longer), or Settings' Try again is under way. Null once its rules are on. Settings → Privacy lists it (status).
@@ -239,6 +241,7 @@ export class AdBlocking {
       profile.release = (status) => {
         if (profile.released) return;
         profile.released = true;
+        profile.releasedAs = status;
         clearTimeout(cap);
         mark(status === 'in' ? `ad blocking rules on (${profileId})` : `ad blocking rules not on: ${status} (${profileId})`);
         resolve();
@@ -257,9 +260,14 @@ export class AdBlocking {
     await Promise.race([this.rulesSettled(), new Promise<void>((resolve) => setTimeout(resolve, capMs).unref?.())]);
   }
 
-  /** Once every attached chord's rules are on, or its pages stopped waiting (each at most RULES_WAIT_MS). */
-  async rulesSettled(): Promise<void> {
-    await Promise.all([...this.profiles.values()].map((p) => p.rulesOn));
+  /**
+   * Once every attached chord's rules are on, or its pages stopped waiting (each at most RULES_WAIT_MS): `'timeout'` if
+   * any stopped at that cap, the product's own fallback (their pages load unblocked), else `'ok'`.
+   */
+  async rulesSettled(): Promise<'ok' | 'timeout'> {
+    const profiles = [...this.profiles.values()];
+    await Promise.all(profiles.map((p) => p.rulesOn));
+    return profiles.some((p) => p.releasedAs === 'timeout') ? 'timeout' : 'ok';
   }
 
   /**
@@ -373,7 +381,7 @@ export class AdBlocking {
         const stale = applied?.rulesVersion !== version || !(await exists(join(blocker.folder, 'manifest.json')));
         if (stale) {
           profile.ready = false;
-          await this.writeRules(blocker);
+          await this.writeRules(blocker, profileId);
           // Launch's timeline (dev and test builds): which step of a fresh profile's rules takes the time (#321).
           mark(`ad blocking rules written (${profileId})`);
           if (gone()) return;
@@ -416,14 +424,14 @@ export class AdBlocking {
    * profile stages its own copy (#274): profiles update side by side, and one removing a shared folder while another
    * still copied out of it left that one with no rules (Windows: EPERM rmdir).
    */
-  private async writeRules(blocker: BlockerExtension): Promise<void> {
+  private async writeRules(blocker: BlockerExtension, profileId: string): Promise<void> {
     const set = this.current!;
     if (set.dir !== this.config.bundledDir) return await blocker.write(set.dir);
     const staging = join(this.config.root, 'Staging', basename(blocker.folder));
     try {
       await mkdir(join(staging, 'rules'), { recursive: true });
       for (const list of FILTER_LISTS) await writeFile(join(staging, 'rules', `${list.id}.json`), await readFile(join(set.dir, 'rules', `${list.id}.json`)));
-      mark(`ad blocking rules staged (${basename(blocker.folder)})`);
+      mark(`ad blocking rules staged (${profileId})`);
       await blocker.write(staging);
     } finally {
       // Gone whether the write worked or not; one that can't go yet (a scanner holding a handle) never fails the rules

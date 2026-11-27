@@ -4,6 +4,7 @@
  * so a bug in main can't hide behind a test that otherwise passed.
  */
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { firstPagesCanLoad } from './first-pages';
 
 const MAIN_ERROR = /\[chord\] (Uncaught exception|Unhandled rejection) in main/;
 const mainErrors: string[] = [];
@@ -14,17 +15,11 @@ const SLOW_LAUNCH = /\[chord\] slow launch:[\s\S]*?\[chord\] end of slow launch/
 const killed = new WeakSet<ElectronApplication>();
 
 /**
- * How long launch may take before its chords can load their first pages: their ad-blocking rules on, or past the
- * product's own RULES_WAIT_MS (15 s) that holds them (#321). Longer is a real failure, never one to hide.
+ * Watch a launched app's stderr for errors main caught; and, unless `waitForFirstPages` is false (a test that quits
+ * right after launch), resolve once its chords can load their first pages (first-pages.ts, #321): every spec's launch
+ * goes through here, so no test's first assertion races Chord's wait for ad-blocking rules.
  */
-const FIRST_PAGES_WITHIN_MS = 20_000;
-
-/**
- * Watch a launched app's stderr for errors main caught; and resolve once its chords can load their first pages
- * (#321): Chord holds a chord's first page until its ad-blocking rules are on (#272's gate, up to 15 s), which on a
- * busy Windows runner's fresh profile has taken 14 s. A test starts from there, so no assertion races that wait.
- */
-export async function watchForMainErrors(app: ElectronApplication): Promise<ElectronApplication> {
+export async function watchForMainErrors(app: ElectronApplication, { waitForFirstPages = true } = {}): Promise<ElectronApplication> {
   let log = '';
   let slow = '';
   app.process().stderr?.on('data', (chunk: Buffer) => {
@@ -49,32 +44,8 @@ export async function watchForMainErrors(app: ElectronApplication): Promise<Elec
     if ((code !== 0 || signal) && !killed.has(app)) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
   });
   throttlePages(app);
-  await firstPagesCanLoad(app);
+  if (waitForFirstPages) await firstPagesCanLoad(app);
   return app;
-}
-
-/**
- * Main's own signal (src/main/index.ts' chordFirstPagesGate, development and test builds): no polling for a title.
- * Past FIRST_PAGES_WITHIN_MS the test fails; its launch timeline (main's slow-launch block) prints beside it.
- */
-async function firstPagesCanLoad(app: ElectronApplication): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<'late'>((resolve) => (timer = setTimeout(() => resolve('late'), FIRST_PAGES_WITHIN_MS)));
-  const opened = app
-    .evaluate(() => (globalThis as { chordFirstPagesGate?: Promise<void> }).chordFirstPagesGate)
-    .then(
-      () => 'open' as const,
-      // Main ended first (a launch its test ends on purpose, or one that fails, which its test reports): nothing to wait for.
-      () => 'ended' as const,
-    );
-  const how = await Promise.race([opened, late]).finally(() => clearTimeout(timer));
-  if (how === 'late') {
-    // Closed here, as its test never gets it to close; at quit main prints the timeline (the first page never loaded).
-    await app.close().catch(() => {});
-    throw new Error(
-      `Chord's chords couldn't load their first pages ${FIRST_PAGES_WITHIN_MS / 1000} s after launch: past the product's own 15 s wait for ad-blocking rules (#321). Its launch timeline prints beside this failure.`,
-    );
-  }
 }
 
 /**

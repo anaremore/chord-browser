@@ -95,7 +95,7 @@ function startSite(): Promise<{ server: Server; origin: string }> {
   );
 }
 
-async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), { firstRun = false } = {}): Promise<ElectronApplication> {
+async function launch(env: Record<string, string>, profile = mkdtempSync(join(tmpdir(), 'chord-e2e-')), { firstRun = false, waitForFirstPages = true } = {}): Promise<ElectronApplication> {
   // A fresh profile per launch unless a test reuses one: tests never touch a developer's real data.
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>), CHORD_USER_DATA: profile, ...env };
   delete childEnv['ELECTRON_RUN_AS_NODE'];
@@ -104,7 +104,7 @@ async function launch(env: Record<string, string>, profile = mkdtempSync(join(tm
   if (firstRun) childEnv['CHORD_FIRST_RUN'] = '1';
   // No other browsers (import.spec.ts brings its own), so first run never offers to import from the machine's.
   childEnv['CHORD_IMPORT_ROOT'] ??= join(profile, 'no-browsers');
-  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir }));
+  return watchForMainErrors(await electron.launch({ chromiumSandbox: true, args: firstRun ? [appDir] : [appDir, '--no-first-run'], env: childEnv, cwd: appDir }), { waitForFirstPages });
 }
 
 failOnMainErrors();
@@ -930,9 +930,10 @@ test('quitting right after launch, before the windows have loaded, trips no erro
   await runAction(shell, 'window.new');
   await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
   await app.close();
-  // Quit as soon as a window's page exists, while it (and the other window) may still be loading.
+  // Quit as soon as a window's page exists, while it (and the other window) may still be loading: not waiting for the
+  // first pages to be able to load (#321, Carbon's SF2 on #343), which would come after.
   for (let i = 0; i < 3; i++) {
-    app = await launch({}, profile);
+    app = await launch({}, profile, { waitForFirstPages: false });
     await app.firstWindow();
     await app.close();
   }

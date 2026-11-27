@@ -132,6 +132,8 @@ describe('ad blocking: what a page waits for (#189)', () => {
     applies[0]!.resolve();
     expect(await settled(gate)).toBe(true);
     expect(blocking.pending(session)).toBeNull();
+    // What the E2E harness hears (#321): its rules came on.
+    expect(await blocking.rulesSettled()).toBe('ok');
     expect(marks()).toEqual(['ad blocking rules on (default)']);
     // Each step of a fresh profile's rules, in launch's timeline: which one took the time on a slow disk (#321, #342).
     expect(allMarks()).toEqual([
@@ -213,6 +215,8 @@ describe('ad blocking: what a page waits for (#189)', () => {
       expect(marks()).toEqual([]);
       vi.advanceTimersByTime(1);
       expect(await settled(gate)).toBe(true);
+      // The product's own fallback, not a failure (Carbon's B1 on #343): the harness notes it and goes on.
+      expect(await blocking.rulesSettled()).toBe('timeout');
       expect(marks()).toEqual(['ad blocking rules not on: timeout (default)']);
     } finally {
       vi.useRealTimers();
