@@ -398,8 +398,9 @@ function registerIpc(): void {
     else if (action === 'stop') {
       // Your Stop is your hand on the page: the assistant's lease there ends (Claude's B2 on #147).
       assistant?.userMovedPage(contents, 'Stop');
-      // A page still waiting for its session (its proxy, its rules, #277): that load is dropped too.
-      browser!.tabs.stopWaiting(contents);
+      // A page still waiting for its session (its proxy, its rules, #277): that load is dropped too; a tab's saved
+      // history waiting to come back only stops showing loading (Carbon's B3 on #331: userStop).
+      browser!.tabs.userStop(contents);
       contents.stop();
     }
   });
@@ -417,7 +418,8 @@ function registerIpc(): void {
   handle('adBlocking:retry', ({ profileId }) => adBlocking.retry(profileId, chordProfiles()));
   // #325: the proxies that can't be set, by chord (a chord's own) or for every chord; Try again tries now.
   handle('proxy:status', () => proxyStatus(proxies.failing(), proxyChords()));
-  handle('proxy:settings', ({ chordId }) => browser!.openProxySettingsAt(chordId));
+  // From the window whose toast it was: Settings opens over that one (Carbon's N3 on #331).
+  handle('proxy:settings', ({ chordId }, sender) => browser!.openProxySettingsAt(chordId, browser!.windowFor(sender)));
   // A profile's Try again only for a chord's (Neon's N-SF3 on #331, as adBlocking:retry); null tries every one failing.
   handle('proxy:retry', ({ owner }) => (owner === null || chordProfiles().has(owner) ? proxies.retry(owner) : undefined));
   // First run's step and the one-time offer, each with the notice on screen.
@@ -1177,10 +1179,18 @@ if (!app.requestSingleInstanceLock()) {
       if (change.state.settings.googleFree && change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'googleFree')) void browser!.player.close();
       // Counts on tabs follow their switch and the sites they're hidden for.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'tabCounts')) browser!.tabs.refreshCounts();
+      // A failing proxy's toast, where it's due now (Carbon's SF3 on #331): presenting ends, a window shows another
+      // chord, a window opens (normal or private). After this turn, so a new window is open to take it.
+      if (change.patches.some((p) => p.path[0] === 'presenting' || (p.path[0] === 'windows' && (p.path.length <= 2 || p.path[2] === 'activeChordId')))) setImmediate(proxyToasts);
     });
     // Proxies and ad blocking follow the settings before Browser's effects run (a tab made again in a session waits for
     // its proxy: Undo of a change of sign-ins, a chord restored, #328).
-    browser.store.setBeforeEffects((change) => followSessions(change, { proxies, adBlocking }));
+    // A chord that gets a proxy of its own (and so, from the shared sign-ins, a profile of its own) has its session made
+    // at once (Carbon's SF1 on #331): see followSessions' makeSessions.
+    const makeSessions = () => {
+      for (const chord of Object.values(browser!.store.state.chords)) if (chord.proxy && !chord.private && !isPrivateProfile(chord.profileId)) profileSession(chord.profileId);
+    };
+    browser.store.setBeforeEffects((change) => followSessions(change, { proxies, adBlocking, makeSessions }));
     safeBrowsing.sync();
     adBlocking.sync();
     // Every chord's session, made now, so each one's blocker extension has loaded before any of its pages loads (below).

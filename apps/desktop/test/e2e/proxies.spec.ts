@@ -523,7 +523,17 @@ test('a proxy that can’t be set (#325): its pages wait, never direct; one toas
     await expect(toast).toBeVisible();
     await expect(toast.getByRole('button', { name: 'Settings' })).toBeVisible();
     await shell.screenshot({ path: test.info().outputPath('proxy-failing-toast.png') });
-    await expect(settings.getByText(/Pages wait until Chord can, and Chord keeps trying\. Chromium said net::ERR_INVALID_ARGUMENT\./)).toBeVisible();
+    // Its Settings: the proxy for every chord's choice in use, focused (Carbon's SF2 on #331), wherever the focus was.
+    await settings.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await toast.getByRole('button', { name: 'Settings' }).click();
+    await expect(settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
+    // In words for people (Carbon's SF5): an address Chromium won't take is one to check.
+    await expect(settings.getByText('Pages wait until Chord can. Check the proxy’s address or its configuration file (ERR_INVALID_ARGUMENT).', { exact: true })).toBeVisible();
+    // A window opened while it fails gets its toast too (Carbon's SF3): a private one, whose pages it holds.
+    await runAction(shell, 'window.newPrivate');
+    await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
+    const privateShell = app.windows().find((p) => isShell(p.url()) && p !== shell)!;
+    await expect(privateShell.getByRole('region', { name: 'Notifications' }).getByRole('group').filter({ hasText: 'The proxy isn’t working. Pages are waiting.' })).toBeVisible();
     await settings.screenshot({ path: test.info().outputPath('proxy-failing-light.png') });
     await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'dark'));
     await settings.waitForTimeout(400);
@@ -540,14 +550,76 @@ test('a proxy that can’t be set (#325): its pages wait, never direct; one toas
     // Held (#331): its page closed, its tab keeps its title; it loads through the proxy below.
     await expect(shell.getByRole('tree', { name: 'Unpinned tabs' })).toContainText('Direct /home');
 
-    // Chromium takes it now; Try again: the row goes, and the page loads through the proxy.
+    // Try again while it still can't (Carbon's B2): Trying…, then said again, as still failing.
+    const again = settings.getByRole('button', { name: 'Try again, proxy for every chord', exact: true });
+    await again.click();
+    await expect(settings.locator('[data-proxy-said]')).toHaveText('Still can’t use this proxy.', { timeout: 10_000 });
+
+    // Chromium takes it now; Try again from the keyboard: the row goes, and the page loads through the proxy. The focus
+    // goes to the choice in use, never to the page (Carbon's B1); the status says it works again.
     await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
-    await settings.getByRole('button', { name: 'Try again' }).click();
+    await again.focus();
+    await settings.keyboard.press('Enter');
     await expect(row).toBeHidden({ timeout: 10_000 });
+    await expect(settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
+    await expect(settings.locator('[data-proxy-said]')).toHaveText('The proxy works again.');
     // The held page loads now, through the proxy, and never went direct.
     await expect.poll(titleOf(app, '/home'), { timeout: 15_000 }).toBe('Via A /home');
     expect(proxyA.seen).toContain(at('/home'));
     expect(direct.seen).toEqual([]);
+  } finally {
+    await app.close();
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+});
+
+test('a chord’s own proxy that can’t be set (Carbon’s round on #331): said at once, even with no tab of it open; its toast opens its proxy; Try again keeps the focus', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_HOME_URL: url('/home') });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(titleOf(app, '/home')).toBe('Direct /home');
+    await app.evaluate(({ session }, port) => {
+      const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
+      const real = proto.setProxy;
+      (globalThis as { refuseProxy?: boolean }).refuseProxy = true;
+      proto.setProxy = function (this: unknown, config: { proxyRules?: string }) {
+        if ((globalThis as { refuseProxy?: boolean }).refuseProxy && String(config?.proxyRules ?? '').includes(`:${port}`)) return Promise.reject(new Error('net::ERR_FAILED'));
+        return real.call(this, config);
+      };
+    }, proxyA.port);
+    // A new chord, with no tab open: its sign-ins are the shared ones until it gets a proxy of its own.
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    await shell.getByRole('textbox', { name: 'Chord name' }).fill('Lab');
+    await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    const settings = await privacy(app, shell);
+    await settings.getByRole('button', { name: 'Its own…, proxy for Lab' }).click();
+    await settings.getByRole('radiogroup', { name: 'Proxy for Lab' }).getByRole('radio', { name: /^A proxy server/ }).click();
+    await settings.getByLabel('Proxy for Lab: address', { exact: true }).fill('127.0.0.1');
+    await settings.getByLabel('Proxy for Lab: port', { exact: true }).fill(String(proxyA.port));
+    await settings.getByRole('button', { name: /^Keep sign-ins separate and use this proxy/ }).click();
+
+    // Its session made at once, so its proxy is tried now: the row under it, never "In use" as if it worked (SF1).
+    const row = settings.locator('[data-tone="warning"]').getByText('Can’t use Lab’s proxy.');
+    await expect(row).toBeVisible({ timeout: 10_000 });
+    await expect(settings.getByText('Its pages wait until Chord can, and Chord keeps trying (ERR_FAILED).', { exact: true })).toBeVisible();
+    await expect(settings.locator('[data-proxy-said]')).toHaveText('Can’t use Lab’s proxy.');
+    // Its toast, in the window showing Lab: Settings opens at Lab's proxy, its choice in use focused (SF2).
+    const toast = shell.getByRole('region', { name: 'Notifications' }).getByRole('group').filter({ hasText: 'Lab’s proxy isn’t working. Its pages are waiting.' });
+    await expect(toast).toBeVisible();
+    await settings.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await toast.getByRole('button', { name: 'Settings' }).click();
+    await expect(settings.getByRole('radiogroup', { name: 'Proxy for Lab' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
+    await settings.screenshot({ path: test.info().outputPath('proxy-failing-chord.png') });
+
+    // Chromium takes it now; Try again from the keyboard: the row goes, the focus to Lab's own button, never the page
+    // (B1), and the status says Lab's proxy works again (B2).
+    await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
+    await settings.getByRole('button', { name: 'Try again, proxy for Lab', exact: true }).focus();
+    await settings.keyboard.press('Enter');
+    await expect(row).toBeHidden({ timeout: 10_000 });
+    await expect(settings.getByRole('button', { name: /^(Done|Change…), proxy for Lab$/ })).toBeFocused();
+    await expect(settings.locator('[data-proxy-said]')).toHaveText('Lab’s proxy works again.');
   } finally {
     await app.close();
   }

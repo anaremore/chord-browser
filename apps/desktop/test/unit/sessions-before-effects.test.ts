@@ -219,11 +219,15 @@ describe('what sessions follow (#328)', () => {
     [['chords', 'lab', 'name'], null],
     [['settings', 'colorScheme'], null],
   ] as const)('%j: %s', (path, which) => {
-    const proxies = { sync: vi.fn() };
+    const order: string[] = [];
+    const proxies = { sync: vi.fn(() => void order.push('proxies')) };
     const adBlocking = { sync: vi.fn() };
-    followSessions(change([...path]), { proxies, adBlocking });
+    const makeSessions = vi.fn(() => void order.push('sessions'));
+    followSessions(change([...path]), { proxies, adBlocking, makeSessions });
     expect(proxies.sync).toHaveBeenCalledTimes(which === 'proxies' ? 1 : 0);
     expect(adBlocking.sync).toHaveBeenCalledTimes(which === 'adBlocking' ? 1 : 0);
+    // A chord's proxy changing has its session made, after the proxies follow (Carbon's SF1 on #331).
+    expect(order).toEqual(which === 'proxies' ? ['proxies', 'sessions'] : []);
   });
 });
 

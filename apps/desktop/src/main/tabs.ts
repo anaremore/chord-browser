@@ -121,7 +121,7 @@ export class TabManager {
   private readonly tabIcons: TabIconIndex;
 
   /** Each page's newest load waiting for its session (whenProxied): an older one's wait ends without loading. */
-  private readonly loadTurns = new WeakMap<WebContents, { overtaken?: () => void }>();
+  private readonly loadTurns = new WeakMap<WebContents, { overtaken?: () => void; restore?: boolean }>();
   /** Pages whose wait for their session marked their first load pending (whenProxied): unmarked as it loads. */
   private readonly waitMarked = new WeakSet<WebContents>();
   /** Pages with a load waiting for their session now (whenProxied): what Stop drops (stopWaiting). */
@@ -140,9 +140,10 @@ export class TabManager {
    * false says it didn't load after all (what it was for had gone by then): the loading this wait put on comes off
    * (round 1 of #333).
    */
-  whenProxied(contents: WebContents, load: () => boolean | void, overtaken?: () => void): () => void {
+  whenProxied(contents: WebContents, load: () => boolean | void, overtaken?: () => void, restore = false): () => void {
     this.loadTurns.get(contents)?.overtaken?.();
-    const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
+    // `restore`: this load brings a tab's saved history back (what your Stop leaves waiting: userStop).
+    const turn: { overtaken?: () => void; restore?: boolean } = { ...(overtaken ? { overtaken } : {}), ...(restore ? { restore } : {}) };
     this.loadTurns.set(contents, turn);
     // `failed`: a wait that rejected (#299): it's over. Asked again, a source answering that same wait isn't waited on.
     const go = (failed?: Promise<void>) => {
@@ -160,7 +161,7 @@ export class TabManager {
           this.waitMarked.add(contents);
           setFirstLoadPending(contents, true);
           const nodeId = this.nodeFor(contents);
-          if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true } });
+          if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true, waitingForSession: true } });
         }
         pending.then(
           () => go(),
@@ -169,13 +170,15 @@ export class TabManager {
         return;
       }
       this.waiting.delete(contents);
-      // A wait put the tab's loading on (this turn's, or one it took over from: Neon's NSF2, round 2 of #333).
+      // A wait put the tab's loading on (this turn's, or one it took over from: Neon's NSF2, round 2 of #333); its
+      // spinner over its icon comes off as it loads (Carbon's SF4 on #331).
       const marked = this.waitMarked.delete(contents);
-      if (marked) setFirstLoadPending(contents, false);
-      if (load() === false && marked) {
-        const nodeId = this.nodeFor(contents);
-        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+      const nodeId = marked ? this.nodeFor(contents) : undefined;
+      if (marked) {
+        setFirstLoadPending(contents, false);
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { waitingForSession: false } });
       }
+      if (load() === false && nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
     };
     go();
     // Its drop: while it still waits, it's no longer the tab's (never run, the tab's loading off), as Stop does but
@@ -187,7 +190,7 @@ export class TabManager {
       if (this.waitMarked.delete(contents)) {
         setFirstLoadPending(contents, false);
         const nodeId = this.nodeFor(contents);
-        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false, waitingForSession: false } });
       }
     };
   }
@@ -221,8 +224,23 @@ export class TabManager {
     this.loadTurns.set(contents, {});
     if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
     const nodeId = this.nodeFor(contents);
-    if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+    if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false, waitingForSession: false } });
     return true;
+  }
+
+  /**
+   * Your Stop (the toolbar's, the page's menu, Esc). A tab whose saved history is waiting to come back (held for its
+   * proxy, #331, or asleep and woken while its session waits) only stops showing loading: that restore was never your
+   * load to drop, and dropping it would leave the tab blank until you reloaded (Carbon's B3); it comes back once the
+   * session is ready. Any other load waiting is dropped (stopWaiting, #277).
+   */
+  userStop(contents: WebContents): void {
+    const nodeId = this.nodeFor(contents);
+    if (nodeId && this.waiting.has(contents) && this.restoring.get(nodeId)?.contents === contents && this.loadTurns.get(contents)?.restore) {
+      this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false, waitingForSession: false } });
+      return;
+    }
+    this.stopWaiting(contents);
   }
 
   /**
@@ -247,6 +265,13 @@ export class TabManager {
       // primed, or its page asked for and not come): left alone, it loads the address anyway, and an agent tab keeps
       // its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
       if (this.waiting.has(contents) || this.priming.has(contents) || firstLoadPending(contents)) return;
+      // A tab whose saved history never came back (its restore dropped while it waited): that history, never a
+      // navigation, which would leave it with only this page (Carbon's B3 on #331).
+      const restoring = nodeId ? this.restoring.get(nodeId) : undefined;
+      if (restoring?.contents === contents) {
+        this.whenProxied(contents, () => this.restoreInto(contents, restoring.nav, url), undefined, true);
+        return;
+      }
       if (nodeId) return this.navigate(nodeId, url);
       // Load failures show in the page itself, as they would in a tab.
       return this.load(contents, url);
@@ -432,14 +457,7 @@ export class TabManager {
     const load = () => {
       if (contents.isDestroyed()) return;
       if (nav) {
-        // Back where it was: same page, same back/forward list, same scroll position.
-        const turn = this.loadTurns.get(contents);
-        contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
-          // Its address instead, once the session is ready (Neon's NN2, round 1 of #323); never over a load asked for
-          // since, waiting or already loading (round 2).
-          if (contents.isDestroyed() || contents.navigationHistory.length() > 0 || this.loadTurns.get(contents) !== turn) return;
-          this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
-        });
+        this.restoreInto(contents, nav, url);
       } else {
         void contents.loadURL(url).catch(() => {
           // Load failures surface through did-fail-load; nothing to do here.
@@ -511,8 +529,19 @@ export class TabManager {
       this.priming.add(contents);
       void armed.then(primed);
     };
-    this.whenProxied(contents, due, armed ? overtake : undefined);
+    this.whenProxied(contents, due, armed ? overtake : undefined, Boolean(nav) && !armed);
     return view;
+  }
+
+  /** Back where it was: same page, same back/forward list, same scroll position; its address if that fails. */
+  private restoreInto(contents: WebContents, nav: NavState, url: string): void {
+    const turn = this.loadTurns.get(contents);
+    contents.navigationHistory.restore({ entries: nav.entries, index: nav.index }).catch(() => {
+      // Its address instead, once the session is ready (Neon's NN2, round 1 of #323); never over a load asked for
+      // since, waiting or already loading (round 2).
+      if (contents.isDestroyed() || contents.navigationHistory.length() > 0 || this.loadTurns.get(contents) !== turn) return;
+      this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
+    });
   }
 
   /**

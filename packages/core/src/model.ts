@@ -254,6 +254,11 @@ export interface LiveTab {
   /** An agent's tab while it works or is held (S18); null otherwise. */
   agent: AgentLive | null;
   loading: boolean;
+  /**
+   * Its page waits for its session (its proxy, its chord's rules) and nothing of it has loaded: its spinner shows over
+   * its icon too, as it would on a tab with none (a tab held for its proxy, Carbon's SF4 on #331).
+   */
+  waitingForSession?: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   audible: boolean;

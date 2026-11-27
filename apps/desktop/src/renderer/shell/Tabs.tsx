@@ -596,7 +596,7 @@ function TabFace({ tab, live, appearance }: { tab: TabNode; live: LiveTab | unde
       {isInternalUrl(tab.url) ? (
         <Archive className={styles.rowGlyph} size={16} strokeWidth={1.75} aria-hidden />
       ) : (
-        <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
+        <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && (!tab.favicon || Boolean(live?.waitingForSession))} appearance={appearance} />
       )}
       <span className={styles.ellipsis}>{pageTitle(tab) || displayHost(tab.url) || 'New tab'}</span>
     </>

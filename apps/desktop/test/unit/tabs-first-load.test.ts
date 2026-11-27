@@ -114,7 +114,7 @@ describe('a page’s load waiting for its session (#189)', () => {
   it('while it waits, the tab shows loading, and a tool call knows a page is on its way', async () => {
     const rules = held();
     const t = setup([rules]);
-    expect(t.commands).toContainEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    expect(t.commands).toContainEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true, waitingForSession: true } });
     expect(firstLoadPending(t.page)).toBe(true);
     rules.resolve();
     await tick();
@@ -126,7 +126,7 @@ describe('a page’s load waiting for its session (#189)', () => {
     const rules = held();
     const t = setup([rules]);
     expect(t.manager.stopWaiting(t.page as never)).toBe(true);
-    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false, waitingForSession: false } });
     expect(firstLoadPending(t.page)).toBe(false);
     rules.resolve();
     await tick();
@@ -164,6 +164,54 @@ describe('a page’s load waiting for its session (#189)', () => {
     Object.assign(t.page.navigationHistory, { length: () => 2, getAllEntries: () => nav.entries, getActiveIndex: () => 1 });
     t.page.emit('did-navigate', {}, FIRST);
     expect(t.manager.history(NODE)).toEqual({ entries: nav.entries.map((e) => expect.objectContaining({ url: e.url })), index: 1 });
+  });
+
+  it('held for its proxy, with an icon (Carbon’s SF4 on #331): it says its page is waiting, so its spinner shows over the icon, until the page loads', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    expect(t.commands).toContainEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true, waitingForSession: true } });
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([FIRST]);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { waitingForSession: false } });
+  });
+
+  it('your Stop on a tab held for its proxy (Carbon’s B3 on #331): only its spinner stops; its saved history comes back once the proxy takes', async () => {
+    const rules = held();
+    const nav = { entries: [{ url: 'https://a.test/', title: 'A' }, { url: FIRST, title: 'First' }], index: 1 };
+    const t = setup([rules], nav);
+    t.manager.userStop(t.page as never);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false, waitingForSession: false } });
+    expect(t.manager.history(NODE)).toEqual(nav);
+    rules.resolve();
+    await tick();
+    expect(t.page.navigationHistory.restore).toHaveBeenCalledWith({ entries: nav.entries, index: 1 });
+    expect(t.loaded()).toEqual([]);
+  });
+
+  it('your Stop on a page whose own navigation waits (#277): still dropped', async () => {
+    const rules = held();
+    const t = setup([rules]);
+    t.manager.userStop(t.page as never);
+    rules.resolve();
+    await tick();
+    expect(t.loaded()).toEqual([]);
+  });
+
+  it('Reload of a held tab whose restore was dropped (Safe Browsing’s stopWaiting; Carbon’s B3): its saved history restores, once the session is ready, never a navigation over it', async () => {
+    const rules = held();
+    const nav = { entries: [{ url: 'https://a.test/', title: 'A' }, { url: FIRST, title: 'First' }], index: 1 };
+    const t = setup([rules], nav);
+    t.manager.stopWaiting(t.page as never);
+    const proxy = held();
+    (t.manager as unknown as { deps: { proxyReady: () => unknown } }).deps.proxyReady = () => (proxy.over ? null : proxy.promise);
+    t.manager.reload(t.page as never);
+    expect(t.page.navigationHistory.restore).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(t.page.navigationHistory.restore).toHaveBeenCalledWith({ entries: nav.entries, index: 1 });
+    expect(t.loaded()).toEqual([]);
+    expect(t.manager.history(NODE)).toEqual(nav);
   });
 
   it('Reload while its first load waits, the page having only an empty first entry (a tab held for its proxy, #331): left alone, it loads once the session is ready', async () => {

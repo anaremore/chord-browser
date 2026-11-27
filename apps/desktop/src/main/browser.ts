@@ -2834,12 +2834,32 @@ export class Browser {
   holdPages(ses: Session): void {
     // A page that isn't a tab yet (Peek, a mini window) in that session closes with what shows it, as openFlaggedAsTab
     // closes them (Neon's SF1-r3: never a Peek card or a mini window left open on a closed page); then any page left.
+    // Each one's address opens as a tab, held like the rest (Carbon's SF6): a Peek's in its window, a mini window's in
+    // its chord's. After the tabs below are held, so a new one isn't put to sleep with them.
+    const promoted: { w: AppWindow; url: string }[] = [];
     for (const w of this.windows.values()) {
       const peek = this.peeks.contents(w);
-      if (peek && !peek.isDestroyed() && peek.session === ses) this.peeks.close(w);
+      if (!peek || peek.isDestroyed() || peek.session !== ses) continue;
+      const nodeId = this.peeks.nodeOf(w);
+      const url = (nodeId && this.tabs.floatingAddress(nodeId)) || peek.getURL();
+      this.peeks.close(w);
+      if (url) promoted.push({ w, url });
     }
-    this.minis.closeIn(ses);
+    for (const { chordId, url } of this.minis.closeIn(ses)) {
+      if (!chordId || !url) continue;
+      const onChord = [...this.windows.values()].find((x) => !x.isPrivate && this.store.state.windows[x.id]?.activeChordId === chordId);
+      const w = onChord ?? this.normalWindowForLinks({ quiet: true });
+      if (!w) continue;
+      if (this.store.state.windows[w.id]?.activeChordId !== chordId) this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+      promoted.push({ w, url });
+    }
     this.tabs.closeFloatingIn(ses);
+    this.holdTabs(ses);
+    for (const { w, url } of promoted) this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+  }
+
+  /** holdPages' tabs: each tab's page in `ses` closes, its history kept. */
+  private holdTabs(ses: Session): void {
     const held = [...this.tabs.entries()].filter(([, contents]) => !contents.isDestroyed() && contents.session === ses).map(([nodeId]) => nodeId);
     if (!held.length) return;
     const onScreen = (nodeId: NodeId) => [...this.windows.values()].some((w) => shownTabs(this.store.state, w.id).includes(nodeId));
@@ -2857,8 +2877,12 @@ export class Browser {
     for (const w of this.windows.values()) if (held.some((nodeId) => shownTabs(this.store.state, w.id).includes(nodeId))) this.showPanes(w);
   }
 
-  /** A proxy toast's Settings (#325): Settings → Privacy → Proxy, at a chord's own proxy or (null) the one for every chord. */
-  openProxySettingsAt(chordId: string | null): void {
+  /**
+   * A proxy toast's Settings (#325): Settings → Privacy → Proxy, at a chord's own proxy or (null) the one for every
+   * chord, over `w`, the window the toast was in.
+   */
+  openProxySettingsAt(chordId: string | null, w?: AppWindow): void {
+    if (w) this.lastWindowId = w.id;
     this.openSettings(`privacy/proxy/${chordId ?? ''}`);
   }
 

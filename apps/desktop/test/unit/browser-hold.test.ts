@@ -16,7 +16,12 @@ const failing = { id: 'failing' };
 const other = { id: 'other' };
 
 /** A Browser with these tabs' pages, the store's `tab.sleep` doing what the reducer does for each (`asleep` or not). */
-function browser(pages: Record<string, { session: object; reducerSleeps: boolean }>, state: object = { windows: {}, nodes: {}, chords: {}, live: {} }, peeking: Record<string, object> = {}) {
+function browser(
+  pages: Record<string, { session: object; reducerSleeps: boolean }>,
+  state: object = { windows: {}, nodes: {}, chords: {}, live: {} },
+  peeking: Record<string, object> = {},
+  minisHeld: { nodeId: string; chordId: string | null; url: string }[] = [],
+) {
   const live = new Set(Object.keys(pages));
   const tabs = {
     *entries() {
@@ -25,14 +30,19 @@ function browser(pages: Record<string, { session: object; reducerSleeps: boolean
     get: (id: string) => (live.has(id) ? { webContents: {} } : undefined),
     sleep: vi.fn((id: string) => void live.delete(id)),
     closeFloatingIn: vi.fn(),
+    floatingAddress: (id: string) => (id === 'peek-w1' ? 'https://peeked.test/' : undefined),
   };
-  const dispatch = vi.fn((command: { t: string; nodeId: string }) => {
-    if (command.t === 'tab.sleep' && pages[command.nodeId]?.reducerSleeps) live.delete(command.nodeId);
+  const dispatch = vi.fn((command: { t: string; nodeId?: string }) => {
+    if (command.t === 'tab.sleep' && command.nodeId && pages[command.nodeId]?.reducerSleeps) live.delete(command.nodeId);
   });
   // Open windows, and the session of the page each one's Peek shows (if any).
   const windows = new Map(Object.keys(peeking).map((id) => [id, { id }]));
-  const peeks = { contents: (w: { id: string }) => (peeking[w.id] ? { isDestroyed: () => false, session: peeking[w.id] } : null), close: vi.fn() };
-  const minis = { closeIn: vi.fn() };
+  const peeks = {
+    contents: (w: { id: string }) => (peeking[w.id] ? { isDestroyed: () => false, session: peeking[w.id], getURL: () => '' } : null),
+    nodeOf: (w: { id: string }) => `peek-${w.id}`,
+    close: vi.fn(),
+  };
+  const minis = { closeIn: vi.fn(() => minisHeld) };
   const self = Object.assign(Object.create(Browser.prototype) as object, {
     tabs,
     peeks,
@@ -41,6 +51,7 @@ function browser(pages: Record<string, { session: object; reducerSleeps: boolean
     windows,
     histories: { touch: vi.fn() },
     showPanes: vi.fn(),
+    normalWindowForLinks: () => ({ id: 'w9' }),
   });
   (Browser.prototype as unknown as { holdPages(s: object): void }).holdPages.call(self, failing);
   return { live, tabs, dispatch, peeks, minis };
@@ -73,21 +84,55 @@ describe('holdPages (#331)', () => {
     expect(tabs.closeFloatingIn).toHaveBeenCalledWith(failing);
   });
 
+  it('a Peek on that session becomes a tab in its window, held like any (Carbon’s SF6): its address, never lost', () => {
+    const { peeks, dispatch } = browser({}, undefined, { w1: failing, w2: other });
+    expect(peeks.close).toHaveBeenCalledWith({ id: 'w1' });
+    expect(dispatch).toHaveBeenCalledWith({ t: 'tab.open', windowId: 'w1', url: 'https://peeked.test/' });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mini window on that session: a tab in its chord’s window (Carbon’s SF6), opened after the tabs are held, so it isn’t put to sleep too', () => {
+    const state = { windows: { w1: { id: 'w1', activeChordId: 'c2', activeTab: {} }, w2: { id: 'w2', activeChordId: 'c1', activeTab: {} } }, nodes: {}, chords: { c1: { id: 'c1' } }, live: {} };
+    const { dispatch, tabs } = browser({ n1: { session: failing, reducerSleeps: true } }, state, { w1: other, w2: other }, [{ nodeId: 'm1', chordId: 'c1', url: 'https://mini.test/' }]);
+    expect(dispatch).toHaveBeenLastCalledWith({ t: 'tab.open', windowId: 'w2', url: 'https://mini.test/' });
+    expect(dispatch.mock.calls.findIndex(([c]) => c.t === 'tab.open')).toBeGreaterThan(dispatch.mock.calls.findIndex(([c]) => c.t === 'tab.sleep'));
+    expect(tabs.sleep).not.toHaveBeenCalled();
+  });
+
+  it('a mini window whose chord no window shows: the window links open in shows that chord, then the tab', () => {
+    const state = { windows: { w9: { id: 'w9', activeChordId: 'c2', activeTab: {} } }, nodes: {}, chords: { c1: { id: 'c1' } }, live: {} };
+    const { dispatch } = browser({}, state, {}, [{ nodeId: 'm1', chordId: 'c1', url: 'https://mini.test/' }]);
+    expect(dispatch.mock.calls.map(([c]) => c)).toEqual([
+      { t: 'chord.activate', windowId: 'w9', chordId: 'c1' },
+      { t: 'tab.open', windowId: 'w9', url: 'https://mini.test/' },
+    ]);
+  });
+
   it('another session’s tabs are left alone', () => {
     const { live } = browser({ n1: { session: failing, reducerSleeps: true }, n2: { session: other, reducerSleeps: true } });
     expect([...live]).toEqual(['n2']);
   });
 });
 
-describe('MiniWindows.closeIn (Neon’s SF1-r3 on #331)', () => {
-  it('closes each mini window whose page is in that session, window and all; others stay', async () => {
+describe('MiniWindows.closeIn (Neon’s SF1-r3, Carbon’s SF6 on #331)', () => {
+  it('each mini window whose page is in that session: its page out at once, the window fading away, and what it showed handed back; others stay', async () => {
     const { MiniWindows } = await import('../../src/main/mini-window');
-    const mini = (session: object) => ({ page: { webContents: { isDestroyed: () => false, session } }, window: { close: vi.fn() } });
-    const held = mini(failing);
-    const kept = mini(other);
+    const mini = (nodeId: string, session: object) => ({
+      nodeId,
+      target: 'c1',
+      promoted: false,
+      page: { webContents: { isDestroyed: () => false, session, getURL: () => `https://${nodeId}.test/` } },
+      window: { close: vi.fn(), isDestroyed: () => false, contentView: { removeChildView: vi.fn() } },
+      fadeAndClose: vi.fn(),
+    });
+    const held = mini('m1', failing);
+    const kept = mini('m2', other);
     const self = Object.assign(Object.create(MiniWindows.prototype) as object, { open: new Map([['m1', held], ['m2', kept]]) });
-    (MiniWindows.prototype as unknown as { closeIn(s: object): void }).closeIn.call(self, failing);
-    expect(held.window.close).toHaveBeenCalled();
+    const gone = (MiniWindows.prototype as unknown as { closeIn(s: object): unknown }).closeIn.call(self, failing);
+    expect(gone).toEqual([{ nodeId: 'm1', chordId: 'c1', url: 'https://m1.test/' }]);
+    expect(held.window.contentView.removeChildView).toHaveBeenCalledWith(held.page);
+    expect(held.fadeAndClose).toHaveBeenCalled();
+    expect(kept.fadeAndClose).not.toHaveBeenCalled();
     expect(kept.window.close).not.toHaveBeenCalled();
   });
 });
