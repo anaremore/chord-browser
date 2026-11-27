@@ -338,8 +338,10 @@ export class ChordDatabase {
    * session, so its partition and its extensions' folders are unused, and
    * launch's cleanups delete them (removeUnusedPartitions, the extensions'
    * removeOrphanFolders). A chord that later keeps its own sign-ins again gets
-   * a new profile, with none. A chord is one `load` reads (`deleted_at` unset),
-   * the same in each statement here. Returns the pruned profiles' partitions.
+   * a new profile, with none. For its extensions and its move a chord is one
+   * `load` reads (`deleted_at` unset); its profile row goes only once no chord
+   * row at all names it (the foreign key). Returns the pruned profiles'
+   * partitions.
    * Main deletes the sign-ins on disk itself, from the folders, because a
    * profile switched on and off between two writes never gets a row.
    */
@@ -347,7 +349,10 @@ export class ChordDatabase {
     const live = 'SELECT profile_id FROM chord WHERE deleted_at IS NULL';
     let unused: Row[] = [];
     this.transaction(() => {
-      unused = this.sql(`SELECT id, partition FROM profile WHERE is_default = 0 AND id NOT IN (${live})`).all() as Row[];
+      // Every chord row here, live or not: a profile row can't go while any chord row names it (its foreign key), so a chord
+      // with `deleted_at` set keeps its profile row; its extensions and move go with the live definition below (Neon's
+      // round 2 of #335).
+      unused = this.sql('SELECT id, partition FROM profile WHERE is_default = 0 AND id NOT IN (SELECT profile_id FROM chord)').all() as Row[];
       for (const r of unused) this.sql('DELETE FROM profile WHERE id = ?').run(str(r['id']));
       // Every extension installed in a profile no chord uses: those just pruned, and any left orphaned before.
       this.sql(`DELETE FROM extension WHERE profile_id <> ? AND profile_id NOT IN (SELECT id FROM profile WHERE is_default = 1) AND profile_id NOT IN (${live})`).run(DEFAULT_PROFILE);

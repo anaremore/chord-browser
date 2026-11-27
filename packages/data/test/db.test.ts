@@ -263,6 +263,24 @@ describe('chord-data', () => {
       expect((saved?.extensions ?? []).map((e) => e.profileId).sort()).toEqual(['default', 'p-live']);
     });
 
+    it('no chord on the default sign-ins: the default’s extensions stay all the same (Neon’s round 2 of #335)', () => {
+      let db = new ChordDatabase(file);
+      let state = seed();
+      db.write(opsForState(state));
+      const [only] = Object.keys(state.chords);
+      state = drive(db, state, [
+        { t: 'chord.profile', chordId: only!, profileId: 'p-own' },
+        { t: 'extension.record', extension: ext('default') },
+      ]);
+      expect(Object.values(state.chords).map((c) => c.profileId)).toEqual(['p-own']);
+      db.close();
+      db = new ChordDatabase(file);
+      expect(db.pruneProfiles()).toEqual([]);
+      const saved = db.load();
+      db.close();
+      expect((saved?.extensions ?? []).map((e) => e.profileId)).toEqual(['default']);
+    });
+
     it('rows already orphaned (a profile pruned before #330, its extension rows left): they go too (Neon’s B1 on #335)', () => {
       let db = new ChordDatabase(file);
       db.write(opsForState(seed()));
