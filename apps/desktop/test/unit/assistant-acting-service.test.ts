@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ACT_REFUSALS, emptyState, nodeOf, splitOf, type State } from '@chord/core';
+import { ACT_REFUSALS, CONTROL_REFUSALS, emptyState, nodeOf, splitOf, type State } from '@chord/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '', isPackaged: false }, shell: {}, clipboard: {}, BrowserWindow: class {}, WebContentsView: class {}, net: {}, nativeImage: {}, ClipboardItem: class {} }));
@@ -324,6 +324,37 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     };
     expect(await host.lease.begin({ id: t.mine })).toBe(ACT_REFUSALS.crashedYours);
     page.isCrashed = () => false;
+    leases.begin = async () => 'on';
+  });
+
+  it('Stop while the lease was being had answers Stop, as every tool does: with the page crashing at that moment too, never the crash (#344)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> } } }).actingHost(s);
+    const control = (s as unknown as { control: { stop(): void } }).control;
+    const page = t.page(t.mine) as unknown as { isCrashed: () => boolean };
+    // Stop and a crash at the same moment, the lease saying no: Stop.
+    leases.begin = async () => {
+      page.isCrashed = () => true;
+      control.stop();
+      return 'no';
+    };
+    expect(await host.lease.begin({ id: t.mine })).toBe(CONTROL_REFUSALS.stopped);
+    page.isCrashed = () => false;
+    leases.begin = async () => 'on';
+  });
+
+  it('Stop while the lease was being had, the lease on: let go of, and Stop answered in its own words (#344)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> } } }).actingHost(s);
+    const control = (s as unknown as { control: { stop(): void } }).control;
+    leases.begin = async () => {
+      control.stop();
+      return 'on';
+    };
+    expect(await host.lease.begin({ id: t.mine })).toBe(CONTROL_REFUSALS.stopped);
+    expect(leases.owners.has(t.page(t.mine))).toBe(false);
     leases.begin = async () => 'on';
   });
 

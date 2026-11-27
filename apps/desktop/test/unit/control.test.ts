@@ -2759,14 +2759,32 @@ describe('acting through the gate (S18 M2c)', () => {
         leaseLost.delete(box.contents);
         return out;
       };
-      // Its first look on a page already crashed (its scripts reject): nothing was done, said as the crash (SF1).
-      {
-        const t = await acting({ act: { siteAllowed: () => true } });
+      // The look itself rejected as the page crashes (#344: mid-crash, past the checks before it, so only the look's own
+      // check can say so): the act's first look, and the look again after a risky step's card. Nothing was done.
+      const rejectAt = (nth: number, tool = 'click', args: Record<string, unknown> = { ref: 'e1' }) => async () => {
+        let n = nth;
+        const t = await acting({
+          onAct: (_events, at) => {
+            if (at !== 'describe' || --n !== 0) return;
+            if (box.contents) leaseLost.add(box.contents);
+            if (box.at) box.at.crashed = true;
+            box.at?.crash?.();
+            throw new Error('Render frame was disposed before WebFrameMain could be accessed');
+          },
+          act: { siteAllowed: () => true },
+        });
         chordIsAgents(t, true);
-        t.at.crashed = true;
-        const out = refusal(await t.call('click', { tab_id: t.tab, ref: 'e1' })).refused;
-        expect(out, 'its look rejected as the page crashed').toBe(ACT_REFUSALS.crashed);
-      }
+        box.contents = t.pages.get('n1')!.contents;
+        box.at = t.at;
+        const out = refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused;
+        leaseLost.delete(box.contents);
+        return { out, stepCard: t.cards.some((c) => c.kind === 'step') };
+      };
+      expect((await rejectAt(1)()).out, 'its first look rejected mid-crash').toBe(ACT_REFUSALS.crashed);
+      // A risky step (typing that sends its form) asks its own card; the look again after it (described the same?).
+      const afterCard = await rejectAt(2, 'type', { ref: 'e2', text: 'wool', submit: true })();
+      expect(afterCard.stepCard, 'its step card asked first').toBe(true);
+      expect(afterCard.out, 'its look after the step card rejected mid-crash').toBe(ACT_REFUSALS.crashed);
       // Before any input (the check right before the press): nothing was done.
       expect(await run('describe', 2, 'click', { ref: 'e1' }), 'before the press').toBe(ACT_REFUSALS.crashed);
       // After the click went in (the page settling): it may have gone in.
