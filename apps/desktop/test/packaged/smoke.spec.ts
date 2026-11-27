@@ -18,7 +18,7 @@ import type { AddressInfo } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { AGENTS_RELEASED, agentActions, agentToolList } from '@chord/core/agent-tools';
+import { agentActions, agentToolList } from '@chord/core/agent-tools';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 
 /** electron-builder's unpacked output for this OS and arch. */
@@ -412,7 +412,7 @@ test('Chord mcp: the relay alone answers fast, in one process, with no window an
   }
 });
 
-test('Chord mcp holds no lock; a packaged Chord serves agents only with Settings → Agents on (and only once AGENTS_RELEASED), and no hook lets one in', async () => {
+test('Chord mcp holds no lock; a packaged Chord serves agents only with Settings → Agents on, and no hook lets one in', async () => {
   const executable = packagedExecutable();
   const profile = mkdtempSync(join(tmpdir(), 'chord-packaged-'));
   const first = await start(executable, profile);
@@ -463,19 +463,6 @@ test('Chord mcp holds no lock; a packaged Chord serves agents only with Settings
     try {
       const shell = await pageWhere(app.browser, isShell);
       await expect(shell.getByText('Personal')).toBeVisible();
-      if (!AGENTS_RELEASED) {
-        // Before 0.14.0 a packaged Chord has no Agents: the saved setting serves nothing, and Settings has no Agents section.
-        expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
-        expect((await mcp.request('tools/call', { name: 'list_tabs', arguments: {} })).result).toMatchObject(notOpen);
-        await shell.evaluate(() => (window as unknown as { chord: { action: { run(a: string): Promise<void> } } }).chord.action.run('app.settings'));
-        const settings = await pageWhere(app.browser, isSettings);
-        const nav = settings.getByRole('navigation', { name: 'Settings sections' });
-        await expect(nav.getByRole('button', { name: 'About', exact: true })).toBeVisible();
-        await expect(nav.getByRole('button', { name: 'Agents', exact: true })).toHaveCount(0);
-        expect(existsSync(join(profile, 'agent-endpoint.json'))).toBe(false);
-        await quit(app, shell);
-        return;
-      }
       await expect.poll(() => existsSync(join(profile, 'agent-endpoint.json'))).toBe(true);
       const call = mcp.request('tools/call', { name: 'list_tabs', arguments: {} });
       const popover = await pageWhere(app.browser, (url) => url === 'chord://popover/');

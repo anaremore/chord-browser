@@ -45,17 +45,16 @@ export interface AgentHello {
 }
 
 /**
- * Whether outside agents ship in release builds: true since 0.14.0. When false, packaged builds hide
- * Settings → Agents, never serve the endpoint, and `chord mcp` answers that Chord isn't open.
- * Development and E2E builds have it all either way.
+ * Whether outside agents ship in release builds: true since 0.14.0. What it gates now: agentsServe's default (a
+ * packaged build serves agents only with it, Settings → Agents on), kept as the release-switch pattern unreleased
+ * switches use (#291). Development and E2E builds have Agents either way.
  */
 export const AGENTS_RELEASED = true as boolean;
 
 /**
- * Whether M2 (agents act on pages; docs/decisions/S18-agent-mcp.md, "M2: plan") ships in release builds. On since M2d
- * (risky steps ask every time): outside agents get the acting tools, and the connect card's *Started by* comes from
- * the peer lookup. The assistant's acting is M2e's, gated by its own scope (no `act` host until then). Off, packaged
- * builds keep M1's ways: no acting tools, and *Started by* from the hello's word.
+ * Whether M2 (agents act on pages; docs/decisions/S18-agent-mcp.md, "M2: plan") ships in release builds: on since
+ * M2d. What it gates now: agentActions, the tool list a packaged build answers with (the acting tools or not), kept as
+ * the release-switch pattern (#291). The assistant's acting has its own switch, ASSISTANT_ACTING_RELEASED.
  */
 export const AGENT_ACTIONS_RELEASED = true as boolean;
 

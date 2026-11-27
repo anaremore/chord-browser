@@ -948,7 +948,7 @@ export type BoxAnswer = { ok: true; url: string; role: string; name: string; tex
  * the page read's own walk (extract.ts' TEXT_LIB), strict: never a field's value, an editing host's contents or an ARIA
  * text field's. A page that's all editor (designMode, an editable body) is never read this way (#145's B-3).
  */
-export function boxTextScript(owner: string, token: string, box: number): string {
+function boxTextScript(owner: string, token: string, box: number): string {
   return String.raw`((args) => {
   ${SNAPSHOT_LIB}
   ${TEXT_LIB}
