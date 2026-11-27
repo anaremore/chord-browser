@@ -92,6 +92,30 @@ describe('a tab of yours: another site’s icon is fetched without its cookies (
     expect(t.fetch.mock.calls[1]![1]).not.toHaveProperty('redirect');
   });
 
+  it('a page on one site of a private suffix naming another’s icon (Neon’s SF3, round 1 of #337): no cookies', async () => {
+    const t = setup(false);
+    t.go('https://evil.blogspot.com/');
+    t.view.page.emit('page-favicon-updated', {}, ['https://victim.blogspot.com/icon.png']);
+    await vi.waitFor(() => expect(t.fetch).toHaveBeenCalled());
+    expect(t.fetch.mock.calls[0]![1]).toMatchObject({ credentials: 'omit' });
+  });
+
+  it('its page closed while the Public Suffix List loads (Neon’s SF1): nothing fetched, nothing thrown', async () => {
+    const t = setup(false);
+    const unhandled: unknown[] = [];
+    const note = (reason: unknown) => void unhandled.push(reason);
+    process.on('unhandledRejection', note);
+    try {
+      t.view.page.emit('page-favicon-updated', {}, ['https://shop.test/favicon.ico']);
+      t.view.page.destroy();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(t.fetch).not.toHaveBeenCalled();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', note);
+    }
+  });
+
   it('an agent’s own-origin icon that fails: never fetched again (#115: no redirect, no second try)', async () => {
     const t = setup();
     let fail: (e: Error) => void = () => undefined;

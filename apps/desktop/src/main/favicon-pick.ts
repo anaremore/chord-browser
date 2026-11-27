@@ -26,9 +26,14 @@ const originOf = (url: string): string | null => {
  * and schemefully (http and https of one domain are two sites, as for cookies).
  */
 function sameSite(page: string, url: string, site: (url: string) => string | null): boolean {
-  if (!/^https?:/i.test(page) || !/^https?:/i.test(url) || new URL(page).protocol !== new URL(url).protocol) return false;
-  const from = site(page);
-  return from !== null && from === site(url);
+  try {
+    if (!/^https?:/i.test(page) || !/^https?:/i.test(url) || new URL(page).protocol !== new URL(url).protocol) return false;
+    const from = site(page);
+    return from !== null && from === site(url);
+  } catch {
+    // An address that doesn't parse: another site, no cookies (Neon's N1 on #337).
+    return false;
+  }
 }
 
 export function pickFavicon(favicons: readonly string[], page: string, tab: { agent: boolean; never: (url: string) => boolean; site?: (url: string) => string | null }): FaviconFetch | null {

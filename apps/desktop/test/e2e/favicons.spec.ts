@@ -145,6 +145,8 @@ test("a tab keeps its site's icon: through pages without one, a broken one and a
 });
 
 test('#324: a tab of yours whose page names another site’s icon fetches it without that site’s cookies', async () => {
+  // Fresh for each run (--repeat-each, a retry: Neon's SF4 on #337).
+  for (const path of Object.keys(iconCookies)) delete iconCookies[path];
   // Two sites on this machine: page.test (the page) and other.test (the icon's), each its own site.
   const app = await launch(`http://other.test:${site.port}/set`, ['--host-resolver-rules=MAP page.test 127.0.0.1, MAP other.test 127.0.0.1']);
   try {
