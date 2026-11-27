@@ -137,7 +137,7 @@ describe('profile partitions after #315 (migration)', () => {
     }
   });
 
-  it('pruning a profile takes it off the move list too, unless an extension still names it (Neon’s SF1-R2 on #329)', () => {
+  it('pruning a profile takes it off the move list too (Neon’s SF1-R2 on #329), its extensions with it (#330)', () => {
     // `Gone` was a chord's own sign-ins before the upgrade; the chord was deleted, so pruning drops its profile.
     before(['Work', 'Ext_Only']);
     const old = new DatabaseSync(file);
@@ -150,8 +150,28 @@ describe('profile partitions after #315 (migration)', () => {
     try {
       expect(db.partitionMoves()).toEqual(['Ext_Only', 'Gone', 'Work']);
       db.pruneProfiles();
-      // A later `gone` (by sync) must never take this one's sign-ins: off the list with its profile.
+      // A later `gone` (by sync) must never take this one's sign-ins: off the list with its profile. `Ext_Only`, which no
+      // chord uses, is pruned now with the extension installed in it (#330), so it comes off too.
+      expect(db.partitionMoves()).toEqual(['Work']);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('an extension row already orphaned (its profile row gone before #330) comes off the move list with it (Neon’s B1, SF2 on #335)', () => {
+    before(['Work', 'Ext_Only']);
+    const old = new DatabaseSync(file);
+    old.exec('PRAGMA foreign_keys = OFF');
+    old.prepare("DELETE FROM chord WHERE profile_id = 'Ext_Only'").run();
+    old.prepare("DELETE FROM profile WHERE id = 'Ext_Only'").run();
+    old.prepare("INSERT INTO extension (profile_id, id, name, version, source, path, notified_version, pinned, installed_at, updated_at) VALUES ('Ext_Only', ?, 'E', '1', 'store', '/x', NULL, 1, 0, 0)").run('a'.repeat(32));
+    old.close();
+    const db = new ChordDatabase(file);
+    try {
       expect(db.partitionMoves()).toEqual(['Ext_Only', 'Work']);
+      db.pruneProfiles();
+      expect(db.partitionMoves()).toEqual(['Work']);
+      expect(db.load()?.extensions ?? []).toEqual([]);
     } finally {
       db.close();
     }
