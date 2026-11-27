@@ -267,7 +267,8 @@ The install-time listeners can't be relied on, so PR 3 doesn't build on them.
 
 **1. Installed before the page's scripts, in every document of an agent's tab, by Chord through the debugger.**
 - The agent's tab keeps its debugger attached for its life (`agents/pickers.ts`). Through it, `Page.addScriptToEvaluateOnNewDocument` with `runImmediately: true` and a world name of Chord's installs the guard's script in a world of its own, in every frame's every document, before the page's scripts.
-- This needs a **spike first (Spike E):** does it run for a frame's first document after the reused `about:blank` Window, for script-made blank frames (no `src`, `about:blank`, `document.write`), for `srcdoc` and `blob:`, and before the page's first inline script? If not, the fallback is to install at arm time (below), with the ordering limit said.
+- Spike E (below) shows it runs first in every navigated frame and in blank frames. `document.open()` (and a `document.write` into a blank frame, which opens it) erases it; the live check below catches that.
+- **Put back, once.** A frame whose guard fails the live check gets it installed again at arm time, through the session. It's then after any window capture listener the page added before; `DOMDebugger.getEventListeners` on that frame's window lists them. If the page has one for a guarded event type (`keydown`, `keypress`, `keyup`, `beforeinput`, the composition events), the action fails closed. Otherwise the guard put back is as good as first.
 - The preload's guard stays, for the top of a tab of yours (no debugger there) and as a second layer.
 
 **2. Armed per action, through the open `DeepSession`, never a second `withDebugger`.**
@@ -282,6 +283,23 @@ The install-time listeners can't be relied on, so PR 3 doesn't build on them.
 - `dropAgentGuard` (your key or click took the tab) drops every frame's, through the session if it's open and through IPC as now.
 
 **4. The mark.** Unchanged: `focused` fires the mark at the element, inside its frame. DOM events cross worlds, so the frame's guard hears it, and a frame's event never reaches the top's window, so the top stays blocking everything.
+
+### Spike E: a guard installed through the debugger (run 2026-11-27, Linux container, an agent's tab, 3 runs, the same each time; throwaway)
+
+The agent's tab's own debugger (attached for its life) ran `Page.addScriptToEvaluateOnNewDocument` with `runImmediately: true` and a world name of its own, then loaded a page. Each document's first script was the page's: a window capture `keydown` listener that counts. Each frame's guard was put up through `Runtime.evaluate` in its world, the focus was put on the frame's input, and one trusted key was sent.
+
+| Frame | Guard's world there | Live check | Key | Page's first listener ran |
+| --- | --- | --- | --- | --- |
+| The top | yes | passes | stopped | no |
+| Static `<iframe src>` | yes | passes | stopped | no |
+| Script-set `src` | yes | passes | stopped | no |
+| `srcdoc`, `blob:` | yes | passes | stopped | no |
+| `src="about:blank"`, filled by the parent | yes | passes | stopped | (no script of its own) |
+| No `src`, `document.write` into it (opens it) | yes | **fails** | typed | yes |
+| The same, the guard put back through the session | yes | passes | stopped | **yes** (the page's listener was there first; `getEventListeners` lists it as `keydown:capture`) |
+| The top after `document.open()` | yes | **fails** | n/a | n/a |
+
+**What this decides:** install through the debugger, as above. The live check catches every erasure, and the putting back fails closed exactly when the page's own listener would come first.
 
 ### Focus inside a frame (SF2)
 
@@ -321,13 +339,13 @@ A frame ref under a lease is refused before any card, as in PR 2 (B1, F8). The s
 
 ### Proposed order
 
-1. **Spike E** (above). It decides between the debugger-installed guard and install at arm time.
-2. **Fix the pre-existing hole for the top first**, in its own PR (a bug, tier A), since it's live today: the guard installed per document as in step 1 of B8, the frames' blocks armed and confirmed through the session, `document.open()` failing closed. PR 3 then builds the target frame's rule on it.
+1. **Spike E:** done (above). The debugger-installed guard holds.
+2. **Fix the pre-existing hole first: #354**, its own PR (a bug, tier A), since it's live today. It covers the guard installed per document as in step 1 of B8, the frames' blocks armed and confirmed through the session, and `document.open()` failing closed. PR 3 then builds the target frame's rule on it.
 3. **PR 3:** the target frame's arm and reads, SF2, the realms, sensitive fields, F5.
 
 ### Limits (proposed)
 
-- **Install at arm time, if Spike E fails:** the guard's listeners then come after any window capture listener the page put there first. Such a listener can stop the guard's listener for a key (`stopImmediatePropagation`). The live check and the after-input `values` count are the backstops: a field elsewhere that changed answers *typed elsewhere* (`typedElsewhere`), as today, but after the fact.
+- **A page that writes into a blank frame and listens on its window first** (an ad's frame, often) fails typing closed for the whole tab while that frame is there: *Chord can't guard typing on this page*. The live check can't tell a harmless listener from a thief.
 - **Another site's frame** is blocked by its preload and IPC alone, with the acknowledgement. Its first-document install has the same Window-reuse risk; with no live answer, the action fails closed, so a page with such a frame may refuse typing everywhere until that's fixed (to be measured in Spike E).
 
 ## Spikes (run 2026-11-26, Linux container, an agent's tab; a throwaway spec, not committed)
