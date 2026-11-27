@@ -244,7 +244,8 @@ export class MiniWindows {
       const page = mini.page.webContents;
       if (page.isDestroyed() || page.session !== ses || mini.promoted) continue;
       mini.promoted = true;
-      gone.push({ nodeId: mini.nodeId, chordId: mini.target, url: page.getURL() });
+      // Before its first page came, its address is where it's going (Carbon's SF-R2-3, as promote's NSF2).
+      gone.push({ nodeId: mini.nodeId, chordId: mini.target, url: this.deps.tabs.floatingAddress(mini.nodeId) ?? page.getURL() });
       if (!mini.window.isDestroyed()) mini.window.contentView.removeChildView(mini.page);
       mini.fadeAndClose();
     }

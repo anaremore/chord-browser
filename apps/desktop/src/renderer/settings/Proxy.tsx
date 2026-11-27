@@ -33,7 +33,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import { api } from './api';
 import { RadioGroup, ResetButton, Row, Segmented } from './controls';
 import local from './Proxy.module.css';
-import { proxyAnnouncement, proxyFailingRows, type ProxyFailingRow, type RowSeen } from './proxy-row';
+import { proxyAnnouncement, proxyFailingRows, rowStillUsesProxy, type ProxyFailingRow, type RowSeen } from './proxy-row';
 import styles from './Settings.module.css';
 
 type Chord = SettingsSnapshot['chords'][number];
@@ -318,12 +318,7 @@ function useProxyStatus(): { status: ProxyStatus | null; refresh: () => Promise<
   return { status, refresh };
 }
 
-/** Whether a row's key still uses a proxy: 'all', unless it's set to none; a chord, while it has one of its own. */
-function usesProxy(key: string, snapshot: SettingsSnapshot): boolean {
-  if (key === 'all') return snapshot.settings.proxy.mode !== 'none';
-  const chord = snapshot.chords.find((c) => c.id === key);
-  return Boolean(chord?.proxy && chord.proxy.mode !== 'none');
-}
+
 
 export function ProxySection({ snapshot, focus }: { snapshot: SettingsSnapshot; focus: ProxyFocus | null }) {
   const { settings, chords } = snapshot;
@@ -360,7 +355,7 @@ export function ProxySection({ snapshot, focus }: { snapshot: SettingsSnapshot; 
   useEffect(() => {
     const now = new Map(JSON.parse(shown) as [string, RowSeen][]);
     const names = Object.fromEntries(snap.current.chords.map((c) => [c.id, c.name]));
-    const words = proxyAnnouncement(seen.current, now, (key) => usesProxy(key, snap.current), names);
+    const words = proxyAnnouncement(seen.current, now, (key) => rowStillUsesProxy(key, snap.current.settings, snap.current.chords), names);
     if (words !== null) setSaid(words);
     seen.current = now;
   }, [shown]);

@@ -1195,8 +1195,9 @@ if (!app.requestSingleInstanceLock()) {
       // Counts on tabs follow their switch and the sites they're hidden for.
       if (change.patches.some((p) => p.path[0] === 'settings' && p.path[1] === 'tabCounts')) browser!.tabs.refreshCounts();
       // A failing proxy's toast, where it's due now (Carbon's SF3 on #331): presenting ends, a window shows another
-      // chord, a window opens (normal or private). After this turn, so a new window is open to take it.
-      if (change.patches.some((p) => p.path[0] === 'presenting' || (p.path[0] === 'windows' && (p.path.length <= 2 || p.path[2] === 'activeChordId')))) setImmediate(proxyToasts);
+      // chord, a window opens (normal or private); and the header sign, when a chord moves onto or off a failing proxy
+      // (Carbon's SF-R2-1). After this turn, so a new window is open to take it.
+      if (change.patches.some((p) => p.path[0] === 'presenting' || p.path[0] === 'chords' || (p.path[0] === 'windows' && (p.path.length <= 2 || p.path[2] === 'activeChordId')))) setImmediate(proxyToasts);
     });
     // Proxies and ad blocking follow the settings before Browser's effects run (a tab made again in a session waits for
     // its proxy: Undo of a change of sign-ins, a chord restored, #328).

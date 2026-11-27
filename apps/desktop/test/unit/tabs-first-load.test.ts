@@ -189,6 +189,19 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.loaded()).toEqual([]);
   });
 
+  it('Reload after your Stop on a held tab, its proxy still failing (Carbon’s N-R2-1): it shows waiting again, and its history still comes back once', async () => {
+    const rules = held();
+    const nav = { entries: [{ url: 'https://a.test/', title: 'A' }, { url: FIRST, title: 'First' }], index: 1 };
+    const t = setup([rules], nav);
+    t.manager.userStop(t.page as never);
+    t.manager.reload(t.page as never);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true, waitingForSession: true } });
+    rules.resolve();
+    await tick();
+    expect(t.page.navigationHistory.restore).toHaveBeenCalledOnce();
+    expect(t.loaded()).toEqual([]);
+  });
+
   it('your Stop on a page whose own navigation waits (#277): still dropped', async () => {
     const rules = held();
     const t = setup([rules]);

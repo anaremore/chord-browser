@@ -278,16 +278,21 @@ kbd {
 
 /* A chord's proxy isn't working (#331): its icon in warning, a button to its settings. */
 .proxyFailing {
+  /*
+   * Its target over the quiet icon's 12px glyph: a quarter of it each side, so the icons beside it stay where they
+   * are; and a faint outline at rest, so it reads as a button even beside an amber chord's icon (Carbon's N-R2-2).
+   */
   display: grid;
   flex: none;
   place-items: center;
   inline-size: var(--size-hit-min);
   block-size: var(--size-hit-min);
-  margin-inline: calc(var(--space-1) * -1);
+  margin-inline: calc(var(--size-hit-min) / -4);
   padding: 0;
   border: 0;
   border-radius: var(--radius-xs);
   background: transparent;
+  box-shadow: inset 0 0 0 var(--size-hairline) color-mix(in oklab, var(--color-warning) 45%, transparent);
   color: var(--color-warning);
   transition: background-color var(--duration-fade-fast) var(--ease-standard);
 }

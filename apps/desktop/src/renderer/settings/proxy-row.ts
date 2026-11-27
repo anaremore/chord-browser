@@ -3,6 +3,7 @@
  * never going direct, and Chord keeps trying. A chord's own proxy is named by its chord; the one for every chord, once.
  * And what a screen reader hears about them (Carbon's B2 on #331), by each row's key.
  */
+import { proxied, type ProxySettings } from '@chord/core';
 import type { ProxyStatus } from '@chord/ipc';
 
 export interface ProxyFailingRow {
@@ -71,10 +72,26 @@ export function proxyAnnouncement(
     else if (was.trying && !row.trying) said.push(row.label.replace(/^Can’t/, 'Still can’t'));
   }
   for (const key of before.keys()) {
-    if (after.has(key) || !stillUses(key)) continue;
+    if (after.has(key)) continue;
+    // Turned off (or to the system's): not the proxy working, but what was said goes, so the same failure later is
+    // said again (Carbon's SF-R2-2).
+    if (!stillUses(key)) {
+      cleared = true;
+      continue;
+    }
     if (key === 'all') said.push('The proxy works again.');
     else if (names[key]) said.push(`${names[key]}’s proxy works again.`);
   }
   if (said.length) return said.join(' ');
   return cleared ? '' : null;
+}
+
+/**
+ * Whether a row's key still uses a proxy of its own setting (Carbon's SF-R2-2): 'all', while the proxy for every chord
+ * is a server or a file; a chord, while its own is. The system's or none is turning it off, never "works again".
+ */
+export function rowStillUsesProxy(key: string, settings: { proxy: ProxySettings }, chords: readonly { id: string; proxy?: ProxySettings | null }[]): boolean {
+  if (key === 'all') return proxied(settings.proxy);
+  const chord = chords.find((c) => c.id === key);
+  return Boolean(chord?.proxy && proxied(chord.proxy));
 }

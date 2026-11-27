@@ -264,7 +264,11 @@ export class TabManager {
       // Its own first load still on its way (waiting for its session, an agent tab's hold arming or its blank page
       // primed, or its page asked for and not come): left alone, it loads the address anyway, and an agent tab keeps
       // its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
-      if (this.waiting.has(contents) || this.priming.has(contents) || firstLoadPending(contents)) return;
+      if (this.waiting.has(contents) || this.priming.has(contents) || firstLoadPending(contents)) {
+        // Still waiting after your Stop (userStop on a held tab): it shows waiting again (Carbon's N-R2-1).
+        if (nodeId && this.waiting.has(contents) && this.waitMarked.has(contents)) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: true, waitingForSession: true } });
+        return;
+      }
       // A tab whose saved history never came back (its restore dropped while it waited): that history, never a
       // navigation, which would leave it with only this page (Carbon's B3 on #331).
       const restoring = nodeId ? this.restoring.get(nodeId) : undefined;

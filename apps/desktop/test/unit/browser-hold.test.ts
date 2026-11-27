@@ -115,6 +115,21 @@ describe('holdPages (#331)', () => {
 });
 
 describe('MiniWindows.closeIn (Neon’s SF1-r3, Carbon’s SF6 on #331)', () => {
+  it('a mini window whose first page hasn’t come yet (Carbon’s SF-R2-3): the address it’s going to, never an empty one', async () => {
+    const { MiniWindows } = await import('../../src/main/mini-window');
+    const mini = {
+      nodeId: 'm1',
+      target: 'c1',
+      promoted: false,
+      page: { webContents: { isDestroyed: () => false, session: failing, getURL: () => '' } },
+      window: { close: vi.fn(), isDestroyed: () => false, contentView: { removeChildView: vi.fn() } },
+      fadeAndClose: vi.fn(),
+    };
+    const self = Object.assign(Object.create(MiniWindows.prototype) as object, { open: new Map([['m1', mini]]), deps: { tabs: { floatingAddress: (id: string) => (id === 'm1' ? 'https://going.test/' : undefined) } } });
+    const gone = (MiniWindows.prototype as unknown as { closeIn(s: object): unknown }).closeIn.call(self, failing);
+    expect(gone).toEqual([{ nodeId: 'm1', chordId: 'c1', url: 'https://going.test/' }]);
+  });
+
   it('each mini window whose page is in that session: its page out at once, the window fading away, and what it showed handed back; others stay', async () => {
     const { MiniWindows } = await import('../../src/main/mini-window');
     const mini = (nodeId: string, session: object) => ({
@@ -127,7 +142,7 @@ describe('MiniWindows.closeIn (Neon’s SF1-r3, Carbon’s SF6 on #331)', () => 
     });
     const held = mini('m1', failing);
     const kept = mini('m2', other);
-    const self = Object.assign(Object.create(MiniWindows.prototype) as object, { open: new Map([['m1', held], ['m2', kept]]) });
+    const self = Object.assign(Object.create(MiniWindows.prototype) as object, { open: new Map([['m1', held], ['m2', kept]]), deps: { tabs: { floatingAddress: () => undefined } } });
     const gone = (MiniWindows.prototype as unknown as { closeIn(s: object): unknown }).closeIn.call(self, failing);
     expect(gone).toEqual([{ nodeId: 'm1', chordId: 'c1', url: 'https://m1.test/' }]);
     expect(held.window.contentView.removeChildView).toHaveBeenCalledWith(held.page);

@@ -3,8 +3,9 @@
  * a screen reader hears about them (Carbon's B2 on #331): each row by its key ('all', or a chord's id), said once when
  * it shows, "Still can't use …" when a try ends and it's still failing, and "… works again" only while it's still used.
  */
+import type { ProxySettings } from '@chord/core';
 import { describe, expect, it } from 'vitest';
-import { proxyAnnouncement, proxyFailingRows, type RowSeen } from '../../src/renderer/settings/proxy-row';
+import { proxyAnnouncement, proxyFailingRows, rowStillUsesProxy, type RowSeen } from '../../src/renderer/settings/proxy-row';
 
 const chords = [
   { id: 'c1', name: 'Work' },
@@ -62,7 +63,26 @@ describe('what a screen reader hears (Carbon’s B2 on #331)', () => {
   it('a row gone: “works again” for that one, only while it still uses a proxy (never after you turned it off)', () => {
     const before = seen({ all: { label: 'Can’t use this proxy.' }, c1: { label: 'Can’t use Work’s proxy.' } });
     expect(proxyAnnouncement(before, seen({ c1: { label: 'Can’t use Work’s proxy.' } }), uses)).toBe('The proxy works again.');
-    expect(proxyAnnouncement(before, seen({ all: { label: 'Can’t use this proxy.' } }), (key) => key !== 'c1', { c1: 'Work' })).toBeNull();
+    // Turned off: nothing said, what was said cleared (Carbon's SF-R2-2).
+    expect(proxyAnnouncement(before, seen({ all: { label: 'Can’t use this proxy.' } }), (key) => key !== 'c1', { c1: 'Work' })).toBe('');
     expect(proxyAnnouncement(before, seen({ all: { label: 'Can’t use this proxy.' } }), uses, { c1: 'Work' })).toBe('Work’s proxy works again.');
+  });
+
+  it('a row gone because its proxy was turned off (Carbon’s SF-R2-2): the text clears, so the same failure later is said again', () => {
+    const before = seen({ all: { label: 'Can’t use this proxy.' } });
+    expect(proxyAnnouncement(before, seen({}), () => false)).toBe('');
+  });
+
+  it('whether a row’s key still uses a proxy (Carbon’s SF-R2-2): a server or a file; the system’s or none is turning it off, never "works again"', () => {
+    const server: ProxySettings = { mode: 'server', server: { scheme: 'http', host: 'p.test', port: 8080, bypass: [] }, pac: null };
+    const settings = (mode: 'system' | 'none' | 'server'): { proxy: ProxySettings } => ({ proxy: mode === 'server' ? server : { ...server, mode } });
+    const chords = [{ id: 'c1', proxy: server }, { id: 'c2', proxy: null }, { id: 'c3', proxy: { ...server, mode: 'system' } as ProxySettings }];
+    expect(rowStillUsesProxy('all', settings('server'), chords)).toBe(true);
+    expect(rowStillUsesProxy('all', settings('system'), chords)).toBe(false);
+    expect(rowStillUsesProxy('all', settings('none'), chords)).toBe(false);
+    expect(rowStillUsesProxy('c1', settings('system'), chords)).toBe(true);
+    expect(rowStillUsesProxy('c2', settings('server'), chords)).toBe(false);
+    expect(rowStillUsesProxy('c3', settings('server'), chords)).toBe(false);
+    expect(rowStillUsesProxy('gone', settings('server'), chords)).toBe(false);
   });
 });

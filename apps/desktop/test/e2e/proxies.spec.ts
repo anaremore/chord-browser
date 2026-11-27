@@ -651,6 +651,52 @@ test('a chord’s own proxy that can’t be set (Carbon’s round on #331): said
   rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
 });
 
+test('the header sign follows a chord onto and off a failing proxy (Carbon’s SF-R2-1 on #331): its own that works, then the shared one again', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const app = await launch(profile, { CHORD_HOME_URL: url('/home') });
+  try {
+    const shell = await pageWhere(app, isShell);
+    await expect.poll(titleOf(app, '/home')).toBe('Direct /home');
+    await app.evaluate(({ session }, port) => {
+      const proto = Object.getPrototypeOf(session.defaultSession) as { setProxy(config: { proxyRules?: string }): Promise<void> };
+      const real = proto.setProxy;
+      proto.setProxy = function (this: unknown, config: { proxyRules?: string }) {
+        if (String(config?.proxyRules ?? '').includes(`:${port}`)) return Promise.reject(new Error('net::ERR_FAILED'));
+        return real.call(this, config);
+      };
+    }, proxyA.port);
+    // The proxy for every chord can't be set.
+    const settings = await privacy(app, shell);
+    await settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ }).click();
+    await settings.getByLabel('Proxy for every chord: address', { exact: true }).fill('127.0.0.1');
+    await settings.getByLabel('Proxy for every chord: port', { exact: true }).fill(String(proxyA.port));
+    await settings.getByRole('button', { name: 'Use this proxy' }).click();
+    await expect(settings.locator('[data-tone="warning"]').getByText('Can’t use this proxy.')).toBeVisible({ timeout: 10_000 });
+    // A new chord, on the shared proxy: its header says so (a chord made while it fails is a change of `chords`).
+    await shell.getByRole('button', { name: 'New chord' }).click();
+    await shell.getByRole('textbox', { name: 'Chord name' }).fill('Lab');
+    await shell.getByRole('textbox', { name: 'Chord name' }).press('Enter');
+    const sign = shell.getByRole('button', { name: 'Lab’s proxy isn’t working, Proxy settings', exact: true });
+    await expect(sign).toBeVisible({ timeout: 10_000 });
+
+    // Off it: Lab connects directly, on sign-ins of its own. Nothing of the failing proxy's changes, only Lab's
+    // settings: the sign goes, and the quiet icon says it has a proxy setting of its own.
+    await settings.getByRole('button', { name: 'Its own…, proxy for Lab' }).click();
+    await settings.getByRole('radiogroup', { name: 'Proxy for Lab' }).getByRole('radio', { name: /^No proxy/ }).click();
+    await settings.getByRole('button', { name: /^Keep sign-ins separate and connect directly/ }).click();
+    await expect(sign).toBeHidden({ timeout: 10_000 });
+    await expect(shell.getByRole('img', { name: 'Uses its own proxy' })).toBeVisible();
+
+    // Back onto it: the sign comes back.
+    await settings.getByRole('radiogroup', { name: 'Proxy for Lab' }).getByRole('radio', { name: /^Same as all chords/ }).click();
+    await settings.getByRole('button', { name: 'Use the proxy for all chords' }).click();
+    await expect(sign).toBeVisible({ timeout: 10_000 });
+  } finally {
+    await app.close();
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+});
+
 test('a page open when its proxy fails (#331, the owner’s pick): held, its own fetches and navigation reach neither the site nor the proxy; back once it takes', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
   // An extension in the session, as a chord's always has (Chord's ad blocking): with one, a page open before the
