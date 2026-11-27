@@ -34,6 +34,12 @@ export const ACT_BAR_MIN_MS = 600;
  * think between moves; Stop, your taking the tab, or the agent letting go end it at once.
  */
 export const AGENT_STEADY_MS = 45_000;
+/**
+ * How long an agent's tabs keep running at full speed (never background-throttled: their animation frames go on off
+ * screen) with no call from it (#358). Its whole session otherwise, from its first call until it's done, stopped or
+ * paused; this is the safety valve for a session never ended, an agent that's gone quiet without saying done.
+ */
+export const AGENT_UNTHROTTLED_IDLE_MS = 10 * 60_000;
 
 /** press_key's keys, as an agent names them (the plan's list). */
 export const PRESS_KEYS = ['Enter', 'Tab', 'Shift+Tab', 'Escape', 'Backspace', 'Delete', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'] as const;

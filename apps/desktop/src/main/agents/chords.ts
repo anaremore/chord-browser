@@ -28,7 +28,7 @@
 import { dropAgentGuard } from '../control/page';
 import { endUntil, failHeld, normalUrl, sendHoldDeps, shownOrigin } from '../control/sends';
 import { randomBytes } from 'node:crypto';
-import { ACT_BAR_MIN_MS, AGENT_STEADY_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
+import { ACT_BAR_MIN_MS, AGENT_STEADY_MS, AGENT_UNTHROTTLED_IDLE_MS, CONTROL_WAIT_MS, barAddress, barDoing, isAgentChord, nodeOf, nodesOfChord, uuidv7, type AgentLive, type BarDoing, type Chord, type ChordId, type Command, type NodeId, type ProfileId, type State, type TabNode, type WindowId } from '@chord/core';
 import type { Toast } from '@chord/ipc';
 import type { WebContents } from 'electron';
 import type { ControlAgent } from '../control/gate';
@@ -46,6 +46,8 @@ export interface AgentChordsDeps {
   /** The *Never* list: an agent's tab that goes to one of its sites closes. */
   neverSites?(): readonly string[];
   now?(): number;
+  /** Which agent tabs run at full speed changed (fullSpeedTabs): Browser parks them, so off screen they still paint (#358). */
+  speedChanged?(): void;
   /** How long a card between actions waits (what an agent's tab sends: control/sends.ts); CONTROL_WAIT_MS unless a test says. */
   waitMs?: number;
 }
@@ -65,6 +67,10 @@ interface AgentChord {
   done: boolean;
   notes: AgentNote[];
   unlisten: () => void;
+  /** When it last made a call (any of its tabs), or null before its first: its tabs' full speed runs from there (#358). */
+  lastCall: number | null;
+  /** Ends full speed AGENT_UNTHROTTLED_IDLE_MS after its last call, if no other call comes first. */
+  idle?: ReturnType<typeof setTimeout>;
 }
 
 /** Notes kept per agent between its calls. */
@@ -144,7 +150,7 @@ export class AgentChords {
     const profile = profileId ?? (windowId ? state.chords[state.windows[windowId]?.activeChordId ?? '']?.profileId : undefined) ?? 'default';
     const chordId = uuidv7();
     this.deps.store.dispatch({ t: 'agent.chord.add', chordId, name, profileId: profile });
-    const chord: AgentChord = { chordId, name, agent, done: false, notes: [], unlisten: agent.listen(() => this.update(chord)) };
+    const chord: AgentChord = { chordId, name, agent, done: false, notes: [], lastCall: null, unlisten: agent.listen(() => this.update(chord)) };
     this.chords.set(chordId, chord);
     return chordId;
   }
@@ -241,9 +247,31 @@ export class AgentChords {
     current.clear.unref?.();
   }
 
+  /**
+   * Whether an agent's tab runs at full speed (#358): its whole session, from its first call until it's done, stopped or
+   * the tab paused (your hands), and while it has called within AGENT_UNTHROTTLED_IDLE_MS. Throttled, a tab off screen
+   * gets no animation frames (measured on #358: 0 a second), so a page's rAF-driven work would stall while the agent
+   * thinks; its timers keep their pace either way. Never the user's own tabs.
+   */
+  private fullSpeed(chord: AgentChord, nodeId: NodeId): boolean {
+    if (chord.done || chord.agent.isStopped || chord.agent.state(nodeId).paused || chord.lastCall === null) return false;
+    return (this.deps.now?.() ?? Date.now()) - chord.lastCall < AGENT_UNTHROTTLED_IDLE_MS;
+  }
+
+  /** A call from the agent (on any of its tabs): its session's full speed runs on from now. */
+  private called(chord: AgentChord): void {
+    chord.lastCall = this.deps.now?.() ?? Date.now();
+    clearTimeout(chord.idle);
+    chord.idle = setTimeout(() => this.update(chord), AGENT_UNTHROTTLED_IDLE_MS);
+    chord.idle.unref?.();
+  }
+
   /** The agent's state changed: each of its tabs' bars, and whether each runs at full speed. */
   private update(chord: AgentChord): void {
-    for (const tab of this.tabsOf(chord.chordId)) {
+    const tabs = this.tabsOf(chord.chordId);
+    if (!chord.done && tabs.some((tab) => chord.agent.state(tab.id).calls > 0)) this.called(chord);
+    let speedChanged = false;
+    for (const tab of tabs) {
       // Stop: what its tabs held to send fails, and their cards come down (control/sends.ts).
       if (chord.agent.isStopped) {
         const page = this.deps.page(tab.id);
@@ -257,14 +285,22 @@ export class AgentChords {
         else this.shown.delete(tab.id);
         this.deps.store.dispatch({ t: 'tab.live', nodeId: tab.id, live: { agent: live } });
       }
-      const working = live?.state === 'working';
-      if (working !== this.unthrottled.has(tab.id)) {
+      const full = this.fullSpeed(chord, tab.id);
+      if (full !== this.unthrottled.has(tab.id)) {
         const page = this.deps.page(tab.id);
-        if (working) this.unthrottled.add(tab.id);
+        if (full) this.unthrottled.add(tab.id);
         else this.unthrottled.delete(tab.id);
-        if (page && !page.isDestroyed()) page.setBackgroundThrottling(!working);
+        if (page && !page.isDestroyed()) page.setBackgroundThrottling(!full);
+        speedChanged = true;
       }
     }
+    // Parked while at full speed: a detached view has no compositor, so its page would get no frames at all (#358).
+    if (speedChanged) this.deps.speedChanged?.();
+  }
+
+  /** The agent tabs at full speed now: Browser keeps them parked in a window, off screen but painting (#358). */
+  fullSpeedTabs(): NodeId[] {
+    return [...this.unthrottled];
   }
 
   /** After a change to windows or tabs: a paused tab no one shows goes on; a done chord with no tabs left goes. */
@@ -293,6 +329,7 @@ export class AgentChords {
   }
 
   private forget(chord: AgentChord): void {
+    clearTimeout(chord.idle);
     chord.unlisten();
     this.chords.delete(chord.chordId);
     this.prune();
@@ -552,6 +589,7 @@ export class AgentChords {
     const chord = chordId ? this.chords.get(chordId) : undefined;
     if (!chord) return;
     chord.done = true;
+    clearTimeout(chord.idle);
     this.update(chord);
     for (const tab of this.tabsOf(chord.chordId)) {
       const page = this.deps.page(tab.id);
