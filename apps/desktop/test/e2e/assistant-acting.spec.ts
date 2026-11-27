@@ -33,6 +33,13 @@ test.beforeAll(async () => {
     '/framed': '<title>Framed</title><h1>Framed</h1><iframe title="Inner form" srcdoc="<button>Inner button</button>"></iframe><button>Top button</button>',
     // #338: a page's own Print button, and what it does after print returns. On /printer the page has set its own print
     // (a spy) as it loads, before any lease; /printer-native keeps Chromium's.
+    // Round 2 of #346, Neon's B1: the page's named elements, shown on the window in every world (the hold's too).
+    '/printer-clobber-div':
+      '<title>Clobber</title><div id="__chordPrintHold"></div><form name="addEventListener"></form><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
+      '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
+    '/printer-clobber-frame':
+      '<title>Clobber</title><iframe name="__chordPrintUntil"></iframe><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
+      '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
     '/printer':
       '<title>Invoice</title><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
       '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
@@ -899,6 +906,8 @@ test('#346, Fable’s B1 (probe E): another site’s frame printing while the as
     await expect(r.page.locator('#log')).toContainText('frame-returned');
     await expect(r.page.locator('#log')).not.toContainText('frame-printed');
     await expect(r.panel.getByText(/^The page tried to print while the assistant acted/)).toBeVisible();
+    // In the click's own result (Fable's nit 1, round 2).
+    expect(r.steps()[1]!.result).toContain(PRINT_NOTE);
     // The lease over: your own click in the page, and the frame prints (its own print runs), with no reload.
     await r.page.waitForTimeout(9000);
     await r.page.getByRole('button', { name: 'Print' }).click();
@@ -920,3 +929,19 @@ test('#346, Fable’s SF1 (probe A): two prints in two steps back to back: each 
     await r.close();
   }
 });
+
+for (const [path, what] of [
+  ['/printer-clobber-div', '<div id="__chordPrintHold"> and <form name="addEventListener">'],
+  ['/printer-clobber-frame', '<iframe name="__chordPrintUntil">'],
+] as const) {
+  test(`#346, Neon’s B1 (round 2): a page with ${what}, the names the hold once used, while the assistant acts: held, said, the page goes on`, async () => {
+    test.setTimeout(120_000);
+    const r = await actOn(path, [{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }]);
+    try {
+      await expect(r.page.locator('#log')).toHaveText('before after ');
+      expect(r.steps()[1]!.result).toContain(PRINT_NOTE);
+    } finally {
+      await r.close();
+    }
+  });
+}

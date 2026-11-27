@@ -87,8 +87,10 @@ const TOKEN = '0123456789abcdef0123456789abcdef';
  * context with that same window's addEventListener, and the tab's binding (recording what it's told). `hold`: whether
  * the hold's world has its listener at all (a frame the lease never reached has none), and its deadline.
  */
-function yourFrame(o: { hold?: 'on' | 'over' | 'none'; pagePrint?: boolean; frozenPrint?: boolean } = {}) {
+function yourFrame(o: { hold?: 'on' | 'over' | 'none'; pagePrint?: boolean; frozenPrint?: boolean; clobbered?: boolean; before?: string; refused?: number } = {}) {
   const calls: string[] = [];
+  /** How many times adding the hold's listener throws first. */
+  const refusals = { left: o.refused ?? 0 };
   const page = createContext({ calls, EventTarget, Event, CustomEvent, pagePrint: Boolean(o.pagePrint), frozenPrint: Boolean(o.frozenPrint) });
   runInContext(
     String.raw`
@@ -107,14 +109,29 @@ function yourFrame(o: { hold?: 'on' | 'over' | 'none'; pagePrint?: boolean; froz
       doc.view = self;`,
     page,
   );
+  // What the page did before the lease's scripts came (its own patches).
+  if (o.before) runInContext(o.before, page);
   const win = runInContext('self', page) as EventTarget;
-  const world = createContext({ addEventListener: (type: string, listener: (event: Event) => void, capture: boolean) => win.addEventListener(type, listener, capture), Date });
+  // The hold's world: its window's EventTarget.prototype.addEventListener reaches the page's window.
+  const listen = (type: string, listener: (event: Event) => void, capture: boolean) => {
+    if (refusals.left > 0) {
+      refusals.left--;
+      throw new Error('not now');
+    }
+    win.addEventListener(type, listener, capture);
+  };
+  // Its window's addEventListener (which a named element can stand in for), and EventTarget's own.
+  const world = createContext({ addEventListener: listen, EventTarget: { prototype: { addEventListener: listen } }, Date });
   runInContext(`self = globalThis; self['${printBinding(TOKEN)}'] = (what) => calls.push('said ' + what);`, world);
+  // The page's named elements, as every world's window shows them: <div id="__chordPrintHold">, <iframe
+  // name="__chordPrintUntil">, <form name="addEventListener"> (Neon's B1, round 2 of #346).
+  if (o.clobbered) runInContext(`self.__chordPrintHold = { tagName: 'DIV' }; self.__chordPrintUntil = { name: 'frame' }; self.addEventListener = { tagName: 'FORM' };`, world);
   (world as { calls?: string[] }).calls = calls;
   runInContext(`calls = globalThis.calls;`, world);
   if ((o.hold ?? 'on') !== 'none') {
+    if (refusals.left > 0) expect(() => runInContext(printHold(TOKEN), world)).toThrow();
     expect(runInContext(printHold(TOKEN), world)).toBe(true);
-    runInContext(printUntil(o.hold === 'over' ? 0 : Date.now() + 60_000), world);
+    runInContext(printUntil(TOKEN, o.hold === 'over' ? 0 : Date.now() + 60_000), world);
   }
   expect(runInContext(printAsks(TOKEN), page)).toBe(true);
   return { calls, run: (code: string) => runInContext(code, page) as unknown, world: (code: string) => runInContext(code, world) as unknown };
@@ -141,9 +158,9 @@ describe('a page’s print in a tab of yours, held in its own frame while the as
 
   it('the deadline moved on and back: held, then not', () => {
     const f = yourFrame({ hold: 'over' });
-    f.world(printUntil(Date.now() + 60_000));
+    f.world(printUntil(TOKEN, Date.now() + 60_000));
     f.run(`self.print();`);
-    f.world(printUntil(0));
+    f.world(printUntil(TOKEN, 0));
     f.run(`self.print();`);
     expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint', 'native print true']);
   });
@@ -192,6 +209,33 @@ describe('a page’s print in a tab of yours, held in its own frame while the as
     f.run('doc.view = null;');
     expect(f.run(`doc.execCommand('print')`)).toBe(false);
     expect(f.calls).toEqual([]);
+  });
+
+  it('the page’s named elements on the window (an id, an iframe’s name) never read as the hold installed, its deadline, or its addEventListener: held and said (Neon’s B1, round 2 of #346)', () => {
+    const f = yourFrame({ clobbered: true });
+    f.run(`self.print();`);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint']);
+  });
+
+  it('a hold whose listener couldn’t be added isn’t marked installed: the next lease’s adds it (Neon’s B1, round 2 of #346)', () => {
+    const f = yourFrame({ refused: 1 });
+    f.run(`self.print();`);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint']);
+  });
+
+  it('a page whose dispatchEvent throws (patched before the lease): held, with no beforeprint or afterprint (Opus’s N2, round 2 of #346)', () => {
+    // The page's EventTarget.prototype.dispatchEvent as the stub reads it (the vm's EventTarget is the host's: shadowed).
+    const f = yourFrame({ before: `EventTarget = { prototype: { dispatchEvent() { throw new Error('no'); } } };` });
+    expect(f.run(`self.print(); doc.execCommand('print')`)).toBe(false);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a page whose print getter throws: print left as it is, and execCommand still held (Neon’s N1, round 2 of #346)', () => {
+    const f = yourFrame({
+      before: `delete self.print; Object.setPrototypeOf(self, Object.create(Object.getPrototypeOf(self), { print: { get() { throw new Error('no'); }, configurable: true } }));`,
+    });
+    expect(f.run(`doc.execCommand('print')`)).toBe(false);
+    expect(f.calls).toEqual(['said print', 'beforeprint', 'afterprint']);
   });
 
   it('only a token main made is baked in', () => {

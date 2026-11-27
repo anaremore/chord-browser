@@ -685,7 +685,7 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     const after = t.sent.slice(added);
     // The deadline over, in the page and the frame, at once.
     for (const session of [undefined, 'f1']) {
-      const over = after.find(([m, , s, p]) => m === 'Page.addScriptToEvaluateOnNewDocument' && s === session && (p as { source: string }).source === printUntil(0));
+      const over = after.find(([m, , s, p]) => m === 'Page.addScriptToEvaluateOnNewDocument' && s === session && (p as { source: string }).source === printUntil(printTokenOf(t.contents), 0));
       expect(over?.[3], String(session)).toMatchObject({ worldName: PRINT_HOLD_WORLD, runImmediately: true });
     }
     if (theirs) {
@@ -840,7 +840,7 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
       expect(await beginUserAction(t.contents, 'chat:1', t.deps()), method).toBe('no');
       expect(t.attached(), method).toBe(false);
     }
-    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker', 'Page.addScriptToEvaluateOnNewDocument', 'Runtime.enable', 'Runtime.addBinding']) {
+    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker', 'Page.addScriptToEvaluateOnNewDocument']) {
       const t = yourTab();
       const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<void> }).sendCommand;
       (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
@@ -871,6 +871,137 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
       for (let i = 0; i < 8; i++) await tick();
     },
   );
+
+  /** #346: a tab of yours whose page has a frame in another process (f1), announced as the first lease's auto-attach is on. */
+  const withFrame = (t: ReturnType<typeof yourTab>, gate?: (m: string, p: unknown, s?: string) => Promise<void> | undefined) => {
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    let announced = false;
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      // Sent as it's called (a gate only when there is one), so what's sent at once is seen at once.
+      const held = gate?.(m, p, s);
+      if (held) await held;
+      const answer = await send(m, p, s);
+      if (m === 'Target.setAutoAttach' && !s && !announced) {
+        announced = true;
+        t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f1', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+      }
+      return answer;
+    };
+  };
+  const untilZero = (t: ReturnType<typeof yourTab>, from = 0) =>
+    t.sent.slice(from).filter(([m, , , p]) => m === 'Page.addScriptToEvaluateOnNewDocument' && (p as { source: string }).source === printUntil(printTokenOf(t.contents), 0)).map(([, , s]) => s);
+
+  it.each(['Runtime.enable', 'Runtime.addBinding'])('#346: a frame’s binding that can’t be had (%s fails there): the lease is on, and that frame’s prints still held, only not said (Fable’s nit 2, round 2)', async (method) => {
+    const t = yourTab();
+    withFrame(t, async (m, _p, s) => {
+      if (m === method && s === 'f1') throw new Error('not allowed');
+    });
+    expect(await beginUserAction(t.contents, 'chat:1', t.deps())).toBe('on');
+    const token = printTokenOf(t.contents);
+    expect(printAdds(t).filter((a) => a.session === 'f1').map((a) => a.source)).toEqual(expect.arrayContaining([printHold(token), printAsks(token)]));
+    endUserLease(t.contents);
+    for (let i = 0; i < 8; i++) await tick();
+  });
+
+  it('#346: a lease superseded while it held a frame in another process: the lease now on takes the frame on (held there through it), and lets it go at its own end (Neon’s B2, round 2 = Opus’s SF-A)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    withFrame(t);
+    const token = printTokenOf(t.contents);
+    let first = true;
+    const off = onUserLease((contents) => {
+      if (contents !== t.contents || !first) return;
+      first = false;
+      endUserLease(t.contents, 'chat:1');
+    });
+    const [one, two] = await Promise.all([beginUserAction(t.contents, 'chat:1', deps()), beginUserAction(t.contents, 'chat:2', deps(() => new Promise(() => undefined)))]);
+    off();
+    for (let i = 0; i < 12; i++) await tick();
+    expect([one, two]).toEqual(['on', 'on']);
+    // The first lease's frame, held by the second: its own hold and stub there (a second set), Fetch on again.
+    const holds = printAdds(t).filter((a) => a.session === 'f1' && a.source === printHold(token));
+    expect(holds).toHaveLength(2);
+    expect(t.sent.filter(([m, , s]) => m === 'Fetch.enable' && s === 'f1')).toHaveLength(2);
+    // Held while the second is on: in the page and in that frame, the last deadline sent is the second's, ahead (the
+    // first's end let prints go before the second was set up; the second's deadline came after it).
+    const mid = t.sent.length;
+    const lastUntil = (session: string | undefined) =>
+      Number(/= (\d+);/.exec([...printAdds(t)].reverse().find((a) => a.session === session && /UNTIL\] = \d+/.test(a.source))!.source)![1]);
+    expect(lastUntil(undefined)).toBeGreaterThan(Date.now());
+    expect(lastUntil('f1')).toBeGreaterThan(Date.now());
+    endUserLease(t.contents);
+    for (let i = 0; i < 12; i++) await tick();
+    // At the second's end: the deadline over in the page and in that frame; every print script out.
+    expect(untilZero(t, mid)).toEqual(expect.arrayContaining([undefined, 'f1']));
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it('#346: as the lease ends, the deadline over in every frame before anything is awaited (your own Print as you take the tab back: Opus’s SF-B, round 2); that script taken out as it answers', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    withFrame(t);
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    const mid = t.sent.length;
+    endUserLease(t.contents);
+    // At once, not after a tick.
+    expect(untilZero(t, mid)).toEqual([undefined, 'f1']);
+    for (let i = 0; i < 12; i++) await tick();
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it('#346: an action’s renewal of the hold answered after the lease ended: taken out at once, never left to run in new documents (Neon’s SF1, round 2)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    const start = Date.now();
+    let answer: () => void = () => undefined;
+    const late = new Promise<void>((done) => (answer = done));
+    withFrame(t, async (m, p) => {
+      // The renewal's deadline (past the first's): answered only once the lease is over.
+      const until = m === 'Page.addScriptToEvaluateOnNewDocument' ? Number(/= (\d+);/.exec((p as { source: string }).source)?.[1] ?? 0) : 0;
+      if (until > start + PRINT_HOLD_MS + 60_000) await late;
+    });
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    // The next action, six minutes on: the hold renewed.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + 6 * 60_000);
+    try {
+      expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+      endUserLease(t.contents);
+      for (let i = 0; i < 12; i++) await tick();
+      answer();
+      for (let i = 0; i < 12; i++) await tick();
+    } finally {
+      now.mockRestore();
+    }
+    const renewals = printAdds(t).filter((a) => Number(/= (\d+);/.exec(a.source)?.[1] ?? 0) > start + PRINT_HOLD_MS + 60_000);
+    expect(renewals.length).toBeGreaterThan(0);
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it.each(['Fetch.enable', 'Page.enable'])('#346: a frame still being held as the lease ends (%s answers after): nothing of the print’s turned on there after the end (Neon’s SF2, round 2)', async (method) => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    let answer: () => void = () => undefined;
+    const late = new Promise<void>((done) => (answer = done));
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      if (m === method && s === 'f2') await late;
+      return send(m, p, s);
+    };
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    // A frame that comes mid-lease.
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f2', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+    await tick();
+    endUserLease(t.contents);
+    for (let i = 0; i < 12; i++) await tick();
+    const mid = t.sent.length;
+    answer();
+    for (let i = 0; i < 12; i++) await tick();
+    const after = t.sent.slice(mid).filter(([m, , s]) => s === 'f2' && ['Runtime.enable', 'Runtime.addBinding', 'Page.addScriptToEvaluateOnNewDocument', ...(method === 'Fetch.enable' ? ['Page.enable'] : [])].includes(m));
+    expect(after.map(([m]) => m)).toEqual([]);
+  });
 
   it('a Send data card from the tail answered after the tail: Allow and Allow for this chat still send it (Neon’s B4 on #150)', async () => {
     for (const answer of ['once', 'until'] as const) {

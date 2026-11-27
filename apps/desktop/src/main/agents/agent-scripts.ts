@@ -224,16 +224,20 @@ export const printAsks = (token: string): string => {
     try { apply(dispatch, at, [new Plain('beforeprint')]); } catch { /* left */ }
     try { apply(dispatch, at, [new Plain('afterprint')]); } catch { /* left */ }
   };
-  const hadPrint = ownGet(here, 'print');
-  if (!hadPrint || hadPrint.configurable !== false) {
-    const current = hadPrint && 'value' in hadPrint ? hadPrint.value : here.print;
-    const realPrint = typeof current === 'function' ? current : null;
-    const printAsks = function print() {
-      if (asked('print')) return void quietly();
-      if (realPrint) return apply(realPrint, here, []);
-    };
-    try { define(here, 'print', { value: printAsks, writable: true, enumerable: true, configurable: false }); } catch { /* left */ }
-  }
+  // print's half on its own: a page's print getter that throws leaves print as it is, never execCommand unwrapped (Neon's
+  // N1, round 2 of #346).
+  try {
+    const hadPrint = ownGet(here, 'print');
+    if (!hadPrint || hadPrint.configurable !== false) {
+      const current = hadPrint && 'value' in hadPrint ? hadPrint.value : here.print;
+      const realPrint = typeof current === 'function' ? current : null;
+      const printAsks = function print() {
+        if (asked('print')) return void quietly();
+        if (realPrint) return apply(realPrint, here, []);
+      };
+      define(here, 'print', { value: printAsks, writable: true, enumerable: true, configurable: false });
+    }
+  } catch { /* left */ }
   const hadExec = ownGet(Doc.prototype, 'execCommand');
   if (!hadExec || hadExec.configurable !== false) {
     ${execCommandAsks("const at = windowOf(this); if (asked('execCommand', at)) { quietly(at); return false; }")}
@@ -243,26 +247,38 @@ export const printAsks = (token: string): string => {
 };
 
 /**
+ * #338: where the hold's world keeps its state: symbol-keyed, never a name, since the page's named elements (an id, an
+ * iframe's name) show on the window in every world, this one too, and would read as installed or as a deadline (Neon's
+ * B1, round 2 of #346). The installed flag and the deadline, by the tab's token.
+ */
+const holdKeys = (token: string): string => `const HELD = Symbol.for('chord.printHold.${token}'); const UNTIL = Symbol.for('chord.printUntil.${token}');`;
+
+/**
  * #338: each frame's hold, in PRINT_HOLD_WORLD (an isolated world: the page sees none of it). While the deadline in
  * that world (printUntil) is ahead, it cancels the tab's print event, before any other listener, and says so through
  * the tab's binding (main says it in the chat, once an action). Once a world: a second lease leaves it, and only moves
- * the deadline.
+ * the deadline. Its listener added through EventTarget's own (the window's addEventListener can be a named element);
+ * marked installed only once it is.
  */
 export const printHold = (token: string): string => {
   if (!isToken(token)) throw new Error('not a print token');
   return String.raw`(() => {
-  if (self.__chordPrintHold) return true;
-  self.__chordPrintHold = true;
-  if (typeof self.__chordPrintUntil !== 'number') self.__chordPrintUntil = 0;
-  addEventListener('${printEvent(token)}', (event) => {
-    if (!(Date.now() < self.__chordPrintUntil)) return;
+  ${holdKeys(token)}
+  if (self[HELD] === true) return true;
+  if (typeof self[UNTIL] !== 'number') self[UNTIL] = 0;
+  EventTarget.prototype.addEventListener.call(self, '${printEvent(token)}', (event) => {
+    if (!(Date.now() < self[UNTIL])) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     try { self['${printBinding(token)}']('print'); } catch { /* not said */ }
   }, true);
+  self[HELD] = true;
   return true;
 })()`;
 };
 
 /** #338: the hold's deadline in each frame's PRINT_HOLD_WORLD (a time in ms; 0: over). */
-export const printUntil = (until: number): string => `self.__chordPrintUntil = ${Math.max(0, Math.floor(until))}; true`;
+export const printUntil = (token: string, until: number): string => {
+  if (!isToken(token)) throw new Error('not a print token');
+  return `(() => { ${holdKeys(token)} self[UNTIL] = ${Math.max(0, Math.floor(until))}; return true; })()`;
+};

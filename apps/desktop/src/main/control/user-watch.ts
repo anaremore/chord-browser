@@ -147,6 +147,13 @@ interface Lease {
    */
   printSession: string | null;
   selfTarget: string | null;
+  /** #338: the tab's print token (printTokenOf). */
+  printToken: string;
+  /**
+   * #346: a frame in another process taken on by this lease after it began (one a lease it superseded had: auto-attach
+   * never announces it again), held as one announced is.
+   */
+  adopt: (frame: string) => void;
   onMessage: (event: unknown, method: string, params: unknown, sessionId?: string) => void;
   onDetach: () => void;
   onGone: () => void;
@@ -201,14 +208,18 @@ const scriptId = (added: unknown): string | null => {
 /**
  * #338: the hold's deadline moved, in each frame of the tab (its documents now, and new ones): a script in the hold's
  * world that runs at once, replacing the session's last. Each command bounded; a failure leaves the last deadline.
+ * `renew`: an action's renewal, never sent once the lease has ended, and one answered after it taken out at once, the
+ * lease's own left as they are (Neon's SF1, round 2 of #346). The end's own (0) is sent after, so it's the last to run.
  */
-async function moveHold(debug: Electron.Debugger, lease: Lease, until: number, sessions: (string | undefined)[]): Promise<void> {
+async function moveHold(debug: Electron.Debugger, lease: Lease, until: number, sessions: (string | undefined)[], renew = false): Promise<void> {
+  if (renew && lease.ended) return;
   lease.printHoldUntil = until;
   await Promise.all(
     sessions.map(async (sessionId) => {
-      const added = await command(debug, 'Page.addScriptToEvaluateOnNewDocument', { source: printUntil(until), worldName: PRINT_HOLD_WORLD, runImmediately: true }, sessionId).catch(() => null);
+      const added = await command(debug, 'Page.addScriptToEvaluateOnNewDocument', { source: printUntil(lease.printToken, until), worldName: PRINT_HOLD_WORLD, runImmediately: true }, sessionId).catch(() => null);
       const id = scriptId(added);
       if (!id) return;
+      if (renew && lease.ended) return void (await command(debug, 'Page.removeScriptToEvaluateOnNewDocument', { identifier: id }, sessionId).catch(() => undefined));
       const was = lease.printUntilScripts.get(sessionId);
       lease.printUntilScripts.set(sessionId, id);
       lease.printScripts.set(sessionId, [...(lease.printScripts.get(sessionId) ?? []), id]);
@@ -309,7 +320,7 @@ export async function beginUserAction(contents: WebContents, owner: string, deps
     lease.going = null;
     // #338: each action hears its own print (Fable's SF1); a long run of actions keeps prints held.
     lease.printSaid = false;
-    if (lease.printHoldUntil - Date.now() < PRINT_HOLD_MS / 2) void moveHold(contents.debugger, lease, Date.now() + PRINT_HOLD_MS, [undefined, ...lease.sessions]);
+    if (lease.printHoldUntil - Date.now() < PRINT_HOLD_MS / 2) void moveHold(contents.debugger, lease, Date.now() + PRINT_HOLD_MS, [undefined, ...lease.sessions], true);
     if (lease.timer) clearTimeout(lease.timer);
     lease.timer = null;
     // Each action tells what must close for it (the vault's menu), not only the lease's first (Neon's S2 on #150).
@@ -364,6 +375,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     printSaid: false,
     printSession: null,
     selfTarget: null,
+    printToken: printTokenOf(contents),
+    adopt: () => undefined,
     onMessage: () => undefined,
     onDetach: () => undefined,
     onGone: () => undefined,
@@ -408,9 +421,12 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     await sayPrints(attached.sessionId).catch(() => undefined);
   };
   const holdPrints = async (sessionId?: string) => {
-    if (sessionId) await sayPrints(sessionId);
+    // Ended meanwhile: nothing more turned on (Neon's SF2, round 2 of #346).
+    if (lease.ended) return;
+    // A frame's binding that can't be had: its prints still held, only not said, as in the page (Fable's nit 2).
+    if (sessionId) await sayPrints(sessionId).catch(() => undefined);
     await addPrintScript(sessionId, { source: printHold(token), worldName: PRINT_HOLD_WORLD, runImmediately: true });
-    const until = await addPrintScript(sessionId, { source: printUntil(lease.printHoldUntil), worldName: PRINT_HOLD_WORLD, runImmediately: true });
+    const until = await addPrintScript(sessionId, { source: printUntil(token, lease.printHoldUntil), worldName: PRINT_HOLD_WORLD, runImmediately: true });
     if (until) lease.printUntilScripts.set(sessionId, until);
     await addPrintScript(sessionId, { source: printAsks(token), runImmediately: true });
   };
@@ -468,6 +484,8 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
       try {
         await command(debug, 'Fetch.enable', { patterns: PATTERNS }, frame);
         await command(debug, 'Target.setAutoAttach', AUTO_ATTACH, frame);
+        // Ended meanwhile: nothing more turned on there (Neon's SF2, round 2 of #346).
+        if (lease.ended) return;
         // What the frame's page sets off, caught too, before it runs.
         await catching(frame);
       } catch {
@@ -478,6 +496,9 @@ async function setUp(contents: WebContents, owner: string, deps: UserTabDeps, me
     })();
     lease.pending.add(ready);
     void ready.finally(() => lease.pending.delete(ready));
+  };
+  lease.adopt = (frame) => {
+    if (!lease.ended && !lease.sessions.has(frame)) holdFrame(frame, false);
   };
   // The debugger let go (DevTools took it, a detach) or the page's renderer went: lost, never failing open. While it's
   // still being set up, only ended: the set-up gives up and cleans up itself (Neon's B4, round 3 of #147).
@@ -677,6 +698,27 @@ function lose(contents: WebContents, lease: Lease): void {
   });
 }
 
+/**
+ * #346: the hold's deadline over in every frame at once, as the lease ends, ahead of the debugger queue and the
+ * clipboard (your own Print as you take the tab back: Opus's SF-B, round 2). Each bounded, failing quietly; turnOff's
+ * ordered one follows. Its script taken out as it answers (it has run in the documents there). Not while another lease
+ * is on (it set the deadline).
+ */
+function letPrintsGo(contents: WebContents, lease: Lease): void {
+  if (contents.isDestroyed() || !contents.debugger.isAttached()) return;
+  const now = leases.get(contents);
+  if (now && now !== lease && !now.ended) return;
+  const debug = contents.debugger;
+  for (const sessionId of [undefined, ...lease.sessions]) {
+    void command(debug, 'Page.addScriptToEvaluateOnNewDocument', { source: printUntil(lease.printToken, 0), worldName: PRINT_HOLD_WORLD, runImmediately: true }, sessionId)
+      .then((added) => {
+        const identifier = scriptId(added);
+        if (identifier) return command(debug, 'Page.removeScriptToEvaluateOnNewDocument', { identifier }, sessionId);
+      })
+      .catch(() => undefined);
+  }
+}
+
 function debugOff(contents: WebContents, lease: Lease): void {
   contents.off('render-process-gone', lease.onGone);
   if (contents.isDestroyed()) return;
@@ -704,7 +746,14 @@ function superseded(contents: WebContents, lease: Lease): boolean {
  * left to run in new documents after the new lease ends: Opus's S1a), then its listeners off.
  */
 async function supersededOff(contents: WebContents, lease: Lease): Promise<void> {
-  if (!contents.isDestroyed()) await removePrintScripts(contents.debugger, lease);
+  if (!contents.isDestroyed()) {
+    // #346: its frames in other processes, handed to the lease now on first: auto-attach never announces them to it, so
+    // it holds them from here (its scripts and deadline there) and lets them go at its own end (Neon's B2, round 2 =
+    // Opus's SF-A). Only then are this lease's scripts taken out.
+    const next = leases.get(contents);
+    if (next && next !== lease && !next.ended) for (const frame of lease.sessions) next.adopt(frame);
+    await removePrintScripts(contents.debugger, lease);
+  }
   debugOff(contents, lease);
 }
 
@@ -762,6 +811,7 @@ async function release(contents: WebContents, lease: Lease, putBack: boolean): P
   lease.cancel.abort();
   if (leases.get(contents) === lease) leases.delete(contents);
   failHeld(contents);
+  letPrintsGo(contents, lease);
   ended(contents, lease);
   // Off before the clipboard's await (Neon's N3): an unload after the end isn't the assistant's.
   if (!contents.isDestroyed()) contents.off('will-prevent-unload', onUnload);
