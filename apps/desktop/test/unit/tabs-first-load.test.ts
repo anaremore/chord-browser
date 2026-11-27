@@ -718,7 +718,7 @@ describe('a page’s load waiting for its session (#189)', () => {
     const proxy = held();
     waits.push(proxy);
     t.manager.queueLoad(t.page as never, () => false);
-    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true, waitingForSession: true } });
     proxy.resolve();
     await tick();
     expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
@@ -762,9 +762,9 @@ describe('a page’s load waiting for its session (#189)', () => {
     waits.push(proxy);
     const load = vi.fn();
     const drop = t.manager.queueLoad(t.page as never, load);
-    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true, waitingForSession: true } });
     drop();
-    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false, waitingForSession: false } });
     // Nothing waits there now: Stop has nothing to drop.
     expect(t.manager.stopWaiting(t.page as never)).toBe(false);
     proxy.resolve();

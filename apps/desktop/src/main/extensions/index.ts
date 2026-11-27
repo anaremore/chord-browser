@@ -508,6 +508,8 @@ export class Extensions {
    * extension in the session isn't one of these (not installed here), and loads nothing itself.
    */
   async restartIn(ses: Session): Promise<void> {
+    // Launch is loading everything itself (Neon's B1 on #334): nothing loaded twice meanwhile; this runs after it.
+    if (this.starting) return void this.restartAfterStart.add(ses);
     for (const [profileId, host] of this.hosts) {
       if (host.session !== ses) continue;
       const keys = Object.values(this.deps.state().extensions).flatMap((e) => (e.profileId === profileId ? [extensionKey(e.profileId, e.id)] : []));
@@ -552,6 +554,10 @@ export class Extensions {
     } finally {
       this.starting = false;
     }
+    // A session whose proxy began failing meanwhile: its extensions, all loaded now, start again under its block.
+    const restarts = [...this.restartAfterStart];
+    this.restartAfterStart.clear();
+    for (const ses of restarts) await this.restartIn(ses);
     for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
     this.deps.changed();
     this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
@@ -589,6 +595,8 @@ export class Extensions {
 
   /** While launch loads everything (start): reconcile waits for it, never loading the same extension beside it. */
   private starting = false;
+  /** Sessions whose proxy began failing during launch: restartIn runs for each once launch has loaded everything. */
+  private readonly restartAfterStart = new Set<Session>();
 
   private scheduleUpdates(): void {
     clearTimeout(this.updateTimer);
