@@ -6,6 +6,8 @@
 import { resolve } from 'node:path';
 import { isMcpArgv } from '@chord/core/agent-tools';
 import { app } from 'electron';
+// Development and tests: the E2E harness's gate, there before index.ts loads (#321).
+import './first-pages-gate';
 
 // Packaged: [Chord, …args]. Development: [electron, …Electron's switches, the app's folder, …args].
 const args = process.argv.slice(1).filter((arg) => app.isPackaged || arg.startsWith('-') || resolve(arg) !== app.getAppPath());

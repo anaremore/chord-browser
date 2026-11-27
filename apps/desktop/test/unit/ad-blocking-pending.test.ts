@@ -110,7 +110,9 @@ const untilTurns = async (ok: () => boolean) => {
     await new Promise((r) => setImmediate(r));
   }
 };
-const marks = () => vi.mocked(mark).mock.calls.map(([m]) => m).filter((m) => m.startsWith('ad blocking'));
+const allMarks = () => vi.mocked(mark).mock.calls.map(([m]) => m).filter((m) => m.startsWith('ad blocking'));
+/** The release: rules on, or why its pages stopped waiting without them. */
+const marks = () => allMarks().filter((m) => /^ad blocking rules (on|not on)/.test(m));
 
 describe('ad blocking: what a page waits for (#189)', () => {
   it('a fresh profile: past launch’s cap while Chromium adds the extension, and until its rules are on, not just loaded', async () => {
@@ -130,7 +132,17 @@ describe('ad blocking: what a page waits for (#189)', () => {
     applies[0]!.resolve();
     expect(await settled(gate)).toBe(true);
     expect(blocking.pending(session)).toBeNull();
+    // What the E2E harness hears (#321): its rules came on.
+    expect(await blocking.rulesSettled()).toBe('ok');
     expect(marks()).toEqual(['ad blocking rules on (default)']);
+    // Each step of a fresh profile's rules, in launch's timeline: which one took the time on a slow disk (#321, #342).
+    expect(allMarks()).toEqual([
+      'ad blocking rules staged (default)',
+      'ad blocking rules written (default)',
+      'ad blocking extension loaded (default)',
+      'ad blocking rules applied (default)',
+      'ad blocking rules on (default)',
+    ]);
   });
 
   it('a warm relaunch (rules and sites as last run): released once the extension is in, no apply to wait for', async () => {
@@ -203,6 +215,8 @@ describe('ad blocking: what a page waits for (#189)', () => {
       expect(marks()).toEqual([]);
       vi.advanceTimersByTime(1);
       expect(await settled(gate)).toBe(true);
+      // The product's own fallback, not a failure (Carbon's B1 on #343): the harness notes it and goes on.
+      expect(await blocking.rulesSettled()).toBe('timeout');
       expect(marks()).toEqual(['ad blocking rules not on: timeout (default)']);
     } finally {
       vi.useRealTimers();

@@ -4,6 +4,7 @@
  * so a bug in main can't hide behind a test that otherwise passed.
  */
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { firstPagesCanLoad } from './first-pages';
 
 const MAIN_ERROR = /\[chord\] (Uncaught exception|Unhandled rejection) in main/;
 const mainErrors: string[] = [];
@@ -13,8 +14,12 @@ const SLOW_LAUNCH = /\[chord\] slow launch:[\s\S]*?\[chord\] end of slow launch/
 /** Apps a test ended on purpose with kill(): their exit isn't a crash. */
 const killed = new WeakSet<ElectronApplication>();
 
-/** Watch a launched app's stderr for errors main caught. */
-export function watchForMainErrors(app: ElectronApplication): ElectronApplication {
+/**
+ * Watch a launched app's stderr for errors main caught; and, unless `waitForFirstPages` is false (a test that quits
+ * right after launch), resolve once its chords can load their first pages (first-pages.ts, #321): every spec's launch
+ * goes through here, so no test's first assertion races Chord's wait for ad-blocking rules.
+ */
+export async function watchForMainErrors(app: ElectronApplication, { waitForFirstPages = true } = {}): Promise<ElectronApplication> {
   let log = '';
   let slow = '';
   app.process().stderr?.on('data', (chunk: Buffer) => {
@@ -39,6 +44,7 @@ export function watchForMainErrors(app: ElectronApplication): ElectronApplicatio
     if ((code !== 0 || signal) && !killed.has(app)) mainErrors.push(`Chord's main process exited with code ${code}, signal ${signal}. Its last output:\n${log}`);
   });
   throttlePages(app);
+  if (waitForFirstPages) await firstPagesCanLoad(app);
   return app;
 }
 

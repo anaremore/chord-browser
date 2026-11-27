@@ -23,6 +23,8 @@ const marks: string[] = [];
 let firstLoaded = false;
 let titled = false;
 let enabled = false;
+/** The 5 s block was printed: the launch was slow, so its quit says how it ended too (#321). */
+let dumped = false;
 
 /** Marks stop once the first page has loaded and had a title: what comes after is no longer launch. */
 const done = () => firstLoaded && titled;
@@ -41,6 +43,8 @@ export function watchLaunch(slowAfterMs = 5000): void {
   if (app.isPackaged) return;
   enabled = true;
   mark('main started');
+  // The E2E harness reads it, for a notice or beside a failure (test/e2e/main-errors.ts, #321).
+  (globalThis as { chordLaunchTimeline?: () => string }).chordLaunchTimeline = () => marks.join('\n');
   recordNetLog();
   let first: string | null = null;
   let settled = false;
@@ -83,10 +87,13 @@ export function watchLaunch(slowAfterMs = 5000): void {
   // Called before `ready`: no page exists yet, so every one is seen as it's made.
   app.on('web-contents-created', (_event, contents) => watch(contents));
   setTimeout(() => {
-    if (!firstLoaded) console.error(block(`no page loaded ${slowAfterMs} ms after main started`));
+    if (firstLoaded) return;
+    dumped = true;
+    console.error(block(`no page loaded ${slowAfterMs} ms after main started`));
   }, slowAfterMs).unref();
   app.on('will-quit', () => {
-    if (marks.some((m) => / {2}(committed|navigation started) /.test(m)) && !done()) {
+    // A slow launch whose first page never even started (its rules never on: Carbon's B2 on #343) says so too.
+    if ((dumped || marks.some((m) => / {2}(committed|navigation started) /.test(m))) && !done()) {
       console.error(block(`at quit, the first page ${firstLoaded ? 'had no title event' : 'never loaded'}`));
     }
   });

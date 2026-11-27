@@ -81,6 +81,7 @@ import { pageGate } from './page-gate';
 import { followSessions } from './sessions-follow';
 import { Screenshots } from './screenshots/service';
 import { DiskShots } from './screenshots/store';
+import { openFirstPagesGate } from './first-pages-gate';
 import { mark, watchLaunch } from './launch-timeline';
 import { chromiumUserAgent } from './user-agent';
 import { targetFor } from '@chord/player-protocol';
@@ -231,7 +232,6 @@ const adBlocking = new AdBlocking(
     offSites: (profileId) => (browser ? blockingOffSites(browser.store.state, profileId) : []),
   },
 );
-
 const downloads = new DownloadManager({
   state: () => browser!.store.state,
   dispatch: (command) => browser!.store.dispatch(command),
@@ -1209,6 +1209,8 @@ if (!app.requestSingleInstanceLock()) {
     adBlocking.sync();
     // Every chord's session, made now, so each one's blocker extension has loaded before any of its pages loads (below).
     for (const profileId of profilesInUse) if (!isPrivateProfile(profileId)) profileSession(profileId);
+    // Development and tests: the E2E harness's gate opens (first-pages-gate.ts, #321).
+    if (!app.isPackaged) void adBlocking.rulesSettled().then(openFirstPagesGate);
     // Before any of Chord's own pages loads (a text field there is what starts a dictionary download).
     applySpellcheck(ui, browser.store.state.settings.spellcheck, browser.store.state.settings.googleFree);
     // One-time move for profiles from 0.6.x, whose assistant kept its files (panel.json, images, its empty working
