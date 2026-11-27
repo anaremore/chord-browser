@@ -1,6 +1,6 @@
 # Acting inside same-site frames (#210): design and threat checklist
 
-Part of #209. **Status: PR 1 (read only) shipped in #320. PR 2 (click and hover) is #347, in review; Argon's design pass on it is folded in (*PR 2: Argon's design pass*, below). PR 3 (text, keys and choices) follows.** Argon cleared the design (2026-11-26) after its round-1 blockers; their changes are in *Argon's review: what changed*, and folded into the sections they touch.
+Part of #209. **Status: PR 1 (read only) shipped in #320. PR 2 (click and hover) is #347 (PR #351), in review; Argon's design pass on it is folded in (*PR 2: Argon's design pass*, below). PR 3 (text, keys and choices) is #352: its design is below (*PR 3: text, keys and choices*), for Argon, with Spike D's finding of a pre-existing hole in the frame guard.** Argon cleared the design (2026-11-26) after its round-1 blockers; their changes are in *Argon's review: what changed*, and folded into the sections they touch.
 
 ## Outcome and Done when (#210)
 
@@ -237,6 +237,98 @@ Click and hover act on a frame ref; text, keys and choices stay *not yet* (PR 3)
 - **A vertical writing mode** on a frame's root: coordinates stay the viewport's; scrolling may differ.
 - **SVG filter displacement** moves pixels, not boxes: both hit tests agree on the layout box.
 - **B4's base and realm** have no test that tells them apart from the top's: a frame of the page's own origin resolves a form's action the same either way in every fixture tried.
+
+## PR 3: text, keys and choices (#352; design for Argon, 2026-11-27)
+
+`type`, `press_key` and `select_option` on a ref inside a same-origin frame, in an agent's own tab. A frame ref in a tab of yours stays refused before any card (B1, F8). What follows is the design, plus a spike that changes B8's premise.
+
+### Spike D: the frame guard today (run 2026-11-27, Linux container, an agent's tab; throwaway, not committed)
+
+`/frame-form` plus frames made by the top's script: no `src` (body filled), `src="about:blank"`, `document.write`, `srcdoc`, `blob:`, a script-set `src` to a page of the site, and one navigated twice. The guard was put up in every frame the way `toFrames` does (`chord:agentGuard`, sent again just before the key), the focus was put on the frame's input, and one trusted key was sent. Main listened for `page:agentGuardStopped`.
+
+| Frame | Preload ran (its print stub is there) | Guard installed (`page:agentGuardState` asked) | Key stopped |
+| --- | --- | --- | --- |
+| Static `<iframe src>` in the page's HTML | yes | (before the listener) | **no** (3 of 3 runs) |
+| Script-set `src` to a page of the site | yes | yes | **flaky** (no, no, yes) |
+| The same frame navigated a second time | yes | yes | yes |
+| `srcdoc`, `blob:` | yes | yes | yes (blob missed once, with the IPC sent once) |
+| No `src`, `about:blank`, `document.write` | stub only (the parent's PAGE_LACKS reaches blank frames) | **never** | **no** |
+| The top, armed, then the page calls `document.open()` | n/a | n/a | yes before, **no after** |
+
+**What this means:**
+- A frame's first document after its initial `about:blank` (the usual case: any `<iframe src>`) often has no live frame guard. The likely cause is Chromium reusing the initial `about:blank` Window for the first same-origin document, which clears the window's listeners or races the preload's install. A second navigation gets a fresh Window and a working guard.
+- Script-made blank frames never run the frame guard at all. Electron's preload world is there as a debugger context (Spike B), but nothing of Chord's is in it.
+- `document.open()` erases every listener on the window, in every world (the HTML spec's "erase all event listeners"). The top's guard API stays and still arms (`arm` answers true), but its listeners are gone.
+- **This is a pre-existing hole, apart from PR 3.** Today, with an agent typing at the top and the page moving the focus into a static same-origin frame's field, the text lands in that field. The top's guard only says `lost`, and the agent hears *focus lost* afterwards. After `document.open()`, the top's guard stops nothing.
+
+### B8, revised: a guard armed per action, never trusted from install
+
+The install-time listeners can't be relied on, so PR 3 doesn't build on them.
+
+**1. Installed before the page's scripts, in every document of an agent's tab, by Chord through the debugger.**
+- The agent's tab keeps its debugger attached for its life (`agents/pickers.ts`). Through it, `Page.addScriptToEvaluateOnNewDocument` with `runImmediately: true` and a world name of Chord's installs the guard's script in a world of its own, in every frame's every document, before the page's scripts.
+- This needs a **spike first (Spike E):** does it run for a frame's first document after the reused `about:blank` Window, for script-made blank frames (no `src`, `about:blank`, `document.write`), for `srcdoc` and `blob:`, and before the page's first inline script? If not, the fallback is to install at arm time (below), with the ordering limit said.
+- The preload's guard stays, for the top of a tab of yours (no debugger there) and as a second layer.
+
+**2. Armed per action, through the open `DeepSession`, never a second `withDebugger`.**
+- `arm` runs in **every** frame of the page's process, through `Runtime.evaluate` in the guard world's context of each frame (the contexts the session already collects, by frame id and world name). Each must answer that its listeners are live, using a check only that world can pass: an event type random per install, heard by its own listener. A frame that doesn't answer, or whose listeners are gone (`document.open()`), fails the action closed before any input: *Chord can't guard typing on this page* (a new refusal), nothing sent.
+- The **target frame** (the one holding the element, identified by `DOM.describeNode` on the chain's last frame element, never by URL or title) arms the top's rule: input only for the marked element, until its `until` event. **Every other frame, and the top,** arm as blocks: every trusted key and insertion is stopped, and counted as `moved`.
+- Frames of another process (another site's) can't be reached by this session. They keep the IPC block, now acknowledged: `chord:agentGuard` carries a nonce, and each frame answers `page:agentGuardUp` with it only after its own live check passes (an answer from a guard whose listeners are gone would be a false yes). Input waits for every answer, at most 250 ms; a frame that doesn't answer fails the action closed. The focus can be put into another site's frame by the page (`iframe.focus()`), so this frame's block matters too.
+- A frame made while the guard is up arms itself blocked, as now (`upNow`), and the session arms it as the new context appears.
+
+**3. Read and disarmed through the same session.**
+- `watchPress`, `pressSeen` and `keySeen` ask the **target frame's** guard: its window sees the click's `mouseup` and the key's `keydown`, never the top's.
+- `unguard` disarms every frame. The answer: `moved` if any frame stopped anything (the target frame's own *moved*, or any block's count, or any IPC report); `lost`, `keydownPassed` and `passed` from the target frame alone. The top's `lost` no longer counts when the target is in a frame: the input's last event never reaches the top.
+- `dropAgentGuard` (your key or click took the tab) drops every frame's, through the session if it's open and through IPC as now.
+
+**4. The mark.** Unchanged: `focused` fires the mark at the element, inside its frame. DOM events cross worlds, so the frame's guard hears it, and a frame's event never reaches the top's window, so the top stays blocking everything.
+
+### Focus inside a frame (SF2)
+
+`focused` and `focus` check the focus through the chain:
+- `deepActive(document)` (the top's `activeElement`, climbed through open shadow roots) is the chain's first frame element;
+- `deepActive(doc_i)` is the next frame element at every link;
+- `deepActive(lastDoc)` is the element;
+- `lastDoc.hasFocus()`.
+
+A closed shadow root on the way fails the check, as at the top. `focus` calls the element's own `focus({ preventScroll: true })`; the frame elements above it take the focus with it.
+
+### Choices, selection and values in the frame's realm (N1)
+
+- `select` selects the field's text through the element's own window (`win.getSelection()`, `doc.createRange()`), never the top's.
+- `choose` and `setValue` use the element's own window's prototypes (`HTMLSelectElement`, `HTMLInputElement`), and `Event` from that window.
+- `values` already walks every same-origin frame from the top. It keeps its list in Chord's world of the top, as now.
+- A select's popup in a frame: `select_option` chooses by value, with no popup, as at the top.
+
+### Sensitive fields in a frame
+
+- `focusOk` refuses a sensitive field with `said.field`, as at the top. For an **editor frame** (its body or root editable, or `designMode`), `said.field` is labelled by the frame's name and by its own label together, as the snapshot labels it (#320's SF2, round 2's S1). So a "Card number" editor frame, or a "Notes" frame whose body is a "Password" field, is refused, nothing typed.
+- A password or card `<input>` in a frame is refused as at the top (its own `autocomplete`, type and label).
+
+### `isAgentInput` in frames
+
+Unchanged, by construction: every frame's input arrives through the tab's one `webContents`, so `before-input-event` and `isAgentInput` see the agent's keys and yours alike, wherever the focus is. Your key in a frame pauses the agent and drops the guard in every frame; the agent's own keys into a frame never do. A unit row pins this for a key sent while the target is a frame.
+
+### The user's own tab
+
+A frame ref under a lease is refused before any card, as in PR 2 (B1, F8). The snapshot gives none there anyway (`frameRefs`). PR 3 adds no path for the assistant into frames.
+
+### Threats PR 3 answers
+
+- **F5:** focus stolen to the top on `keydown` (`press_key`), and on `beforeinput` (`type`), from inside the target frame: stopped by the top's block, said (*moved*), nothing typed at the top. Also to a sibling frame, and to a static frame's field when the target is at the top (Spike D's hole).
+- **F5b (Spike D):** the page calls `document.open()` on the top or the target frame between the snapshot and the input: refused before input (the guard's live check), nothing typed.
+- **F10:** sensitive fields in frames, above.
+
+### Proposed order
+
+1. **Spike E** (above). It decides between the debugger-installed guard and install at arm time.
+2. **Fix the pre-existing hole for the top first**, in its own PR (a bug, tier A), since it's live today: the guard installed per document as in step 1 of B8, the frames' blocks armed and confirmed through the session, `document.open()` failing closed. PR 3 then builds the target frame's rule on it.
+3. **PR 3:** the target frame's arm and reads, SF2, the realms, sensitive fields, F5.
+
+### Limits (proposed)
+
+- **Install at arm time, if Spike E fails:** the guard's listeners then come after any window capture listener the page put there first. Such a listener can stop the guard's listener for a key (`stopImmediatePropagation`). The live check and the after-input `values` count are the backstops: a field elsewhere that changed answers *typed elsewhere* (`typedElsewhere`), as today, but after the fact.
+- **Another site's frame** is blocked by its preload and IPC alone, with the acknowledgement. Its first-document install has the same Window-reuse risk; with no live answer, the action fails closed, so a page with such a frame may refuse typing everywhere until that's fixed (to be measured in Spike E).
 
 ## Spikes (run 2026-11-26, Linux container, an agent's tab; a throwaway spec, not committed)
 
