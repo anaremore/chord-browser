@@ -233,6 +233,25 @@ export class MiniWindows {
     return this.open.has(nodeId);
   }
 
+  /**
+   * Every mini window whose page is in this session goes (its proxy began failing, #331): its page out of it at once
+   * (closeFloatingIn closes it), the window fading away as "Open in" does. What each showed, and its chord, come back,
+   * for a tab there that waits for the proxy like any (Carbon's SF6).
+   */
+  closeIn(ses: Session): { nodeId: NodeId; chordId: ChordId | null; url: string }[] {
+    const gone: { nodeId: NodeId; chordId: ChordId | null; url: string }[] = [];
+    for (const mini of [...this.open.values()]) {
+      const page = mini.page.webContents;
+      if (page.isDestroyed() || page.session !== ses || mini.promoted) continue;
+      mini.promoted = true;
+      // Before its first page came, its address is where it's going (Carbon's SF-R2-3, as promote's NSF2).
+      gone.push({ nodeId: mini.nodeId, chordId: mini.target, url: this.deps.tabs.floatingAddress(mini.nodeId) ?? page.getURL() });
+      if (!mini.window.isDestroyed()) mini.window.contentView.removeChildView(mini.page);
+      mini.fadeAndClose();
+    }
+    return gone;
+  }
+
   /** The OS window of the mini window this contents is in. */
   windowFor(contents: WebContents): BaseWindow | undefined {
     return this.forContents(contents)?.window;

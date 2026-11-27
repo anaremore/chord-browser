@@ -69,7 +69,7 @@ export function AgentSections({ state, windowId, appearance, info }: { state: St
                       title={tab.url}
                       onClick={() => void api.state.dispatch({ t: 'tab.activate', windowId, nodeId: tab.id })}
                     >
-                      <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && !tab.favicon} appearance={appearance} />
+                      <Favicon url={tab.url} title={tab.title} favicon={tab.favicon} loading={Boolean(live?.loading) && (!tab.favicon || Boolean(live?.waitingForSession))} appearance={appearance} />
                       <span className={styles.title}>{tab.title || tab.url}</span>
                       {working && <span className={styles.dot} role="img" aria-label={`${chord.name} is using this tab`} />}
                     </button>

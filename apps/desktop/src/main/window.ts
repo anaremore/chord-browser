@@ -471,12 +471,16 @@ export class AppWindow {
     });
   }
 
-  /** A toast in this window's sidebar (or minimal bar), once its shell can show it. In presenting mode, only one about the share. */
-  toast(toast: Toast): void {
-    if (this.presenting() && !toast.whilePresenting) return;
+  /**
+   * A toast in this window's sidebar (or minimal bar), once its shell can show it. In presenting mode, only one about
+   * the share: false when it's skipped there.
+   */
+  toast(toast: Toast): boolean {
+    if (this.presenting() && !toast.whilePresenting) return false;
     if (this.shellLoaded) send(this.shell.webContents, 'toast:show', toast);
     // The same toast again replaces the one waiting, as it would on screen.
     else this.pendingToasts = [...this.pendingToasts.filter((t) => t.id !== toast.id), toast];
+    return true;
   }
 
   /** The focused page: the active tab, or the focused pane of a split. */

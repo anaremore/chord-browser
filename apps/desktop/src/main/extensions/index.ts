@@ -501,6 +501,42 @@ export class Extensions {
       });
   }
 
+  /**
+   * A session whose proxy began failing (#331, Opus's SF-A): its installed extensions are taken out and loaded again,
+   * so a worker already running (fetching on a loop, sending around the session's block) stops, and the one that
+   * starts again runs under the block (measured in Chord: 12 requests in 3 s before, none after). Chord's own ad-blocking
+   * extension in the session isn't one of these (not installed here), and loads nothing itself.
+   */
+  async restartIn(ses: Session): Promise<void> {
+    // Launch is loading everything itself (Neon's B1 on #334): nothing loaded twice meanwhile; this runs after it.
+    if (this.starting) return void this.restartAfterStart.add(ses);
+    for (const [profileId, host] of this.hosts) {
+      if (host.session !== ses) continue;
+      const keys = Object.values(this.deps.state().extensions).flatMap((e) => (e.profileId === profileId ? [extensionKey(e.profileId, e.id)] : []));
+      for (const key of keys) {
+        // Read fresh each time: an install, an update or a removal may have come since (Opus's round 3 on #331).
+        const e = this.deps.state().extensions[key];
+        // One being installed, updated or loaded loads its own version itself, from where that put it.
+        if (!e || !host.get(e.id) || this.installing.has(key) || this.updating.has(key) || this.loading.has(key)) continue;
+        this.loading.add(key);
+        host.unload(e.id);
+        try {
+          await host.load(e.path);
+          // Removed while it loaded again: it doesn't stay loaded.
+          if (!this.deps.state().extensions[key]) host.unload(e.id);
+        } catch (error) {
+          // Not tried again by itself (reconcile skips it), as any extension that won't load.
+          this.unloadable.add(key);
+          console.error(`Extension ${e.name} (${e.id}) didn't load again after its proxy began failing:`, error);
+        } finally {
+          this.loading.delete(key);
+        }
+      }
+    }
+    this.sync();
+    this.deps.changed();
+  }
+
   /* ---------- Install, update, remove ---------- */
 
   /**
@@ -518,6 +554,10 @@ export class Extensions {
     } finally {
       this.starting = false;
     }
+    // A session whose proxy began failing meanwhile: its extensions, all loaded now, start again under its block.
+    const restarts = [...this.restartAfterStart];
+    this.restartAfterStart.clear();
+    for (const ses of restarts) await this.restartIn(ses);
     for (const e of Object.values(this.deps.state().extensions)) void this.finishInstall(e);
     this.deps.changed();
     this.updateTimer = setTimeout(() => void this.scheduledUpdateCheck().finally(() => this.scheduleUpdates()), FIRST_UPDATE_CHECK_MS);
@@ -555,6 +595,8 @@ export class Extensions {
 
   /** While launch loads everything (start): reconcile waits for it, never loading the same extension beside it. */
   private starting = false;
+  /** Sessions whose proxy began failing during launch: restartIn runs for each once launch has loaded everything. */
+  private readonly restartAfterStart = new Set<Session>();
 
   private scheduleUpdates(): void {
     clearTimeout(this.updateTimer);

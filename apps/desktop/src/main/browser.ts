@@ -62,7 +62,7 @@ import {
 } from '@chord/core';
 import type { ArchiveEntry, HistoryEvent, NavState } from '@chord/data';
 import { GesturePhases } from './gesture-phases';
-import type { AgentConnectCard, AgentSiteCard, AgentStepCard, ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView } from '@chord/ipc';
+import type { AgentConnectCard, AgentSiteCard, AgentStepCard, ArchiveSnapshot, DevtoolsAction, DrmNotice, GesturePhase, MediaAction, NowPlaying, OtherBrowserId, PopoverState, PreviewTarget, ReaderLook, Rect, SettingsSnapshot, SyncView, Toast } from '@chord/ipc';
 import { THEME_VARS, type KeyReport, type Theme } from '@chord/player-protocol';
 import { createChordTheme, durations, hexToRgb, rgbToOklch, size } from '@chord/tokens';
 import { homedir } from 'node:os';
@@ -2807,6 +2807,83 @@ export class Browser {
           : `“${chord.name}” uses the proxy for all chords again.`,
       action: { label: 'Undo', command: { t: 'chord.proxy', chordId, ...previous } },
     });
+  }
+
+  /**
+   * A toast in each window showing one of these chords now, and with `privateToo` in private windows (whose pages the
+   * proxy for every chord holds), but not in those `skip` names (a proxy that isn't working, #325): the ones that got it.
+   */
+  toastWhereChords(chordIds: readonly string[], toast: Toast, options: { privateToo: boolean; skip: (windowId: string) => boolean }): string[] {
+    const got: string[] = [];
+    for (const [windowId, w] of this.windows) {
+      const model = this.store.state.windows[windowId];
+      if (!model || options.skip(windowId)) continue;
+      if (!(chordIds.includes(model.activeChordId) || (options.privateToo && model.private))) continue;
+      // Skipped while presenting: not shown, so still due there (Opus's nit on #331).
+      if (w.toast(toast)) got.push(windowId);
+    }
+    return got;
+  }
+
+  /**
+   * A session whose proxy can't be set (#331, the owner's pick, 2026-11-26): each tab whose page is in it closes that
+   * page, keeping its history and its place, title and all. A tab on screen loads again at once, through the gate,
+   * which holds it (loading, as any held tab) until the proxy takes; one off screen loads when it's shown. A page open
+   * before the failure could otherwise still send around the proxy. What was typed in it, and its scroll, may be lost.
+   */
+  holdPages(ses: Session): void {
+    // A page that isn't a tab yet (Peek, a mini window) in that session closes with what shows it, as openFlaggedAsTab
+    // closes them (Neon's SF1-r3: never a Peek card or a mini window left open on a closed page); then any page left.
+    // Each one's address opens as a tab, held like the rest (Carbon's SF6): a Peek's in its window, a mini window's in
+    // its chord's. After the tabs below are held, so a new one isn't put to sleep with them.
+    const promoted: { w: AppWindow; url: string }[] = [];
+    for (const w of this.windows.values()) {
+      const peek = this.peeks.contents(w);
+      if (!peek || peek.isDestroyed() || peek.session !== ses) continue;
+      const nodeId = this.peeks.nodeOf(w);
+      const url = (nodeId && this.tabs.floatingAddress(nodeId)) || peek.getURL();
+      this.peeks.close(w);
+      if (url) promoted.push({ w, url });
+    }
+    for (const { chordId, url } of this.minis.closeIn(ses)) {
+      if (!chordId || !url) continue;
+      const onChord = [...this.windows.values()].find((x) => !x.isPrivate && this.store.state.windows[x.id]?.activeChordId === chordId);
+      const w = onChord ?? this.normalWindowForLinks({ quiet: true });
+      if (!w) continue;
+      if (this.store.state.windows[w.id]?.activeChordId !== chordId) this.store.dispatch({ t: 'chord.activate', windowId: w.id, chordId });
+      promoted.push({ w, url });
+    }
+    this.tabs.closeFloatingIn(ses);
+    this.holdTabs(ses);
+    for (const { w, url } of promoted) this.store.dispatch({ t: 'tab.open', windowId: w.id, url });
+  }
+
+  /** holdPages' tabs: each tab's page in `ses` closes, its history kept. */
+  private holdTabs(ses: Session): void {
+    const held = [...this.tabs.entries()].filter(([, contents]) => !contents.isDestroyed() && contents.session === ses).map(([nodeId]) => nodeId);
+    if (!held.length) return;
+    const onScreen = (nodeId: NodeId) => [...this.windows.values()].some((w) => shownTabs(this.store.state, w.id).includes(nodeId));
+    for (const nodeId of held) {
+      if (!onScreen(nodeId)) {
+        this.store.dispatch({ t: 'tab.sleep', nodeId });
+        // The store leaves some alone (a tab in a window closed but remembered, one with no `live` entry): their page
+        // is closed all the same. No path leaves a live page in a failing session (Neon's B1-r2 on #331).
+        if (!this.tabs.get(nodeId)) continue;
+      }
+      this.tabs.sleep(nodeId);
+      // Asleep, its history is what brings it back.
+      this.histories.touch(nodeId, true);
+    }
+    for (const w of this.windows.values()) if (held.some((nodeId) => shownTabs(this.store.state, w.id).includes(nodeId))) this.showPanes(w);
+  }
+
+  /**
+   * A proxy toast's Settings (#325): Settings → Privacy → Proxy, at a chord's own proxy or (null) the one for every
+   * chord, over `w`, the window the toast was in.
+   */
+  openProxySettingsAt(chordId: string | null, w?: AppWindow): void {
+    if (w) this.lastWindowId = w.id;
+    this.openSettings(`privacy/proxy/${chordId ?? ''}`);
   }
 
   /** Settings → Privacy → Proxy, with this chord's own proxy open to change. */

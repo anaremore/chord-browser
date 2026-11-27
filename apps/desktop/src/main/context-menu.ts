@@ -7,6 +7,7 @@ import { searchEngine, searchUrl, type ActionId, type Platform, type SearchEngin
 import { clipboard, Menu, type BaseWindow, type ContextMenuParams, type MenuItem, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import { acceleratorFor } from './menu';
 import { platform } from './platform';
+import { proxies } from './proxy';
 
 export type ContextMenuDeps = MenuDeps & (WebMenuDeps | { surface: 'ui' | 'reader' });
 
@@ -100,7 +101,15 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
       { label: 'Open image in new tab', click: () => deps.openTab(params.srcURL, false) },
       { label: 'Copy image', click: () => contents.copyImageAt(params.x, params.y) },
       { label: 'Copy image address', click: () => clipboard.writeText(params.srcURL) },
-      { label: 'Save image as…', click: () => contents.downloadURL(params.srcURL) },
+      // A download started from main bypasses the session's requests (#331): never while its proxy is failing.
+      // Asked again when it's chosen: the proxy may have begun failing, or being set, since the menu opened (Neon's SF2-r2).
+      {
+        label: 'Save image as…',
+        enabled: !proxies.holding(contents.session),
+        click: () => {
+          if (!contents.isDestroyed() && !proxies.holding(contents.session)) contents.downloadURL(params.srcURL);
+        },
+      },
     );
   }
 

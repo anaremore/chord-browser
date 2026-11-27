@@ -43,6 +43,7 @@ function runAction(action: ToastAction | undefined): void {
   if ('update' in action) void api.updates.restart();
   else if ('screenshot' in action) void api.screenshots.act(action.screenshot.id, action.screenshot.do);
   else if ('passwordRevert' in action) void api.passwords.revert(action.passwordRevert);
+  else if ('proxySettings' in action) void api.proxy.openSettings(action.proxySettings);
   else void api.state.dispatch(action.command);
 }
 

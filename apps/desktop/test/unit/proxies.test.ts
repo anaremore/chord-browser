@@ -173,8 +173,10 @@ describe('Proxies', () => {
     expect(page.policies).toEqual(['disable_non_proxied_udp']);
     settings.all = NONE;
     proxies.sync();
-    expect(page.policies).toEqual(['disable_non_proxied_udp', 'default']);
+    // Strict until the direct config has taken: never looser than what's in place (Opus's N2 on #331).
+    expect(page.policies).toEqual(['disable_non_proxied_udp']);
     await proxies.settled();
+    expect(page.policies).toEqual(['disable_non_proxied_udp', 'default']);
   });
 
   it('forgets a private window’s session with it', async () => {
