@@ -52,7 +52,7 @@ export interface AgentServiceDeps {
   chords?: AgentChordsDeps;
   dispatch?(command: Command): void;
   neverSites?(): readonly string[];
-  /** M2's slices (agentActions): without them, *Started by* comes from the hello's word, as in M1. */
+  /** M2's tools (agentActions): the tool list connections answer with; absent, they're on (development and tests). */
   actions?: boolean;
   /** Who's at the other end of a connection (peer.ts); tests give their own. Null: the OS can't say. */
   peer?(socket: Socket, endpoint: string, claimed: number, held: ReadonlySet<number>): Promise<PeerLookup>;

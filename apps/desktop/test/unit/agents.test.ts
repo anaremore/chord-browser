@@ -492,21 +492,13 @@ describe('Zero cost, and off in packaged builds', () => {
     await packaged.settled();
     expect(made).toBe(0);
     expect(existsSync(join(ud, AGENT_ENDPOINT_FILE))).toBe(false);
-    // Packaged with the setting saved on, or turned on: serves only once AGENTS_RELEASED (0.14.0).
+    // Packaged with the setting saved on: serves (Agents is released, 0.14.0).
     const savedOn = store(true);
     const packagedOn = watchAgents({ packaged: true, store: savedOn, devSwitch: undefined, make });
     cleanup.push(() => packagedOn.quit());
     await packagedOn.settled();
-    if (!AGENTS_RELEASED) {
-      savedOn.set(false);
-      savedOn.set(true);
-      await packagedOn.settled();
-      expect(made).toBe(0);
-      expect(existsSync(join(ud, AGENT_ENDPOINT_FILE))).toBe(false);
-    } else {
-      await packagedOn.quit();
-      made = 0;
-    }
+    await packagedOn.quit();
+    made = 0;
     const s = store(false);
     const agents = watchAgents({ packaged: false, store: s, devSwitch: undefined, make });
     cleanup.push(() => agents.quit());
@@ -539,11 +531,11 @@ describe('Zero cost, and off in packaged builds', () => {
   });
 
   // M2a: Started by comes from the process at the other end, as the OS says (peer.ts), never the hello's parentPid.
-  // [the peer the OS gives, M2 in this build, whose chain the card gets: 'parent' (this process's parent: the peer is
-  // Chord's own executable, the bridge), or 'none']
-  const started: [string, number | null, boolean, 'parent' | 'none'][] = [
-    ['the bridge, in Chord’s executable: who started it', process.pid, true, 'parent'],
-    ['unknown: nobody, so no program and no Always allow', null, true, 'none'],
+  // [the peer the OS gives, whose chain the card gets: 'parent' (this process's parent: the peer is Chord's own
+  // executable, the bridge), or 'none']
+  const started: [string, number | null, 'parent' | 'none'][] = [
+    ['the bridge, in Chord’s executable: who started it', process.pid, 'parent'],
+    ['unknown: nobody, so no program and no Always allow', null, 'none'],
   ];
   // On Windows the chain comes from window-owner.exe's `chain` (the build's, as Chord runs it), never PowerShell's query
   // of each process, which took more than its 10 s on CI's busy Windows runners (#107). Built here when it isn't yet
@@ -555,7 +547,7 @@ describe('Zero cost, and off in packaged builds', () => {
     expect(existsSync(windowsHelper), 'window-owner.exe built').toBe(true);
     return windowsHelper;
   };
-  it.each(started)('who started it: %s', async (_name, peerPid, actions, want) => {
+  it.each(started)('who started it: %s', async (_name, peerPid, want) => {
     const ud = profile();
     let asked: { claimed: number; endpoint: string } | null = null;
     const helper = builtHelper();
@@ -565,7 +557,6 @@ describe('Zero cost, and off in packaged builds', () => {
       ask: answering('once'),
       helper,
       waitMs: 2000,
-      actions,
       peer: async (_socket, endpoint, claimed) => {
         asked = { claimed, endpoint };
         return { pid: peerPid };
@@ -581,9 +572,8 @@ describe('Zero cost, and off in packaged builds', () => {
     // The right process, on every OS: never the wrong one, and never none where there is one.
     if (want === 'none') expect(chain).toEqual([]);
     else expect(chain[0]?.pid).toBe(process.ppid);
-    if (actions) expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
-    else expect(asked).toBeNull();
-    expect(held!.peerPid ?? null).toBe(actions ? peerPid : null);
+    expect(asked).toEqual({ claimed: process.pid, endpoint: service.serving!.path });
+    expect(held!.peerPid ?? null).toBe(peerPid);
   }, 20_000);
 
   // #264, Carbon's B1: .NET wrote the helper's answer in the console's code page (OEM), so a profile folder like José's

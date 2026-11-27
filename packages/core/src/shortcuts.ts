@@ -9,7 +9,6 @@
  * Windows or Super key (never used on macOS, where ⌘ is `Mod`).
  */
 
-import { AGENTS_RELEASED } from './agent-tools';
 
 export type Platform = 'darwin' | 'win32' | 'linux';
 
@@ -145,8 +144,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   s('chord.proxy', 'Proxy for this chord…', 'page-first', []),
   // The assistant (DESIGN.md §13.1): page-first, so web editors that use ⌘E / Ctrl+E keep it; Chrome uses these keys too.
   s('assistant.toggle', 'Show or hide the assistant', 'page-first', ['Mod+E']),
-  // Reserved: a page can never keep it from you. It names agents only once a release has them.
-  s('agents.stopAll', AGENTS_RELEASED ? 'Stop every agent and assistant reply' : 'Stop the assistant’s reply', 'reserved', ['Mod+.']),
+  // Reserved: a page can never keep it from you.
+  s('agents.stopAll', 'Stop every agent and assistant reply', 'reserved', ['Mod+.']),
   // No key (owner, 2026-11-21: ⌘⇧K / Ctrl+Shift+K is the password generator's "make another"): the tab menu and the
   // command bar share a tab (S18 M1e).
   s('agents.share', 'Share this tab with an agent, or stop sharing it', 'page-first', []),
