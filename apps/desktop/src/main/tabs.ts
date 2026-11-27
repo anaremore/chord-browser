@@ -130,16 +130,22 @@ export class TabManager {
    * when it is. Only the newest load asked for here runs: one asked for during the wait (a navigation, an upload) is
    * never landed on by an older one, whose `overtaken` is called. The session is asked again before loading (a wait
    * can end while another starts). Meanwhile the tab shows loading, and an agent's tool call waits for the page
-   * (agents/pickers.ts' firstLoadPending, which pageLoaded waits on) rather than calling it unloadable.
+   * (agents/pickers.ts' firstLoadPending, which pageLoaded waits on) rather than calling it unloadable. `load` returning
+   * false says it didn't load after all (what it was for had gone by then): the loading this wait put on comes off
+   * (round 1 of #333).
    */
-  whenProxied(contents: WebContents, load: () => void, overtaken?: () => void): void {
+  whenProxied(contents: WebContents, load: () => boolean | void, overtaken?: () => void): () => void {
     this.loadTurns.get(contents)?.overtaken?.();
     const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
     this.loadTurns.set(contents, turn);
     // `failed`: a wait that rejected (#299): it's over. Asked again, a source answering that same wait isn't waited on.
     const go = (failed?: Promise<void>) => {
-      if (contents.isDestroyed()) return void (this.waitMarked.delete(contents) && setFirstLoadPending(contents, false));
       if (this.loadTurns.get(contents) !== turn) return;
+      if (contents.isDestroyed()) {
+        if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
+        // Gone: its load never runs, and whoever waits on it hears so, never left hanging (Neon's NB1, round 2 of #333).
+        return turn.overtaken?.();
+      }
       const asked = this.deps.proxyReady(contents.session);
       const pending = asked === failed ? null : asked;
       if (pending) {
@@ -157,10 +163,43 @@ export class TabManager {
         return;
       }
       this.waiting.delete(contents);
-      if (this.waitMarked.delete(contents)) setFirstLoadPending(contents, false);
-      load();
+      // A wait put the tab's loading on (this turn's, or one it took over from: Neon's NSF2, round 2 of #333).
+      const marked = this.waitMarked.delete(contents);
+      if (marked) setFirstLoadPending(contents, false);
+      if (load() === false && marked) {
+        const nodeId = this.nodeFor(contents);
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+      }
     };
     go();
+    // Its drop: while it still waits, it's no longer the tab's (never run, the tab's loading off), as Stop does but
+    // without calling its own `overtaken` (Fable's FN3 on #333: a tool's load it gave up on).
+    return () => {
+      if (this.loadTurns.get(contents) !== turn || !this.waiting.has(contents)) return;
+      this.waiting.delete(contents);
+      this.loadTurns.set(contents, {});
+      if (this.waitMarked.delete(contents)) {
+        setFirstLoadPending(contents, false);
+        const nodeId = this.nodeFor(contents);
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+      }
+    };
+  }
+
+  /**
+   * A load asked for over a page (not its first): through the gate (whenProxied), and when it waits, Safe Browsing hears
+   * of it as of a navigation, so a late answer about the page before can't stop or drop it (#323's NSF1b; round 1 of
+   * #333: every one, the agent's and extensions' too).
+   */
+  queueLoad(contents: WebContents, load: () => boolean | void, overtaken?: () => void): () => void {
+    const drop = this.whenProxied(contents, load, overtaken);
+    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
+    return drop;
+  }
+
+  /** `url` in the page, as queueLoad does. */
+  load(contents: WebContents, url: string): void {
+    this.queueLoad(contents, () => void contents.loadURL(url).catch(() => {}));
   }
 
   /**
@@ -201,15 +240,32 @@ export class TabManager {
       // its hold. Only with nothing in flight (after Stop) does the address load again (Opus's N1, Neon's B1).
       if (this.waiting.has(contents) || this.priming.has(contents) || firstLoadPending(contents)) return;
       if (nodeId) return this.navigate(nodeId, url);
-      return this.whenProxied(contents, () => {
-        void contents.loadURL(url).catch(() => {
-          // Load failures show in the page itself, as they would in a tab.
-        });
-      });
+      // Load failures show in the page itself, as they would in a tab.
+      return this.load(contents, url);
     }
     // Once its session is ready, like any load (Neon's B2): never over the old connection, nor before its rules are on.
     // A load waiting already is overtaken by this one. Hard Reload too (round 1 of #292, SF2).
-    this.whenProxied(contents, () => (options.ignoreCache ? contents.reloadIgnoringCache() : contents.reload()));
+    this.queueLoad(contents, () => (options.ignoreCache ? contents.reloadIgnoringCache() : contents.reload()));
+  }
+
+  /**
+   * A page loaded at `url` and then reloaded, once its session is ready (#326): a PDF citation's page, which Chromium's
+   * viewer reads from `#page=` only as it loads.
+   */
+  reopenAt(contents: WebContents, url: string): void {
+    if (contents.isDestroyed()) return;
+    this.queueLoad(contents, () => {
+      const turn = this.loadTurns.get(contents);
+      contents.loadURL(url).then(
+        // Only after a load that went (not one stopped, or overtaken by yours or another citation's), and only while it's
+        // still this turn's; through the gate again, as the session may have changed meanwhile (Neon's B1, round 1 of
+        // #333).
+        () => {
+          if (!contents.isDestroyed() && this.loadTurns.get(contents) === turn) this.queueLoad(contents, () => contents.reload());
+        },
+        () => {},
+      );
+    });
   }
 
   /**
@@ -223,7 +279,9 @@ export class TabManager {
     if (!can()) return;
     // Once its session is ready (Neon's B2, round 1 of #292), and only if there's still somewhere to go then; if not,
     // the tab stops showing loading, put on while it waited (round 2 of #292).
-    this.whenProxied(contents, () => {
+    // Waiting for the session: Safe Browsing hears of it, as of a navigation, so a late answer can't drop it (Neon's
+    // round 2 of #323): queueLoad.
+    this.queueLoad(contents, () => {
       if (!can()) {
         const nodeId = this.nodeFor(contents);
         if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
@@ -232,9 +290,6 @@ export class TabManager {
       if (way === 'back') contents.navigationHistory.goBack();
       else contents.navigationHistory.goForward();
     });
-    // Waiting for the session: Safe Browsing hears of it, as of a navigation, so a late answer can't drop it (Neon's
-    // round 2 of #323).
-    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
   }
 
   /** Keep a site's icon, the newest first out of `SITE_ICONS` (a few KB each). */
@@ -518,8 +573,7 @@ export class TabManager {
     }
     const contents = pageOf(view);
     if (!contents || isInternalUrl(url)) return;
-    this.whenProxied(contents, () => void contents.loadURL(url).catch(() => {}));
-    if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
+    this.load(contents, url);
   }
 
   /** Silence the tab's page, or let it be heard. A tab without a page is silenced when it gets one (ensure). */
@@ -727,8 +781,13 @@ export class TabManager {
       // and its hold, lost, refuses acting there until it's armed again.
       const attempts = agentPage ? MAX_CRASH_RELOADS : (this.crashReloads.get(nodeId) ?? 0);
       if (attempts < MAX_CRASH_RELOADS) {
-        this.crashReloads.set(nodeId, attempts + 1);
-        contents.reload();
+        // Through the gate, as your Reload is (#326): never before the session's proxy is set or its rules are on. Not over
+        // a load you asked for that's waiting: it starts a renderer anyway, and it's where the tab is going (Opus's SF1,
+        // round 1 of #333); and then not counted, as it didn't run (round 2).
+        if (!this.waiting.has(contents)) {
+          this.crashReloads.set(nodeId, attempts + 1);
+          this.reload(contents);
+        }
       } else {
         live({ crashed: true, loading: false });
       }
@@ -806,7 +865,9 @@ export class TabManager {
     // Peek and mini windows keep to themselves: a link that wants a new tab opens right there.
     const floating = this.floating.get(openerNodeId);
     if (floating) {
-      void pageOf(floating.view)?.loadURL(url).catch(() => {});
+      // Once its session is ready, over any load still waiting (#326).
+      const page = pageOf(floating.view);
+      if (page) this.load(page, url);
       return { action: 'deny' };
     }
     // A pinned tab's link to another site opens in Peek, unless it was asked for in the background (⌘/Ctrl-click).

@@ -214,7 +214,7 @@ export function agentConnection(hello: Omit<AgentHello, 'token'>, send: Send, de
         if (!contents) return { text: 'That tab couldn’t be opened.', isError: true };
         // Its own address already asked about (the step card above): not asked again as it loads.
         if (why) allowFirstLoad(contents, url);
-        const page = controlPage(contents);
+        const page = controlPage(contents, deps.browser.tabs);
         // Followed from the start, so page_id names the page it loads.
         void page.id;
         // Past its blank first page too (tabs.ts: service workers bypassed in it), at most LOAD_MS.

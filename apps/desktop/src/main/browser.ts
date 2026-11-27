@@ -618,6 +618,9 @@ export class Browser {
             const popup = BrowserWindow.fromWebContents(contents);
             return popup ? { window: popup, x: 0, y: 0 } : undefined;
           },
+          // Through the gate, as a tab's are (#326): never before the session is ready, and gone with the popup.
+          reload: () => this.tabs.reload(contents),
+          go: (way) => this.tabs.go(contents, way),
         });
       },
     });
@@ -754,6 +757,7 @@ export class Browser {
       dispatch: (command) => this.store.dispatch(command),
       profileSession: (profileId) => options.profileSession(profileId),
       proxyReady: (session) => options.proxyReady(session),
+      tabMoves: this.tabs,
       root: options.extensions.root,
       preloadPath: options.extensions.preloadPath,
       unpackWorkerPath: options.extensions.unpackWorkerPath,
@@ -1325,7 +1329,8 @@ export class Browser {
                 for (const contents of w.paneContents) {
                   if (contents.isDestroyed() || !isBlockingOff(contents.getURL(), [site])) continue;
                   this.userNavigates?.(contents);
-                  contents.reload();
+                  // Through the gate (#326): a load already waiting is dropped for it, never raced.
+                  this.tabs.reload(contents);
                 }
               }
             }),
@@ -1682,7 +1687,7 @@ export class Browser {
     };
     // A tab just made in a session not ready yet (its proxy being set, its rules not on) waits, as its page does, and
     // takes over from the page's own first load (tabs.ts' whenProxied): the upload is what loads.
-    this.tabs.whenProxied(contents, upload);
+    this.tabs.queueLoad(contents, upload);
   }
 
   /** A new tab in the window, on `url` for now, and its page, so main can load into it (an upload, say). */

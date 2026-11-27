@@ -1,6 +1,5 @@
 export type IpcEvent = Electron.IpcMainEvent | Electron.IpcMainServiceWorkerEvent;
 export type IpcInvokeEvent = Electron.IpcMainInvokeEvent | Electron.IpcMainServiceWorkerInvokeEvent;
-export type IpcAnyEvent = IpcEvent | IpcInvokeEvent;
 interface RoutingDelegateObserver {
     session: Electron.Session;
     onExtensionMessage(event: Electron.IpcMainInvokeEvent, extensionId: string | undefined, handlerName: string, ...args: any[]): Promise<void>;

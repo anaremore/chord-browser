@@ -420,7 +420,7 @@ function setup(
         return state;
       },
     },
-    tabs: { get: view, ensure: (id) => (opts.onEnsure?.({ go, close }), view(id)) },
+    tabs: { queueLoad: (_c: unknown, load: () => unknown) => void load(), get: view, ensure: (id) => (opts.onEnsure?.({ go, close }), view(id)) },
     readers: { viewFor: () => undefined },
   };
   const cards: ControlCard[] = [];
@@ -2254,6 +2254,139 @@ describe('acting through the gate (S18 M2c)', () => {
     const t: Awaited<ReturnType<typeof acting>> = await acting({ act: { doing: (_n, d) => void (d && t!.agent.pause('n1', true)) } });
     expect(refusal(await t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' })).refused).toBe(CONTROL_REFUSALS.paused);
     expect(t.at.loads).toEqual([]);
+  });
+
+  it.each([
+    ['navigate', { url: 'https://news.test/b' }, ACT_REFUSALS.overtaken],
+    // Its entry still the one before: dropped, not moved (Fable's FN1).
+    ['back', {}, ACT_REFUSALS.overtaken],
+  ] as const)('%s overtaken while it waited for the session (round 1 of #333, Opus’s N4): refused in its own words, nothing loaded', async (tool, args, refused) => {
+    const t = await acting();
+    // Somewhere to go back to.
+    t.at.history = [{ url: 'https://news.test/before' }, { url: t.at.url }];
+    t.at.active = 1;
+    // The tab's gate: another load replaced this one before the session was ready.
+    (t.browser.tabs as { queueLoad: unknown }).queueLoad = (_c: unknown, _load: unknown, overtaken?: () => void) => overtaken?.();
+    expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused).toBe(refused);
+    expect(t.at.loads).toEqual([]);
+  });
+
+  it.each(['Stop', 'a pause'] as const)('%s while navigate waits for the session (Neon’s NSF1, round 2 of #333): the step ends then (its hold let go, the bar cleared), not when the session is ready', async (what) => {
+    const t = await acting();
+    // A gate that doesn't answer while the test runs.
+    let asked = false;
+    (t.browser.tabs as { queueLoad: unknown }).queueLoad = () => void (asked = true);
+    const going = t.call('navigate', { tab_id: t.tab, url: 'https://news.test/b' });
+    for (let i = 0; i < 200 && !asked; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(asked).toBe(true);
+    if (what === 'Stop') t.agent.stop();
+    else t.agent.pause('n1', true);
+    // The tool's own end: what it said it was doing is cleared (its finally), within a moment.
+    for (let i = 0; i < 100 && t.doings.at(-1) !== null; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(t.doings.at(-1)).toBeNull();
+    expect(refusal(await going).refused).toBe(what === 'Stop' ? CONTROL_REFUSALS.stopped : CONTROL_REFUSALS.paused);
+    expect(t.at.loads).toEqual([]);
+  });
+
+  describe('navigate and back while the tab’s session isn’t ready (Fable’s look at #333)', () => {
+    /** The step, with the tab's gate holding its load until `release` (or dropped by the step). */
+    async function gated(tool: 'navigate' | 'back', opts: Parameters<typeof acting>[0] = {}) {
+      const t = await acting(opts);
+      // Somewhere to go back to.
+      t.at.history = [{ url: 'https://news.test/before' }, { url: t.at.url }];
+      t.at.active = 1;
+      const gate = { load: null as (() => unknown) | null, dropped: false };
+      (t.browser.tabs as { queueLoad: unknown }).queueLoad = (_c: unknown, load: () => unknown) => {
+        gate.load = load;
+        return () => void (gate.dropped = true);
+      };
+      const going = t.call(tool, tool === 'navigate' ? { tab_id: t.tab, url: 'https://news.test/b' } : { tab_id: t.tab });
+      for (let i = 0; i < 200 && !gate.load; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(gate.load).not.toBeNull();
+      /** The session ready at last: the gate runs what it holds, unless the step dropped it. */
+      const release = () => void (gate.dropped || gate.load!());
+      return { t, going, gate, release };
+    }
+
+    it.each([
+      ['the hold lost (a renderer gone)', (t: Awaited<ReturnType<typeof acting>>): void => void leaseLost.add(t.pages.get('n1')!.contents), ACT_REFUSALS.noCheck],
+      ['taken over by you', (t: Awaited<ReturnType<typeof acting>>): void => void t.agent.cancelCardsFor('n1'), ACT_REFUSALS.takenOver],
+    ] as const)('%s while navigate waits (FB1, FN2): refused, and its load never comes after', async (_, what, refused) => {
+      const g = await gated('navigate');
+      what(g.t);
+      expect(refusal(await g.going).refused).toBe(refused);
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.loads).toEqual([]);
+    });
+
+    it('a tab of yours switched away while navigate waits (FSF1): refused with why, its load never comes', async () => {
+      let away = false;
+      const g = await gated('navigate', { act: { mayAct: () => (away ? 'That tab isn’t on screen any more.' : null) } });
+      away = true;
+      expect(refusal(await g.going).refused).toBe('That tab isn’t on screen any more.');
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.loads).toEqual([]);
+    });
+
+    it.each(['Stop', 'a pause'] as const)('%s while back waits (FN2): refused, no move after', async (what) => {
+      const g = await gated('back');
+      if (what === 'Stop') g.t.agent.stop();
+      else g.t.agent.pause('n1', true);
+      expect(refusal(await g.going).refused).toBe(what === 'Stop' ? CONTROL_REFUSALS.stopped : CONTROL_REFUSALS.paused);
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.active).toBe(1);
+    });
+
+    it('past the call’s deadline before its load started (FSF2): dropped, refused as not ready, never “Going to…”', async () => {
+      const g = await gated('navigate', { callDeadlineMs: 150 });
+      expect(refusal(await g.going).refused).toBe(ACT_REFUSALS.notReady);
+      expect(g.gate.dropped).toBe(true);
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.loads).toEqual([]);
+    });
+
+    it('back on a tab closed while it waited (FN1): the tab is closed, not that its history moved', async () => {
+      const g = await gated('back');
+      g.t.close('n1');
+      g.t.at.destroy!();
+      expect(refusal(await g.going).refused).toBe(CONTROL_REFUSALS.closed);
+    });
+
+    it('you say Don’t on a Send data card while navigate waits (FB1, FN2): refused at once, its load dropped, never after', async () => {
+      const g = await gated('navigate', { answer: 'deny', act: { siteAllowed: () => true } });
+      // The page it's on sends something while the load waits for the session: held, its card asked.
+      g.t.at.emitDebug!('Fetch.requestPaused', { requestId: 'g1', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Fetch' });
+      const answer = await Promise.race([g.going, new Promise((r) => setTimeout(() => r('still waiting'), 1500))]);
+      expect(answer).not.toBe('still waiting');
+      expect(refusal(answer as Awaited<typeof g.going>).refused).toBe(ACT_REFUSALS.stepDenied);
+      expect(g.gate.dropped).toBe(true);
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.loads).toEqual([]);
+    });
+
+    it('a Send data card still up at the call’s deadline while its load waits (Neon’s round 3 of #333): not ready, dropped, never after', async () => {
+      const g = await gated('navigate', { answer: 'hold', callDeadlineMs: 300, act: { siteAllowed: () => true } });
+      // The page it's on sends while the load waits: held, its card up, unanswered past the deadline.
+      g.t.at.emitDebug!('Fetch.requestPaused', { requestId: 'g2', request: { method: 'POST', url: 'https://news.test/save' }, resourceType: 'Fetch' });
+      expect(refusal(await g.going).refused).toBe(ACT_REFUSALS.notReady);
+      expect(g.gate.dropped).toBe(true);
+      g.release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(g.t.at.loads).toEqual([]);
+    });
+
+    it('back whose entry is another page by the time the session is ready (FN1): its history moved', async () => {
+      const g = await gated('back');
+      g.t.at.history = [{ url: 'https://news.test/elsewhere' }, { url: g.t.at.url }];
+      g.release();
+      expect(refusal(await g.going).refused).toBe(ACT_REFUSALS.backMoved);
+      expect(g.t.at.active).toBe(1);
+    });
   });
 
   // ---------- Risky steps (S18 M2d) ----------

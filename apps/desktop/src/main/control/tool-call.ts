@@ -3,7 +3,7 @@ import { firstLoadPending, pickersUnsecured } from '../agents/pickers';
 import { type RiskWhy, CONTROL_REFUSALS, ACT_REFUSALS, barAddress, wholeAddress, isNeverReadable, nodeOf, toolResult, type AssistantToolName, type NodeId, type State, type TabNode } from '@chord/core';
 import type { WebContents, WebContentsView } from 'electron';
 import { pageOf } from '../view-page';
-import { controlPage, type ControlPage } from './page';
+import { controlPage, type ControlPage, type LoadGate } from './page';
 import { shownOrigin } from './sends';
 import type { PageRead } from './extract';
 import type { ControlAgent, ControlCard } from './gate';
@@ -12,7 +12,7 @@ import type { ControlScope, ToolMemory, ToolOutput } from './scope';
 /** What of the browser the tools use: its state, its tabs' pages and reader view. */
 export interface ControlBrowser {
   readonly store: { readonly state: State };
-  readonly tabs: { get(nodeId: NodeId): WebContentsView | undefined; ensure(nodeId: NodeId): WebContentsView | undefined };
+  readonly tabs: LoadGate & { get(nodeId: NodeId): WebContentsView | undefined; ensure(nodeId: NodeId): WebContentsView | undefined };
   readonly readers: { viewFor(nodeId: NodeId): WebContentsView | undefined };
 }
 
@@ -99,7 +99,7 @@ export async function loadedPage(browser: ControlBrowser, nodeId: NodeId, signal
   // A page with a frame held unsecured never finishes loading (agents/pickers.ts): no waiting on it.
   // Stop and the client's cancel end the wait at once (round 1 of #145, SF3).
   if (!pickersUnsecured(contents)) await pageLoaded(contents, 15_000, signal);
-  return contents.isDestroyed() ? null : controlPage(contents);
+  return contents.isDestroyed() ? null : controlPage(contents, browser.tabs);
 }
 
 /**
@@ -131,7 +131,7 @@ export async function pageLoaded(contents: WebContents, ms: number, signal?: Abo
 /** The tab's page as it is now, without waking it. */
 export function currentPage(browser: ControlBrowser, nodeId: NodeId): ControlPage | null {
   const contents = pageOf(browser.tabs.get(nodeId));
-  return contents ? controlPage(contents) : null;
+  return contents ? controlPage(contents, browser.tabs) : null;
 }
 
 /** A tab read, and where (the assistant's readFrom: its origin then, Neon's B3 on #151). */

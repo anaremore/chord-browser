@@ -495,6 +495,214 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it('a link that wants a new tab, in a mini window or a Peek (#326): it loads there once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const view = t.manager.createFloating('f1' as NodeId, { session: {} as Session, url: SECOND, private: false }) as unknown as FakeView;
+    const page = view.page as FakeContents;
+    page.loadURL.mockClear();
+    const proxy = held();
+    waits.push(proxy);
+    const open = page.setWindowOpenHandler.mock.calls[0]![0] as (d: object) => { action: string };
+    expect(open({ url: 'https://third.test/', disposition: 'foreground-tab', features: '', frameName: '', referrer: {}, postBody: null }).action).toBe('deny');
+    expect(page.loadURL).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(page.loadURL.mock.calls.map(([url]) => url)).toEqual(['https://third.test/']);
+  });
+
+  it('a page that crashed, reloaded by itself (#326): once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    // A page that had loaded: its history has it.
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    const proxy = held();
+    waits.push(proxy);
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    expect(t.page.reload).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
+  it('a page opened again at an address (a PDF citation’s page, #326): loaded, then reloaded, once the session is ready', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    t.page.loadURL.mockClear();
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+    expect(t.page.loadURL).not.toHaveBeenCalled();
+    proxy.resolve();
+    await tick();
+    expect(t.loaded()).toEqual(['https://first.test/doc.pdf#page=3']);
+    expect(t.page.reload).toHaveBeenCalledOnce();
+  });
+
+  describe('a PDF citation’s page opened again (Neon’s B1, round 1 of #333): its reload', () => {
+    /** The page's loadURL answered when the test says. */
+    const answered = (t: ReturnType<typeof setup>) => {
+      let resolve!: () => void;
+      let reject!: (e: Error) => void;
+      t.page.loadURL.mockImplementationOnce(() => new Promise<void>((res, rej) => ((resolve = res), (reject = rej))));
+      return { resolve: () => resolve(), reject: () => reject(new Error('ERR_ABORTED')) };
+    };
+
+    it('not after a load that was stopped (Stop, your own navigation)', async () => {
+      const t = setup([]);
+      const load = answered(t);
+      t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+      load.reject();
+      await tick();
+      expect(t.page.reload).not.toHaveBeenCalled();
+    });
+
+    it('not once another load was asked for meanwhile (yours, another citation’s)', async () => {
+      const t = setup([]);
+      const load = answered(t);
+      t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+      t.manager.navigate(NODE, SECOND);
+      load.resolve();
+      await tick();
+      expect(t.page.reload).not.toHaveBeenCalled();
+    });
+
+    it('through the gate: the session changing while it loaded, the reload waits for it', async () => {
+      const waits: Array<ReturnType<typeof held>> = [];
+      const t = setup(waits);
+      const load = answered(t);
+      t.manager.reopenAt(t.page as never, 'https://first.test/doc.pdf#page=3');
+      const proxy = held();
+      waits.push(proxy);
+      const navigationQueued = vi.fn();
+      (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = navigationQueued;
+      load.resolve();
+      await tick();
+      expect(t.page.reload).not.toHaveBeenCalled();
+      // The reload's own wait: Safe Browsing hears of it (Opus's round 2 of #333).
+      expect(navigationQueued).toHaveBeenCalledWith(t.page);
+      proxy.resolve();
+      await tick();
+      expect(t.page.reload).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('a crash while your navigation waits for the session (Opus’s SF1, round 1 of #333): no reload over it; yours loads', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    t.page.loadURL.mockClear();
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.navigate(NODE, SECOND);
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    proxy.resolve();
+    await tick();
+    expect(t.page.reload).not.toHaveBeenCalled();
+    expect(t.loaded()).toEqual([SECOND]);
+  });
+
+  it('a crash reload that didn’t run (your navigation waited) isn’t counted (Opus’s round 2 of #333): two more crashes still reload', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.navigate(NODE, SECOND);
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    proxy.resolve();
+    await tick();
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    t.page.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    expect(t.page.reload).toHaveBeenCalledTimes(2);
+    expect(t.commands).not.toContainEqual(expect.objectContaining({ live: expect.objectContaining({ crashed: true }) }));
+  });
+
+  it.each([
+    ['tabs.load (extensions’ update, a link from Peek or a mini window)', (t: ReturnType<typeof setup>) => t.manager.load(t.page as never, SECOND)],
+    ['tabs.reload', (t: ReturnType<typeof setup>) => t.manager.reload(t.page as never)],
+    ['tabs.reopenAt (a PDF citation)', (t: ReturnType<typeof setup>) => t.manager.reopenAt(t.page as never, SECOND)],
+    ['tabs.queueLoad (the agent’s navigate and back)', (t: ReturnType<typeof setup>) => t.manager.queueLoad(t.page as never, () => undefined)],
+  ])('%s waiting for the session (Neon’s SF3, Opus’s SF2, round 1 of #333): Safe Browsing hears of it', (_, ask) => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    Object.assign(t.page.navigationHistory, { length: () => 1, getEntryAtIndex: () => ({ url: FIRST }) });
+    const navigationQueued = vi.fn();
+    (t.manager as unknown as { deps: { navigationQueued: unknown } }).deps.navigationQueued = navigationQueued;
+    waits.push(held());
+    ask(t);
+    expect(navigationQueued).toHaveBeenCalledWith(t.page);
+  });
+
+  it('a load that waited, then didn’t load after all (round 1 of #333): the tab stops showing loading', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.queueLoad(t.page as never, () => false);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    proxy.resolve();
+    await tick();
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+  });
+
+  it.each([
+    ['before it asks', true],
+    ['while it waits', false],
+  ])('a page closed %s (Neon’s NB1, round 2 of #333): the load never runs, and whoever waits on it hears so', async (_, before) => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    const load = vi.fn();
+    const overtaken = vi.fn();
+    if (before) t.page.destroy();
+    t.manager.queueLoad(t.page as never, load, overtaken);
+    if (!before) t.page.destroy();
+    proxy.resolve();
+    await tick();
+    expect(load).not.toHaveBeenCalled();
+    expect(overtaken).toHaveBeenCalledOnce();
+  });
+
+  it('a second waiting load over the first, which then doesn’t load (Neon’s NSF2, round 2 of #333): the tab stops showing loading', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    t.manager.queueLoad(t.page as never, () => undefined);
+    t.manager.queueLoad(t.page as never, () => false);
+    proxy.resolve();
+    await tick();
+    expect(t.commands.filter((c) => c.t === 'tab.live').at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+  });
+
+  it('a load given up on while it waits (its drop: Fable’s FN3 on #333): never runs, the tab no longer loading for it; a later drop does nothing', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    const load = vi.fn();
+    const drop = t.manager.queueLoad(t.page as never, load);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    drop();
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+    // Nothing waits there now: Stop has nothing to drop.
+    expect(t.manager.stopWaiting(t.page as never)).toBe(false);
+    proxy.resolve();
+    await tick();
+    expect(load).not.toHaveBeenCalled();
+    // A load asked for after, then the old drop: the new one stays.
+    const next = held();
+    waits.push(next);
+    const later = vi.fn();
+    t.manager.queueLoad(t.page as never, later);
+    drop();
+    next.resolve();
+    await tick();
+    expect(later).toHaveBeenCalledOnce();
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);

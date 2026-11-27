@@ -8,7 +8,21 @@ import { clipboard, Menu, type BaseWindow, type ContextMenuParams, type MenuItem
 import { acceleratorFor } from './menu';
 import { platform } from './platform';
 
-export interface ContextMenuDeps {
+export type ContextMenuDeps = MenuDeps & (WebMenuDeps | { surface: 'ui' | 'reader' });
+
+/**
+ * A page's menu (a tab's, Peek's, a mini window's, a popup's): its Back, Forward and Reload go through the session's
+ * gate, never the page's own (#287, #326), so a page's menu can't be made without them.
+ */
+interface WebMenuDeps {
+  surface: 'web';
+  /** Its Reload (tabs.reload: once the session is ready; one stopped before it ever loaded loads its address, #287). */
+  reload(): void;
+  /** Its Back and Forward (tabs.go: a load waiting for its session is dropped first, #292). */
+  go(way: 'back' | 'forward'): void;
+}
+
+interface MenuDeps {
   /** `web` for pages, `ui` for Chord's shell and command bar, `reader` for a reader view (its article's links and text). */
   surface: 'web' | 'ui' | 'reader';
   /** Offer Inspect (always for pages; development builds only for Chord's UI). */
@@ -28,10 +42,6 @@ export interface ContextMenuDeps {
   placement(): { window: BaseWindow; x: number; y: number } | undefined;
   /** Back, Forward or Reload chosen here: about to move the page (an agent's tab: you take it over, S18 M2e-1). */
   navigates?(going: 'back' | 'forward' | 'reload'): void;
-  /** Its Reload, where the page is a tab's (tabs.reload: one stopped before it ever loaded loads its address, #287). */
-  reload?(): void;
-  /** Its Back and Forward, where the page is a tab's (tabs.go: a load waiting for its session is dropped first, #292). */
-  go?(way: 'back' | 'forward'): void;
   /** Items extensions added for what was clicked (ARCHITECTURE.md §12). */
   extensionItems?(params: ContextMenuParams): MenuItem[];
   /**
@@ -116,7 +126,7 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
     );
   }
 
-  if (web && !isWebLink && params.mediaType === 'none' && !params.isEditable && !params.selectionText.trim()) {
+  if (deps.surface === 'web' && !isWebLink && params.mediaType === 'none' && !params.isEditable && !params.selectionText.trim()) {
     const blocking = deps.adBlocking?.on(params.pageURL) ?? null;
     const effects = deps.effects?.available() ? deps.effects : null;
     section(
@@ -125,8 +135,7 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
         enabled: history.canGoBack(),
         click: () => {
           deps.navigates?.('back');
-          if (deps.go) deps.go('back');
-          else history.goBack();
+          deps.go('back');
         },
       },
       {
@@ -134,8 +143,7 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
         enabled: history.canGoForward(),
         click: () => {
           deps.navigates?.('forward');
-          if (deps.go) deps.go('forward');
-          else history.goForward();
+          deps.go('forward');
         },
       },
       {
@@ -143,8 +151,7 @@ function buildContextMenu(contents: WebContents, params: ContextMenuParams, deps
         accelerator: accel('nav.reload'),
         click: () => {
           deps.navigates?.('reload');
-          if (deps.reload) deps.reload();
-          else contents.reload();
+          deps.reload();
         },
       },
       { type: 'separator' },

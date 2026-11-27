@@ -22,6 +22,10 @@ export interface HostCallbacks {
   selectTab(contents: WebContents, window: BaseWindow): void;
   /** Close this tab: only ever for an extension's request, never for a page Chord itself is closing. */
   closeTab(contents: WebContents): void;
+  /** chrome.tabs.update({ url }), reload, goBack and goForward: through the tab's session gate (#326). */
+  navigateTab(contents: WebContents, url: string): void;
+  reloadTab(contents: WebContents, bypassCache: boolean): void;
+  goTab(contents: WebContents, way: 'back' | 'forward'): void;
   tabFacts(contents: WebContents): TabFacts | undefined;
   createWindow(details: { url?: string | string[]; type?: string; width?: number; height?: number; focused?: boolean }): Promise<BaseWindow>;
   closeWindow(window: BaseWindow): void;
@@ -101,6 +105,9 @@ export class ExtensionHost {
       preloadPath,
       createTab: (details) => callbacks.createTab({ url: details.url, active: details.active !== false, windowId: details.windowId }),
       selectTab: (contents, window) => callbacks.selectTab(contents, window),
+      navigateTab: (contents, url) => callbacks.navigateTab(contents, url),
+      reloadTab: (contents, bypassCache) => callbacks.reloadTab(contents, bypassCache),
+      goTab: (contents, way) => callbacks.goTab(contents, way),
       removeTab: (contents) => {
         // The library also calls this when a page is destroyed; only a live tab is the extension asking.
         if (!contents.isDestroyed()) callbacks.closeTab(contents);
