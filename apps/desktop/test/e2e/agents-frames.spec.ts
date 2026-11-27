@@ -140,19 +140,35 @@ test('a card form in a frame is described as the same form at the top (F10)', as
   });
 });
 
-test('every action on a ref inside a frame is refused for now, and nothing reaches the frame (PR 1: not yet)', async () => {
-  test.setTimeout(90_000);
+test('a click and a hover on a ref inside a frame land on its element; text, keys and choices are refused for now, and nothing reaches the frame (#347: PR 2)', async () => {
+  test.setTimeout(120_000);
   reached.length = 0;
   await agentOn(async ({ allowed, open, inTab }) => {
+    // A click in a frame: its own button, and only it.
+    const goes = await open('/frame-goes');
+    const go = refIn(inside(goes.content, 'Widget'), 'button "Widget go"');
+    expect(go, goes.content).toBeDefined();
+    const clicked = await allowed('click', { tab_id: goes.tab_id, ref: go! });
+    expect([clicked.isError, clicked.text.slice(0, 200)], 'click').toEqual([false, expect.stringContaining('Clicked “Widget go”')]);
+    expect(await inTab(`${site.origin}/frame-goes`, 'document.querySelector("iframe").contentDocument.getElementById("log").textContent')).toBe(' go');
+    // Two frames deep.
+    const nested = await open('/frame-nested');
+    const inner = refIn(inside(nested.content, 'Inner'), 'button "Inner go"');
+    expect(inner, nested.content).toBeDefined();
+    expect((await allowed('click', { tab_id: nested.tab_id, ref: inner! })).isError, 'two deep').toBe(false);
+    // A hover: the pointer on its element.
+    const hover = await open('/frame-hover');
+    const point = refIn(inside(hover.content, 'Hover'), 'button "Point here"');
+    expect(point, hover.content).toBeDefined();
+    expect((await allowed('hover', { tab_id: hover.tab_id, ref: point! })).isError, 'hover').toBe(false);
+    expect(await inTab(`${site.origin}/frame-hover`, 'document.querySelector("iframe").contentDocument.getElementById("log").textContent')).toBe(' hovered');
+    // Text, keys and choices: not yet (PR 3).
     const { tab_id, content } = await open('/frame-form');
     const lines = inside(content, 'Order form');
-    const send = refIn(lines, 'button "Send order"')!;
     const name = refIn(lines, 'textbox "Name"')!;
     const size = refIn(lines, 'combobox "Size"')!;
-    expect([send, name, size].every(Boolean), content).toBe(true);
+    expect([name, size].every(Boolean), content).toBe(true);
     const calls: [string, Record<string, unknown>][] = [
-      ['click', { ref: send }],
-      ['hover', { ref: send }],
       ['type', { ref: name, text: 'Ada' }],
       ['press_key', { ref: name, key: 'Enter' }],
       ['select_option', { ref: size, option: 'M' }],
@@ -161,12 +177,231 @@ test('every action on a ref inside a frame is refused for now, and nothing reach
       const out = await allowed(tool, { tab_id, ...args });
       expect([out.isError, out.text], tool).toEqual([true, ACT_REFUSALS.inFrame]);
     }
-    const batched = await allowed('batch', { tab_id, steps: [{ tool: 'click', ref: send }] });
+    const batched = await allowed('batch', { tab_id, steps: [{ tool: 'type', ref: name, text: 'Ada' }] });
     expect(JSON.parse(batched.text)).toMatchObject({ data: { step: 1, why: ACT_REFUSALS.inFrame } });
-    expect(await inTab(`${site.origin}/frame-form`, 'document.querySelector("iframe").contentDocument.getElementById("log").textContent')).toBe('');
     // Nothing typed, nothing chosen (#320's N4).
     expect(await inTab(`${site.origin}/frame-form`, '(() => { const d = document.querySelector("iframe").contentDocument; return [d.querySelector("input[name=name]").value, d.querySelector("select").value]; })()')).toEqual(['', 'S']);
     expect(reached.filter((r) => r.includes('frame-order'))).toEqual([]);
+  });
+});
+
+test('the pointer lands where the element is: a padded, bordered frame in a scrolled box acts; a transform or zoom on a frame or a box above it is refused, nothing pressed (#347: F4, B7)', async () => {
+  test.setTimeout(120_000);
+  await agentOn(async ({ allowed, open, inTab }) => {
+    const url = `${site.origin}/frame-moved`;
+    const moved = await open('/frame-moved');
+    const logOf = (title: string) => inTab(url, `document.querySelector('iframe[title="${title}"]').contentDocument.getElementById("log").textContent`);
+    const go = (title: string) => refIn(inside(moved.content, title), 'button "Widget go"');
+    // Padded, bordered, in a scrolled box: it acts, on its own button.
+    expect(go('Moved'), moved.content).toBeDefined();
+    const out = await allowed('click', { tab_id: moved.tab_id, ref: go('Moved')! });
+    expect([out.isError, out.text.slice(0, 120)], 'Moved').toEqual([false, expect.stringContaining('Clicked')]);
+    expect(await logOf('Moved')).toBe(' go');
+    // Transformed or zoomed, the frame or a box above it: refused, nothing pressed.
+    for (const title of ['Turned', 'Zoomed', 'In turned box', 'In zoomed box']) {
+      const ref = go(title);
+      expect(ref, `${title}: ${moved.content}`).toBeDefined();
+      const refused = await allowed('click', { tab_id: moved.tab_id, ref: ref! });
+      expect([refused.isError, refused.text], title).toEqual([true, ACT_REFUSALS.cantPoint]);
+      expect(await logOf(title), title).toBe('');
+    }
+  });
+});
+
+test('a frame moved within its item (moveBefore: the same document, name and items) is another place: changed, nothing pressed (#347: position)', async () => {
+  test.setTimeout(90_000);
+  await agentOn(async ({ allowed, open, inTab }) => {
+    const url = `${site.origin}/frame-reorder`;
+    const { tab_id, content } = await open('/frame-reorder');
+    const go = refIn(inside(content, 'Widget'), 'button "Widget go"');
+    expect(go, content).toBeDefined();
+    expect(await inTab(url, 'typeof Element.prototype.moveBefore')).toBe('function');
+    await inTab(url, 'window.reorder()');
+    const out = await allowed('click', { tab_id, ref: go! });
+    expect([out.isError, out.text]).toEqual([true, ACT_REFUSALS.changed]);
+    expect(await inTab(url, '[...document.querySelectorAll("iframe")].map((f) => f.contentDocument.getElementById("log").textContent).join("|")')).toBe('|');
+  });
+});
+
+test('a see-through frame put over the target frame covers it: refused, nothing pressed (#347: F3)', async () => {
+  test.setTimeout(90_000);
+  await agentOn(async ({ allowed, open, inTab }) => {
+    const { tab_id, content } = await open('/frame-decoy-target');
+    const go = refIn(inside(content, 'Target'), 'button "Widget go"');
+    expect(go, content).toBeDefined();
+    const out = await allowed('click', { tab_id, ref: go! });
+    expect([out.isError, out.text]).toEqual([true, ACT_REFUSALS.covered('frame “Decoy”')]);
+    expect(await inTab(`${site.origin}/frame-decoy-target`, 'document.querySelector("iframe[title=Target]").contentDocument.getElementById("log").textContent')).toBe('');
+  });
+});
+
+test('a decoy put over the target frame as the pointer arrives, and one of another site, cover it: covered, never “couldn’t check”, nothing pressed (#347: Argon’s F3 list)', async () => {
+  test.setTimeout(90_000);
+  await agentOn(async ({ allowed, open, inTab }) => {
+    for (const path of ['/frame-decoy-late', '/frame-decoy-nested', '/frame-decoy-other']) {
+      const { tab_id, content } = await open(path);
+      const go = refIn(inside(content, 'Target'), 'button "Widget go"');
+      expect(go, `${path}: ${content}`).toBeDefined();
+      const out = await allowed('click', { tab_id, ref: go! });
+      expect([out.isError, out.text], path).toEqual([true, ACT_REFUSALS.covered('frame “Decoy”')]);
+      expect(await inTab(`${site.origin}${path}`, 'document.querySelector("iframe[title=Target]").contentDocument.getElementById("log").textContent'), path).toBe('');
+    }
+  });
+});
+
+test('an action in a frame settles with the frame: its answer comes once the frame’s changes are over (#347: Argon’s SF1)', async () => {
+  test.setTimeout(90_000);
+  await agentOn(async ({ allowed, open }) => {
+    const { tab_id, content } = await open('/frame-busy');
+    const work = refIn(inside(content, 'Busy'), 'button "Work"');
+    expect(work, content).toBeDefined();
+    const out = await allowed('click', { tab_id, ref: work! });
+    expect(out.isError, out.text).toBe(false);
+    expect(out.text, 'the frame’s last change in its answer').toContain('all done');
+  });
+});
+
+test('a second click at the same point, at a frame’s right edge: the pointer moves off and back inside the frame, and it clicks (#347: Argon’s B2)', async () => {
+  test.setTimeout(90_000);
+  await agentOn(async ({ allowed, open, inTab }) => {
+    const { tab_id, content } = await open('/frame-edge');
+    const e = refIn(inside(content, 'Edge'), 'button "E"');
+    expect(e, content).toBeDefined();
+    for (const n of [1, 2]) {
+      const out = await allowed('click', { tab_id, ref: e! });
+      expect([out.isError, out.text.slice(0, 80)], `click ${n}`).toEqual([false, expect.stringContaining('Clicked “E”')]);
+    }
+    expect(await inTab(`${site.origin}/frame-edge`, 'document.querySelector("iframe").contentDocument.getElementById("log").textContent')).toBe(' go go');
+  });
+});
+
+test('each of a frame’s own transforms, a perspective above it, and a zoom on its own root: refused, nothing pressed (#347: Argon’s SF2)', async () => {
+  test.setTimeout(120_000);
+  await agentOn(async ({ allowed, open, inTab }) => {
+    const url = `${site.origin}/frame-bent`;
+    const bent = await open('/frame-bent');
+    for (const title of ['Scaled', 'Rotated', 'Translated', 'In perspective', 'Root zoomed']) {
+      const ref = refIn(inside(bent.content, title), 'button "Widget go"');
+      expect(ref, `${title}: ${bent.content}`).toBeDefined();
+      const out = await allowed('click', { tab_id: bent.tab_id, ref: ref! });
+      expect([out.isError, out.text], title).toEqual([true, ACT_REFUSALS.cantPoint]);
+      expect(await inTab(url, `document.querySelector('iframe[title="${title}"]').contentDocument.getElementById("log").textContent`), title).toBe('');
+    }
+  });
+});
+
+test('unnamed rows inside a frame are told apart as at the top: patched by position, its row says something else; a row that says nothing, redrawn, is never found again (#347 with #273)', async () => {
+  test.setTimeout(120_000);
+  await agentOn(async ({ allowed, open, inTab, mcp }) => {
+    const rows = await open('/frame-rows');
+    const a = refIn(inside(rows.content, 'Orders'), 'button "Cancel"');
+    expect(a, rows.content).toBeDefined();
+    await inTab(`${site.origin}/frame-rows`, 'document.querySelector("iframe").contentWindow.setData(["B", "C"])');
+    const patched = await allowed('click', { tab_id: rows.tab_id, ref: a! });
+    expect([patched.isError, patched.text], 'patched by position').toEqual([true, ACT_REFUSALS.rowChanged]);
+    expect(await inTab(`${site.origin}/frame-rows`, 'document.querySelector("iframe").contentDocument.getElementById("log").textContent')).toBe('');
+    const blank = await open('/frame-blank-rows');
+    await inTab(`${site.origin}/frame-blank-rows`, 'document.querySelector("iframe").contentWindow.rows([{ n: 1, html: "" }])');
+    const look = (JSON.parse((await mcp.call('snapshot', { tab_id: blank.tab_id })).text) as Look).content;
+    const cancel = refIn(inside(look, 'Blank'), 'button "Cancel"');
+    expect(cancel, look).toBeDefined();
+    await inTab(`${site.origin}/frame-blank-rows`, 'document.querySelector("iframe").contentWindow.rows([{ n: 2, html: "" }])');
+    const redrawn = await allowed('click', { tab_id: blank.tab_id, ref: cancel! });
+    expect([redrawn.isError, redrawn.text], 'says nothing, redrawn').toEqual([true, ACT_REFUSALS.rowEmpty]);
+  });
+});
+
+test('a frame’s risky step asks as at the top: a form to another site says where it goes; one with no action goes to the frame’s own address; Pay now asks (#347: F6, F7, F10)', async () => {
+  test.setTimeout(150_000);
+  reached.length = 0;
+  await agentOn(async ({ app, mcp, open, inTab }) => {
+    const popover = await pageWhere(app, isPopover);
+    /** A call, every card it raises read and answered: the site card allowed, a step card answered `step`. */
+    const carded = async (name: string, args: Record<string, unknown>, step: 'Allow' | 'Don’t') => {
+      const calling = mcp.call(name, args);
+      const texts: string[] = [];
+      for (;;) {
+        const card = popover.getByRole('alertdialog').first();
+        const next = await Promise.race([calling.then(() => 'done' as const), card.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+        if (next === 'done') return { out: await calling, texts };
+        const text = (await card.textContent()) ?? '';
+        texts.push(text);
+        await popover.waitForTimeout(600);
+        const isStep = !/Allow for now/.test(text) && (await card.getByRole('button', { name: step, exact: true }).count()) > 0;
+        const label = isStep ? step : (await card.getByRole('button', { name: 'Allow for now', exact: true }).count()) ? 'Allow for now' : 'Allow once';
+        await card.getByRole('button', { name: label, exact: true }).click();
+        await card.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+      }
+    };
+    const third = `localhost:${new URL(site.origin).port}`;
+    // F6: the partner form in a frame posts to another site: its card says where; Don't sends nothing.
+    const posts = await open('/frame-post');
+    const partner = refIn(inside(posts.content, 'Partner form'), 'button "Send to partner"');
+    expect(partner, posts.content).toBeDefined();
+    const sent = await carded('click', { tab_id: posts.tab_id, ref: partner! }, 'Don’t');
+    expect(sent.texts.join(' | '), 'F6').toContain(`It goes to ${third}.`);
+    expect(sent.out.isError, 'F6').toBe(true);
+    expect(reached.filter((r) => r.includes('partner-order'))).toEqual([]);
+    // Allow posts it there, once (Argon's SF4).
+    const again = (JSON.parse((await mcp.call('snapshot', { tab_id: posts.tab_id })).text) as Look).content;
+    const partnerNow = refIn(inside(again, 'Partner form'), 'button "Send to partner"');
+    const allowedSend = await carded('click', { tab_id: posts.tab_id, ref: partnerNow! }, 'Allow');
+    expect(allowedSend.out.isError, `F6 Allow: ${allowedSend.out.text}`).toBe(false);
+    await expect.poll(() => reached.filter((r) => r.includes('partner-order')), { timeout: 10_000 }).toEqual(['POST /partner-order']);
+    // F7: a form with no action, in a frame: Allow sends it to the frame's own address, with no other card.
+    const plain = refIn(inside(posts.content, 'Plain form'), 'button "Save note"');
+    expect(plain, posts.content).toBeDefined();
+    const fresh = (JSON.parse((await mcp.call('snapshot', { tab_id: posts.tab_id })).text) as Look).content;
+    const plainNow = refIn(inside(fresh, 'Plain form'), 'button "Save note"') ?? plain;
+    const saved = await carded('click', { tab_id: posts.tab_id, ref: plainNow! }, 'Allow');
+    expect(saved.out.isError, `F7: ${saved.out.text}`).toBe(false);
+    // Its answer came once the frame had loaded what it posted (Argon's SF1): the frame's new page in the step's changes.
+    expect(saved.out.text, 'F7: waited for the frame').toContain('done POST /frame-plain-inner');
+    expect(saved.texts.some((t) => /^Send data to /.test(t)), `F7: ${saved.texts.join(' | ')}`).toBe(false);
+    await expect.poll(() => reached.filter((r) => r.includes('/frame-plain-inner')), { timeout: 10_000 }).toEqual(['POST /frame-plain-inner']);
+    // F10: Pay now in a frame asks its risky card, as at the top; Don't pays nothing.
+    const card = await open('/frame-card');
+    const pay = refIn(inside(card.content, 'Payment'), 'button "Pay now"');
+    expect(pay, card.content).toBeDefined();
+    // Show me on its card (Argon's F10): the button outlined in its frame, the card still up; then Don't.
+    const paying = mcp.call('click', { tab_id: card.tab_id, ref: pay! });
+    const texts: string[] = [];
+    let shown = false;
+    for (;;) {
+      const next = popover.getByRole('alertdialog').first();
+      const what = await Promise.race([paying.then(() => 'done' as const), next.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'card' as const)]);
+      if (what === 'done') break;
+      const text = (await next.textContent()) ?? '';
+      texts.push(text);
+      await popover.waitForTimeout(600);
+      const showMe = next.getByRole('button', { name: 'Show me', exact: true });
+      if (!shown && (await showMe.count())) {
+        await showMe.click();
+        shown = true;
+        await popover.waitForTimeout(300);
+        expect(await next.isVisible(), 'F10: the card stays up').toBe(true);
+        expect(await inTab(`${site.origin}/frame-card`, 'document.querySelector("iframe").contentDocument.querySelector("button").getAnimations().length'), 'F10: outlined in its frame').toBeGreaterThan(0);
+      }
+      const label = (await next.getByRole('button', { name: 'Don’t', exact: true }).count()) ? 'Don’t' : (await next.getByRole('button', { name: 'Allow for now', exact: true }).count()) ? 'Allow for now' : 'Allow once';
+      await next.getByRole('button', { name: label, exact: true }).click();
+      await next.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+    }
+    const paid = { out: await paying, texts };
+    expect(shown, 'F10: Show me offered').toBe(true);
+    expect(paid.texts.length, 'F10: a step card asked').toBeGreaterThan(0);
+    expect(paid.out.isError, 'F10').toBe(true);
+    expect(reached.filter((r) => r.includes('frame-pay'))).toEqual([]);
+    // SF4 (Argon): a frame's button that posts by fetch to another site: the send hold's card; Don't drops it, Allow
+    // lets it go, once.
+    const fetcher = await open('/frame-fetch');
+    const tell = refIn(inside(fetcher.content, 'Fetcher'), 'button "Tell a partner"');
+    expect(tell, fetcher.content).toBeDefined();
+    const dropped = await carded('click', { tab_id: fetcher.tab_id, ref: tell! }, 'Don’t');
+    expect(dropped.texts.join(' | '), 'SF4: its card').toContain(`Send data to http://${third}?`);
+    expect(reached.filter((r) => r.includes('frame-fetch-post'))).toEqual([]);
+    const allowedFetch = await carded('click', { tab_id: fetcher.tab_id, ref: tell! }, 'Allow');
+    expect(allowedFetch.out.isError, `SF4 Allow: ${allowedFetch.out.text}`).toBe(false);
+    await expect.poll(() => reached.filter((r) => r.includes('frame-fetch-post')), { timeout: 10_000 }).toEqual(['POST /frame-fetch-post']);
   });
 });
 
@@ -406,9 +641,13 @@ test('refind never crosses frames: a twin in a sibling frame is never acted on; 
     const right = refIn(inside(twins.content, 'Right'), 'button "Go"');
     expect([left, right].every(Boolean), twins.content).toBe(true);
     await new Promise((r) => setTimeout(r, 300));
-    for (const ref of [left!, right!]) expect((await allowed('click', { tab_id: twins.tab_id, ref })).isError).toBe(true);
+    // While both redraw every 100 ms: Right's ref is found again in Right's own document (Argon's B5), and clicks there.
+    const redrawn = await allowed('click', { tab_id: twins.tab_id, ref: right! });
+    expect([redrawn.isError, redrawn.text.slice(0, 80)], 'Right, redrawn').toEqual([false, expect.stringContaining('Clicked “Go”')]);
+    expect(await inTab(`${site.origin}/frame-twins`, '[...document.querySelectorAll("iframe")].map((f) => f.contentDocument.getElementById("log").textContent).join("|")')).toBe('| go');
+    await inTab(`${site.origin}/frame-twins`, '[...document.querySelectorAll("iframe")].forEach((f) => { f.contentDocument.getElementById("log").textContent = ""; })');
     // Both held still, a new snapshot; then Left's button removed, Right's kept (B6): Left's ref is changed, never
-    // Right's button; Right's own is not yet (never a twin's ambiguous).
+    // Right's button; Right's own acts, in Right only (#347), never a twin's ambiguous.
     await inTab(`${site.origin}/frame-twins`, '[...document.querySelectorAll("iframe")].forEach((f) => f.contentWindow.holdStill())');
     const still = (JSON.parse((await mcp.call('snapshot', { tab_id: twins.tab_id })).text) as Look).content;
     const leftNow = refIn(inside(still, 'Left'), 'button "Go"');
@@ -418,8 +657,8 @@ test('refind never crosses frames: a twin in a sibling frame is never acted on; 
     const gone = await allowed('click', { tab_id: twins.tab_id, ref: leftNow! });
     expect([gone.isError, gone.text], 'Left, gone').toEqual([true, ACT_REFUSALS.changed]);
     const kept = await allowed('click', { tab_id: twins.tab_id, ref: rightNow! });
-    expect([kept.isError, kept.text], 'Right').toEqual([true, ACT_REFUSALS.inFrame]);
-    expect(await inTab(`${site.origin}/frame-twins`, '[...document.querySelectorAll("iframe")].map((f) => f.contentDocument.getElementById("log").textContent).join("|")')).toBe('|');
+    expect([kept.isError, kept.text.slice(0, 120)], 'Right').toEqual([false, expect.stringContaining('Clicked “Go”')]);
+    expect(await inTab(`${site.origin}/frame-twins`, '[...document.querySelectorAll("iframe")].map((f) => f.contentDocument.getElementById("log").textContent).join("|")')).toBe('| go');
     // A top button the page moves (the live node) into a frame: refused, never pressed in there (B5).
     const top = await open('/frame-swallows');
     const fold = /button "Fold" \[ref=(e\d+)\]/.exec(top.content)?.[1];

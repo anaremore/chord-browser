@@ -200,6 +200,8 @@ export function actRefusal(answer: Extract<ActAnswer, { ok: false }>): string {
   if (answer.why === 'row-empty') return ACT_REFUSALS.rowEmpty;
   // Inside a same-origin frame (#210, PR 1: read, not acted on yet).
   if (answer.why === 'in-frame') return ACT_REFUSALS.inFrame;
+  // In a frame under a transform or a zoom (#347, B7): where the pointer would land can't be told.
+  if (answer.why === 'transformed') return ACT_REFUSALS.cantPoint;
   if (answer.why === 'covered') return ACT_REFUSALS.covered(answer.cover ? `${answer.cover.role} ${quotedName(answer.cover.name, answer.cover.role)}` : 'something');
   if (answer.why === 'not-select') return ACT_REFUSALS.notSelect;
   if (answer.why === 'no-answer') return 'The page didn’t answer in time. Call snapshot again, then try once more.';

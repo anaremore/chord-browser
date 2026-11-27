@@ -190,6 +190,13 @@ export const SNAPSHOT_LIB = String.raw`
   // Where a kept element is (the owner's bug #2: a ref whose node the page replaced is found again by it): its ancestors'
   // tags and roles, out through open shadow roots to their hosts, up to the root (at most 64), as JSON (a role's words
   // can't pass for another ancestor: the review of #117).
+  // A frame's place (#347; Argon's SF3): its index among its sibling frames. A reorder (moveBefore keeps its document,
+  // name and items) moves it; a banner or another element put beside it doesn't.
+  const framePlace = (el) => {
+    let i = 0;
+    for (let n = el.previousElementSibling; n; n = n.previousElementSibling) if (n.localName === 'iframe' || n.localName === 'frame') i++;
+    return i;
+  };
   const refPath = (el) => {
     const parts = [];
     let node = el.parentElement || (el.parentNode && el.parentNode.host) || null;
@@ -586,9 +593,9 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
   let frameHere = null;
   const enterFrame = (el, doc, depth, frameSid) => {
     // Its name and the items it's in, too (#320's SF3): a frame retitled, or moved into another item, is another frame.
-    frames.push({ el, doc, sid: frameSid, name: nameOf(el, 'iframe'), items: itemsOf(el) });
+    frames.push({ el, doc, sid: frameSid, name: nameOf(el, 'iframe'), items: itemsOf(el), row: rowOf(el), path: refPath(el), place: framePlace(el) });
     const before = frameHere;
-    frameHere = { chain: frames.map((f) => ({ frame: new WeakRef(f.el), doc: new WeakRef(f.doc), name: f.name, items: f.items })), key: frames.map((f) => f.sid).join('/') };
+    frameHere = { chain: frames.map((f) => ({ frame: new WeakRef(f.el), doc: new WeakRef(f.doc), name: f.name, items: f.items, row: f.row, path: f.path, place: f.place })), key: frames.map((f) => f.sid).join('/') };
     const start = doc.body || doc.documentElement;
     if (start && editorDoc(doc)) {
       // An editor frame (#210's B2): one typed field, named as its frame is, never walked (what's typed never read).
@@ -603,7 +610,7 @@ function snapshotScript(owner: string, token: string, pinned = true, boxes = fal
       node.field = { ...own, label: [name, own.label].filter(Boolean).join(' ') };
       looked++;
       if (args.frameRefs && shown(start) && keep.length >= args.maxRefs) cut.refs = true;
-      else if (args.frameRefs && shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name, items: '[]', path: refPath(start), shape: refShape(start), frames: frameHere }); }
+      else if (args.frameRefs && shown(start)) { node.key = keep.length; keep.push({ ref: new WeakRef(start), role: 'textbox', name, items: '[]', row: '', path: refPath(start), shape: refShape(start), frames: frameHere }); }
       nodes.push(node);
     } else if (start) {
       // Its own document's ancestors (#210's B6): a place and items within it, as refPath and itemsOf climb there.

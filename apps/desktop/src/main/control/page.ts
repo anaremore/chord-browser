@@ -477,8 +477,10 @@ async function afterActing(contents: WebContents, act: () => void | Promise<void
   // Where your focus is: an agent's tab never keeps it after its action (a page it took somewhere can take it).
   const yours = await focusedPage();
   let started = false;
+  // Any frame's: an action in a frame (#347, Argon's SF1: a frame's form posting to its own address) waits for that
+  // frame's load before its diff; navigated stays the main frame's (its page id).
   const onStart = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>) => {
-    if (details.isMainFrame && !details.isSameDocument) started = true;
+    if (!details.isSameDocument) started = true;
   };
   contents.on('did-start-navigation', onStart);
   try {

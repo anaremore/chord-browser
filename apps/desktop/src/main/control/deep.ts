@@ -28,6 +28,7 @@ import type { WebContents } from 'electron';
 import { pickersLost, retryPickers } from '../agents/pickers';
 import { withDebugger } from '../debugger-queue';
 import { pageCall } from '../page-call';
+import { FRAME_CHAIN_FN } from './frame-chain';
 import { SNAPSHOT_LIB, SNAPSHOT_FIND } from './snapshot';
 
 /** At most this long for the whole session (a hung page): then it's let go, and whatever waited is refused. */
@@ -60,6 +61,7 @@ type Node = { shadowRoots?: (Node & { shadowRootType?: string })[]; children?: N
 const CHECK_FN = String.raw`function (owner, token, key) {
   ${SNAPSHOT_LIB}
   ${SNAPSHOT_FIND}
+  ${FRAME_CHAIN_FN}
   const hit = this;
   const read = snapshotFind(owner, token);
   if (!read) return { ok: false, why: 'stale' };
@@ -69,6 +71,13 @@ const CHECK_FN = String.raw`function (owner, token, key) {
   // Replaced since the action pointed at it (a page that re-renders): said so, and the action starts over (tools.ts).
   // Twins (#211): which one can't be told, never looked for again.
   if (!el || !el.isConnected) return { ok: false, why: entry && entry.twins ? 'ambiguous' : entry && entry.path !== undefined ? 'replaced' : 'stale' };
+  // The element's own document: a frame's, for a ref in one, its chain checked as the act checks it (#347).
+  let lastDoc = document;
+  if (entry.frames) {
+    const chained = frameChain(entry.frames.chain, el, document, { nameOf, itemsOf, rowOf, pathOf: refPath, placeOf: framePlace });
+    if (!chained.ok) return chained;
+    lastDoc = chained.doc;
+  }
   const FRAMES = new Set(['iframe', 'frame', 'embed', 'object', 'fencedframe']);
   const up = (n) => n.parentNode ? (n.parentNode.nodeType === 11 ? n.parentNode.host : n.parentNode) : null;
   const coverOf = (cover) => {
@@ -81,15 +90,24 @@ const CHECK_FN = String.raw`function (owner, token, key) {
   };
   // From the node up to the element, through closed roots too; a frame anywhere on the way is never the element's.
   // What opens a file picker on the way too: a file input, or a label for one (its text, an icon in it).
+  // A hit in another document than the element's (a decoy frame over it, a frame of its own inside it): out through
+  // each frame's element to the element's document or above (Argon's B3), and what it lands on covers it.
+  let at = hit;
+  while (at && at.ownerDocument !== lastDoc) {
+    const fe = at.ownerDocument && at.ownerDocument.defaultView && at.ownerDocument.defaultView.frameElement;
+    if (!fe) break;
+    at = fe;
+  }
+  if (!at || at.ownerDocument !== lastDoc) return { ok: false, why: 'covered', cover: coverOf(at && at.nodeType === 1 ? at : at && up(at)) };
   let ours = false;
-  for (let n = hit; n; n = up(n)) {
+  for (let n = at; n; n = up(n)) {
     if (n.nodeType === 1 && FRAMES.has(n.localName)) return { ok: false, why: 'covered', cover: coverOf(n) };
     if (n.nodeType === 1 && opensFiles(n)) return { ok: false, why: 'file' };
     if (n === el) { ours = true; break; }
     // Inside a closed shadow root (Neon's review of #112): what it is can't be classified there, so it isn't clicked.
     if (n.parentNode && n.parentNode.nodeType === 11 && n.parentNode.mode === 'closed') return { ok: false, why: 'closed' };
   }
-  if (!ours) return { ok: false, why: 'covered', cover: coverOf(hit.nodeType === 1 ? hit : up(hit)) };
+  if (!ours) return { ok: false, why: 'covered', cover: coverOf(at.nodeType === 1 ? at : up(at)) };
   for (let n = el; n; n = up(n)) if (n.nodeType === 1 && n.localName === 'label' && opensFiles(n)) return { ok: false, why: 'file' };
   return { ok: true };
 }`;
@@ -182,14 +200,16 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
         }
       }
       const element = world
-        ? await send<{ result: { objectId?: string } }>('Runtime.evaluate', {
+        ? await send<{ result: { value?: unknown } }>('Runtime.evaluate', {
             contextId: world,
             objectGroup: OBJECT_GROUP,
-            expression: `(() => { ${SNAPSHOT_FIND} const r = snapshotFind(${JSON.stringify(owner)}, ${JSON.stringify(token)}); if (!r) return null; const e = r.keep[${JSON.stringify(key)}]; return (e && e.ref.deref()) || null; })()`,
+            // The ref, not its node (#347, Argon's N1): a node replaced since says so in hit and open (replaced), and the
+            // action starts over from its pointer's move, never a refusal here.
+            expression: `(() => { ${SNAPSHOT_FIND} const r = snapshotFind(${JSON.stringify(owner)}, ${JSON.stringify(token)}); return Boolean(r && r.keep[${JSON.stringify(key)}]); })()`,
+            returnByValue: true,
           })
         : null;
-      const elementId = element?.result.objectId;
-      if (!main || !world || !elementId) {
+      if (!main || !world || element?.result.value !== true) {
         await close();
         ready(null);
         return;
@@ -205,16 +225,25 @@ export async function openDeep(contents: WebContents, owner: string, token: stri
         hit: async (x, y) => {
           const at = await send<{ backendNodeId: number; frameId: string }>('DOM.getNodeForLocation', { x: Math.round(x), y: Math.round(y), includeUserAgentShadowDOM: false, ignorePointerEventsNone: false });
           if (!at) return { ok: false, why: 'no-check', step: `location ${lastError}` };
-          let backendNodeId = at.backendNodeId;
-          // A node in another frame: named by its frame's element in the page (the main frame's child it's under).
-          if (at.frameId !== main) {
-            let frame = at.frameId;
-            while (parents.get(frame) && parents.get(frame) !== main) frame = parents.get(frame)!;
+          const resolve = (backendNodeId: number) => send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId, executionContextId: worldId, objectGroup: OBJECT_GROUP });
+          // The node itself, in Chord's world: a node in a frame of the page's own origin resolves there, and the check
+          // climbs out of its frame (#347, Argon's B3). One in a frame that can't (another site's, a sandboxed one) is
+          // named by its frame's element, out to the nearest that resolves: covered, never "couldn't check".
+          let resolved = await resolve(at.backendNodeId);
+          let frame = at.frameId;
+          for (let up = 0; !resolved?.object.objectId && frame !== main && up < 8; up++) {
             const owner = await send<{ backendNodeId: number }>('DOM.getFrameOwner', { frameId: frame });
             if (!owner) return { ok: false, why: 'covered', cover: { role: 'frame', name: '' } };
-            backendNodeId = owner.backendNodeId;
+            resolved = await resolve(owner.backendNodeId);
+            // A frame made since the session opened (on mouseenter): the tree read again.
+            if (!parents.has(frame)) {
+              const fresh = await send<{ frameTree: { frame: { id: string }; childFrames?: unknown[] } }>('Page.getFrameTree');
+              if (fresh) walk(fresh.frameTree);
+            }
+            const parent = parents.get(frame);
+            if (!parent) break;
+            frame = parent;
           }
-          const resolved = await send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId, executionContextId: worldId, objectGroup: OBJECT_GROUP });
           if (!resolved?.object.objectId) return { ok: false, why: 'no-check', step: `resolve ${lastError}` };
           const checked = await send<{ result: { value?: DeepAnswer } }>('Runtime.callFunctionOn', {
             objectId: resolved.object.objectId,

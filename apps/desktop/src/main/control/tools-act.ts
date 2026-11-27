@@ -482,6 +482,9 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
   if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
   // A look that failed on a page that crashed: the crash, before any input (#336, Neon's SF1).
   if (!element.ok) return refuse(page.crashed?.() ? crashedWhy(call, node.id, false) : actRefusal(element));
+  // In a frame (#347, Argon's B1): a click or a hover only, and never in a tab of yours (frames.md's B3, F8: no frame
+  // refs there), said before any card asks about a step that won't go.
+  if (element.inFrame && (host.lease || (tool !== 'click' && tool !== 'hover'))) return refuse(ACT_REFUSALS.inFrame);
   // A field the page turned into a password, code or card field since the snapshot: never acted on (it'd have no ref now).
   if (element.field && sensitiveField(element.field)) return refuse(ACT_REFUSALS.sensitive);
   if (tool === 'type' && !element.editable) return refuse(ACT_REFUSALS.notEditable);
@@ -1023,7 +1026,8 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
         // both, as any click's move (its mouseenter and mousemove handlers run before the test). A page that swallows
         // moves still sees neither: no press.
         if (!hit.ok && hit.why === 'no-move') {
-          const off = { x: x + 3, y };
+          // Inside the element's frame (#347, Argon's B2): point says where; at the top, 3 px off as before.
+          const off = at.off ?? { x: x + 3, y };
           if ((refused = halt())) return;
           page.pointer(off.x, off.y);
           const seen = await actOn({ op: 'hit', ...off, onlyMove: true });

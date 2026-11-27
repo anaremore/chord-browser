@@ -667,11 +667,66 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
       '<title>Decoy</title><main style="position:relative"><button id=pay style="width:200px;height:60px">Pay</button>' +
       '<iframe title="Decoy" srcdoc="<p>.</p>" style="position:absolute;left:0;top:0;width:220px;height:80px;opacity:0.01;border:0"></iframe><p id=log></p></main>' +
       '<script>document.getElementById("pay").onclick = () => { document.getElementById("log").textContent += " paid"; };</script>',
+    // #347 (PR 2 owes position): two frames in one item; the page reorders them with moveBefore (their documents kept).
+    '/frame-reorder':
+      '<title>Reorder</title><main><section aria-label="Shelf"><iframe id=a title="Widget" src="/frame-widget"></iframe><iframe id=b title="Spare" src="/frame-widget"></iframe></section></main>' +
+      '<script>window.reorder = () => { const s = document.querySelector("section"); s.moveBefore(document.getElementById("b"), document.getElementById("a")); };</script>',
+    // #347 (Argon's F3 list): a decoy put over the target frame as the pointer arrives; and one of another site.
+    '/frame-decoy-late':
+      '<title>Late decoy</title><main style="position:relative"><iframe title="Target" src="/frame-decoy-late-inner" style="width:300px;height:150px;border:0"></iframe></main>' +
+      '<script>window.decoy = () => { const d = document.createElement("iframe"); d.title = "Decoy"; d.srcdoc = "<p>.</p>"; d.style.cssText = "position:absolute;left:0;top:0;width:300px;height:150px;opacity:0.01;border:0"; document.querySelector("main").append(d); };</script>',
+    '/frame-decoy-late-inner':
+      '<title>Target</title><button id=b>Widget go</button><p id=log></p><script>const b = document.getElementById("b"); b.onclick = () => { document.getElementById("log").textContent += " go"; }; b.addEventListener("mouseenter", () => parent.decoy(), { once: true });</script>',
+    '/frame-decoy-nested': '<title>Nested decoy</title><main><iframe title="Target" src="/frame-decoy-nested-inner" style="width:300px;height:150px;border:0"></iframe></main>',
+    '/frame-decoy-nested-inner':
+      '<title>Target</title><body style="margin:0;position:relative"><button id=b>Widget go</button><p id=log></p>' +
+      '<script>const b = document.getElementById("b"); b.onclick = () => { document.getElementById("log").textContent += " go"; }; b.addEventListener("mouseenter", () => { const d = document.createElement("iframe"); d.title = "Decoy"; d.srcdoc = "<p>.</p>"; d.style.cssText = "position:absolute;left:0;top:0;width:300px;height:150px;opacity:0.01;border:0"; document.body.append(d); }, { once: true });</script></body>',
+    '/frame-decoy-other':
+      '<title>Other decoy</title><main style="position:relative"><iframe title="Target" src="/frame-widget" style="width:300px;height:150px;border:0"></iframe></main>' +
+      '<script>const d = document.createElement("iframe"); d.title = "Decoy"; d.src = location.origin.replace("127.0.0.1", "localhost") + "/frame-widget"; d.style.cssText = "position:absolute;left:0;top:0;width:300px;height:150px;opacity:0.01;border:0"; document.querySelector("main").append(d);</script>',
+    // #347 (Argon's F4 list): a button at a frame's right edge, clicked twice at the same point (the off-and-back move).
+    '/frame-edge': '<title>Edge</title><main><iframe title="Edge" src="/frame-edge-inner" style="width:240px;height:120px;border:0"></iframe></main>',
+    '/frame-edge-inner':
+      '<title>Edge</title><body style="margin:0"><button id=b style="position:absolute;right:0;top:40px;width:4px;height:24px;padding:0;border:0;min-width:0">E</button><p id=log style="margin-top:80px"></p>' +
+      '<script>document.getElementById("b").onclick = () => { document.getElementById("log").textContent += " go"; };</script></body>',
+    // #347 (Argon's F4 list): each of a frame's own transforms one at a time, and a zoom on the frame's own root.
+    '/frame-bent':
+      '<title>Bent</title><main>' +
+      '<iframe title="Scaled" src="/frame-widget" style="scale:1.1"></iframe>' +
+      '<iframe title="Rotated" src="/frame-widget" style="rotate:2deg"></iframe>' +
+      '<iframe title="Translated" src="/frame-widget" style="translate:10px 0"></iframe>' +
+      '<div style="perspective:400px"><iframe title="In perspective" src="/frame-widget"></iframe></div>' +
+      '<iframe title="Root zoomed" src="/frame-zoomed-root"></iframe></main>',
+    '/frame-zoomed-root': '<html style="zoom:1.25"><title>Zoomed root</title><button>Widget go</button><p id=log></p><script>document.querySelector("button").onclick = () => { document.getElementById("log").textContent += " go"; };</script></html>',
+    // #347 (#273's rows in a frame): unnamed rows the page redraws by position, and rows that say nothing.
+    '/frame-rows': '<title>Rows in a frame</title><main><iframe title="Orders" src="/p-index" style="width:400px;height:200px"></iframe></main>',
+    '/frame-blank-rows': '<title>Blank rows</title><main><iframe title="Blank" src="/p-rows" style="width:400px;height:200px"></iframe></main>',
+    // #347 (Argon's SF4): a frame's button that posts by fetch to another site: held by the send hold's card.
+    '/frame-fetch': '<title>Fetch host</title><main><iframe title="Fetcher" src="/frame-fetch-inner"></iframe></main>',
+    '/frame-fetch-inner':
+      '<title>Fetcher</title><button id=b type=button>Tell a partner</button><p id=log></p>' +
+      '<script>document.getElementById("b").onclick = () => { fetch(location.origin.replace("127.0.0.1", "localhost") + "/frame-fetch-post", { method: "POST", body: "x" }).then(() => { document.getElementById("log").textContent += " sent"; }, () => { document.getElementById("log").textContent += " failed"; }); };</script>',
+    '/frame-busy': '<title>Busy host</title><main><iframe title="Busy" src="/frame-busy-inner"></iframe></main>',
+    '/frame-busy-inner':
+      '<title>Busy</title><button id=b>Work</button><p id=log></p><script>document.getElementById("b").onclick = () => { let n = 0; const step = () => { n++; document.getElementById("log").textContent = n < 8 ? "working " + n : "all done"; if (n < 8) setTimeout(step, 70); }; step(); };</script>',
+    // #347: a frame whose button says when the pointer is on it.
+    '/frame-hover': '<title>Hover host</title><main><iframe title="Hover" src="/frame-hover-inner"></iframe></main>',
+    '/frame-hover-inner':
+      '<title>Hover</title><button id=b>Point here</button><p id=log></p><script>document.getElementById("b").addEventListener("mouseenter", () => { document.getElementById("log").textContent += " hovered"; });</script>',
+    // F3 (PR 2): a see-through same-origin frame put over the target frame's button.
+    '/frame-decoy-target':
+      '<title>Decoy over a frame</title><main style="position:relative"><iframe title="Target" src="/frame-widget" style="width:300px;height:150px;border:0"></iframe>' +
+      '<iframe title="Decoy" srcdoc="<p>.</p>" style="position:absolute;left:0;top:0;width:300px;height:150px;opacity:0.01;border:0"></iframe></main>',
     // F4 (PR 2): a frame in a scrolled, padded, bordered box; and a transformed frame.
     '/frame-moved':
       '<title>Moved</title><div style="height:900px"></div><div id=box style="overflow:auto;height:300px;padding:17px;border:9px solid #333"><div style="height:400px"></div>' +
       '<iframe title="Moved" src="/frame-widget" style="border:6px solid #000;padding:11px"></iframe><div style="height:400px"></div></div>' +
-      '<iframe title="Turned" src="/frame-widget" style="transform:rotate(3deg) scale(1.1)"></iframe>',
+      '<iframe title="Turned" src="/frame-widget" style="transform:rotate(3deg) scale(1.1)"></iframe>' +
+      // #347 (B7): a zoomed frame, a frame in a transformed box, one in a zoomed box: transforms and zoom aren't
+      // inherited, so the frame alone looks plain.
+      '<iframe title="Zoomed" src="/frame-widget" style="zoom:1.5"></iframe>' +
+      '<div style="transform:translateX(40px) scale(1.05)"><iframe title="In turned box" src="/frame-widget"></iframe></div>' +
+      '<div style="zoom:0.8"><iframe title="In zoomed box" src="/frame-widget"></iframe></div>',
     // F6 and F7 (PR 2): a frame's form that posts to another site; one with no action (it posts to the frame's own address).
     '/frame-post': '<title>Posts</title><iframe title="Partner form" src="/frame-post-inner"></iframe><iframe title="Plain form" src="/frame-plain-inner"></iframe>',
     '/frame-post-inner':
@@ -859,6 +914,17 @@ export async function startAgentSite(): Promise<{ server: Server; origin: string
     // M2d: a form posted, or a delete address asked for, is recorded: the step card's journeys check what reached it.
     // Any method but a read (a preflight without a body is one: round 4 of #112).
     const sends = req.method !== 'GET' && req.method !== 'HEAD' && !(req.method === 'OPTIONS' && !Number(req.headers['content-length'] ?? 0));
+    // #347 (SF1): the frame's form posting to its own address answers late, so only an action that waits for the
+    // frame's load sees what it posted.
+    if (req.method === 'POST' && req.url === '/frame-plain-inner') {
+      reached.push('POST /frame-plain-inner');
+      req.resume();
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end('<title>Done</title><p>done POST /frame-plain-inner</p>');
+      }, 1200);
+      return;
+    }
     if (sends || /\/delete(\b|$)/.test(req.url ?? '')) {
       reached.push(`${req.method} ${req.url}`);
       req.resume();

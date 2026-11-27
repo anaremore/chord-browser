@@ -353,6 +353,8 @@ function fakePage(url: string, read: Answer) {
         if (method === 'Runtime.enable') debugEvents.emit('message', {}, 'Runtime.executionContextCreated', { context: { id: 7, auxData: { frameId: 'F', type: 'isolated' } } });
         if (method === 'Runtime.evaluate') {
           if (params?.expression?.includes('instanceof Map')) return { result: { value: true } };
+          // The session's check that its ref is there (deep.ts, #347's N1: the ref, not its node).
+          if (params?.expression?.includes('return Boolean(r && r.keep[')) return { result: { value: true } };
           // deep.open's look at the element: what the page answers, in turn (the node replaced, the snapshot gone).
           const opened = params?.expression?.includes("'replaced'") ? at.deep.opens?.shift() : undefined;
           return opened ? { result: { type: 'string', value: opened } } : { result: { objectId: 'el' } };
@@ -1370,12 +1372,13 @@ describe('acting through the gate (S18 M2c)', () => {
       onAct?.(events, args.op);
       const el = ELEMENTS[args.key!]!;
       const f = twist.field ?? el.field;
-      const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}), ...(twist.place ? twist.place(args.op) : {}) };
+      const said = { role: el.role, name: el.name, ...(f ? { field: f } : {}), ...(twist.place ? twist.place(args.op) : {}), ...(twist.inFrame ? { inFrame: true } : {}) };
       // The page replaced the node, this many more times at this step (a re-render): found again only by point.
       // Look-alikes the page redrew (#211): which one can't be told.
       if (twist.ambiguous) return { ok: false, why: 'ambiguous' };
-      // A ref inside a same-origin frame (#210, PR 1): read, never acted on yet.
-      if (twist.inFrame) return { ok: false, why: 'in-frame' };
+      // A ref inside a same-origin frame (#347, PR 2): its look and the pointer's steps answer (inFrame: true); text,
+      // keys and choices not yet (act.ts, as a page answers).
+      if (twist.inFrame && ['focus', 'focused', 'select', 'choose', 'setValue', 'values'].includes(args.op)) return { ok: false, why: 'in-frame' };
       // Where the text went, checked after it went in (#211's round 2: Fable's probe).
       if (args.op === 'values' && args.mode === 'compare' && twist.ambiguousCompare) return { ok: false, why: 'ambiguous' };
       if (args.op === 'values' && args.mode === 'compare' && twist.compareWhy) return { ok: false, why: twist.compareWhy };
@@ -1481,7 +1484,7 @@ describe('acting through the gate (S18 M2c)', () => {
     const t = await acting();
     t.at.zoom = 1.5;
     const out = await t.call('click', { tab_id: t.tab, ref: 'e1' });
-    expect(out.isError).toBeFalsy();
+    expect(out.isError, out.text).toBeFalsy();
     expect(result(out).data).toMatchObject({ tab_id: t.tab, done: 'Clicked “Home”', navigated: false, url: 'https://news.test/a' });
     expect(t.cards.map((c) => [c.kind, c.subject, c.description, c.tab])).toEqual([['site', 'news.test', 'click “Home”', 'n1']]);
     // Described again right before the press (#112: the pointer's move can change the step).
@@ -4645,10 +4648,8 @@ describe('acting through the gate (S18 M2c)', () => {
     expect(sharedAsked.some((c) => c.includes('"frameRefs":true'))).toBe(false);
   });
 
-  it('a ref inside a same-origin frame: refused for now, at its first look, nothing pressed or typed (#210, PR 1)', async () => {
+  it('a ref inside a same-origin frame: text, keys and choices refused at its first look, before any card, nothing typed or pressed (#347, Argon’s B1)', async () => {
     for (const [tool, args] of [
-      ['click', { ref: 'e1' }],
-      ['hover', { ref: 'e1' }],
       ['type', { ref: 'e2', text: 'Ada' }],
       ['press_key', { ref: 'e2', key: 'Enter' }],
       ['select_option', { ref: 'e3', option: 'Express' }],
@@ -4657,6 +4658,27 @@ describe('acting through the gate (S18 M2c)', () => {
       expect(refusal(await t.call(tool, { tab_id: t.tab, ...args })).refused, tool).toBe(ACT_REFUSALS.inFrame);
       expect(t.steps, tool).toEqual(['describe']);
       expect(t.at.text, tool).toEqual([]);
+      expect(t.at.input, tool).toEqual([]);
+      expect(t.cards, tool).toEqual([]);
+    }
+  });
+
+  it('a ref inside a same-origin frame: a click and a hover go, as at the top (#347, PR 2)', async () => {
+    for (const tool of ['click', 'hover']) {
+      const t = await acting({ twist: { inFrame: true }, act: { siteAllowed: () => true } });
+      const out = await t.call(tool, { tab_id: t.tab, ref: 'e1' });
+      expect(result(out).data['done'], tool).toBeTruthy();
+      expect(t.steps, tool).toContain('point');
+      expect(t.at.input.length, tool).toBeGreaterThan(0);
+    }
+  });
+
+  it('a frame ref in a tab of yours (the assistant’s lease): refused at its first look, before any card, nothing pressed (#347, frames.md’s B3 and F8)', async () => {
+    const lease = { begin: async () => null, end: () => undefined, going: () => undefined };
+    for (const tool of ['click', 'hover']) {
+      const t = await acting({ twist: { inFrame: true }, act: { lease } });
+      expect(refusal(await t.call(tool, { tab_id: t.tab, ref: 'e1' })).refused, tool).toBe(ACT_REFUSALS.inFrame);
+      expect(t.steps, tool).toEqual(['describe']);
       expect(t.at.input, tool).toEqual([]);
       expect(t.cards, tool).toEqual([]);
     }
