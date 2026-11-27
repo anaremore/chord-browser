@@ -14,7 +14,8 @@ const { AGENT_TAB_REFUSALS, duetScope, USER_TAB_REFUSALS } = await import('../..
 const { ControlAgent } = await import('../../src/main/control/gate');
 const { Store } = await import('../../src/main/store');
 const watch = await import('../../src/main/control/user-watch');
-const { AFTER_MS, askUserTabDownload, COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, userLeaseLost, userTabActing, userTabCatching, userTabGoing, TAIL_MS } = watch;
+const { AFTER_MS, askUserTabDownload, COMMAND_MS, endUserLease, onUserLease, onUserLeaseEnd, printTokenOf, PRINT_HOLD_MS, userLeaseLost, userTabActing, userTabCatching, userTabGoing, TAIL_MS } = watch;
+const { PRINT_HOLD_WORLD, printAsks, printBinding, printHold, printUntil } = await import('../../src/main/agents/agent-scripts');
 /** Each action's own end, by tab, as its begin handed it (round 3 of #147: an end belongs to its own lease). */
 const actionEnds = new Map<object, (() => void)[]>();
 const beginUserAction = async (...args: Parameters<typeof watch.beginUserAction>) => {
@@ -179,6 +180,8 @@ function yourTab() {
   const debug = new EventEmitter();
   let attached = false;
   const sent: [string, string, string | undefined, unknown][] = [];
+  let scripts = 0;
+  let printSessions = 0;
   Object.assign(debug, {
     isAttached: () => attached,
     attach: () => void (attached = true),
@@ -186,7 +189,14 @@ function yourTab() {
       attached = false;
       debug.emit('detach', {}, 'target closed');
     },
-    sendCommand: async (method: string, params: { requestId?: string }, sessionId?: string) => void sent.push([method, params?.requestId ?? '', sessionId, params]),
+    sendCommand: async (method: string, params: { requestId?: string }, sessionId?: string) => {
+      sent.push([method, params?.requestId ?? '', sessionId, params]);
+      // #338: each print script's own name, for its removal; the page's own target, and the lease's session on it.
+      if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: `script-${++scripts}` };
+      if (method === 'Target.getTargetInfo') return { targetInfo: { targetId: 'the-page', type: 'page' } };
+      if (method === 'Target.attachToTarget') return { sessionId: `print-${++printSessions}` };
+      return undefined;
+    },
   });
   const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, getURL: () => 'https://game.example/table', debugger: debug }) as unknown as WebContents;
   const post = (requestId: string) => debug.emit('message', {}, 'Fetch.requestPaused', { requestId, request: { method: 'POST', url: 'https://game.example/move' }, resourceType: 'XHR' });
@@ -590,6 +600,173 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
     endUserLease(t.contents);
   });
 
+  /** #338: the print scripts added, by session: [script, its params]. */
+  const printAdds = (t: ReturnType<typeof yourTab>) =>
+    t.sent.filter(([m]) => m === 'Page.addScriptToEvaluateOnNewDocument').map(([, , session, params]) => ({ session, ...(params as { source: string; worldName?: string; runImmediately?: boolean }) }));
+  /** #338: the identifiers the fake handed out, in order (script-1, script-2, …), and those taken out. */
+  const removed = (t: ReturnType<typeof yourTab>) => t.sent.filter(([m]) => m === 'Page.removeScriptToEvaluateOnNewDocument').map(([, , , params]) => (params as { identifier: string }).identifier);
+
+  it('#338: prints held in each frame while it’s on: the binding, the hold and its deadline in the hold’s world, then the page’s own stub, each after Page.enable answers, in the page and in a frame (Argon’s B3)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    const token = printTokenOf(t.contents);
+    // Page.enable answers a moment later: nothing of the print's is sent before it has, in each session.
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    const enabled = new Set<string | undefined>();
+    const early: string[] = [];
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      if (m === 'Page.enable') {
+        await new Promise((r) => setTimeout(r, 5));
+        enabled.add(s);
+      }
+      if ((m === 'Page.addScriptToEvaluateOnNewDocument' || (m === 'Runtime.addBinding' && s === 'f1')) && !enabled.has(s)) early.push(`${m} ${s}`);
+      return send(m, p, s);
+    };
+    const before = Date.now();
+    await beginUserAction(t.contents, 'chat:1', deps());
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f1', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(early).toEqual([]);
+    // The page's binding: in the lease's own session on it (print-1), Runtime on there, never in the page's own session,
+    // which the click and page_diagnostics turn on and off (deep.ts).
+    expect(t.sent.find(([m]) => m === 'Target.attachToTarget')?.[3]).toEqual({ targetId: 'the-page', flatten: true });
+    expect(t.sent.filter(([m]) => m === 'Runtime.enable' || m === 'Runtime.addBinding').map(([m, , s]) => `${m} ${s}`)).toEqual(
+      expect.arrayContaining(['Runtime.enable print-1', 'Runtime.addBinding print-1', 'Runtime.enable f1', 'Runtime.addBinding f1']),
+    );
+    expect(t.sent.some(([m, , s]) => m.startsWith('Runtime.') && m !== 'Runtime.runIfWaitingForDebugger' && s === undefined)).toBe(false);
+    for (const [session, said] of [[undefined, 'print-1'], ['f1', 'f1']] as const) {
+      expect(t.sent.find(([m, , s]) => m === 'Runtime.addBinding' && s === said)?.[3], String(session)).toEqual({ name: printBinding(token), executionContextName: PRINT_HOLD_WORLD });
+      const adds = printAdds(t).filter((a) => a.session === session);
+      expect(adds.map((a) => [a.worldName ?? 'page', a.runImmediately]), String(session)).toEqual([
+        [PRINT_HOLD_WORLD, true],
+        [PRINT_HOLD_WORLD, true],
+        ['page', true],
+      ]);
+      expect(adds[0]!.source).toBe(printHold(token));
+      const until = Number(/= (\d+);/.exec(adds[1]!.source)![1]);
+      expect(until).toBeGreaterThanOrEqual(before + PRINT_HOLD_MS);
+      expect(adds[2]!.source).toBe(printAsks(token));
+    }
+    endUserLease(t.contents);
+    for (let i = 0; i < 8; i++) await tick();
+  });
+
+  it('#338: a held print is said once an action, in fixed words (Fable’s SF1, Argon’s SF3); another binding’s call isn’t; the next action’s print is said too', async () => {
+    const t = yourTab();
+    const token = printTokenOf(t.contents);
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    const held = (name = printBinding(token)) => t.debug.emit('message', {}, 'Runtime.bindingCalled', { name, payload: 'print', executionContextId: 7 });
+    held();
+    held();
+    held('somethingElse');
+    expect(t.notes).toEqual(['print: ']);
+    endUserAction(t.contents);
+    await beginUserAction(t.contents, 'chat:1', t.deps());
+    held();
+    expect(t.notes).toEqual(['print: ', 'print: ']);
+    endUserLease(t.contents);
+    for (let i = 0; i < 8; i++) await tick();
+    held();
+    expect(t.notes).toEqual(['print: ', 'print: ']);
+  });
+
+  it.each([
+    ['someone else’s attachment', true],
+    ['Chord’s own', false],
+  ])('#338: at its end, on %s: prints let go in every frame (the deadline over) first; on someone else’s, every script and the binding out (Fable’s B1, Argon’s SF2)', async (_, theirs) => {
+    const t = yourTab();
+    if (theirs) (t.debug as unknown as { attach(): void }).attach();
+    await beginUserAction(t.contents, 'chat:1', deps());
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f1', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+    await tick();
+    const added = t.sent.length;
+    endUserLease(t.contents);
+    for (let i = 0; i < 10; i++) await tick();
+    const after = t.sent.slice(added);
+    // The deadline over, in the page and the frame, at once.
+    for (const session of [undefined, 'f1']) {
+      const over = after.find(([m, , s, p]) => m === 'Page.addScriptToEvaluateOnNewDocument' && s === session && (p as { source: string }).source === printUntil(printTokenOf(t.contents), 0));
+      expect(over?.[3], String(session)).toMatchObject({ worldName: PRINT_HOLD_WORLD, runImmediately: true });
+    }
+    if (theirs) {
+      // Every script the lease added, out: none runs in a new document after it.
+      const ids = Array.from({ length: printAdds(t).length }, (_, i) => `script-${i + 1}`);
+      expect(new Set(removed(t))).toEqual(new Set(ids));
+      expect(t.sent.filter(([m]) => m === 'Runtime.removeBinding').map(([, , s]) => s)).toEqual(['f1']);
+      // The lease's own session on the page, let go; the page's own session's Runtime never touched.
+      expect(after.filter(([m]) => m === 'Target.detachFromTarget').map(([, , , p]) => p)).toEqual([{ sessionId: 'print-1' }]);
+      expect(after.some(([m, , s]) => m === 'Runtime.disable' && s === undefined)).toBe(false);
+      expect(t.attached()).toBe(true);
+    } else expect(t.attached()).toBe(false);
+  });
+
+  it('#338: a lease superseded on someone else’s attachment takes its print scripts out; the next lease’s go at its own end: all of them, never one left to run (Opus’s S1a; Neon’s B4, round 3, adapted)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    let first = true;
+    const off = onUserLease((contents) => {
+      if (contents !== t.contents || !first) return;
+      first = false;
+      endUserLease(t.contents, 'chat:1');
+    });
+    const [one, two] = await Promise.all([beginUserAction(t.contents, 'chat:1', deps()), beginUserAction(t.contents, 'chat:2', deps(() => new Promise(() => undefined)))]);
+    off();
+    for (let i = 0; i < 8; i++) await tick();
+    expect([one, two]).toEqual(['on', 'on']);
+    endUserLease(t.contents);
+    for (let i = 0; i < 10; i++) await tick();
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(printAdds(t).length).toBeGreaterThan(3);
+    expect(kept).toEqual([]);
+    // Each lease's own session on the page, let go too.
+    const opened = t.sent.filter(([m]) => m === 'Target.attachToTarget').length;
+    expect(opened).toBeGreaterThan(1);
+    expect(t.sent.filter(([m]) => m === 'Target.detachFromTarget').length).toBe(opened);
+  });
+
+  it('#338: a frame that came mid-lease, its print script still being added as the lease ends: taken out as it answers, never left to run (Opus’s S1b)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    let answer: () => void = () => undefined;
+    const late = new Promise<void>((done) => (answer = done));
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      // The frame's page stub answers only once the lease's end has gone by.
+      if (m === 'Page.addScriptToEvaluateOnNewDocument' && s === 'f1' && !(p as { worldName?: string }).worldName) await late;
+      return send(m, p, s);
+    };
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f1', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+    for (let i = 0; i < 6; i++) await tick();
+    endUserLease(t.contents);
+    for (let i = 0; i < 12; i++) await tick();
+    answer();
+    for (let i = 0; i < 12; i++) await tick();
+    const added = printAdds(t).filter((a) => a.session === 'f1' && !a.worldName);
+    expect(added).toHaveLength(1);
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it('#338: the lease ended while a print script was being added: taken out as it answers, never kept (Opus’s S1b)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    let once = true;
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      // The page's stub answers only after the lease has been ended.
+      if (m === 'Page.addScriptToEvaluateOnNewDocument' && once && (p as { source: string }).source.startsWith('(() => {\n  const Doc')) {
+        once = false;
+        endUserLease(t.contents);
+      }
+      return send(m, p, s);
+    };
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('no');
+    for (let i = 0; i < 10; i++) await tick();
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
   it('a frame gone is let go of: on someone else’s attachment, Fetch goes off in the frames still there, not in one gone', async () => {
     const t = yourTab();
     (t.debug as unknown as { attach(): void }).attach();
@@ -653,7 +830,7 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
   });
 
   it('a catch that can’t be turned on fails closed: on the page, no lease; on a frame there as it begins, no lease, the frame left paused (Neon’s B3 on #150)', async () => {
-    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker']) {
+    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker', 'Page.addScriptToEvaluateOnNewDocument']) {
       const t = yourTab();
       const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<void> }).sendCommand;
       (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
@@ -663,7 +840,7 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
       expect(await beginUserAction(t.contents, 'chat:1', t.deps()), method).toBe('no');
       expect(t.attached(), method).toBe(false);
     }
-    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker']) {
+    for (const method of ['Page.enable', 'Page.setInterceptFileChooserDialog', 'WebAuthn.enable', 'Network.enable', 'Network.setBypassServiceWorker', 'Page.addScriptToEvaluateOnNewDocument']) {
       const t = yourTab();
       const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<void> }).sendCommand;
       (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
@@ -674,6 +851,156 @@ describe('The lease on a tab of yours (S18 M2e-2a, C1)', () => {
       expect(await beginUserAction(t.contents, 'chat:1', t.deps()), `frame ${method}`).toBe('no');
       expect(t.sent.some(([m, , s]) => m === 'Runtime.runIfWaitingForDebugger' && s === 'f1'), `frame ${method}`).toBe(false);
     }
+  });
+
+  it.each(['Target.getTargetInfo', 'Target.attachToTarget', 'Runtime.enable', 'Runtime.addBinding'])(
+    '#338: the page’s binding can’t be had (%s fails): the lease is still on and prints still held in the page, only not said',
+    async (method) => {
+      const t = yourTab();
+      const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+      (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+        if (m === method && (s === undefined || s.startsWith('print-'))) throw new Error('not allowed');
+        return send(m, p, s);
+      };
+      expect(await beginUserAction(t.contents, 'chat:1', t.deps())).toBe('on');
+      const token = printTokenOf(t.contents);
+      expect(t.sent.filter(([m, , s]) => m === 'Page.addScriptToEvaluateOnNewDocument' && s === undefined).map(([, , , p]) => (p as { source: string }).source)).toEqual(
+        expect.arrayContaining([printHold(token), printAsks(token)]),
+      );
+      endUserLease(t.contents);
+      for (let i = 0; i < 8; i++) await tick();
+    },
+  );
+
+  /** #346: a tab of yours whose page has a frame in another process (f1), announced as the first lease's auto-attach is on. */
+  const withFrame = (t: ReturnType<typeof yourTab>, gate?: (m: string, p: unknown, s?: string) => Promise<void> | undefined) => {
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    let announced = false;
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      // Sent as it's called (a gate only when there is one), so what's sent at once is seen at once.
+      const held = gate?.(m, p, s);
+      if (held) await held;
+      const answer = await send(m, p, s);
+      if (m === 'Target.setAutoAttach' && !s && !announced) {
+        announced = true;
+        t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f1', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+      }
+      return answer;
+    };
+  };
+  const untilZero = (t: ReturnType<typeof yourTab>, from = 0) =>
+    t.sent.slice(from).filter(([m, , , p]) => m === 'Page.addScriptToEvaluateOnNewDocument' && (p as { source: string }).source === printUntil(printTokenOf(t.contents), 0)).map(([, , s]) => s);
+
+  it.each(['Runtime.enable', 'Runtime.addBinding'])('#346: a frame’s binding that can’t be had (%s fails there): the lease is on, and that frame’s prints still held, only not said (Fable’s nit 2, round 2)', async (method) => {
+    const t = yourTab();
+    withFrame(t, async (m, _p, s) => {
+      if (m === method && s === 'f1') throw new Error('not allowed');
+    });
+    expect(await beginUserAction(t.contents, 'chat:1', t.deps())).toBe('on');
+    const token = printTokenOf(t.contents);
+    expect(printAdds(t).filter((a) => a.session === 'f1').map((a) => a.source)).toEqual(expect.arrayContaining([printHold(token), printAsks(token)]));
+    endUserLease(t.contents);
+    for (let i = 0; i < 8; i++) await tick();
+  });
+
+  it('#346: a lease superseded while it held a frame in another process: the lease now on takes the frame on (held there through it), and lets it go at its own end (Neon’s B2, round 2 = Opus’s SF-A)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    withFrame(t);
+    const token = printTokenOf(t.contents);
+    let first = true;
+    const off = onUserLease((contents) => {
+      if (contents !== t.contents || !first) return;
+      first = false;
+      endUserLease(t.contents, 'chat:1');
+    });
+    const [one, two] = await Promise.all([beginUserAction(t.contents, 'chat:1', deps()), beginUserAction(t.contents, 'chat:2', deps(() => new Promise(() => undefined)))]);
+    off();
+    for (let i = 0; i < 12; i++) await tick();
+    expect([one, two]).toEqual(['on', 'on']);
+    // The first lease's frame, held by the second: its own hold and stub there (a second set), Fetch on again.
+    const holds = printAdds(t).filter((a) => a.session === 'f1' && a.source === printHold(token));
+    expect(holds).toHaveLength(2);
+    expect(t.sent.filter(([m, , s]) => m === 'Fetch.enable' && s === 'f1')).toHaveLength(2);
+    // Held while the second is on: in the page and in that frame, the last deadline sent is the second's, ahead (the
+    // first's end let prints go before the second was set up; the second's deadline came after it).
+    const mid = t.sent.length;
+    const lastUntil = (session: string | undefined) =>
+      Number(/= (\d+);/.exec([...printAdds(t)].reverse().find((a) => a.session === session && /UNTIL\] = \d+/.test(a.source))!.source)![1]);
+    expect(lastUntil(undefined)).toBeGreaterThan(Date.now());
+    expect(lastUntil('f1')).toBeGreaterThan(Date.now());
+    endUserLease(t.contents);
+    for (let i = 0; i < 12; i++) await tick();
+    // At the second's end: the deadline over in the page and in that frame; every print script out.
+    expect(untilZero(t, mid)).toEqual(expect.arrayContaining([undefined, 'f1']));
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it('#346: as the lease ends, the deadline over in every frame before anything is awaited (your own Print as you take the tab back: Opus’s SF-B, round 2); that script taken out as it answers', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    withFrame(t);
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    const mid = t.sent.length;
+    endUserLease(t.contents);
+    // At once, not after a tick.
+    expect(untilZero(t, mid)).toEqual([undefined, 'f1']);
+    for (let i = 0; i < 12; i++) await tick();
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it('#346: an action’s renewal of the hold answered after the lease ended: taken out at once, never left to run in new documents (Neon’s SF1, round 2)', async () => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    const start = Date.now();
+    let answer: () => void = () => undefined;
+    const late = new Promise<void>((done) => (answer = done));
+    withFrame(t, async (m, p) => {
+      // The renewal's deadline (past the first's): answered only once the lease is over.
+      const until = m === 'Page.addScriptToEvaluateOnNewDocument' ? Number(/= (\d+);/.exec((p as { source: string }).source)?.[1] ?? 0) : 0;
+      if (until > start + PRINT_HOLD_MS + 60_000) await late;
+    });
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    // The next action, six minutes on: the hold renewed.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + 6 * 60_000);
+    try {
+      expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+      endUserLease(t.contents);
+      for (let i = 0; i < 12; i++) await tick();
+      answer();
+      for (let i = 0; i < 12; i++) await tick();
+    } finally {
+      now.mockRestore();
+    }
+    const renewals = printAdds(t).filter((a) => Number(/= (\d+);/.exec(a.source)?.[1] ?? 0) > start + PRINT_HOLD_MS + 60_000);
+    expect(renewals.length).toBeGreaterThan(0);
+    const kept = printAdds(t).map((_, i) => `script-${i + 1}`).filter((id) => !removed(t).includes(id));
+    expect(kept).toEqual([]);
+  });
+
+  it.each(['Fetch.enable', 'Page.enable'])('#346: a frame still being held as the lease ends (%s answers after): nothing of the print’s turned on there after the end (Neon’s SF2, round 2)', async (method) => {
+    const t = yourTab();
+    (t.debug as unknown as { attach(): void }).attach();
+    let answer: () => void = () => undefined;
+    const late = new Promise<void>((done) => (answer = done));
+    const send = (t.debug as unknown as { sendCommand: (m: string, p: unknown, s?: string) => Promise<unknown> }).sendCommand;
+    (t.debug as unknown as { sendCommand: typeof send }).sendCommand = async (m, p, s) => {
+      if (m === method && s === 'f2') await late;
+      return send(m, p, s);
+    };
+    expect(await beginUserAction(t.contents, 'chat:1', deps())).toBe('on');
+    // A frame that comes mid-lease.
+    t.debug.emit('message', {}, 'Target.attachedToTarget', { sessionId: 'f2', waitingForDebugger: false, targetInfo: { type: 'iframe' } });
+    await tick();
+    endUserLease(t.contents);
+    for (let i = 0; i < 12; i++) await tick();
+    const mid = t.sent.length;
+    answer();
+    for (let i = 0; i < 12; i++) await tick();
+    const after = t.sent.slice(mid).filter(([m, , s]) => s === 'f2' && ['Runtime.enable', 'Runtime.addBinding', 'Page.addScriptToEvaluateOnNewDocument', ...(method === 'Fetch.enable' ? ['Page.enable'] : [])].includes(m));
+    expect(after.map(([m]) => m)).toEqual([]);
   });
 
   it('a Send data card from the tail answered after the tail: Allow and Allow for this chat still send it (Neon’s B4 on #150)', async () => {
@@ -838,6 +1165,13 @@ describe('What the clipboard note says, by what happened (the owner’s card-gam
     expect(USER_TAB_NOTES.clipboard('changed')).toBe(
       'Your clipboard changed while the assistant acted, but not by the page itself: a frame inside the page copied something, or you copied something elsewhere. Chord left it as it is; check it before you paste',
     );
+  });
+});
+
+describe('What the print note says (#338)', () => {
+  it('fixed words, whatever the page did (the wording is the owner’s: kept)', async () => {
+    const { USER_TAB_NOTES } = await import('../../src/main/assistant/service');
+    expect(USER_TAB_NOTES.print('anything')).toBe('The page tried to print while the assistant acted; Chord didn’t print it');
   });
 });
 

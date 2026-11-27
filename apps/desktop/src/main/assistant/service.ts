@@ -1649,6 +1649,9 @@ export class AssistantService {
               const said = USER_TAB_NOTES[what](plainNote(detail));
               // In the chat, and in the next result there, so the model never says done when the page said no.
               const caught = s.caught.get(node.id) ?? [];
+              // A print said once an action (control/user-watch.ts), and not again while that same note still waits for
+              // this tab's next result (#338, Fable's SF1).
+              if (what === 'print' && caught.includes(said)) return;
               if (caught.length < CAUGHT_MAX) s.caught.set(node.id, [...caught, said]);
               if (s.thread) void this.activity(s, 'act', said, contents.isDestroyed() ? '' : contents.getURL(), false);
             },
@@ -2287,6 +2290,8 @@ export function plainNote(text: string): string {
 /** What the chat says of something the assistant's click set off (M2e-2b, A6), Chord's words around the page's. */
 export const USER_TAB_NOTES: Record<UserTabNote, (detail: string) => string> = {
   file: () => 'The page tried to open a file picker; it wasn’t shown',
+  // #338: fixed words; the renderer gives none (Argon's SF3).
+  print: () => 'The page tried to print while the assistant acted; Chord didn’t print it',
   // An alert has no Cancel: it was closed (its OK); a confirm or a prompt was answered Cancel.
   dialog: (detail) => (detail.startsWith('alert') ? `The page showed an alert (${detail}); it was closed` : `The page showed a dialog (${detail}); it was answered Cancel`),
   popup: (detail) => `The page tried to open ${detail} in a new tab or window; it wasn’t opened`,

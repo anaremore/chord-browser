@@ -31,6 +31,28 @@ test.beforeAll(async () => {
     '/plain': '<form><label>Customer name: <input name=customer></label></form>',
     // #210 (F8): a same-origin frame in a tab of yours: read, never a ref inside.
     '/framed': '<title>Framed</title><h1>Framed</h1><iframe title="Inner form" srcdoc="<button>Inner button</button>"></iframe><button>Top button</button>',
+    // #338: a page's own Print button, and what it does after print returns. On /printer the page has set its own print
+    // (a spy) as it loads, before any lease; /printer-native keeps Chromium's.
+    // Round 2 of #346, Neon's B1: the page's named elements, shown on the window in every world (the hold's too).
+    '/printer-clobber-div':
+      '<title>Clobber</title><div id="__chordPrintHold"></div><form name="addEventListener"></form><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
+      '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
+    '/printer-clobber-frame':
+      '<title>Clobber</title><iframe name="__chordPrintUntil"></iframe><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
+      '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
+    '/printer':
+      '<title>Invoice</title><p id=log></p><script>window.print = function print() { log.textContent += "printed "; };</script>' +
+      '<button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
+    // #346, Fable's probe E: another site's frame that prints when the top asks it to (its own print posts back).
+    '/xinner':
+      '<title>Inner</title><script>window.print = function print() { parent.postMessage(`frame-printed`, `*`); }; addEventListener(`message`, (e) => { if (e.data !== `go`) return; window.print(); parent.postMessage(`frame-returned`, `*`); });</script><p>inner</p>',
+    '/printer-native': '<title>Receipt</title><p id=log></p><button onclick="log.textContent += `before `; window.print(); log.textContent += `after `;">Print</button>',
+    // Round 1 of #346, Neon's B1: a frame's execCommand, the frame then removed, called on the top's document.
+    '/printer-detached':
+      '<title>Detached</title><p id=log></p><button onclick="log.textContent += `before `; const f = document.createElement(`iframe`); document.body.append(f); const ex = f.contentWindow.Document.prototype.execCommand; f.remove(); ex.call(document, `print`); log.textContent += `after `;">Print</button>',
+    // Neon's B2: the top goes to a blob: page that prints as it loads.
+    '/printer-blob':
+      '<title>Blob</title><script>function go() { const page = [`<title>Blob page</title><p id=log>before </p><scr`, `ipt>window.print(); log.textContent += String.fromCharCode(97, 102, 116, 101, 114);</scr`, `ipt>`].join(``); location.href = URL.createObjectURL(new Blob([page], { type: `text/html` })); }</script><button onclick="go()">Print</button>',
     '/form': '<title>Sign up</title><form><label>Full name <input name=name></label> <label>Email <input name=email></label> <button type=button onclick="this.form.reset()">Reset</button></form>',
     // M2e-2b: what a click can set off. Each button's outcome goes in the page's log (and the passkey's time, for the
     // pending-request check: one asked with a 20 s timeout while Chord holds WebAuthn).
@@ -63,6 +85,12 @@ test.beforeAll(async () => {
       res.writeHead(200, { 'content-type': 'text/javascript' });
       // It sends (a POST of its own), then says so: held as its page's sends are (the final check of #150).
       res.end("fetch('/wmove', { method: 'POST', body: 'w' }).then(() => postMessage('posted'), () => postMessage('failed'));");
+      return;
+    }
+    // #346, Fable's probe E: a page with another site's frame (localhost), which prints when its Print asks it to.
+    if (req.url === '/xframe') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`<title>XFrame</title><p id=log></p><script>addEventListener('message', (e) => (log.textContent += e.data + ' '));</script><iframe id=f title=inner src="${site.other}/xinner"></iframe><button onclick="log.textContent += 'asked '; f.contentWindow.postMessage('go', '*')">Print</button>`);
       return;
     }
     if (req.url === '/sw.js') {
@@ -750,3 +778,173 @@ test('a page whose service worker sends its POSTs: while the assistant acts, its
     rmSync(config, { recursive: true, force: true });
   }
 });
+
+test('#338: a page’s Print the assistant clicks in your tab doesn’t print, and the chat says so; once it’s done, the page’s Print prints', async () => {
+  test.setTimeout(150_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/printer` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/printer`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/printer`))!;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 30_000 }).toBe(1);
+    // Asked, held: the page went on, and its print (the spy) never ran.
+    await expect(page.locator('#log')).toHaveText('before after ');
+    await expect(panel.getByText('The page tried to print while the assistant acted; Chord didn’t print it')).toBeVisible();
+    // In the click's own result, so the model hears it there (Fable's N1 on #346).
+    expect(lastActing(config)[1]!.result).toContain('The page tried to print while the assistant acted');
+    // The lease over (its tail and AFTER_MS past the last action): the page's own Print prints again.
+    await page.waitForTimeout(8000);
+    await page.getByRole('button', { name: 'Print' }).click();
+    await expect(page.locator('#log')).toHaveText('before after before printed after ');
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('#338: Chromium’s own print, clicked by the assistant in your tab: no dialog holds the page, and the next read works', async () => {
+  test.setTimeout(120_000);
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  try {
+    const shell = await shellOf(app);
+    const panel = await openAssistant(shell);
+    await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url: `${site.origin}/printer-native` });
+    await expect.poll(() => app.windows().some((p) => p.url().startsWith(`${site.origin}/printer-native`))).toBe(true);
+    const page = app.windows().find((p) => p.url().startsWith(`${site.origin}/printer-native`))!;
+    await send(panel, act([{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }, { tool: 'read_tab' }]));
+    const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+    await expect(siteCard).toBeVisible({ timeout: 20_000 });
+    await shell.waitForTimeout(700);
+    await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+    await expect.poll(() => actingTurns(config), { timeout: 45_000 }).toBe(1);
+    await expect(page.locator('#log')).toHaveText('before after ');
+    const steps = lastActing(config);
+    expect(steps.map((s) => s.tool)).toEqual(['snapshot', 'click', 'read_tab']);
+    // Read: the page answered (before #338 it was held by the dialog: *That page could not be read.*).
+    expect(steps[2]!.result).not.toContain('refused');
+    expect(steps[2]!.result).toContain('before after');
+    await expect(panel.getByText('The page tried to print while the assistant acted; Chord didn’t print it')).toBeVisible();
+  } finally {
+    await app.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+/** #346: the assistant on a page of the site, after Allow for this chat; its turn's steps, once they're done. */
+async function actOn(path: string, steps: object[], turns = 1) {
+  const profile = mkdtempSync(join(tmpdir(), 'chord-e2e-'));
+  const config = mkdtempSync(join(tmpdir(), 'chord-claude-'));
+  const app = await launch(profile, config);
+  const shell = await shellOf(app);
+  const panel = await openAssistant(shell);
+  const url = path.startsWith('http') ? path : `${site.origin}${path}`;
+  await dispatch(shell, { t: 'tab.open', windowId: (await where(shell)).windowId, url });
+  await expect.poll(() => app.windows().some((p) => p.url().startsWith(url))).toBe(true);
+  const page = app.windows().find((p) => p.url().startsWith(url))!;
+  await send(panel, act(steps));
+  const siteCard = panel.getByRole('group', { name: /^Let the assistant click and type on / });
+  await expect(siteCard).toBeVisible({ timeout: 20_000 });
+  await shell.waitForTimeout(700);
+  await siteCard.getByRole('button', { name: 'Allow for this chat' }).click();
+  await expect.poll(() => actingTurns(config), { timeout: 45_000 }).toBe(turns);
+  return {
+    app,
+    page,
+    panel,
+    steps: () => lastActing(config),
+    close: async () => {
+      await app.close();
+      rmSync(profile, { recursive: true, force: true });
+      rmSync(config, { recursive: true, force: true });
+    },
+  };
+}
+
+const PRINT_NOTE = 'The page tried to print while the assistant acted';
+
+test('#346, Neon’s B1: a removed frame’s execCommand called on the top’s document, while the assistant acts: held, said, the page goes on', async () => {
+  test.setTimeout(120_000);
+  const r = await actOn('/printer-detached', [{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }, { tool: 'read_tab' }]);
+  try {
+    await expect(r.page.locator('#log')).toHaveText('before after ');
+    const steps = r.steps();
+    expect(steps[1]!.result).toContain(PRINT_NOTE);
+    expect(steps[2]!.result).not.toContain('refused');
+  } finally {
+    await r.close();
+  }
+});
+
+test('#346, Neon’s B2: the top gone to a blob: page that prints as it loads, while the assistant acts: held, said, the page goes on', async () => {
+  test.setTimeout(120_000);
+  const r = await actOn('/printer-blob', [{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }]);
+  try {
+    await expect.poll(() => r.page.url(), { timeout: 10_000 }).toMatch(/^blob:/);
+    // The blob: page ran past its print: it isn't held by a dialog.
+    await expect(r.page.locator('#log')).toHaveText('before after', { timeout: 10_000 });
+    await expect(r.panel.getByText(/^The page tried to print while the assistant acted/)).toBeVisible({ timeout: 10_000 });
+  } finally {
+    await r.close();
+  }
+});
+
+test('#346, Fable’s B1 (probe E): another site’s frame printing while the assistant acts is held and said; once the lease is over, it prints with no reload', async () => {
+  test.setTimeout(150_000);
+  const r = await actOn('/xframe', [{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }, { sleep: 1000 }, { tool: 'read_tab' }]);
+  try {
+    // Held in the frame: its own print (it set one: it posts frame-printed) never ran; it went on (frame-returned).
+    await expect(r.page.locator('#log')).toContainText('frame-returned');
+    await expect(r.page.locator('#log')).not.toContainText('frame-printed');
+    await expect(r.panel.getByText(/^The page tried to print while the assistant acted/)).toBeVisible();
+    // In the click's own result (Fable's nit 1, round 2).
+    expect(r.steps()[1]!.result).toContain(PRINT_NOTE);
+    // The lease over: your own click in the page, and the frame prints (its own print runs), with no reload.
+    await r.page.waitForTimeout(9000);
+    await r.page.getByRole('button', { name: 'Print' }).click();
+    await expect(r.page.locator('#log')).toContainText('frame-printed');
+  } finally {
+    await r.close();
+  }
+});
+
+test('#346, Fable’s SF1 (probe A): two prints in two steps back to back: each step’s result says its own', async () => {
+  test.setTimeout(120_000);
+  const r = await actOn('/printer-native', [{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }, { tool: 'click', name: 'Print' }]);
+  try {
+    await expect(r.page.locator('#log')).toHaveText('before after before after ');
+    const steps = r.steps();
+    expect(steps[1]!.result).toContain(PRINT_NOTE);
+    expect(steps[2]!.result).toContain(PRINT_NOTE);
+  } finally {
+    await r.close();
+  }
+});
+
+for (const [path, what] of [
+  ['/printer-clobber-div', '<div id="__chordPrintHold"> and <form name="addEventListener">'],
+  ['/printer-clobber-frame', '<iframe name="__chordPrintUntil">'],
+] as const) {
+  test(`#346, Neon’s B1 (round 2): a page with ${what}, the names the hold once used, while the assistant acts: held, said, the page goes on`, async () => {
+    test.setTimeout(120_000);
+    const r = await actOn(path, [{ tool: 'snapshot' }, { tool: 'click', name: 'Print' }]);
+    try {
+      await expect(r.page.locator('#log')).toHaveText('before after ');
+      expect(r.steps()[1]!.result).toContain(PRINT_NOTE);
+    } finally {
+      await r.close();
+    }
+  });
+}

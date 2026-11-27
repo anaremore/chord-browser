@@ -608,4 +608,18 @@ describe('The service’s side of acting (S18 M2e-2a; the reviews of #147)', () 
     expect(host.caught({ id: t.mine })).toEqual(['The page showed a dialog (confirm: “Delete?”); it was answered Cancel', 'The page tried to open a file picker; it wasn’t shown']);
     expect(host.caught({ id: t.mine })).toEqual([]);
   });
+
+  it('#338: a print note is waiting for the tab’s next result once, however many actions printed before it was read; read, the next one is said again (Fable’s SF1 on #346)', async () => {
+    const t = setup();
+    const s = await t.turn();
+    const host = (t.service as unknown as { actingHost(s: unknown): { lease: { begin(node: unknown): Promise<string | null> }; caught(node: unknown): string[] } }).actingHost(s);
+    await host.lease.begin({ id: t.mine });
+    const print = 'The page tried to print while the assistant acted; Chord didn’t print it';
+    leases.deps!.note('print', '');
+    leases.deps!.note('file', 'a file picker');
+    leases.deps!.note('print', '');
+    expect(host.caught({ id: t.mine })).toEqual([print, 'The page tried to open a file picker; it wasn’t shown']);
+    leases.deps!.note('print', '');
+    expect(host.caught({ id: t.mine })).toEqual([print]);
+  });
 });
