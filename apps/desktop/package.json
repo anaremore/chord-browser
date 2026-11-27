@@ -62,7 +62,7 @@
     "@ghostery/adblocker": "2.20.1",
     "@mozilla/readability": "0.6.0",
     "electron-updater": "6.8.11",
-    "immer": "11.2.9",
+    "immer": "11.2.10",
     "jsonc-parser": "3.3.1",
     "lucide-react": "1.61.0",
     "motion": "14.6.0",
