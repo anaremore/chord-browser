@@ -357,8 +357,16 @@ export class DownloadManager {
     const entry = this.entries.get(id);
     if (!entry?.screen?.verdict) return;
     entry.screen.verdict = false;
-    // Asked in the chat and not yet allowed there: it waits for that too (Neon's SF2, round 2 of #150).
-    if (entry.asked !== null && entry.asked !== false && entry.item.getState() === 'progressing' && entry.item.isPaused()) entry.item.resume();
+    // Asked in the chat and not yet allowed there: it waits for that too (Neon's SF2, round 2 of #150). Resuming goes
+    // around the session's requests, so never while its proxy holds (#331, Neon's nit r3): Resume in the list, later.
+    if (
+      entry.asked !== null &&
+      entry.asked !== false &&
+      entry.item.getState() === 'progressing' &&
+      entry.item.isPaused() &&
+      !proxies.holding(entry.session ?? this.deps.defaultSession())
+    )
+      entry.item.resume();
     this.report(id);
     void this.settle(id);
   }

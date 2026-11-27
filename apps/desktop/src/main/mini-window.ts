@@ -233,6 +233,14 @@ export class MiniWindows {
     return this.open.has(nodeId);
   }
 
+  /** Every mini window whose page is in this session closes, window and all (its proxy began failing, #331). */
+  closeIn(ses: Session): void {
+    for (const mini of [...this.open.values()]) {
+      const page = mini.page.webContents;
+      if (!page.isDestroyed() && page.session === ses) mini.window.close();
+    }
+  }
+
   /** The OS window of the mini window this contents is in. */
   windowFor(contents: WebContents): BaseWindow | undefined {
     return this.forContents(contents)?.window;

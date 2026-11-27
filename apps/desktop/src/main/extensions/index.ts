@@ -511,10 +511,14 @@ export class Extensions {
     for (const [profileId, host] of this.hosts) {
       if (host.session !== ses) continue;
       for (const e of Object.values(this.deps.state().extensions)) {
-        if (e.profileId !== profileId || !host.get(e.id)) continue;
+        const key = extensionKey(e.profileId, e.id);
+        // One being installed or updated loads its new version itself, from where its update put it (Neon's nit r3).
+        if (e.profileId !== profileId || !host.get(e.id) || this.installing.has(key) || this.updating.has(key)) continue;
         host.unload(e.id);
         try {
           await host.load(e.path);
+          // Removed while it loaded again: it doesn't stay loaded. (Updated meanwhile: its update loads its own version.)
+          if (!this.stillCurrent(e) && !this.deps.state().extensions[key] && !this.updating.has(key)) host.unload(e.id);
         } catch (error) {
           console.error(`Extension ${e.name} (${e.id}) didn't load again after its proxy began failing:`, error);
         }

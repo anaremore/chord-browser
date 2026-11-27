@@ -2832,7 +2832,13 @@ export class Browser {
    * before the failure could otherwise still send around the proxy. What was typed in it, and its scroll, may be lost.
    */
   holdPages(ses: Session): void {
-    // A page that isn't a tab yet (Peek, a mini window) in that session closes: it can stay open a long time (Opus).
+    // A page that isn't a tab yet (Peek, a mini window) in that session closes with what shows it, as openFlaggedAsTab
+    // closes them (Neon's SF1-r3: never a Peek card or a mini window left open on a closed page); then any page left.
+    for (const w of this.windows.values()) {
+      const peek = this.peeks.contents(w);
+      if (peek && !peek.isDestroyed() && peek.session === ses) this.peeks.close(w);
+    }
+    this.minis.closeIn(ses);
     this.tabs.closeFloatingIn(ses);
     const held = [...this.tabs.entries()].filter(([, contents]) => !contents.isDestroyed() && contents.session === ses).map(([nodeId]) => nodeId);
     if (!held.length) return;

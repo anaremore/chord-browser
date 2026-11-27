@@ -471,8 +471,10 @@ export class AppWindow {
     });
   }
 
-  /** A toast in this window's sidebar (or minimal bar), once its shell can show it. In presenting mode, only one about the share. */
-  /** Show a toast (or keep it for when the shell has loaded): false when presenting mode skips it. */
+  /**
+   * A toast in this window's sidebar (or minimal bar), once its shell can show it. In presenting mode, only one about
+   * the share: false when it's skipped there.
+   */
   toast(toast: Toast): boolean {
     if (this.presenting() && !toast.whilePresenting) return false;
     if (this.shellLoaded) send(this.shell.webContents, 'toast:show', toast);
