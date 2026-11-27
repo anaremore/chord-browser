@@ -276,6 +276,32 @@ kbd {
   color: var(--color-fg-subtle);
 }
 
+/* A chord's proxy isn't working (#331): its icon in warning, a button to its settings. */
+.proxyFailing {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--size-hit-min);
+  block-size: var(--size-hit-min);
+  margin-inline: calc(var(--space-1) * -1);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-warning);
+  transition: background-color var(--duration-fade-fast) var(--ease-standard);
+}
+
+.proxyFailing:hover {
+  background: var(--color-item-hover);
+}
+
+@media (forced-colors: active) {
+  .proxyFailing {
+    color: ButtonText;
+  }
+}
+
 /* A private window's chord: the eye-off glyph in the icon's place. */
 .privateGlyph {
   display: grid;

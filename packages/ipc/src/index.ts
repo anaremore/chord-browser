@@ -1125,6 +1125,15 @@ export interface ProxyStatus {
   }[];
 }
 
+/**
+ * A chord whose pages wait for a proxy that can't be set (#331): its header's proxy icon turns into a warning button.
+ * `own`: its own proxy, else the one for every chord (which its button opens, as the toast's Settings does).
+ */
+export interface ProxyFailingChord {
+  chordId: string;
+  own: boolean;
+}
+
 /** Ad and tracker blocking's lists on this computer (ARCHITECTURE.md §9), for Settings → Privacy. */
 export interface AdBlockingStatus {
   /** On (Settings' switch). */
@@ -1991,6 +2000,8 @@ export const invokeChannels = {
   'action:run': { roles: ['shell', 'overlay'], request: z.object({ action: ActionId }), response: z.void() },
   // #325: a proxy toast's Settings, at the proxy it's about (a chord's own, or null: the one for every chord).
   'proxy:settings': { roles: ['shell'], request: z.strictObject({ chordId: z.string().min(1).max(200).nullable() }), response: z.void() },
+  // #331: the chords whose proxy isn't working, for the header's sign (then each change, as `proxy:failing` events).
+  'proxy:failing': { roles: ['shell'], request: z.void(), response: z.custom<ProxyFailingChord[]>() },
   // Extensions (ARCHITECTURE.md §12): toolbar buttons in the shell, the list in Settings.
   'extensions:state': { roles: ['shell', 'overlay'], request: z.void(), response: z.custom<ExtensionsBarState>() },
   /** Click an extension's button (or its row in the list): its popup opens under `anchor` (window coordinates). */
@@ -2162,6 +2173,8 @@ export interface EventPayloads {
   /** Jump to a Settings section (`shortcuts` from ⌘⌥/). */
   'settings:section': string;
   'extensions:state': ExtensionsBarState;
+  /** The chords whose proxy isn't working now (#331), whenever that changes. */
+  'proxy:failing': ProxyFailingChord[];
   /** The archive gained or lost entries: the archive page lists them again. */
   'archive:changed': null;
   'archive:snapshot': ArchiveSnapshot;
@@ -2293,8 +2306,15 @@ export interface ShellApi {
   toasts: { onShow(listener: (toast: Toast) => void): () => void };
   gestures: { onPhase(listener: (phase: GesturePhase) => void): () => void };
   action: { run(action: CoreActionId): Promise<void> };
-  /** A proxy toast's Settings (#325): at the proxy it's about. */
-  proxy: { openSettings(chordId: string | null): Promise<void> };
+  /**
+   * A proxy toast's Settings (#325): at the proxy it's about. `failing`/`onFailing`: the chords whose proxy isn't
+   * working, for the header's sign (#331).
+   */
+  proxy: {
+    openSettings(chordId: string | null): Promise<void>;
+    failing(): Promise<ProxyFailingChord[]>;
+    onFailing(listener: (failing: ProxyFailingChord[]) => void): () => void;
+  };
   /** "Restart to update" from a toast. */
   updates: { restart(): Promise<void> };
   /** A screenshot toast's Save and Ask about it. */

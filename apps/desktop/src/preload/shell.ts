@@ -49,7 +49,7 @@ const api: ShellApi = {
   assistant: { view: () => invoke('assistant:view'), act: (action) => invoke('assistant:do', action), onState: (listener) => subscribe('assistant:state', listener) },
   gestures: { onPhase: (listener) => subscribe('gesture:phase', listener) },
   action: { run: (action) => invoke('action:run', { action }) },
-  proxy: { openSettings: (chordId) => invoke('proxy:settings', { chordId }) },
+  proxy: { openSettings: (chordId) => invoke('proxy:settings', { chordId }), failing: () => invoke('proxy:failing'), onFailing: (listener) => subscribe('proxy:failing', listener) },
   updates: { restart: () => invoke('update:restart') },
   screenshots: { act: (id, action) => invoke('screenshots:do', { id, do: action }) },
   extensions: {

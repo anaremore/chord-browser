@@ -529,6 +529,8 @@ test('a proxy that can’t be set (#325): its pages wait, never direct; one toas
     await expect(settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
     // In words for people (Carbon's SF5): an address Chromium won't take is one to check.
     await expect(settings.getByText('Pages wait until Chord can. Check the proxy’s address or its configuration file (ERR_INVALID_ARGUMENT).', { exact: true })).toBeVisible();
+    // The chord's header says so too, quietly, while it lasts (the owner's yes on #331): its proxy icon, a button.
+    await expect(shell.getByRole('button', { name: 'Personal’s proxy isn’t working, Proxy settings', exact: true })).toBeVisible();
     // A window opened while it fails gets its toast too (Carbon's SF3): a private one, whose pages it holds.
     await runAction(shell, 'window.newPrivate');
     await expect.poll(() => app.windows().filter((p) => isShell(p.url())).length).toBe(2);
@@ -563,6 +565,7 @@ test('a proxy that can’t be set (#325): its pages wait, never direct; one toas
     await expect(row).toBeHidden({ timeout: 10_000 });
     await expect(settings.getByRole('radiogroup', { name: 'Proxy for every chord' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
     await expect(settings.locator('[data-proxy-said]')).toHaveText('The proxy works again.');
+    await expect(shell.getByRole('button', { name: /proxy isn’t working/ })).toHaveCount(0);
     // The held page loads now, through the proxy, and never went direct.
     await expect.poll(titleOf(app, '/home'), { timeout: 15_000 }).toBe('Via A /home');
     expect(proxyA.seen).toContain(at('/home'));
@@ -612,6 +615,25 @@ test('a chord’s own proxy that can’t be set (Carbon’s round on #331): said
     await expect(settings.getByRole('radiogroup', { name: 'Proxy for Lab' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
     await settings.screenshot({ path: test.info().outputPath('proxy-failing-chord.png') });
 
+    // Lab's header: its proxy icon in warning, a button to its proxy (the owner's yes on #331), in light, dark and
+    // forced colours.
+    const sign = shell.getByRole('button', { name: 'Lab’s proxy isn’t working, Proxy settings', exact: true });
+    await expect(sign).toBeVisible();
+    const header = sign.locator('..');
+    await header.screenshot({ path: test.info().outputPath('proxy-sign-light.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'dark'));
+    await shell.waitForTimeout(400);
+    await header.screenshot({ path: test.info().outputPath('proxy-sign-dark.png') });
+    await app.evaluate(({ nativeTheme }) => void (nativeTheme.themeSource = 'system'));
+    await shell.emulateMedia({ forcedColors: 'active' });
+    await shell.waitForTimeout(200);
+    await header.screenshot({ path: test.info().outputPath('proxy-sign-forced.png') });
+    await shell.emulateMedia({ forcedColors: 'none' });
+    // It opens Lab's proxy, as the toast does.
+    await settings.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await sign.click();
+    await expect(settings.getByRole('radiogroup', { name: 'Proxy for Lab' }).getByRole('radio', { name: /^A proxy server/ })).toBeFocused();
+
     // Chromium takes it now; Try again from the keyboard: the row goes, the focus to Lab's own button, never the page
     // (B1), and the status says Lab's proxy works again (B2).
     await app.evaluate(() => void ((globalThis as { refuseProxy?: boolean }).refuseProxy = false));
@@ -620,6 +642,9 @@ test('a chord’s own proxy that can’t be set (Carbon’s round on #331): said
     await expect(row).toBeHidden({ timeout: 10_000 });
     await expect(settings.getByRole('button', { name: /^(Done|Change…), proxy for Lab$/ })).toBeFocused();
     await expect(settings.locator('[data-proxy-said]')).toHaveText('Lab’s proxy works again.');
+    // Its header's icon is only the quiet one again.
+    await expect(sign).toBeHidden();
+    await expect(shell.getByRole('img', { name: 'Uses its own proxy' })).toBeVisible();
   } finally {
     await app.close();
   }

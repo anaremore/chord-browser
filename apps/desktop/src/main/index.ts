@@ -23,7 +23,7 @@ import {
   type Command,
   type WindowId,
 } from '@chord/core';
-import type { AntigravityAnswer, RendererCommand } from '@chord/ipc';
+import type { AntigravityAnswer, ProxyFailingChord, RendererCommand } from '@chord/ipc';
 import { defaultChordStops, hexToRgb, rgbToOklch } from '@chord/tokens';
 import { hostname } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -117,9 +117,23 @@ let browser: Browser | undefined;
 /** Chords as #325's proxy alerts need them, in switcher order: whose sign-ins, and whether each has its own proxy. */
 const proxyChords = (): ProxyChord[] => (browser ? sortedChords(browser.store.state).map((c) => ({ id: c.id, name: c.name, profileId: c.profileId, own: Boolean(c.proxy) })) : []);
 const proxyAlerts = new ProxyAlerts();
-/** Each failing proxy's toast, in each window whose pages it holds that hasn't had it (#325; #331's N-SF5). */
+/** The chords whose proxy isn't working (#331): a chord's own, or the one for every chord, by chord. */
+function proxyFailingChords(): ProxyFailingChord[] {
+  return proxyStatus(proxies.failing(), proxyChords()).failing.flatMap((f) => f.chordIds.map((chordId) => ({ chordId, own: f.own })));
+}
+let proxyFailingSent = '[]';
+/**
+ * Each failing proxy's toast, in each window whose pages it holds that hasn't had it (#325; #331's N-SF5); and every
+ * window's header sign, when which chords' proxies fail changes (the owner's yes to Carbon's SF4 on #331).
+ */
 function proxyToasts(): void {
   if (!browser) return;
+  const failing = proxyFailingChords();
+  const json = JSON.stringify(failing);
+  if (json !== proxyFailingSent) {
+    proxyFailingSent = json;
+    for (const w of browser.allWindows) send(w.shell.webContents, 'proxy:failing', failing);
+  }
   const chords = proxyChords();
   for (const t of proxyAlerts.due(proxyStatus(proxies.failing(), chords), chords)) {
     const got = browser.toastWhereChords(
@@ -419,6 +433,7 @@ function registerIpc(): void {
   // #325: the proxies that can't be set, by chord (a chord's own) or for every chord; Try again tries now.
   handle('proxy:status', () => proxyStatus(proxies.failing(), proxyChords()));
   // From the window whose toast it was: Settings opens over that one (Carbon's N3 on #331).
+  handle('proxy:failing', () => proxyFailingChords());
   handle('proxy:settings', ({ chordId }, sender) => browser!.openProxySettingsAt(chordId, browser!.windowFor(sender)));
   // A profile's Try again only for a chord's (Neon's N-SF3 on #331, as adBlocking:retry); null tries every one failing.
   handle('proxy:retry', ({ owner }) => (owner === null || chordProfiles().has(owner) ? proxies.retry(owner) : undefined));

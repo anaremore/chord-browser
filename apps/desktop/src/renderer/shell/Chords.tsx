@@ -4,7 +4,7 @@
  * crossfade behind it all.
  */
 import { DEFAULT_PROFILE, chordsFor, chordsWithCounts, firstGrapheme, keycapFor, type ActionId, type Chord, type ChordThemeSpec, type ShortcutOverrides, type State } from '@chord/core';
-import type { SystemInfo } from '@chord/ipc';
+import type { ProxyFailingChord, SystemInfo } from '@chord/ipc';
 import { createChordTheme, presetStops, type PresetId } from '@chord/tokens';
 import { useDroppable } from '@dnd-kit/react';
 import { EyeOff, KeyRound, Network, Plus } from 'lucide-react';
@@ -15,6 +15,7 @@ import { INSTANT } from '../shared/motion';
 import { api } from './api';
 import styles from './App.module.css';
 import { SlidingPill } from './SlidingPill';
+import { proxySign } from './proxy-sign';
 import { CHORD_DROP } from './tree';
 import type { PaneMotion } from './useChordSwipe';
 
@@ -202,6 +203,8 @@ export function ChordHeader({
 }) {
   const [editing, setEditing] = useState(false);
   const [picking, setPicking] = useState(false);
+  const failing = useProxyFailing();
+  const sign = chord && !chord.private ? proxySign(failing, chord) : null;
   const isEditing = (editing || edit === 'name') && chord;
   const isPicking = (picking || edit === 'icon') && chord;
   // Named (or not), the keyboard goes back where it was: the New chord button, the chord's menu.
@@ -286,13 +289,35 @@ export function ChordHeader({
           <KeyRound size={12} strokeWidth={2} aria-hidden />
         </span>
       )}
-      {chord?.proxy && (
-        <span className={styles.signIns} role="img" aria-label="Uses its own proxy" title="Uses its own proxy">
+      {sign ? (
+        // Its proxy isn't working (#331): the icon in warning, a click from that proxy's settings.
+        <button type="button" className={styles.proxyFailing} aria-label={sign.label} title={sign.label} onClick={() => void api.proxy.openSettings(sign.target)}>
           <Network size={12} strokeWidth={2} aria-hidden />
-        </span>
+        </button>
+      ) : (
+        chord?.proxy && (
+          <span className={styles.signIns} role="img" aria-label="Uses its own proxy" title="Uses its own proxy">
+            <Network size={12} strokeWidth={2} aria-hidden />
+          </span>
+        )
       )}
     </div>
   );
+}
+
+/** The chords whose proxy isn't working (#331): asked once, then kept up to date by main. */
+function useProxyFailing(): ProxyFailingChord[] {
+  const [failing, setFailing] = useState<ProxyFailingChord[]>([]);
+  useEffect(() => {
+    let live = true;
+    const stop = api.proxy.onFailing((next) => setFailing(next));
+    void api.proxy.failing().then((now) => live && setFailing(now));
+    return () => {
+      live = false;
+      stop();
+    };
+  }, []);
+  return failing;
 }
 
 /** A chord in the switcher. Dropping a tab on another chord moves the tab there. */
