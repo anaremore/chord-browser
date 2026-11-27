@@ -152,8 +152,15 @@ test('passwords: save with the first passphrase, fill by keys and by click, upda
     // (Asked of main: Playwright emulates focus in each page it drives, so `document.hasFocus()` there says nothing.)
     // Polled: focus the OS gave one of them on its own goes back on main's next turn, which a check can run ahead of;
     // then again a second later, past anything the OS does after. Their focus log, if the page hasn't it.
+    // Under headless Weston (CI's Wayland) no window ever reports focus, even after focus() (#340): there, the page
+    // having it within the window is what can be checked.
     const pageHasKeys = () =>
-      app.evaluate(({ BaseWindow, webContents }, origin) => BaseWindow.getFocusedWindow() !== null && (webContents.getFocusedWebContents()?.getURL().startsWith(origin) ?? false), site.origin);
+      app.evaluate(
+        ({ app: a, BaseWindow, webContents }, origin) =>
+          (a.commandLine.getSwitchValue('ozone-platform') === 'wayland' || BaseWindow.getFocusedWindow() !== null) &&
+          (webContents.getFocusedWebContents()?.getURL().startsWith(origin) ?? false),
+        site.origin,
+      );
     const keysOnPage = (when: string) =>
       expect
         .poll(pageHasKeys, { timeout: 3_000, message: `the page has the keyboard ${when}` })
