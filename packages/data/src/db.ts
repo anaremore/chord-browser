@@ -327,19 +327,33 @@ export class ChordDatabase {
   }
 
   /**
-   * Profiles no chord uses any more (its sign-ins were shared again, or the
-   * chord was deleted): their rows go. Returns their partitions. Main deletes
-   * the sign-ins on disk itself, from the folders (removeUnusedPartitions),
-   * because a profile switched on and off between two writes never gets a row.
+   * Profiles no chord uses any more (its sign-ins were shared again; a deleted
+   * chord's row stays for its Undo, and so does its profile): their rows go,
+   * with the extensions installed in them, in one transaction (#330, the
+   * planner's decision of 2026-11-26). Kept, those would load at every launch
+   * into a session made for a profile no chord uses, which kept its sign-ins
+   * on disk for good; gone, nothing makes that session, so its partition and
+   * its extensions' folders are unused, and launch's cleanups delete them
+   * (removeUnusedPartitions, the extensions' removeOrphanFolders). A chord
+   * that later keeps its own sign-ins again gets a new profile, with none.
+   * Returns their partitions. Main deletes the sign-ins on disk itself, from
+   * the folders, because a profile switched on and off between two writes
+   * never gets a row.
    */
   pruneProfiles(): string[] {
-    const unused = this.sql('SELECT id, partition FROM profile WHERE is_default = 0 AND id NOT IN (SELECT profile_id FROM chord)').all() as Row[];
-    for (const r of unused) this.sql('DELETE FROM profile WHERE id = ?').run(str(r['id']));
-    // #315: a profile gone (no chord uses it, no extension names it) comes off the move list too, so a look-alike that
-    // arrives later (sync, import) never takes its sign-ins (Neon's SF1-R2 on #329).
-    this.sql(
-      'DELETE FROM partition_move WHERE id NOT IN (SELECT profile_id FROM chord WHERE deleted_at IS NULL) AND id NOT IN (SELECT profile_id FROM extension)',
-    ).run();
+    let unused: Row[] = [];
+    this.transaction(() => {
+      unused = this.sql('SELECT id, partition FROM profile WHERE is_default = 0 AND id NOT IN (SELECT profile_id FROM chord)').all() as Row[];
+      for (const r of unused) {
+        this.sql('DELETE FROM extension WHERE profile_id = ?').run(str(r['id']));
+        this.sql('DELETE FROM profile WHERE id = ?').run(str(r['id']));
+      }
+      // #315: a profile gone (no chord uses it, no extension names it) comes off the move list too, so a look-alike that
+      // arrives later (sync, import) never takes its sign-ins (Neon's SF1-R2 on #329).
+      this.sql(
+        'DELETE FROM partition_move WHERE id NOT IN (SELECT profile_id FROM chord WHERE deleted_at IS NULL) AND id NOT IN (SELECT profile_id FROM extension)',
+      ).run();
+    });
     return unused.map((r) => str(r['partition']));
   }
 

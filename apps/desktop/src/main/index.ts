@@ -61,7 +61,7 @@ import { openable, urlsFromArgv } from './os-links';
 import { seedForPerformance } from './perf-seed';
 import { originOf } from '@chord/data';
 import { Persistence, removeUnusedPartitions } from './persistence';
-import { foldersInUse, migratePartitions, partitionFsFailingFor } from './partitions';
+import { foldersInUse, launchProfiles, migratePartitions, partitionFsFailingFor } from './partitions';
 import { platform, systemInfo, uiScale } from './platform';
 import { handleChordProtocol, registerSchemes, serveAssistantImages, serveReaderImages } from './protocol';
 import { appBadgeShown, watchAppBadge } from './app-badge';
@@ -979,7 +979,7 @@ if (!app.requestSingleInstanceLock()) {
     const partitionMoves = await migratePartitions(
       app.getPath('userData'),
       opened.partitionMoves,
-      [...profilesInUse, ...Object.values(initial.extensions).map((e) => e.profileId)],
+      launchProfiles(initial),
       // Development and tests only: one profile's move fails (#329's quit probe: a twin on an in-memory fallback).
       !app.isPackaged && process.env['CHORD_E2E_PARTITION_MOVE_FAIL'] ? partitionFsFailingFor(process.env['CHORD_E2E_PARTITION_MOVE_FAIL']) : undefined,
       (id) => opened.persistence.partitionMoved([id]),

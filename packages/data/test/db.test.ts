@@ -213,6 +213,43 @@ describe('chord-data', () => {
     expect(count('profile')).toBe(1);
   });
 
+  it('a pruned profile’s installed extensions go with it (#330); a profile still in use, or a deleted chord’s (its Undo), keeps theirs', () => {
+    let db = new ChordDatabase(file);
+    let state = seed();
+    db.write(opsForState(state));
+    const [first, second] = Object.keys(state.chords);
+    const ext = (profileId: string) => ({
+      id: 'ddkjiahejlhfcafbddmgiahcphecmpfh',
+      profileId,
+      name: 'uBlock Origin Lite',
+      version: '2026.1013.1',
+      source: 'store' as const,
+      path: `C:/Chord/Extensions/${profileId}/ubol/2026.1013.1_0`,
+      notifiedVersion: null,
+      pinned: true,
+      installedAt: 1,
+      updatedAt: 2,
+    });
+    state = drive(db, state, [
+      { t: 'chord.profile', chordId: first!, profileId: 'p-gone' },
+      { t: 'chord.profile', chordId: second!, profileId: 'p-deleted' },
+      { t: 'extension.record', extension: ext('default') },
+      { t: 'extension.record', extension: ext('p-gone') },
+      { t: 'extension.record', extension: ext('p-deleted') },
+    ]);
+    // The first chord shares sign-ins again (its own are given up); the second is deleted (Undo can bring it back).
+    drive(db, state, [
+      { t: 'chord.profile', chordId: first!, profileId: 'default' },
+      { t: 'chord.delete', chordId: second! },
+    ]);
+    db.close();
+    db = new ChordDatabase(file);
+    expect(db.pruneProfiles()).toEqual(['persist:p-p-gone']);
+    const saved = db.load();
+    db.close();
+    expect((saved?.extensions ?? []).map((e) => e.profileId).sort()).toEqual(['default', 'p-deleted']);
+  });
+
   it('upgrades a version-15 profile to 16, and keeps the proxy for every chord and a chord’s own across a restart', () => {
     const v15 = oldDatabase(file, 15);
     v15.prepare('INSERT INTO chord (id, profile_id, name, icon, theme, rank, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(

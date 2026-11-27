@@ -24,7 +24,7 @@
  */
 import { cp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { DEFAULT_PROFILE, isId, isPrivateProfile, profilePartition } from '@chord/core';
+import { DEFAULT_PROFILE, isId, isPrivateProfile, profilePartition, type State } from '@chord/core';
 
 /** What the move does on disk: node:fs/promises', stood in for by tests. */
 export interface PartitionFs {
@@ -235,6 +235,15 @@ function inMemoryWhereShared(failed: readonly { id: string; old: string }[], kep
     fallbacks.set(id, fallbackPartition(id));
   }
   return fallbacks;
+}
+
+/**
+ * The profiles launch makes a session for: every chord's (index.ts) and every one an extension is installed in
+ * (extensions.start loads each into its profile's session). A profile no chord uses any more isn't one of them: its
+ * extensions were pruned with it (chord-data's pruneProfiles, #330), so its sign-ins on disk are unused and go.
+ */
+export function launchProfiles(state: Pick<State, 'chords' | 'extensions'>): string[] {
+  return [...new Set([...Object.values(state.chords).map((c) => c.profileId), ...Object.values(state.extensions).map((e) => e.profileId)])];
 }
 
 /**

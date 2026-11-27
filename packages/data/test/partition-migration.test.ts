@@ -137,7 +137,7 @@ describe('profile partitions after #315 (migration)', () => {
     }
   });
 
-  it('pruning a profile takes it off the move list too, unless an extension still names it (Neon’s SF1-R2 on #329)', () => {
+  it('pruning a profile takes it off the move list too (Neon’s SF1-R2 on #329), its extensions with it (#330)', () => {
     // `Gone` was a chord's own sign-ins before the upgrade; the chord was deleted, so pruning drops its profile.
     before(['Work', 'Ext_Only']);
     const old = new DatabaseSync(file);
@@ -150,8 +150,9 @@ describe('profile partitions after #315 (migration)', () => {
     try {
       expect(db.partitionMoves()).toEqual(['Ext_Only', 'Gone', 'Work']);
       db.pruneProfiles();
-      // A later `gone` (by sync) must never take this one's sign-ins: off the list with its profile.
-      expect(db.partitionMoves()).toEqual(['Ext_Only', 'Work']);
+      // A later `gone` (by sync) must never take this one's sign-ins: off the list with its profile. `Ext_Only`, which no
+      // chord uses, is pruned now with the extension installed in it (#330), so it comes off too.
+      expect(db.partitionMoves()).toEqual(['Work']);
     } finally {
       db.close();
     }
