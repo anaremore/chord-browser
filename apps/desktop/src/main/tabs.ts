@@ -134,7 +134,7 @@ export class TabManager {
    * false says it didn't load after all (what it was for had gone by then): the loading this wait put on comes off
    * (round 1 of #333).
    */
-  whenProxied(contents: WebContents, load: () => boolean | void, overtaken?: () => void): void {
+  whenProxied(contents: WebContents, load: () => boolean | void, overtaken?: () => void): () => void {
     this.loadTurns.get(contents)?.overtaken?.();
     const turn: { overtaken?: () => void } = overtaken ? { overtaken } : {};
     this.loadTurns.set(contents, turn);
@@ -172,6 +172,18 @@ export class TabManager {
       }
     };
     go();
+    // Its drop: while it still waits, it's no longer the tab's (never run, the tab's loading off), as Stop does but
+    // without calling its own `overtaken` (Fable's FN3 on #333: a tool's load it gave up on).
+    return () => {
+      if (this.loadTurns.get(contents) !== turn || !this.waiting.has(contents)) return;
+      this.waiting.delete(contents);
+      this.loadTurns.set(contents, {});
+      if (this.waitMarked.delete(contents)) {
+        setFirstLoadPending(contents, false);
+        const nodeId = this.nodeFor(contents);
+        if (nodeId) this.deps.dispatch({ t: 'tab.live', nodeId, live: { loading: false } });
+      }
+    };
   }
 
   /**
@@ -179,9 +191,10 @@ export class TabManager {
    * of it as of a navigation, so a late answer about the page before can't stop or drop it (#323's NSF1b; round 1 of
    * #333: every one, the agent's and extensions' too).
    */
-  queueLoad(contents: WebContents, load: () => boolean | void, overtaken?: () => void): void {
-    this.whenProxied(contents, load, overtaken);
+  queueLoad(contents: WebContents, load: () => boolean | void, overtaken?: () => void): () => void {
+    const drop = this.whenProxied(contents, load, overtaken);
     if (this.waiting.has(contents)) this.deps.navigationQueued?.(contents);
+    return drop;
   }
 
   /** `url` in the page, as queueLoad does. */

@@ -111,10 +111,10 @@ export interface ControlPage {
   afterActing(act: () => void | Promise<void>, acted?: () => void): Promise<{ navigated: boolean; loading: boolean }>;
   /**
    * Goes to an address once the tab's session is ready, and waits for that load (at most ACT_LOAD_MS from its start).
-   * Null when it never started: overtaken while it waited (your load, a newer one), or `abandoned` by then (Stop,
-   * paused, taken over: round 1 of #333).
+   * Null when it never started: overtaken while it waited (your load, a newer one), closed, or abandoned by then (round
+   * 1 of #333; GatedLoad).
    */
-  navigate(url: string, abandoned?: () => boolean): Promise<{ loading: boolean } | null>;
+  navigate(url: string, how?: GatedLoad): Promise<{ loading: boolean } | null>;
   /**
    * The entry just before this one in the tab's history, or null. Not goBack's: Chromium's goBack skips entries a page
    * added without a gesture (a pushState), so it can land further back than the entry checked.
@@ -124,7 +124,7 @@ export interface ControlPage {
    * Goes to exactly that entry once the tab's session is ready, if it's still the one just before this page then (null
    * if not, or overtaken, or `abandoned`), and waits for that load.
    */
-  back(entry: { index: number; url: string }, abandoned?: () => boolean): Promise<{ loading: boolean } | null>;
+  back(entry: { index: number; url: string }, how?: GatedLoad): Promise<{ loading: boolean } | null>;
   title(): string;
 }
 
@@ -235,7 +235,18 @@ function toFrames(contents: WebContents, up: boolean): void {
  * Browsing hears of a load that waits.
  */
 export interface LoadGate {
-  queueLoad(contents: WebContents, load: () => boolean | void, overtaken?: () => void): void;
+  /** Returns a drop: the load, if it still waits, is no longer the tab's (its loading off, never run). */
+  queueLoad(contents: WebContents, load: () => boolean | void, overtaken?: () => void): (() => void) | void;
+}
+
+/** How a tool's load through the gate is let go of, and heard of (Fable's look at #333). */
+export interface GatedLoad {
+  /** Looked at while it waits, and as the gate lets it go: true, and it never starts (Stop, a pause, your hand, refused). */
+  abandoned?: () => boolean;
+  /** Aborted: it never starts, and the tab's gate drops it now (the step refused it). */
+  signal?: AbortSignal;
+  /** Its load has started (the session ready): from here it's the tab's, waited for as it goes. */
+  onStart?: () => void;
 }
 
 /**
@@ -243,29 +254,41 @@ export interface LoadGate {
  * caller `abandoned` it by then; then that load is waited for, as `loaded` does, its stop listened for from its start
  * only (never an earlier load's: Neon's B2, round 1 of #333). Null at once when it didn't start.
  */
-function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => unknown) | null, abandoned?: () => boolean): Promise<{ loading: boolean } | null> {
+function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => unknown) | null, how: GatedLoad = {}): Promise<{ loading: boolean } | null> {
+  const { abandoned, signal, onStart } = how;
   return new Promise((done) => {
-    // A page already gone: nothing to wait for (Neon's NB1, round 2 of #333).
-    if (contents.isDestroyed()) return done(null);
+    // A page already gone, or refused already: nothing to wait for (Neon's NB1, round 2 of #333).
+    if (contents.isDestroyed() || signal?.aborted) return done(null);
     let decided = false;
-    /** It won't start: null now, and nothing after. */
+    let drop: (() => void) | void = undefined;
+    /** It's decided: nothing more is listened for. */
     const off = (): boolean => {
       if (decided) return false;
       decided = true;
       clearInterval(watch);
       contents.off('destroyed', gone);
+      signal?.removeEventListener('abort', given);
       return true;
     };
+    /** It won't start: null now, nothing after. */
     const gone = () => off() && done(null);
+    /** It won't start, and the tab's gate lets go of it now: the tab no longer loading for it (Fable's FN3). */
+    const given = () => {
+      if (!off()) return;
+      drop?.();
+      done(null);
+    };
     // Closed while it waits: at once, whatever the gate does (NB1).
     contents.once('destroyed', gone);
-    // Stop, a pause or your hand while it waits: the step ends then, not when the session is ready, so its hold is let
-    // go and its bar cleared (Neon's NSF1, round 2 of #333). The gate, answering later, finds it decided.
+    // The step refused (its deadline, a card's no, the hold lost: Fable's FB1, FSF2): dropped at once.
+    signal?.addEventListener('abort', given, { once: true });
+    // Stop, a pause, your hand, or the tab no longer one the agent may act in, while it waits: the step ends then, not
+    // when the session is ready, so its hold is let go and its bar cleared (Neon's NSF1, round 2 of #333).
     const watch = setInterval(() => {
-      if (abandoned?.()) gone();
+      if (abandoned?.()) given();
     }, ABANDON_CHECK_MS);
     watch.unref?.();
-    gate.queueLoad(
+    drop = gate.queueLoad(
       contents,
       () => {
         if (!off()) return false;
@@ -274,11 +297,14 @@ function gatedLoad(contents: WebContents, gate: LoadGate, start: () => (() => un
           done(null);
           return false;
         }
+        onStart?.();
         void loaded(contents, go).then(done);
         return true;
       },
       gone,
     );
+    // Decided while it was being queued (a gate that ran it at once): nothing to drop.
+    if (decided) drop = undefined;
   });
 }
 
@@ -367,10 +393,10 @@ export function controlPage(contents: WebContents, gate: LoadGate): ControlPage 
       if (!contents.isDestroyed()) await pageCall(contents.insertText(text), undefined, 3000);
     },
     afterActing: (act, acted) => afterActing(contents, act, acted),
-    navigate: async (url, abandoned) => {
+    navigate: async (url, how) => {
       const yours = await focusedPage();
       try {
-        return await gatedLoad(contents, gate, () => () => contents.loadURL(url).catch(() => undefined), abandoned);
+        return await gatedLoad(contents, gate, () => () => contents.loadURL(url).catch(() => undefined), how);
       } finally {
         await giveBackFocus(contents, yours);
       }
@@ -381,14 +407,14 @@ export function controlPage(contents: WebContents, gate: LoadGate): ControlPage 
       const url = index >= 0 ? contents.navigationHistory.getEntryAtIndex(index)?.url : undefined;
       return url ? { index, url } : null;
     },
-    back: async (entry, abandoned) => {
+    back: async (entry, how) => {
       // The entry just before this page, as checked: the page still one past it, and the entry still that address
       // (Neon's SF1, round 1 of #333). Asked now and again once the session is ready.
       const still = () => !contents.isDestroyed() && contents.navigationHistory.getActiveIndex() === entry.index + 1 && contents.navigationHistory.getEntryAtIndex(entry.index)?.url === entry.url;
       if (!still()) return null;
       const yours = await focusedPage();
       try {
-        return await gatedLoad(contents, gate, () => (still() ? () => contents.navigationHistory.goToIndex(entry.index) : null), abandoned);
+        return await gatedLoad(contents, gate, () => (still() ? () => contents.navigationHistory.goToIndex(entry.index) : null), how);
       } finally {
         await giveBackFocus(contents, yours);
       }

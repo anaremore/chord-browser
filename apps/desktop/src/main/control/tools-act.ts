@@ -306,21 +306,26 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       /** #143: past the call's deadline with nothing held: it answers now, the page still on its way. */
       let past = false;
       const stepWords = tool === 'navigate' ? `Going to ${barAddress(target)}` : 'Going back';
+      // The hold lost meanwhile (a detach, the renderer gone) is never a success (Neon's B5, round 2 of #147).
+      // Your own taking over reads as yours, before the hold's loss (Neon's S1, round 3). A card's Allow counts only
+      // while the page is the document it was when the card opened (#143, Neon's B4: as an action's, below); a no or
+      // no answer stays the user's, whatever the page did meanwhile.
+      let allowedNow = false;
+      const halt = (opened?: unknown) =>
+        call.stopped()
+          ? CONTROL_REFUSALS.stopped
+          : scope.agent.state(node.id).paused
+            ? CONTROL_REFUSALS.paused
+            : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : allowedNow && opened && page.mark.document !== (opened as typeof page.mark).document ? ACT_REFUSALS.movedOn : null));
       try {
-        // Never started once the session is ready, if by then Stop, a pause or your hand came (round 1 of #333).
-        const abandoned = () => call.stopped() || scope.agent.state(node.id).paused || takenOver() !== null;
-        const going = tool === 'navigate' ? page.navigate(target, abandoned) : page.back(back!, abandoned);
-        // The hold lost meanwhile (a detach, the renderer gone) is never a success (Neon's B5, round 2 of #147).
-        // Your own taking over reads as yours, before the hold's loss (Neon's S1, round 3). A card's Allow counts only
-        // while the page is the document it was when the card opened (#143, Neon's B4: as an action's, below); a no or
-        // no answer stays the user's, whatever the page did meanwhile.
-        let allowedNow = false;
-        const halt = (opened?: unknown) =>
-          call.stopped()
-            ? CONTROL_REFUSALS.stopped
-            : scope.agent.state(node.id).paused
-              ? CONTROL_REFUSALS.paused
-              : (takenOver() ?? notHereNow() ?? (page.lost() ? ACT_REFUSALS.noCheck : allowedNow && opened && page.mark.document !== (opened as typeof page.mark).document ? ACT_REFUSALS.movedOn : null));
+        // Its load never starts once anything would refuse the step (Stop, a pause, your hand, the tab not one it may act
+        // in, the hold lost), nor once the step has answered a refusal: dropped at once then (Fable's FB1 on #333).
+        const refusing = new AbortController();
+        const refuseLoad = () => refusing.abort();
+        const abandoned = () => refusing.signal.aborted || halt() !== null;
+        let started = false;
+        const how = { abandoned, signal: refusing.signal, onStart: () => void (started = true) };
+        const going = tool === 'navigate' ? page.navigate(target, how) : page.back(back!, how);
         const cards = new OpenCards(scope.agent, node.id);
         const cardsEnd = new AbortController();
         // Its Allows counted where they let requests go (round 2 of #266, blocker 2).
@@ -364,19 +369,26 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
             cardsEnd.abort();
             w.deny();
             sent = no;
+            refuseLoad();
           } else handed = handOver(w, counted.allowed, cards, cardsEnd, stepWords, sending);
         } else if ('past' in settled) {
           // Past the deadline with nothing held: the same checks first (Neon's round 3): never a page that can't be read
           // (a redirect to a Never site still loading), nor Stop, your hand or a lost hold, answered as *Going to…*.
           const no = halt() ?? blockedNow(call, node.id, page, 'That page went somewhere that can’t be read.');
-          if (no) sent = no;
-          else past = true;
+          // Its load not started yet (the session not ready): dropped, and said so, never *Going to…* for a load that
+          // would come later, outside the step's watch (Fable's FSF2 on #333).
+          if (no ?? !started) {
+            sent = no ?? ACT_REFUSALS.notReady;
+            refuseLoad();
+          } else past = true;
         } else {
           sent = settled.sent;
-          // Refused already (Stop, a pause, your hand): the load, if it ever comes, isn't waited for (Neon's NSF1, round 2
-          // of #333).
-          if (sent) void going.catch(() => undefined);
-          else went = await going;
+          // Refused already (Stop, a pause, your hand, a card's no): its load, if it hasn't started, never does, and isn't
+          // waited for (Neon's NSF1, round 2 of #333; Fable's FB1).
+          if (sent) {
+            refuseLoad();
+            void going.catch(() => undefined);
+          } else went = await going;
         }
         if (handed || past) void going.catch(() => undefined);
       } finally {
@@ -388,12 +400,12 @@ async function actOn(call: Call, tool: ActTool, args: Record<string, unknown>, l
       if (sent) return refuse(sent);
       // The hold lost while it loaded (a detach, the renderer gone): never reported done (Neon's B5, round 2 of #147).
       if (page.lost()) return refuse(ACT_REFUSALS.noCheck);
-      // It never started: Stop, a pause or your hand say so; else another load came first, or (back) the tab's history
-      // moved while it waited (Opus's N4, round 1 of #333).
+      // It never started: the tab closed; or what would refuse the step says why (Stop, a pause, your hand, the tab not one
+      // it may act in: Fable's FSF1); else, for back, the tab's history moved while it waited; else it was dropped
+      // (Opus's N4, round 1 of #333; Fable's FN1).
       if (!went) {
-        if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);
-        if (scope.agent.state(node.id).paused) return refuse(CONTROL_REFUSALS.paused);
-        return refuse(takenOver() ?? (tool === 'back' ? ACT_REFUSALS.backMoved : ACT_REFUSALS.overtaken));
+        if (nodeOf(call.browser.store.state, node.id)?.kind !== 'tab' || page.gone()) return refuse(CONTROL_REFUSALS.closed);
+        return refuse(halt() ?? (tool === 'back' && page.backEntry()?.url !== goingTo ? ACT_REFUSALS.backMoved : ACT_REFUSALS.overtaken));
       }
       const { loading } = went;
       if (call.stopped()) return refuse(CONTROL_REFUSALS.stopped);

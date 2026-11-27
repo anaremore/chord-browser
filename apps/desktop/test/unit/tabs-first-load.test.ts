@@ -677,6 +677,32 @@ describe('a page’s load waiting for its session (#189)', () => {
     expect(t.commands.filter((c) => c.t === 'tab.live').at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
   });
 
+  it('a load given up on while it waits (its drop: Fable’s FN3 on #333): never runs, the tab no longer loading for it; a later drop does nothing', async () => {
+    const waits: Array<ReturnType<typeof held>> = [];
+    const t = setup(waits);
+    const proxy = held();
+    waits.push(proxy);
+    const load = vi.fn();
+    const drop = t.manager.queueLoad(t.page as never, load);
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: true } });
+    drop();
+    expect(t.commands.at(-1)).toEqual({ t: 'tab.live', nodeId: NODE, live: { loading: false } });
+    // Nothing waits there now: Stop has nothing to drop.
+    expect(t.manager.stopWaiting(t.page as never)).toBe(false);
+    proxy.resolve();
+    await tick();
+    expect(load).not.toHaveBeenCalled();
+    // A load asked for after, then the old drop: the new one stays.
+    const next = held();
+    waits.push(next);
+    const later = vi.fn();
+    t.manager.queueLoad(t.page as never, later);
+    drop();
+    next.resolve();
+    await tick();
+    expect(later).toHaveBeenCalledOnce();
+  });
+
   it('closed during the wait: nothing loads, nothing left pending', async () => {
     const rules = held();
     const t = setup([rules]);

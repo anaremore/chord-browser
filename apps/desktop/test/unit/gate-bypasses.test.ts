@@ -81,7 +81,7 @@ describe('the agent’s navigate and back go through the session gate (#326)', (
     const page = agentPage();
     const held = heldGate();
     let stopped = false;
-    const going = controlPage(page as never, { queueLoad: held.gate }).navigate('https://three.test/', () => stopped);
+    const going = controlPage(page as never, { queueLoad: held.gate }).navigate('https://three.test/', { abandoned: () => stopped });
     await turns();
     stopped = true;
     held.release();
@@ -118,6 +118,35 @@ describe('the agent’s navigate and back go through the session gate (#326)', (
     }
     expect(await state(going)).toEqual({ settled: true, value: null });
     expect(page.loadURL).not.toHaveBeenCalled();
+  });
+
+  it('navigate the step refused while it waits (its signal: Fable’s FB1, FN3 on #333): null at once, the tab’s gate drops it, nothing fires after', async () => {
+    const page = agentPage();
+    const held = heldGate();
+    const dropped = vi.fn();
+    const gate = { queueLoad: (c: unknown, load: () => unknown, overtaken?: () => void) => (held.gate(c, load, overtaken), dropped) };
+    const refusing = new AbortController();
+    const started = vi.fn();
+    const going = controlPage(page as never, gate).navigate('https://three.test/', { signal: refusing.signal, onStart: started });
+    await turns();
+    refusing.abort();
+    expect(await state(going)).toEqual({ settled: true, value: null });
+    expect(dropped).toHaveBeenCalledOnce();
+    held.release();
+    expect(page.loadURL).not.toHaveBeenCalled();
+    expect(started).not.toHaveBeenCalled();
+  });
+
+  it('navigate’s start is told once its load starts (Fable’s FSF2)', async () => {
+    const page = agentPage();
+    const held = heldGate();
+    const started = vi.fn();
+    void controlPage(page as never, { queueLoad: held.gate }).navigate('https://three.test/', { onStart: started });
+    await turns();
+    expect(started).not.toHaveBeenCalled();
+    held.release();
+    expect(started).toHaveBeenCalledOnce();
+    page.emit('did-stop-loading');
   });
 
   it('back: no history move until the session is ready', async () => {
