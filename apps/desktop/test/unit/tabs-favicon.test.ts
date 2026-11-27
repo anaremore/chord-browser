@@ -71,7 +71,8 @@ describe('a tab of yours: another site’s icon is fetched without its cookies (
   it('another site’s icon: no cookies', async () => {
     const t = setup(false);
     t.view.page.emit('page-favicon-updated', {}, ['https://cdn.other.test/icon.png']);
-    await t.settle();
+    // Its first icon waits for the Public Suffix List to load (tabs.ts' faviconSites).
+    await vi.waitFor(() => expect(t.fetch).toHaveBeenCalled());
     expect(t.fetch.mock.calls[0]![1]).toMatchObject({ credentials: 'omit' });
   });
 
@@ -80,7 +81,8 @@ describe('a tab of yours: another site’s icon is fetched without its cookies (
     let fail: (e: Error) => void = () => undefined;
     t.fetch.mockImplementationOnce(() => new Promise<Response>((_r, reject) => (fail = reject)));
     t.view.page.emit('page-favicon-updated', {}, ['https://shop.test/favicon.ico']);
-    await t.settle();
+    // Its first icon waits for the Public Suffix List to load (tabs.ts' faviconSites).
+    await vi.waitFor(() => expect(t.fetch).toHaveBeenCalled());
     expect(t.fetch.mock.calls[0]![1]).toMatchObject({ redirect: 'error' });
     expect(t.fetch.mock.calls[0]![1]).not.toHaveProperty('credentials');
     fail(new Error('Redirect was cancelled'));

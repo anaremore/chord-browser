@@ -10,8 +10,6 @@
  * never shadowed by another origin's named before it), fetched with no credentials and no redirect (a redirect would go
  * wherever the page's server says), and none at all on a Never site.
  */
-import { hostOf, siteOf } from '@chord/core';
-
 export type FaviconFetch = { url: string; init: { credentials?: 'omit'; redirect?: 'error' } };
 
 const originOf = (url: string): string | null => {
@@ -22,21 +20,24 @@ const originOf = (url: string): string | null => {
   }
 };
 
-/** Whether `url` is the page's own site, schemefully (http and https of one domain are two sites, as for cookies). */
-function sameSite(page: string, url: string): boolean {
-  const from = hostOf(page);
-  const to = hostOf(url);
-  if (from === null || to === null) return false;
-  return new URL(page).protocol === new URL(url).protocol && siteOf(from) === siteOf(to);
+/**
+ * Whether `url` is the page's own site: its registrable domain by the Public Suffix List, private suffixes too
+ * (`a.blogspot.com` and `b.blogspot.com` are two sites: Opus's B1 on #337), by `site` (password-sites.ts' loginSite);
+ * and schemefully (http and https of one domain are two sites, as for cookies).
+ */
+function sameSite(page: string, url: string, site: (url: string) => string | null): boolean {
+  if (!/^https?:/i.test(page) || !/^https?:/i.test(url) || new URL(page).protocol !== new URL(url).protocol) return false;
+  const from = site(page);
+  return from !== null && from === site(url);
 }
 
-export function pickFavicon(favicons: readonly string[], page: string, tab: { agent: boolean; never: (url: string) => boolean }): FaviconFetch | null {
+export function pickFavicon(favicons: readonly string[], page: string, tab: { agent: boolean; never: (url: string) => boolean; site?: (url: string) => string | null }): FaviconFetch | null {
   if (!tab.agent) {
     const url = favicons.find((u) => /^(https?|data):/i.test(u));
     if (!url) return null;
     if (/^data:/i.test(url)) return { url, init: {} };
     // Its own site's: its cookies, as today, but no redirect (fetched again without them). Any other: none (#324).
-    return { url, init: sameSite(page, url) ? { redirect: 'error' } : { credentials: 'omit' } };
+    return { url, init: tab.site && sameSite(page, url, tab.site) ? { redirect: 'error' } : { credentials: 'omit' } };
   }
   if (tab.never(page)) return null;
   const own = originOf(page);

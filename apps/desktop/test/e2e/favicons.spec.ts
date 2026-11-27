@@ -177,4 +177,3 @@ test('#324: a tab of yours whose page names another site’s icon fetches it wit
     await app.close();
   }
 });
-

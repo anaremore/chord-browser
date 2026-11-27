@@ -16,6 +16,11 @@ import { platform } from './platform';
 import { pageCall } from './page-call';
 import { failHeld } from './control/sends';
 import { pickFavicon } from './favicon-pick';
+import type * as PasswordSites from '@chord/core/password-sites';
+
+/** The Public Suffix List's sites (tldts), loaded the first time a tab of yours fetches an icon: off the launch path. */
+let faviconSitesModule: Promise<typeof PasswordSites> | undefined;
+const faviconSites = () => (faviconSitesModule ??= import('@chord/core/password-sites'));
 import { pageOf } from './view-page';
 import { iconOn, TabIconIndex } from './site-icons';
 import { holdFilePickers, bypassServiceWorkers, firstLoadPending, holdFailed, setFirstLoadPending } from './agents/pickers';
@@ -907,7 +912,9 @@ export class TabManager {
     // An agent's tab (#115, B1): only a data: or own-origin icon, with no credentials and no redirect; none on a Never
     // site (favicon-pick.ts).
     const never = (url: string) => isNeverReadable(url, this.deps.state().settings?.assistant?.neverSites ?? []);
-    const picked = pickFavicon(favicons, page, { agent, never });
+    // A tab of yours: its own site by the Public Suffix List (#324), read in only when it's needed, as passwords do.
+    const site = agent ? undefined : (await faviconSites()).loginSite;
+    const picked = pickFavicon(favicons, page, { agent, never, ...(site ? { site } : {}) });
     if (!picked) return;
     const { url } = picked;
     const session = contents.session;
