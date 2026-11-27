@@ -243,7 +243,8 @@ const AUDITED: Record<string, [Site['kind'], string, string][]> = {
   'tabs.ts': [
     ['window-open', 'contents', "a tab's window.open: an agent's tab opens nothing (openFrom, agentPage)"],
     ['window-open', 'contents', 'a popup opened by a tab of yours (agent tabs open none)'],
-    ['fetch', 'contents.session', "a tab's favicon: an agent's page (latched) only its own origin's or data:, no credentials, no redirect, never on a Never site (favicon-pick.ts, #115)"],
+    ['fetch', 'contents.session', "a tab's favicon: an agent's page (latched) only its own origin's or data:, no credentials, no redirect, never on a Never site (favicon-pick.ts, #115); yours: another site's without cookies, its own site's with them but no redirect (#324)"],
+    ['fetch', 'contents.session', "a tab of yours' own-site favicon that redirected or failed, fetched again without cookies (#324); never an agent's (#115)"],
   ],
   'updates.ts': [['fetch', '(await this.session())', "Chord's update feed, through its own session"]],
 };

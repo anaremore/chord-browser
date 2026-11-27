@@ -30,8 +30,9 @@ const NODE = 'n1' as NodeId;
 const PAGE = 'https://shop.test/a';
 const NEVER = 'https://bank.test/';
 
-function setup() {
-  const kind = { agent: true };
+/** A tab and its page; an agent's unless `agent` is false (its kind is the page's from the start: wire()'s latch). */
+function setup(agent = true) {
+  const kind = { agent };
   const state = {
     nodes: nodesFrom([{ kind: 'tab', id: NODE, url: PAGE, title: '', section: 'today', chordId: 'c1' } as SidebarNode]),
     live: {},
@@ -65,6 +66,41 @@ function setup() {
   const settle = () => new Promise((r) => setTimeout(r, 0));
   return { kind, view, fetch, answer: (r: Response) => answer(r), icon, remember, dispatch, settle, go: (u: string) => (url = u) };
 }
+
+describe('a tab of yours: another site’s icon is fetched without its cookies (#324)', () => {
+  it('another site’s icon: no cookies', async () => {
+    const t = setup(false);
+    t.view.page.emit('page-favicon-updated', {}, ['https://cdn.other.test/icon.png']);
+    await t.settle();
+    expect(t.fetch.mock.calls[0]![1]).toMatchObject({ credentials: 'omit' });
+  });
+
+  it('its own site’s icon: its cookies, no redirect; one that redirects (Electron throws) is fetched again without them', async () => {
+    const t = setup(false);
+    let fail: (e: Error) => void = () => undefined;
+    t.fetch.mockImplementationOnce(() => new Promise<Response>((_r, reject) => (fail = reject)));
+    t.view.page.emit('page-favicon-updated', {}, ['https://shop.test/favicon.ico']);
+    await t.settle();
+    expect(t.fetch.mock.calls[0]![1]).toMatchObject({ redirect: 'error' });
+    expect(t.fetch.mock.calls[0]![1]).not.toHaveProperty('credentials');
+    fail(new Error('Redirect was cancelled'));
+    await t.settle();
+    expect(t.fetch.mock.calls[1]![0]).toBe('https://shop.test/favicon.ico');
+    expect(t.fetch.mock.calls[1]![1]).toMatchObject({ credentials: 'omit' });
+    expect(t.fetch.mock.calls[1]![1]).not.toHaveProperty('redirect');
+  });
+
+  it('an agent’s own-origin icon that fails: never fetched again (#115: no redirect, no second try)', async () => {
+    const t = setup();
+    let fail: (e: Error) => void = () => undefined;
+    t.fetch.mockImplementationOnce(() => new Promise<Response>((_r, reject) => (fail = reject)));
+    t.view.page.emit('page-favicon-updated', {}, ['https://shop.test/icon.png']);
+    await t.settle();
+    fail(new Error('Redirect was cancelled'));
+    await t.settle();
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('an agent’s tab’s favicon (#322)', () => {
   it('B2: decided by the page’s latched kind: a tab no longer counted an agent’s (kept, closing) still fetches as one', async () => {

@@ -916,7 +916,16 @@ export class TabManager {
       if (/^data:/i.test(url)) {
         if (usableDataIcon(url, MAX_FAVICON_BYTES)) icon = url;
       } else {
-        const response = await contents.session.fetch(url, { ...picked.init, signal: AbortSignal.timeout(8000) });
+        const signal = AbortSignal.timeout(8000);
+        let response: Response;
+        try {
+          response = await contents.session.fetch(url, { ...picked.init, signal });
+        } catch (error) {
+          // A tab of yours' own-site icon that redirected (or failed): once more without cookies, wherever it goes, never
+          // on to another site with that site's cookies (#324). An agent's: nothing (#115).
+          if (agent || picked.init.credentials === 'omit' || signal.aborted) throw error;
+          response = await contents.session.fetch(url, { credentials: 'omit', signal });
+        }
         const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim();
         const bytes = response.ok && /^image\//.test(type) ? Buffer.from(await response.arrayBuffer()) : null;
         if (bytes && bytes.length > 0 && bytes.length <= MAX_FAVICON_BYTES) icon = `data:${type};base64,${bytes.toString('base64')}`;
